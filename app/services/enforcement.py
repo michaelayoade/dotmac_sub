@@ -21,6 +21,7 @@ from pyrad.packet import CoARequest, DisconnectACK, DisconnectNAK, DisconnectReq
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.logging import sanitize_exception
 from app.models.catalog import (
     AccessCredential,
     NasDevice,
@@ -821,7 +822,7 @@ def _api_kick_session(db: Session, nas_device: NasDevice, username: str | None) 
         logger.warning(
             "API kick (profile refresh) failed on %s: %s",
             getattr(api_dev, "name", "?"),
-            exc,
+            sanitize_exception(exc),
         )
         return False
 
@@ -878,7 +879,7 @@ def _enforce_address_list_on_nas(
             "Address-list %s: API fallback failed for %s: %s",
             action,
             getattr(api_dev, "name", "?"),
-            exc,
+            sanitize_exception(exc),
         )
         return False
 
@@ -1131,7 +1132,7 @@ def disconnect_subscription_sessions(
                 logger.warning(
                     "API kick failed on %s: %s — trying SSH.",
                     getattr(nas_device, "name", "?"),
-                    exc,
+                    sanitize_exception(exc),
                 )
 
         # SSH last resort, only for sessions the API did not confirm gone.

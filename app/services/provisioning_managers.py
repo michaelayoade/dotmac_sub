@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.logging import redact_routeros_credentials, sanitize_exception
 from app.models.domain_settings import SettingDomain
 from app.models.provisioning import (
     AppointmentStatus,
@@ -893,7 +894,12 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                 )
             )
         except Exception as exc:
-            error_message = str(getattr(exc, "detail", exc))
+            detail = getattr(exc, "detail", None)
+            error_message = (
+                redact_routeros_credentials(detail)
+                if isinstance(detail, str)
+                else sanitize_exception(exc)
+            )
             run.status = ProvisioningRunStatus.failed
             run.output_payload = {"results": []}
             run.error_message = error_message
@@ -1002,7 +1008,7 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                     exc_info=True,
                 )
                 status = ProvisioningRunStatus.failed
-                step_error_message = str(exc)
+                step_error_message = sanitize_exception(exc)
                 results.append(
                     {
                         "step_id": str(step.id),

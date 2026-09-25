@@ -226,9 +226,18 @@ def test_connect_drains_pool_when_construction_times_out(monkeypatch):
 
 def test_sanitize_exc_names_blank_exceptions_and_redacts_password():
     assert _sanitize_exc(TimeoutError()) == "TimeoutError"
+    # No recognizable RouterOS word boundary follows the value here, so the
+    # shared helper redacts through to end-of-string rather than risk leaving
+    # an unrecognized tail shape unredacted (it also absorbs the trailing
+    # space, unlike the old poller-local regex).
+    assert _sanitize_exc(RuntimeError("failure =password=secret ")) == (
+        "failure =password=<redacted>"
+    )
+    # A recognized RouterOS word boundary (`.tag=`) after the value stops the
+    # match precisely there, preserving what follows.
     assert (
-        _sanitize_exc(RuntimeError("failure =password=secret "))
-        == "failure =password=<redacted> "
+        _sanitize_exc(RuntimeError("failure b'/login =name=x =password=secret .tag=1'"))
+        == "failure b'/login =name=x =password=<redacted> .tag=1'"
     )
 
 
