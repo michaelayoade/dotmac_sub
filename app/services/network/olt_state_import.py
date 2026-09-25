@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db import finish_read_transaction
 from app.models.network import (
     OLTDevice,
     OltLineProfile,
@@ -114,6 +115,32 @@ class OltStateImportResult:
             "service_ports": self.service_ports,
             "warnings": list(self.warnings),
         }
+
+
+@dataclass(frozen=True)
+class _LiveProfileRead:
+    """One profile and its detail captured from the OLT before DB writes begin."""
+
+    profile_id: int
+    name: str
+    binding_count: int
+    detail: str
+
+
+@dataclass(frozen=True)
+class _LiveRegistrationRead:
+    """One OLT registration captured during a live read."""
+
+    fsp: str
+    ont_id: int
+    serial_number: str | None
+    equipment_id: str | None
+    line_profile_id: int | None
+    service_profile_id: int | None
+    tr069_profile_id: int | None
+    match_state: str | None
+    description: str | None
+    raw_config: str
 
 
 def _upsert_by_keys(
@@ -858,9 +885,24 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
     imported_at = datetime.now(UTC)
     olt_name = olt.name
     warnings: list[str] = []
-    line_count = 0
-    service_count = 0
-    registration_count = 0
+    line_reads: list[_LiveProfileRead] = []
+    service_reads: list[_LiveProfileRead] = []
+    registration_reads: list[_LiveRegistrationRead] = []
+    pon_fsps = tuple(
+        str(name or "").strip()
+        for name in db.scalars(
+            select(PonPort.name)
+            .where(PonPort.olt_id == olt.id)
+            .where(PonPort.is_active.is_(True))
+            .order_by(PonPort.name)
+        ).all()
+        if str(name or "").strip()
+    )
+    # A live shelf read can take minutes. Do not leave the request session in a
+    # database transaction while waiting on SSH: PostgreSQL correctly treats
+    # that as an idle transaction and closes it before the observation can be
+    # applied. ``olt`` is deliberately kept materialized by the helper.
+    finish_read_transaction(db)
 
     try:
         transport, channel, _policy = core._open_shell(olt)
@@ -888,27 +930,14 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
             detail = core._run_huawei_cmd(
                 channel, f"display ont-lineprofile gpon profile-id {profile.profile_id}"
             )
-            _upsert_by_keys(
-                db,
-                OltLineProfile,
-                {"olt_id": olt.id, "profile_id": profile.profile_id},
-                {
-                    "name": profile.name,
-                    "binding_count": profile.binding_count,
-                    "tr069_management_enabled": parse_line_profile_tr069_enabled(
-                        detail
-                    ),
-                    "raw_config": detail,
-                    "last_imported_at": imported_at,
-                },
+            line_reads.append(
+                _LiveProfileRead(
+                    profile_id=profile.profile_id,
+                    name=profile.name,
+                    binding_count=profile.binding_count,
+                    detail=detail,
+                )
             )
-            _import_line_profile_gem_mappings_from_config(
-                db,
-                olt,
-                detail,
-                imported_at,
-            )
-            line_count += 1
 
         service_output = core._run_huawei_cmd(
             channel, "display ont-srvprofile gpon all"
@@ -924,37 +953,17 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
             detail = core._run_huawei_cmd(
                 channel, f"display ont-srvprofile gpon profile-id {profile.profile_id}"
             )
-            parsed = parse_service_profile_detail(
-                detail,
-                profile_id=profile.profile_id,
-                name=profile.name,
-                binding_count=profile.binding_count,
+            service_reads.append(
+                _LiveProfileRead(
+                    profile_id=profile.profile_id,
+                    name=profile.name,
+                    binding_count=profile.binding_count,
+                    detail=detail,
+                )
             )
-            _upsert_by_keys(
-                db,
-                OltServiceProfile,
-                {"olt_id": olt.id, "profile_id": profile.profile_id},
-                {
-                    "name": profile.name,
-                    "binding_count": profile.binding_count,
-                    "ethernet_ports": parsed.ethernet_ports,
-                    "voip_ports": parsed.voip_ports,
-                    "catv_ports": parsed.catv_ports,
-                    "raw_config": detail,
-                    "last_imported_at": imported_at,
-                },
-            )
-            service_count += 1
 
-        db.flush()
         command_profile = get_huawei_command_profile(olt)
-        pon_ports = db.scalars(
-            select(PonPort)
-            .where(PonPort.olt_id == olt.id)
-            .where(PonPort.is_active.is_(True))
-            .order_by(PonPort.name)
-        ).all()
-        if not pon_ports:
+        if not pon_fsps:
             warnings.append(
                 "No active PON ports in DB; ONT registrations not imported."
             )
@@ -966,10 +975,7 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
         # live ONTs on a board a transient SSH error skipped. Track whether the
         # enumeration was complete; only run the destructive sweep if it was.
         read_complete = True
-        for pon_port in pon_ports:
-            fsp = str(pon_port.name or "").strip()
-            if not fsp:
-                continue
+        for fsp in pon_fsps:
             try:
                 summary_output = core._run_huawei_cmd(
                     channel,
@@ -1006,43 +1012,102 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                 registration_ont_id = parsed_detail.ont_id or entry.ont_id
                 seen_registration_keys.add((registration_fsp, registration_ont_id))
                 serial_number = parsed_detail.serial_number or entry.serial_number
-                if serial_number:
-                    moved_rows = db.scalars(
-                        select(OltOntRegistration)
-                        .where(OltOntRegistration.olt_id == olt.id)
-                        .where(OltOntRegistration.serial_number == serial_number)
-                        .where(OltOntRegistration.is_active.is_(True))
-                    ).all()
-                    for moved_row in moved_rows:
-                        if (
-                            moved_row.fsp,
-                            moved_row.ont_id_on_olt,
-                        ) != (registration_fsp, registration_ont_id):
-                            moved_row.is_active = False
-                            moved_row.last_imported_at = imported_at
-                _upsert_by_keys(
-                    db,
-                    OltOntRegistration,
-                    {
-                        "olt_id": olt.id,
-                        "fsp": registration_fsp,
-                        "ont_id_on_olt": registration_ont_id,
-                    },
-                    {
-                        "serial_number": serial_number,
-                        "equipment_id": parsed_detail.equipment_id
-                        or parsed_detail.model,
-                        "line_profile_id": parsed_detail.line_profile_id,
-                        "service_profile_id": parsed_detail.service_profile_id,
-                        "tr069_profile_id": parsed_detail.tr069_profile_id,
-                        "match_state": parsed_detail.match_state or entry.match_state,
-                        "description": parsed_detail.description or entry.description,
-                        "raw_config": detail_output,
-                        "is_active": True,
-                        "last_imported_at": imported_at,
-                    },
+                registration_reads.append(
+                    _LiveRegistrationRead(
+                        fsp=registration_fsp,
+                        ont_id=registration_ont_id,
+                        serial_number=serial_number,
+                        equipment_id=parsed_detail.equipment_id or parsed_detail.model,
+                        line_profile_id=parsed_detail.line_profile_id,
+                        service_profile_id=parsed_detail.service_profile_id,
+                        tr069_profile_id=parsed_detail.tr069_profile_id,
+                        match_state=parsed_detail.match_state or entry.match_state,
+                        description=parsed_detail.description or entry.description,
+                        raw_config=detail_output,
+                    )
                 )
-                registration_count += 1
+
+        # Every SSH operation has completed. The remaining work is local and
+        # runs in one short transaction, so the import cannot be terminated as
+        # an idle database transaction while the OLT is responding.
+        for profile in line_reads:
+            _upsert_by_keys(
+                db,
+                OltLineProfile,
+                {"olt_id": olt.id, "profile_id": profile.profile_id},
+                {
+                    "name": profile.name,
+                    "binding_count": profile.binding_count,
+                    "tr069_management_enabled": parse_line_profile_tr069_enabled(
+                        profile.detail
+                    ),
+                    "raw_config": profile.detail,
+                    "last_imported_at": imported_at,
+                },
+            )
+            _import_line_profile_gem_mappings_from_config(
+                db, olt, profile.detail, imported_at
+            )
+
+        for profile in service_reads:
+            parsed = parse_service_profile_detail(
+                profile.detail,
+                profile_id=profile.profile_id,
+                name=profile.name,
+                binding_count=profile.binding_count,
+            )
+            _upsert_by_keys(
+                db,
+                OltServiceProfile,
+                {"olt_id": olt.id, "profile_id": profile.profile_id},
+                {
+                    "name": profile.name,
+                    "binding_count": profile.binding_count,
+                    "ethernet_ports": parsed.ethernet_ports,
+                    "voip_ports": parsed.voip_ports,
+                    "catv_ports": parsed.catv_ports,
+                    "raw_config": profile.detail,
+                    "last_imported_at": imported_at,
+                },
+            )
+
+        for registration in registration_reads:
+            if registration.serial_number:
+                for moved_row in db.scalars(
+                    select(OltOntRegistration)
+                    .where(OltOntRegistration.olt_id == olt.id)
+                    .where(
+                        OltOntRegistration.serial_number == registration.serial_number
+                    )
+                    .where(OltOntRegistration.is_active.is_(True))
+                ).all():
+                    if (moved_row.fsp, moved_row.ont_id_on_olt) != (
+                        registration.fsp,
+                        registration.ont_id,
+                    ):
+                        moved_row.is_active = False
+                        moved_row.last_imported_at = imported_at
+            _upsert_by_keys(
+                db,
+                OltOntRegistration,
+                {
+                    "olt_id": olt.id,
+                    "fsp": registration.fsp,
+                    "ont_id_on_olt": registration.ont_id,
+                },
+                {
+                    "serial_number": registration.serial_number,
+                    "equipment_id": registration.equipment_id,
+                    "line_profile_id": registration.line_profile_id,
+                    "service_profile_id": registration.service_profile_id,
+                    "tr069_profile_id": registration.tr069_profile_id,
+                    "match_state": registration.match_state,
+                    "description": registration.description,
+                    "raw_config": registration.raw_config,
+                    "is_active": True,
+                    "last_imported_at": imported_at,
+                },
+            )
 
         deactivated = _deactivate_unseen_registrations(
             db,
@@ -1070,9 +1135,9 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
             success=True,
             message="OLT state imported.",
             olt_id=str(olt.id),
-            line_profiles=line_count,
-            service_profiles=service_count,
-            ont_registrations=registration_count,
+            line_profiles=len(line_reads),
+            service_profiles=len(service_reads),
+            ont_registrations=len(registration_reads),
             profile_mappings=mapping_count,
             warnings=warnings,
         )
