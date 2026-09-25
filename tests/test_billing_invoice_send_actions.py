@@ -124,7 +124,8 @@ def test_invoice_sent_email_copy_explains_the_attached_review_document():
 def test_invoice_detail_issue_delegates_to_lifecycle_owner(
     db_session, subscriber, monkeypatch
 ):
-    due_at = datetime.now(UTC) + timedelta(days=30)
+    issued_at = datetime(2026, 8, 1, tzinfo=UTC)
+    due_at = datetime(2026, 8, 31, tzinfo=UTC)
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number="INV-DETAIL-ISSUE",
@@ -134,6 +135,7 @@ def test_invoice_detail_issue_delegates_to_lifecycle_owner(
         tax_total=Decimal("0.00"),
         total=Decimal("15000.00"),
         balance_due=Decimal("15000.00"),
+        issued_at=issued_at,
         due_at=due_at,
         due_date_basis=InvoiceDueDateBasis.contract_terms,
         due_date_basis_ref="test:invoice-detail-contract",
@@ -181,6 +183,7 @@ def test_invoice_detail_issue_delegates_to_lifecycle_owner(
     assert issued is invoice
     assert captured[0]["invoice_id"] == str(invoice.id)
     issuance = captured[0]["issuance"]
+    assert issuance.issued_at == issued_at
     assert issuance.due_at.date() == due_at.date()
     assert issuance.due_date_basis == InvoiceDueDateBasis.contract_terms
     assert issuance.due_date_basis_ref == "test:invoice-detail-contract"
@@ -190,6 +193,61 @@ def test_invoice_detail_issue_delegates_to_lifecycle_owner(
     assert captured[0]["apply_available_credit"] is True
     assert captured[0]["require_full_available_credit"] is True
     assert captured[0]["commit"] is True
+
+
+def test_invoice_detail_issue_defaults_issue_time_when_draft_has_none(
+    db_session, subscriber, monkeypatch
+):
+    due_at = datetime.now(UTC) + timedelta(days=30)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-DETAIL-ISSUE-NO-DATE",
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        subtotal=Decimal("15000.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("15000.00"),
+        balance_due=Decimal("15000.00"),
+        issued_at=None,
+        due_at=due_at,
+        due_date_basis=InvoiceDueDateBasis.contract_terms,
+        due_date_basis_ref="test:invoice-detail-no-date",
+        due_date_policy_version="test-v1",
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    db_session.refresh(invoice)
+
+    captured = {}
+
+    def _fake_issue(
+        db,
+        invoice_id,
+        *,
+        issuance,
+        announce,
+        apply_available_credit,
+        require_full_available_credit,
+        commit,
+    ):
+        captured["issuance"] = issuance
+        return SimpleNamespace(invoice=invoice)
+
+    monkeypatch.setattr(
+        "app.services.web_billing_invoices."
+        "web_prepaid_draft_reconciliation_service.preview_for_invoice_detail",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.web_billing_invoices.billing_service.invoices.issue_draft_system",
+        _fake_issue,
+    )
+
+    before = datetime.now(UTC)
+    issue_invoice_from_detail(db_session, invoice_id=invoice.id)
+    after = datetime.now(UTC)
+
+    assert before <= captured["issuance"].issued_at <= after
 
 
 def test_invoice_detail_draft_send_issues_and_announces_once(
