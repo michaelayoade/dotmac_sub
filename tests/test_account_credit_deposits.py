@@ -37,17 +37,17 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-from app.models.integration_platform import (
-    IntegrationCapabilityBinding,
-    IntegrationInbox,
-    IntegrationInstallation,
-)
 from app.models.customer_subledger import (
     CustomerPostingGroup,
     PostingCommandKind,
     PostingProducer,
     PostingSourceKind,
+)
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.integration_platform import (
+    IntegrationCapabilityBinding,
+    IntegrationInbox,
+    IntegrationInstallation,
 )
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import SubscriberStatus

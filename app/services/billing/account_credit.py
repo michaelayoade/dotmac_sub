@@ -42,16 +42,16 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
-from app.models.integration_platform import (
-    IntegrationCapabilityBinding,
-    IntegrationInbox,
-)
 from app.models.customer_subledger import (
     CustomerPositionEffect,
     CustomerPostingGroup,
     PostingCommandKind,
     PostingProducer,
     PostingSourceKind,
+)
+from app.models.integration_platform import (
+    IntegrationCapabilityBinding,
+    IntegrationInbox,
 )
 from app.models.prepaid_funding import PrepaidOpeningFundingConsumption
 from app.schemas.billing import (
