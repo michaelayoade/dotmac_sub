@@ -92,7 +92,11 @@ DOMAIN = DomainSOT(
             name="automation.rule_definitions",
             module="app.services.automation_rules",
             owns=("automation rule definitions and immutable versions",),
-            depends_on=("automation.capability_registry",),
+            depends_on=(
+                "automation.capability_registry",
+                "support.ticket_assignment_rule_configuration",
+                "support.ticket_automation_rule_configuration",
+            ),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
@@ -102,6 +106,8 @@ DOMAIN = DomainSOT(
                             "typed automation rule lifecycle command",
                             "declared automation capabilities",
                             "tenant-scoped automation rule records",
+                            "active ticket assignment rules",
+                            "active ticket-creation automation rules",
                         ),
                         canonical_writer="automation.rule_definitions",
                     ),
@@ -131,6 +137,24 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="AutomationRule and AutomationRuleVersion rows",
                     ),
+                    AuthorityInput(
+                        name="active ticket assignment rules",
+                        owner="support.ticket_assignment_rule_configuration",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "current active TicketAssignmentRule rows used to reject an "
+                            "overlapping urgent-ticket Automation Center publication"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="active ticket-creation automation rules",
+                        owner="support.ticket_automation_rule_configuration",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "current active TicketAutomationRule rows used to reject an "
+                            "overlapping urgent-ticket Automation Center publication"
+                        ),
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
@@ -140,7 +164,8 @@ DOMAIN = DomainSOT(
                     ),
                     locking=(
                         "tenant and rule identity are rechecked; existing rules and "
-                        "draft versions are locked before mutation"
+                        "draft versions are locked before mutation; current legacy rule "
+                        "evidence is re-read before publication"
                     ),
                     idempotency=(
                         "tenant rule keys, rule-version numbers, and one-draft indexes "
@@ -162,6 +187,7 @@ DOMAIN = DomainSOT(
                         "automation.rule_definitions.trigger_runtime_unavailable",
                         "automation.rule_definitions.action_runtime_unavailable",
                         "automation.rule_definitions.legacy_scope_conflict",
+                        "automation.rule_definitions.live_legacy_rule_conflict",
                         "automation.rule_definitions.status_conflict",
                         *owner_command_boundary_error_codes(
                             "automation.rule_definitions"

@@ -557,6 +557,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "typed TicketCreate, TicketUpdate, TicketMentionTarget, "
+                            "AssignTicketServiceTeamFromAutomationCommand, "
                             "comment, merge, link, resolution, typed "
                             "AttachmentMeta with private StoredFile UUID, bounded comment "
                             "attachment-reference repair, and bulk command inputs "
@@ -721,6 +722,7 @@ DOMAIN = DomainSOT(
                         "ticket_comment_mention_invalid",
                         "ticket_comment_mention_target_unavailable",
                         "ticket_comment_attachment_repair_scope_invalid",
+                        "automation_assignment_team_unavailable",
                         *owner_command_boundary_error_codes("support.ticket_lifecycle"),
                     ),
                     mapping_owner=(
@@ -737,6 +739,7 @@ DOMAIN = DomainSOT(
                 events=EventContract(
                     event_types=(
                         "ticket.created",
+                        "support.ticket.created",
                         "ticket.assigned",
                         "ticket.resolution_requested",
                         "ticket.resolution_confirmed",
@@ -1724,22 +1727,12 @@ DOMAIN = DomainSOT(
             AutomationTriggerCapability(
                 key="support.ticket.created",
                 label="New support ticket created",
-                # Native ticket creation still travels in the legacy custom
-                # envelope. The draft form pins this exact event name as a
-                # hidden typed condition until a dedicated event is admitted.
-                event_type="custom",
-                event_schema_version=1,
+                event_type="support.ticket.created",
+                event_schema_version=2,
                 entity_type="support.ticket",
                 tenant_id_field="tenant_id",
                 entity_id_field="ticket_id",
                 fields=(
-                    AutomationConditionField(
-                        key="name",
-                        label="Event name",
-                        value_type=AutomationValueType.enum,
-                        operators=(AutomationOperator.equals,),
-                        enum_values=("ticket.created",),
-                    ),
                     AutomationConditionField(
                         key="priority",
                         label="Priority",

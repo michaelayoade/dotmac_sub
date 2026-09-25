@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 
 from app.services import automation_capabilities, automation_rules
+from app.services.automation_actions import runtime_registry_errors
 from app.services.automation_contracts import AutomationOperator
 from app.services.events.handlers.automation import HANDLED_EVENT_TYPES
 from app.services.events.types import EventType
@@ -23,11 +24,6 @@ def test_ticket_assignment_pilot_is_draftable_but_not_runtime_enabled() -> None:
     trigger_schema, conditions, actions = automation_rules._validate_definition(
         trigger_key=trigger.key,
         conditions=(
-            automation_rules.AutomationCondition(
-                field_key="name",
-                operator=AutomationOperator.equals,
-                value="ticket.created",
-            ),
             automation_rules.AutomationCondition(
                 field_key="priority",
                 operator=AutomationOperator.equals,
@@ -48,10 +44,11 @@ def test_ticket_assignment_pilot_is_draftable_but_not_runtime_enabled() -> None:
         permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
     )
 
-    assert trigger_schema == 1
-    assert conditions[1]["value"] == "urgent"
+    assert trigger_schema == 2
+    assert conditions[0]["value"] == "urgent"
     assert actions[0]["action_key"] == action.key
-    assert EventType.custom not in HANDLED_EVENT_TYPES
+    assert EventType.support_ticket_created not in HANDLED_EVENT_TYPES
+    assert not runtime_registry_errors()
 
 
 def test_ticket_assignment_pilot_cannot_be_published_before_runtime_admission() -> None:
@@ -60,6 +57,7 @@ def test_ticket_assignment_pilot_cannot_be_published_before_runtime_admission() 
 
     with pytest.raises(automation_rules.AutomationRuleError) as exc_info:
         automation_rules._validate_persisted_definition(
+            db=SimpleNamespace(),
             rule=rule,
             version=version,
             permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),

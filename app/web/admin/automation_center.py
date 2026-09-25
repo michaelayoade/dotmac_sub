@@ -169,11 +169,6 @@ def create_ticket_assignment_draft(
                 trigger_key=_PILOT_TRIGGER,
                 conditions=(
                     automation_rules.AutomationCondition(
-                        field_key="name",
-                        operator=automation_rules.AutomationOperator.equals,
-                        value="ticket.created",
-                    ),
-                    automation_rules.AutomationCondition(
                         field_key="priority",
                         operator=automation_rules.AutomationOperator.equals,
                         value="urgent",

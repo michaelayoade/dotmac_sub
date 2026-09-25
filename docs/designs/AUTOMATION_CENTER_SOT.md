@@ -1,6 +1,6 @@
 # Automation Center source of truth
 
-Status: pilot draft authoring
+Status: pilot runtime foundation
 
 Decision owner: Michael
 
@@ -90,16 +90,25 @@ An authorized administrator can save exactly one shape of draft: a newly
 created urgent support ticket assigned to one existing active Service Team.
 The UI cannot publish, pause, resume, or execute that draft. The capability is
 explicitly marked runtime-unavailable, so the rule owner rejects publication
-even if a caller bypasses the UI. A later slice must add a dedicated ticket
-event identity, a typed action adapter to the Ticket lifecycle owner, live
-legacy-rule conflict evidence, and runtime acceptance tests before this pilot
-can execute.
+even if a caller bypasses the UI. The runtime foundation now exists, but remains
+disabled: the Ticket owner stages the dedicated `support.ticket.created` event
+with only the operator tenant, Ticket identity, and priority; the declared
+action delegates through the typed Ticket lifecycle command with stable event,
+rule-version, and step provenance.
+
+Before publishing, the rule owner reads active legacy Ticket assignment and
+Ticket-creation automation rules. A rule that can also assign an urgent Ticket
+blocks publication and identifies the legacy rule. The check is deliberately
+conservative where the Automation Center rule has no condition that proves a
+legacy region, type, source, or tag rule cannot overlap.
+
+Runtime acceptance tests, including event delivery, replay, assignment audit,
+and conflict cases, are still required before the capability can be enabled.
 
 The current ticket-assignment and ticket-creation automation pages are listed
-as legacy ownership links only. Their rules are neither read nor changed by
-the pilot. They have no static conflict scope because a rule-by-rule,
-evidence-based conflict check does not exist yet; publishing remains blocked
-until that check is delivered.
+as legacy ownership links only. Their rules are neither changed nor migrated by
+the pilot. They have no static conflict scope because the live rule-by-rule
+check supplies the current evidence at publication time.
 
 ## Legacy coexistence
 
