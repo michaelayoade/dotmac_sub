@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import secrets
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -2452,7 +2452,12 @@ class Tickets:
         )
 
     @staticmethod
-    def _stage_automation_ticket_created_event(db: Session, ticket: Ticket) -> None:
+    def _stage_automation_ticket_created_event(
+        db: Session,
+        ticket: Ticket,
+        *,
+        dispatch_after_commit: bool,
+    ) -> None:
         """Stage the bounded event identity used by Automation Center rules.
 
         The existing custom ticket event remains for its legacy consumers. This
@@ -2473,7 +2478,35 @@ class Tickets:
             actor="support.ticket_lifecycle",
             subscriber_id=ticket.subscriber_id,
             account_id=ticket.customer_account_id or ticket.subscriber_id,
+            dispatch_after_commit=dispatch_after_commit,
         )
+
+    @staticmethod
+    def _ticket_creation_audit_actor(
+        request: object | None,
+        actor_id: str | None,
+    ):
+        """Return the authenticated Ticket creator as a typed audit actor."""
+
+        from app.services.audit_adapter import AuditActor
+
+        state = getattr(request, "state", None)
+        auth = getattr(state, "auth", None)
+        principal_type = (
+            str(auth.get("principal_type") or "").strip().lower()
+            if isinstance(auth, Mapping)
+            else str(getattr(state, "actor_type", "") or "").strip().lower()
+        )
+        resolved_actor_id = str(
+            actor_id or getattr(state, "actor_id", "") or ""
+        ).strip()
+        if principal_type == "api_key" and resolved_actor_id:
+            return AuditActor.api_key(resolved_actor_id)
+        if principal_type == "service" and resolved_actor_id:
+            return AuditActor.service(resolved_actor_id)
+        if resolved_actor_id:
+            return AuditActor.user(resolved_actor_id)
+        return AuditActor.system("support.ticket_lifecycle")
 
     @staticmethod
     def _stage_create(
@@ -2619,13 +2652,14 @@ class Tickets:
                 metadata=audit_metadata,
             )
         else:
-            log_audit_event(
-                db=db,
-                request=request,
+            from app.services.audit_adapter import stage_audit_event
+
+            stage_audit_event(
+                db,
                 action="create",
                 entity_type="support_ticket",
                 entity_id=str(ticket.id),
-                actor_id=actor_id,
+                actor=Tickets._ticket_creation_audit_actor(request, actor_id),
                 metadata=audit_metadata,
             )
         Tickets._emit_ticket_event(
@@ -2639,7 +2673,11 @@ class Tickets:
             creation_consequence_mode=consequence_mode,
         )
         if consequence_mode is TicketCreationConsequenceMode.standard:
-            Tickets._stage_automation_ticket_created_event(db, ticket)
+            Tickets._stage_automation_ticket_created_event(
+                db,
+                ticket,
+                dispatch_after_commit=dispatch_event_after_commit,
+            )
         from app.services import sla_operational_notifications
 
         sla_operational_notifications.emit_ticket_created(db, ticket)
@@ -2826,16 +2864,14 @@ class Tickets:
             payload=TicketUpdate(service_team_id=command.service_team_id),
             actor_id=command.context.actor,
         )
-        from app.models.audit import AuditActorType
-        from app.services.audit_adapter import stage_audit_event
+        from app.services.audit_adapter import AuditActor, stage_audit_event
 
         stage_audit_event(
             db,
             action="automation_service_team_assigned",
             entity_type="support_ticket",
             entity_id=str(updated.id),
-            actor_type=AuditActorType.service,
-            actor_id=command.context.actor,
+            actor=AuditActor.service(command.context.actor),
             metadata={
                 "event_id": str(command.event_id),
                 "rule_id": str(command.rule_id),
