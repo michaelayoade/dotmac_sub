@@ -2,6 +2,7 @@
     "use strict";
 
     const widgetSelector = "#attendance-widget";
+    const confirmedCheckInEvent = "dotmac:attendance-confirmed-check-in";
 
     function formatElapsed(milliseconds) {
         const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -54,7 +55,7 @@
 
     function replaceWidget(html) {
         const current = document.querySelector(widgetSelector);
-        if (!current) return;
+        if (!current) return "";
         const template = document.createElement("template");
         template.innerHTML = html.trim();
         const replacement = template.content.querySelector(widgetSelector);
@@ -62,7 +63,9 @@
             clearAttendanceTimer(current);
             current.replaceWith(replacement);
             initializeAttendanceTimer(replacement);
+            return replacement.dataset.attendanceState || "";
         }
+        return "";
     }
 
     async function refreshAttendance() {
@@ -147,7 +150,13 @@
                 button.textContent = originalText;
                 return;
             }
-            replaceWidget(await response.text());
+            const attendanceState = replaceWidget(await response.text());
+            if (
+                action === "check-in" &&
+                attendanceState === "checked_in"
+            ) {
+                document.dispatchEvent(new Event(confirmedCheckInEvent));
+            }
         } catch (_error) {
             // A timed-out mutation is ambiguous. Read ERP's authoritative state
             // before presenting another action; never infer local success.
