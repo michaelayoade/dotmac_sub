@@ -467,7 +467,9 @@ implementation.
   quotation-deposit capability.
 - States: unauthenticated, unauthorized/not found, expired, cancelled/inactive,
   already paid, Paystack unavailable, checkout failed, pending verification,
-  and confirmed are distinct and fail closed.
+  and confirmed are distinct and fail closed. Expected Paystack routing or
+  checkout-start failures return a generic retryable unavailable response; the
+  adapter logs the typed failure without exposing its configuration details.
 - Responsive behavior: summary and action stack on small screens, retain the
   authoritative amount and primary action, and do not expose internal
   collection-account or payment-intent identifiers.
