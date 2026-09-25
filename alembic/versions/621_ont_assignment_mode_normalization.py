@@ -22,14 +22,16 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE ont_assignments
-        SET wan_mode = CASE lower(btrim(wan_mode::text))
-            WHEN 'bridge' THEN 'bridging'
-            WHEN 'bridged' THEN 'bridging'
-            WHEN 'setup_via_onu' THEN 'bridging'
-            WHEN 'routing' THEN 'routing'
-            WHEN 'bridging' THEN 'bridging'
-            ELSE NULL
-        END
+        SET wan_mode = (
+            CASE lower(btrim(wan_mode::text))
+                WHEN 'bridge' THEN 'bridging'
+                WHEN 'bridged' THEN 'bridging'
+                WHEN 'setup_via_onu' THEN 'bridging'
+                WHEN 'routing' THEN 'routing'
+                WHEN 'bridging' THEN 'bridging'
+                ELSE NULL
+            END
+        )::onumode
         WHERE wan_mode IS NOT NULL
           AND lower(btrim(wan_mode::text)) NOT IN ('routing', 'bridging')
         """
@@ -37,16 +39,18 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE ont_assignments
-        SET ip_mode = CASE lower(btrim(ip_mode::text))
-            WHEN 'bridge' THEN 'dhcp'
-            WHEN 'bridged' THEN 'dhcp'
-            WHEN 'dynamic' THEN 'dhcp'
-            WHEN 'static' THEN 'static_ip'
-            WHEN 'inactive' THEN 'inactive'
-            WHEN 'static_ip' THEN 'static_ip'
-            WHEN 'dhcp' THEN 'dhcp'
-            ELSE NULL
-        END
+        SET ip_mode = (
+            CASE lower(btrim(ip_mode::text))
+                WHEN 'bridge' THEN 'dhcp'
+                WHEN 'bridged' THEN 'dhcp'
+                WHEN 'dynamic' THEN 'dhcp'
+                WHEN 'static' THEN 'static_ip'
+                WHEN 'inactive' THEN 'inactive'
+                WHEN 'static_ip' THEN 'static_ip'
+                WHEN 'dhcp' THEN 'dhcp'
+                ELSE NULL
+            END
+        )::mgmtipmode
         WHERE ip_mode IS NOT NULL
           AND lower(btrim(ip_mode::text)) NOT IN ('inactive', 'static_ip', 'dhcp')
         """
