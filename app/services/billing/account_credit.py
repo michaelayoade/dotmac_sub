@@ -1180,6 +1180,7 @@ class AccountCreditApplications:
         invoice_id: UUID,
         expected_allocation_ids: tuple[UUID, ...],
         memo: str,
+        reverse_customer_posting: bool = True,
     ) -> list[tuple[LedgerEntry, UUID]]:
         """Append reversals and retire allocations; the caller owns the commit."""
         invoice = db.get(Invoice, invoice_id)
@@ -1215,9 +1216,10 @@ class AccountCreditApplications:
             )
             reversals.append((reversal, entry.original_entry_id))
         for allocation in allocations:
-            AccountCreditApplications._reverse_customer_credit_application_posting_for_void(
-                db, allocation=allocation
-            )
+            if reverse_customer_posting:
+                AccountCreditApplications._reverse_customer_credit_application_posting_for_void(
+                    db, allocation=allocation
+                )
             allocation.is_active = False
             allocation.payment.updated_at = datetime.now(UTC)
         db.flush()
@@ -1249,6 +1251,7 @@ class AccountCreditApplications:
             invoice_id=command.invoice_id,
             expected_allocation_ids=(command.allocation_id,),
             memo=reason,
+            reverse_customer_posting=False,
         )
 
     @staticmethod
