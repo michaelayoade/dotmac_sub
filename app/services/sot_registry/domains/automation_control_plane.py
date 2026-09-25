@@ -159,6 +159,8 @@ DOMAIN = DomainSOT(
                         "automation.rule_definitions.condition_value_invalid",
                         "automation.rule_definitions.action_inputs_invalid",
                         "automation.rule_definitions.action_target_mismatch",
+                        "automation.rule_definitions.trigger_runtime_unavailable",
+                        "automation.rule_definitions.action_runtime_unavailable",
                         "automation.rule_definitions.legacy_scope_conflict",
                         "automation.rule_definitions.status_conflict",
                         *owner_command_boundary_error_codes(

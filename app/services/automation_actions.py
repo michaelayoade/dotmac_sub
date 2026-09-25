@@ -77,6 +77,7 @@ def runtime_registry_errors() -> tuple[str, ...]:
         action.key
         for module in automation_capabilities.registered_module_manifests()
         for action in module.actions
+        if action.runtime_enabled
     }
     executable = set(_ACTION_EXECUTORS)
     errors = [

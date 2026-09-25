@@ -20,7 +20,7 @@ from app.models.automation import (
     AutomationRuleStatus,
     AutomationRuleVersion,
 )
-from app.services import automation_capabilities
+from app.services import automation_actions, automation_capabilities
 from app.services.automation_contracts import (
     AutomationActionCapability,
     AutomationConditionField,
@@ -417,6 +417,12 @@ def _validate_persisted_definition(
     automation_capabilities.require_valid_capability_registry()
     trigger = automation_capabilities.trigger_capability(rule.trigger_key)
     _require_permission(permission_keys, trigger.author_permission)
+    if not trigger.runtime_enabled:
+        raise _error(
+            "trigger_runtime_unavailable",
+            "This trigger is available for drafting but is not ready to run.",
+            trigger_key=trigger.key,
+        )
     if version.trigger_schema_version != trigger.event_schema_version:
         raise _error(
             "trigger_schema_stale",
@@ -463,6 +469,12 @@ def _validate_persisted_definition(
                 action_key=action_key,
             )
         _require_permission(permission_keys, capability.author_permission)
+        if not capability.runtime_enabled:
+            raise _error(
+                "action_runtime_unavailable",
+                "This action is available for drafting but is not ready to run.",
+                action_key=action_key,
+            )
         declared = {item.key: item for item in capability.inputs}
         stored_inputs = _stored_mapping_list(step.get("inputs"))
         if stored_inputs is None:
@@ -744,6 +756,13 @@ def publish_rule(
             version=version,
             permission_keys=command.permission_keys,
         )
+        try:
+            automation_actions.require_valid_runtime_registry()
+        except automation_actions.AutomationActionExecutorError as exc:
+            raise _error(
+                "action_runtime_unavailable",
+                "The rule cannot be published because its runtime is unavailable.",
+            ) from exc
         version.published_at = datetime.now(UTC)
         version.published_by = command.context.actor
         rule.active_version_id = version.id

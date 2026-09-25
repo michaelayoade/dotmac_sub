@@ -1,6 +1,6 @@
 # Automation Center source of truth
 
-Status: implementation foundation
+Status: pilot draft authoring
 
 Decision owner: Michael
 
@@ -84,6 +84,22 @@ The admin shell is available at `/admin/automation`. Opening the hub requires
 read-only. It exposes registry readiness, central definitions, run evidence,
 and legacy ownership links without implying that rule authoring is available
 before a complete module adapter exists.
+
+The first admitted UI slice is a draft-only Support Ticket Assignment pilot.
+An authorized administrator can save exactly one shape of draft: a newly
+created urgent support ticket assigned to one existing active Service Team.
+The UI cannot publish, pause, resume, or execute that draft. The capability is
+explicitly marked runtime-unavailable, so the rule owner rejects publication
+even if a caller bypasses the UI. A later slice must add a dedicated ticket
+event identity, a typed action adapter to the Ticket lifecycle owner, live
+legacy-rule conflict evidence, and runtime acceptance tests before this pilot
+can execute.
+
+The current ticket-assignment and ticket-creation automation pages are listed
+as legacy ownership links only. Their rules are neither read nor changed by
+the pilot. They have no static conflict scope because a rule-by-rule,
+evidence-based conflict check does not exist yet; publishing remains blocked
+until that check is delivered.
 
 ## Legacy coexistence
 
