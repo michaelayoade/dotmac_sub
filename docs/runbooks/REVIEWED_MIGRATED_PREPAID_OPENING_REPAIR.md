@@ -6,9 +6,14 @@ service period. The operator CLI is an adapter and never decides or writes money
 directly.
 
 **Use only when.** One migrated prepaid account existed at customer-subledger
-authority activation, has retained Splynx identity, has no opening position, and
-Finance has approved a complete-history position at the original authority
-cutoff. Native accounts use the existing native-account completion path. A
+authority activation, has retained Splynx identity (or a Finance-reviewed
+`pppoe_username` identity exception), has no opening position, and Finance has
+approved a complete-history position at the original authority cutoff. A
+`pppoe_username` exception is accepted only when one active credential exists
+globally for that username and it belongs to the selected account. The
+username is fingerprinted as evidence and is never copied into
+`splynx_customer_id`. Native accounts use the existing native-account
+completion path. A
 cohort-wide source problem uses the sealed full-cohort reconstruction workflow.
 
 Deployment does not run this repair. Every write below is a separate explicit
@@ -36,6 +41,8 @@ poetry run python -m scripts.billing.billing_target_shadow \
   --legacy-position <reviewed-cutoff-position> \
   --source-evidence-ref <controlled-review-reference> \
   --source-evidence-sha256 <reviewed-document-sha256> \
+  [--reviewed-identity-kind pppoe_username \
+   --reviewed-identity-value <unique-pppoe-username>] \
   --code-version <deployed-commit> \
   --schema-version <deployed-alembic-head> \
   --idempotency-key <unique-preview-key>
