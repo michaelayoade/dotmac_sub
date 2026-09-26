@@ -102,12 +102,55 @@ def _assign_support_ticket_service_team(
     )
 
 
+def _set_support_ticket_priority(
+    db: Session, command: ExecuteAutomationActionCommand
+) -> AutomationActionOutcome:
+    from app.models.support import TicketPriority
+    from app.services.support import Tickets
+    from app.services.support_ticket_contracts import (
+        SetTicketPriorityFromAutomationCommand,
+    )
+
+    if command.target.entity_type != "support.ticket":
+        raise AutomationActionExecutorError(
+            "The support ticket priority action received the wrong target type."
+        )
+    values = [item.value for item in command.inputs if item.key == "priority"]
+    if len(values) != 1:
+        raise AutomationActionExecutorError(
+            "Automation action requires exactly one 'priority' input."
+        )
+    try:
+        priority = TicketPriority(str(values[0]))
+    except ValueError as exc:
+        raise AutomationActionExecutorError(
+            "Automation action priority is no longer supported."
+        ) from exc
+    Tickets.set_ticket_priority_from_automation(
+        db,
+        command=SetTicketPriorityFromAutomationCommand(
+            ticket_id=command.target.entity_id,
+            priority=priority,
+            event_id=command.event_id,
+            rule_id=command.rule_id,
+            rule_version_id=command.rule_version_id,
+            step_index=command.step_index,
+            context=command.context,
+        ),
+    )
+    return AutomationActionOutcome(
+        disposition=AutomationActionDisposition.succeeded,
+        outcome_code="support_ticket_priority_set",
+    )
+
+
 # Module-adapter PRs add exact key -> typed adapter entries here. The immutable
 # mapping prevents runtime registration from turning a configuration change
 # into executable code admission.
 _ACTION_EXECUTORS: Mapping[str, AutomationActionExecutor] = MappingProxyType(
     {
         "support.ticket.assign_service_team": _assign_support_ticket_service_team,
+        "support.ticket.set_priority": _set_support_ticket_priority,
     }
 )
 

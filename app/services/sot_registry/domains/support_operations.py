@@ -723,6 +723,7 @@ DOMAIN = DomainSOT(
                         "ticket_comment_mention_target_unavailable",
                         "ticket_comment_attachment_repair_scope_invalid",
                         "automation_assignment_team_unavailable",
+                        "automation_priority_invalid",
                         *owner_command_boundary_error_codes("support.ticket_lifecycle"),
                     ),
                     mapping_owner=(
@@ -752,8 +753,9 @@ DOMAIN = DomainSOT(
                     compatibility=(
                         "Version 1 carries stable Ticket/account identifiers and bounded "
                         "change evidence, including the explicit creation consequence mode; "
-                        "the dedicated support.ticket.created envelope carries the canonical "
-                        "customer account identity for customer-scoped automation. Private "
+                        "support.ticket.created schema 4 carries tenant and Ticket identity, "
+                        "priority, ticket type, channel, region, and canonical customer "
+                        "identity for the declared Automation Center conditions. Private "
                         "comment bodies and attachments are not placed in transport events."
                     ),
                     replay=(
@@ -1729,7 +1731,7 @@ DOMAIN = DomainSOT(
                 key="support.ticket.created",
                 label="New support ticket created",
                 event_type="support.ticket.created",
-                event_schema_version=3,
+                event_schema_version=4,
                 entity_type="support.ticket",
                 tenant_id_field="tenant_id",
                 entity_id_field="ticket_id",
@@ -1754,9 +1756,44 @@ DOMAIN = DomainSOT(
                         value_type=AutomationValueType.uuid,
                         operators=(AutomationOperator.in_values,),
                     ),
+                    AutomationConditionField(
+                        key="ticket_type",
+                        label="Ticket type",
+                        value_type=AutomationValueType.string,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                            AutomationOperator.contains,
+                            AutomationOperator.is_empty,
+                            AutomationOperator.is_not_empty,
+                        ),
+                    ),
+                    AutomationConditionField(
+                        key="channel",
+                        label="Channel",
+                        value_type=AutomationValueType.enum,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                        ),
+                        enum_values=("web", "email", "phone", "chat", "api"),
+                    ),
+                    AutomationConditionField(
+                        key="region",
+                        label="Region",
+                        value_type=AutomationValueType.string,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                            AutomationOperator.contains,
+                            AutomationOperator.is_empty,
+                            AutomationOperator.is_not_empty,
+                        ),
+                    ),
                 ),
                 author_permission="support:ticket:read",
                 runtime_enabled=True,
+                compatible_event_schema_versions=(3,),
             ),
         ),
         actions=(
@@ -1772,6 +1809,33 @@ DOMAIN = DomainSOT(
                         key="service_team_id",
                         label="Service team",
                         value_type=AutomationValueType.uuid,
+                    ),
+                ),
+                author_permission="support:ticket:update",
+                runtime_scope="support:ticket:update",
+                idempotency="event, rule version, and step",
+                runtime_enabled=True,
+            ),
+            AutomationActionCapability(
+                key="support.ticket.set_priority",
+                label="Set ticket priority",
+                entity_type="support.ticket",
+                command_owner="support.ticket_lifecycle",
+                command_name="set_ticket_priority_from_automation",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="priority",
+                        label="Priority",
+                        value_type=AutomationValueType.enum,
+                        enum_values=(
+                            "lower",
+                            "low",
+                            "medium",
+                            "normal",
+                            "high",
+                            "urgent",
+                        ),
                     ),
                 ),
                 author_permission="support:ticket:update",

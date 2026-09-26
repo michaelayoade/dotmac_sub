@@ -1,0 +1,112 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header %}
+
+{% block title %}{{ "Edit rule draft" if rule_id else "New rule" }} - Automation Center{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-7">
+    {% call page_header(title=("Edit rule draft" if rule_id else "New rule"), subtitle="Combine approved app triggers, conditions, and actions.", color="indigo") %}
+        <a href="/admin/automation" class="text-sm font-semibold text-indigo-700 underline underline-offset-4 dark:text-indigo-300">Back to Automation Center</a>
+    {% endcall %}
+    {% if error %}<div role="alert" class="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div>{% endif %}
+
+    <form id="rule-builder" method="post" action="{% if rule_id %}/admin/automation/rules/{{ rule_id }}/draft{% else %}/admin/automation/rules{% endif %}" class="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        <input type="hidden" name="command_token" value="{{ command_token }}">
+        <input type="hidden" id="conditions-json" name="conditions_json">
+        <input type="hidden" id="actions-json" name="actions_json">
+        <div class="space-y-2">
+            <label for="name" class="block text-sm font-medium text-slate-800 dark:text-slate-200">Rule name</label>
+            {% if rule_id %}<p class="font-semibold text-slate-950 dark:text-white">{{ name }}</p><input type="hidden" name="name" value="{{ name }}">
+            {% else %}<input id="name" name="name" value="{{ name }}" required maxlength="160" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white" placeholder="Urgent tickets to Escalation Team">{% endif %}
+        </div>
+
+        <section class="space-y-2" aria-labelledby="trigger-heading">
+            <h2 id="trigger-heading" class="text-base font-semibold text-slate-950 dark:text-white">When this happens</h2>
+            <label for="trigger-key" class="sr-only">Trigger</label>
+            <select id="trigger-key" {% if rule_id %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                {% for trigger in triggers %}<option value="{{ trigger.key }}" {% if trigger.key == trigger_key %}selected{% endif %}>{{ trigger.label }}</option>{% endfor %}
+            </select>
+            {% if rule_id %}<input type="hidden" name="trigger_key" value="{{ trigger_key }}">{% else %}<input type="hidden" id="trigger-key-value" name="trigger_key" value="{{ trigger_key }}">{% endif %}
+        </section>
+
+        <section class="space-y-3" aria-labelledby="conditions-heading">
+            <div class="flex items-center justify-between gap-3"><h2 id="conditions-heading" class="text-base font-semibold text-slate-950 dark:text-white">Only when</h2><button id="add-condition" type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-slate-800">Add condition</button></div>
+            <div id="conditions-container" class="space-y-3"></div>
+            <p class="text-xs text-slate-500 dark:text-slate-400">All conditions must match. Leave this section empty to match every event of the selected trigger.</p>
+        </section>
+
+        {% if supports_customer_scope %}<fieldset id="customer-scope-section" class="space-y-3" aria-describedby="scope-help">
+            <legend class="text-base font-semibold text-slate-950 dark:text-white">Who this applies to</legend>
+            <p id="scope-help" class="text-sm text-slate-600 dark:text-slate-400">Apply it to every customer or choose specific customers.</p>
+            <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700"><input type="radio" name="customer_scope" value="company" {% if customer_scope == "company" %}checked{% endif %} class="mt-1 text-indigo-700 focus:ring-indigo-500"><span><span class="block text-sm font-medium text-slate-900 dark:text-white">All customers</span></span></label>
+            <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700"><input type="radio" name="customer_scope" value="selected" {% if customer_scope == "selected" %}checked{% endif %} class="mt-1 text-indigo-700 focus:ring-indigo-500"><span><span class="block text-sm font-medium text-slate-900 dark:text-white">Selected customers</span><span class="block text-xs text-slate-500 dark:text-slate-400">Choose up to 100.</span></span></label>
+            <div id="customer-picker" class="space-y-3 {% if customer_scope != 'selected' %}hidden{% endif %}">
+                <div class="flex flex-col gap-2 sm:flex-row"><label class="sr-only" for="customer-search">Search customers</label><input id="customer-search" type="search" minlength="2" maxlength="120" class="min-h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white" placeholder="Search by name, email, or account number"><button id="customer-search-button" type="button" class="min-h-10 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Search</button></div>
+                <p id="customer-search-message" class="text-sm text-slate-500 dark:text-slate-400" aria-live="polite">Search for a customer, then add them.</p><ul id="customer-search-results" class="divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700"></ul>
+                <div><h3 class="text-sm font-medium text-slate-800 dark:text-slate-200">Selected customers</h3><ul id="selected-customers" class="mt-2 flex flex-wrap gap-2">{% for customer in selected_customers %}<li class="selected-customer inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-sm text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100" data-customer-id="{{ customer.id }}"><span>{{ customer.label }}</span><input type="hidden" name="customer_ids" value="{{ customer.id }}"><button type="button" class="remove-customer rounded-full px-1 font-bold" aria-label="Remove {{ customer.label }}">×</button></li>{% endfor %}</ul></div>
+            </div>
+        </fieldset>{% endif %}
+
+        <section class="space-y-3" aria-labelledby="actions-heading">
+            <div class="flex items-center justify-between gap-3"><h2 id="actions-heading" class="text-base font-semibold text-slate-950 dark:text-white">Then do this</h2><button id="add-action" type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-slate-800">Add action</button></div>
+            <div id="actions-container" class="space-y-3"></div>
+        </section>
+
+        <div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">Saving creates a draft only. It starts running only after an admin activates it. Conflicting active rules can prevent activation.</div>
+        <div class="flex justify-end gap-3"><a href="/admin/automation" class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</a><button type="submit" class="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800">{{ "Save draft revision" if rule_id else "Save draft" }}</button></div>
+    </form>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+(() => {
+    const form = document.getElementById("rule-builder");
+    const trigger = document.getElementById("trigger-key");
+    const conditionsBox = document.getElementById("conditions-container");
+    const actionsBox = document.getElementById("actions-container");
+    if (!form || !trigger || !conditionsBox || !actionsBox) return;
+    const capabilities = {{ builder_options|tojson }};
+    const teams = {{ service_teams|tojson }};
+    const initialConditions = {{ initial_conditions|tojson }};
+    const initialActions = {{ initial_actions|tojson }};
+    const config = () => capabilities[trigger.value] || {fields: [], actions: []};
+    const make = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
+    const selectFor = (items, value, label) => { const select = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); select.setAttribute("aria-label", label); for (const item of items) { const option = make("option", "", item.label); option.value = item.key; select.append(option); } if (value) select.value = value; return select; };
+    const removeButton = (row) => { const button = make("button", "rounded-lg px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/30", "Remove"); button.type = "button"; button.addEventListener("click", () => row.remove()); return button; };
+    const renderCondition = (initial = {}) => {
+        const fields = config().fields; if (!fields.length) return;
+        const row = make("div", "grid gap-2 rounded-xl border border-slate-200 p-3 sm:grid-cols-[1fr_1fr_1fr_auto] dark:border-slate-700");
+        const field = selectFor(fields, initial.field_key || fields[0].key, "Condition field");
+        const operator = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); operator.setAttribute("aria-label", "Condition operator");
+        const valueWrap = make("div", "");
+        const refresh = () => { const selected = fields.find((item) => item.key === field.value) || fields[0]; operator.replaceChildren(); for (const key of selected.operators) { const option = make("option", "", key.replaceAll("_", " ")); option.value = key; operator.append(option); } if (initial.operator) operator.value = initial.operator; valueWrap.replaceChildren(); if (!["is_empty", "is_not_empty"].includes(operator.value)) { let input; if (selected.enum_values?.length) { input = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); input.append(new Option("Choose a value", "")); for (const item of selected.enum_values) { const option = make("option", "", item); option.value = item; input.append(option); } } else { input = make("input", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); input.type = selected.value_type === "integer" || selected.value_type === "decimal" ? "number" : selected.value_type === "date" ? "date" : "text"; if (input.type === "number" && selected.value_type === "decimal") input.step = "any"; if (["in", "not_in"].includes(operator.value)) input.placeholder = "Separate values with commas"; } input.dataset.value = "true"; input.setAttribute("aria-label", "Condition value"); if (initial.value !== undefined && initial.value !== null) input.value = initial.value; valueWrap.append(input); } };
+        field.addEventListener("change", () => { initial.operator = ""; initial.value = ""; refresh(); }); operator.addEventListener("change", refresh); refresh(); row.append(field, operator, valueWrap, removeButton(row)); conditionsBox.append(row);
+    };
+    const renderAction = (initial = {}) => {
+        const options = config().actions; if (!options.length) return;
+        const row = make("div", "rounded-xl border border-slate-200 p-3 dark:border-slate-700");
+        const top = make("div", "grid gap-2 sm:grid-cols-[1fr_auto]"); const action = selectFor(options, initial.action_key || options[0].key, "Action"); const inputs = make("div", "mt-3 grid gap-3 sm:grid-cols-2");
+        const refresh = () => { const selected = options.find((item) => item.key === action.value) || options[0]; inputs.replaceChildren(); for (const definition of selected.inputs) { const wrap = make("label", "space-y-1 text-sm font-medium text-slate-700 dark:text-slate-200"); wrap.append(make("span", "block", definition.label)); let input; if (definition.key === "service_team_id") { input = selectFor(teams, initial.inputs?.[definition.key] || "", definition.label); input.prepend(new Option("Choose a team", "")); } else if (definition.enum_values?.length) { input = selectFor(definition.enum_values.map((item) => ({key: item, label: item})), initial.inputs?.[definition.key] || "", definition.label); input.prepend(new Option("Choose a value", "")); } else { input = make("input", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); input.type = definition.value_type === "integer" || definition.value_type === "decimal" ? "number" : "text"; input.value = initial.inputs?.[definition.key] ?? ""; } input.dataset.inputKey = definition.key; input.required = definition.required; wrap.append(input); inputs.append(wrap); } };
+        action.addEventListener("change", () => { initial.inputs = {}; refresh(); }); refresh(); top.append(action, removeButton(row)); row.append(top, inputs); actionsBox.append(row);
+    };
+    const renderAll = (conditions, actions) => { conditionsBox.replaceChildren(); actionsBox.replaceChildren(); conditions.forEach(renderCondition); actions.forEach(renderAction); if (!conditions.length && config().fields.length) renderCondition(); if (!actions.length && config().actions.length) renderAction(); };
+    document.getElementById("add-condition")?.addEventListener("click", () => renderCondition());
+    document.getElementById("add-action")?.addEventListener("click", () => renderAction());
+    const updateCustomerScope = () => { const section = document.getElementById("customer-scope-section"); const supported = Boolean(config().supports_customer_scope); section?.classList.toggle("hidden", !supported); if (!supported) { const company = document.querySelector('input[name="customer_scope"][value="company"]'); if (company) company.checked = true; document.getElementById("selected-customers")?.replaceChildren(); } };
+    trigger.addEventListener("change", () => { const submittedTrigger = document.getElementById("trigger-key-value"); if (submittedTrigger) submittedTrigger.value = trigger.value; renderAll([], []); updateCustomerScope(); });
+    form.addEventListener("submit", () => {
+        const conditions = [...conditionsBox.children].map((row) => { const selects = row.querySelectorAll("select"); const op = selects[1].value; return {field_key: selects[0].value, operator: op, value: ["is_empty", "is_not_empty"].includes(op) ? null : (row.querySelector("[data-value]")?.value ?? "")}; });
+        const actions = [...actionsBox.children].map((row) => ({action_key: row.querySelector("select").value, inputs: Object.fromEntries([...row.querySelectorAll("[data-input-key]")].map((input) => [input.dataset.inputKey, input.value]))}));
+        document.getElementById("conditions-json").value = JSON.stringify(conditions);
+        document.getElementById("actions-json").value = JSON.stringify(actions);
+    });
+    const picker = document.getElementById("customer-picker"), searchInput = document.getElementById("customer-search"), searchButton = document.getElementById("customer-search-button"), message = document.getElementById("customer-search-message"), results = document.getElementById("customer-search-results"), selected = document.getElementById("selected-customers");
+    const updateScope = () => picker?.classList.toggle("hidden", document.querySelector('input[name="customer_scope"]:checked')?.value !== "selected");
+    document.querySelectorAll('input[name="customer_scope"]').forEach((input) => input.addEventListener("change", updateScope));
+    selected?.addEventListener("click", (event) => { if (event.target instanceof HTMLElement && event.target.closest(".remove-customer")) event.target.closest(".selected-customer")?.remove(); });
+    searchButton?.addEventListener("click", async () => { const term = searchInput.value.trim(); results.replaceChildren(); if (term.length < 2) { message.textContent = "Enter at least two characters to search."; return; } message.textContent = "Searching…"; searchButton.disabled = true; try { const response = await fetch(`/admin/automation/customers/search?q=${encodeURIComponent(term)}`, {headers: {"Accept": "application/json"}}); if (!response.ok) throw new Error("Customer search is unavailable. Please try again."); const data = await response.json(); for (const customer of data.items || []) { const item = make("li", "flex items-center justify-between gap-3 px-3 py-2 text-sm"); const label = make("span", "min-w-0 truncate", customer.label); const add = make("button", "rounded-md px-3 py-1 font-semibold text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300", "Add"); add.type = "button"; add.addEventListener("click", () => { if (selected.querySelector(`[data-customer-id="${CSS.escape(customer.id)}"]`)) return; if (selected.querySelectorAll(".selected-customer").length >= 100) { message.textContent = "A rule can include up to 100 customers."; return; } const pill = make("li", "selected-customer inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-sm", ""); pill.dataset.customerId = customer.id; pill.append(label.cloneNode(true)); const hidden = make("input"); hidden.type = "hidden"; hidden.name = "customer_ids"; hidden.value = customer.id; const remove = make("button", "remove-customer px-1", "×"); remove.type = "button"; pill.append(hidden, remove); selected.append(pill); }); item.append(label, add); results.append(item); } message.textContent = data.items?.length ? "Choose a customer to add it." : "No matching active customers found."; } catch (error) { message.textContent = error instanceof Error ? error.message : "Customer search is unavailable."; } finally { searchButton.disabled = false; } });
+    searchInput?.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); searchButton.click(); } });
+    renderAll(initialConditions, initialActions); updateScope(); updateCustomerScope();
+})();
+</script>
+{% endblock %}

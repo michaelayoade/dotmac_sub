@@ -60,6 +60,8 @@ class AutomationTriggerCapability:
     #: A trigger may be admitted for draft authoring before its durable event
     #: producer and identity contract are ready for runtime delivery.
     runtime_enabled: bool = False
+    #: Older condition contracts that remain safe against this event payload.
+    compatible_event_schema_versions: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

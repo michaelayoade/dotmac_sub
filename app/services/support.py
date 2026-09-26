@@ -34,6 +34,7 @@ from app.models.support import (
     TicketCommentMention,
     TicketLink,
     TicketMerge,
+    TicketPriority,
     TicketSlaEvent,
     TicketStatus,
     canonical_ticket_status_value,
@@ -98,6 +99,7 @@ from app.services.staff_notifications import queue_staff_email
 from app.services.support_ticket_contracts import (
     AssignTicketServiceTeamFromAutomationCommand,
     InternalOperationalTicketSource,
+    SetTicketPriorityFromAutomationCommand,
     SupportTicketCommentRealtimeChange,
     SupportTicketCommentRealtimeHint,
 )
@@ -2474,6 +2476,9 @@ class Tickets:
                 "tenant_id": str(OPERATOR_TENANT_ID),
                 "ticket_id": str(ticket.id),
                 "priority": str(ticket.priority or "").strip().lower(),
+                "ticket_type": str(ticket.ticket_type or "").strip(),
+                "channel": ticket.channel.value,
+                "region": str(ticket.region or "").strip(),
                 "customer_id": str(ticket.customer_account_id or ticket.subscriber_id)
                 if ticket.customer_account_id or ticket.subscriber_id
                 else None,
@@ -2881,6 +2886,55 @@ class Tickets:
                 "rule_version_id": str(command.rule_version_id),
                 "step_index": command.step_index,
                 "service_team_id": str(command.service_team_id),
+            },
+        )
+        return updated
+
+    @staticmethod
+    @ticket_owner_command("set_ticket_priority_from_automation")
+    def set_ticket_priority_from_automation(
+        db: Session,
+        *,
+        command: SetTicketPriorityFromAutomationCommand,
+    ) -> Ticket:
+        """Set priority through Ticket lifecycle with stable step provenance."""
+
+        from app.services.audit_adapter import AuditActor, stage_audit_event
+
+        try:
+            priority_value = TicketPriority(command.priority).value
+        except (TypeError, ValueError):
+            raise _ticket_error(
+                "automation_priority_invalid",
+                "The automation rule's Ticket priority is no longer supported.",
+            )
+        ticket = db.scalar(
+            select(Ticket)
+            .where(Ticket.id == command.ticket_id, Ticket.is_active.is_(True))
+            .with_for_update()
+        )
+        if ticket is None:
+            raise _ticket_error("ticket_not_found", "Ticket not found")
+        if ticket.priority == priority_value:
+            return ticket
+        updated = Tickets.update(
+            db,
+            ticket_id=str(command.ticket_id),
+            payload=TicketUpdate(priority=priority_value),
+            actor_id=command.context.actor,
+        )
+        stage_audit_event(
+            db,
+            action="automation_ticket_priority_set",
+            entity_type="support_ticket",
+            entity_id=str(updated.id),
+            actor=AuditActor.service(command.context.actor),
+            metadata={
+                "event_id": str(command.event_id),
+                "rule_id": str(command.rule_id),
+                "rule_version_id": str(command.rule_version_id),
+                "step_index": command.step_index,
+                "priority": priority_value,
             },
         )
         return updated

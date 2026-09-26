@@ -5,12 +5,12 @@ from uuid import UUID
 
 import pytest
 
-from app.services import automation_capabilities, automation_rules
+from app.models.support import TicketPriority
+from app.services import automation_actions, automation_capabilities, automation_rules
 from app.services.automation_actions import runtime_registry_errors
 from app.services.automation_contracts import AutomationOperator
 from app.services.events.handlers.automation import HANDLED_EVENT_TYPES
 from app.services.events.types import EventType
-from app.web.admin.automation_center import _pilot_rule_key
 
 
 def test_ticket_assignment_pilot_is_runtime_enabled() -> None:
@@ -20,6 +20,7 @@ def test_ticket_assignment_pilot_is_runtime_enabled() -> None:
     )
 
     assert trigger.runtime_enabled
+    assert trigger.compatible_event_schema_versions == (3,)
     assert action.runtime_enabled
     trigger_schema, conditions, actions = automation_rules._validate_definition(
         db=SimpleNamespace(),
@@ -45,7 +46,7 @@ def test_ticket_assignment_pilot_is_runtime_enabled() -> None:
         permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
     )
 
-    assert trigger_schema == 3
+    assert trigger_schema == 4
     assert conditions[0]["value"] == "urgent"
     assert actions[0]["action_key"] == action.key
     assert EventType.support_ticket_created in HANDLED_EVENT_TYPES
@@ -89,7 +90,7 @@ def test_ticket_assignment_can_target_selected_customers(monkeypatch) -> None:
         permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
     )
 
-    assert trigger_schema == 3
+    assert trigger_schema == 4
     assert conditions[0]["value"] == [str(customer_id)]
 
 
@@ -102,7 +103,7 @@ def test_ticket_assignment_rejects_an_inactive_selected_customer(monkeypatch) ->
     )
     rule = SimpleNamespace(trigger_key="support.ticket.created")
     version = SimpleNamespace(
-        trigger_schema_version=3,
+        trigger_schema_version=4,
         conditions=[
             {
                 "field_key": "customer_id",
@@ -124,7 +125,64 @@ def test_ticket_assignment_rejects_an_inactive_selected_customer(monkeypatch) ->
     assert exc_info.value.code == "automation.rule_definitions.customer_scope_invalid"
 
 
-def test_ticket_assignment_draft_key_is_stable_and_safe() -> None:
-    assert _pilot_rule_key("Urgent tickets to Escalation Team") == (
-        "support.ticket.assignment.urgent_tickets_to_escalation_team"
+def test_ticket_builder_exposes_more_conditions_and_ordered_actions() -> None:
+    trigger = automation_capabilities.trigger_capability("support.ticket.created")
+    fields = {item.key for item in trigger.fields}
+    assert {"priority", "ticket_type", "channel", "region", "customer_id"} <= fields
+    assert automation_capabilities.action_capability(
+        "support.ticket.set_priority"
+    ).runtime_enabled
+    _, _, actions = automation_rules._validate_definition(
+        db=SimpleNamespace(),
+        trigger_key=trigger.key,
+        conditions=(),
+        actions=(
+            automation_rules.AutomationActionStep(
+                action_key="support.ticket.set_priority",
+                inputs=(automation_rules.AutomationActionValue("priority", "high"),),
+            ),
+            automation_rules.AutomationActionStep(
+                action_key="support.ticket.assign_service_team",
+                inputs=(
+                    automation_rules.AutomationActionValue(
+                        "service_team_id",
+                        UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+                    ),
+                ),
+            ),
+        ),
+        permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
     )
+    assert [item["position"] for item in actions] == [0, 1]
+
+
+def test_priority_action_uses_typed_ticket_owner_command(monkeypatch) -> None:
+    observed = {}
+
+    def capture(_db, *, command):
+        observed["command"] = command
+
+    from app.services.support import Tickets
+
+    monkeypatch.setattr(Tickets, "set_ticket_priority_from_automation", capture)
+    command = automation_actions.ExecuteAutomationActionCommand(
+        tenant_id=UUID("182a8f9e-52aa-4eb0-9912-85f830002a94"),
+        event_id=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+        rule_id=UUID("98ce8c4d-71ca-42fa-9bb0-6a76d35c95e1"),
+        rule_version_id=UUID("53c2d409-5f53-4c74-9b8c-2af4284bd731"),
+        step_index=0,
+        target=automation_actions.AutomationTargetReference(
+            entity_type="support.ticket",
+            entity_id=UUID("d7fac8aa-dce2-4447-91d8-94d46ab3c976"),
+        ),
+        inputs=(automation_actions.AutomationActionInputValue("priority", "high"),),
+        context=SimpleNamespace(),
+    )
+
+    outcome = automation_actions.action_executor("support.ticket.set_priority")(
+        SimpleNamespace(), command
+    )
+
+    assert outcome.outcome_code == "support_ticket_priority_set"
+    assert observed["command"].priority is TicketPriority.high
+    assert observed["command"].step_index == 0

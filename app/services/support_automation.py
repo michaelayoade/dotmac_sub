@@ -44,15 +44,16 @@ class TicketAutomationProposal:
 
 
 @dataclass(frozen=True, slots=True)
-class AutomationCenterTicketAssignmentConflictQuery:
-    """The fixed first Automation Center rule shape to check for overlap."""
+class AutomationCenterLegacyConflictQuery:
+    """Automation Center actions and priority facts checked against legacy rules."""
 
     priority: str
+    action_keys: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
 class AutomationCenterLegacyRuleConflict:
-    """One active legacy rule that could also assign an incoming Ticket."""
+    """One active legacy rule that could perform the same Ticket action."""
 
     surface_key: str
     rule_id: UUID
@@ -92,21 +93,36 @@ def _automation_rule_can_overlap_urgent_ticket(rule: TicketAutomationRule) -> bo
     return _allows_value(conditions.get("priority"), "urgent")
 
 
-def list_automation_center_ticket_assignment_conflicts(
-    db: Session,
-    query: AutomationCenterTicketAssignmentConflictQuery,
-) -> tuple[AutomationCenterLegacyRuleConflict, ...]:
-    """Return live legacy overlap evidence for the fixed urgent-ticket pilot.
+def _automation_rule_can_overlap_priority_ticket(
+    rule: TicketAutomationRule, *, priority: str
+) -> bool:
+    if (
+        rule.trigger is not AutomationTrigger.ticket_created
+        or rule.action_type is not AutomationActionType.set_priority
+    ):
+        return False
+    conditions = rule.conditions if isinstance(rule.conditions, dict) else {}
+    return not priority or _allows_value(conditions.get("priority"), priority)
 
-    A constrained legacy rule remains a conflict when it could apply to any
-    urgent Ticket. The draft rule intentionally has no region, type, source,
-    or tag constraint with which to prove the two paths disjoint.
+
+def list_automation_center_legacy_conflicts(
+    db: Session,
+    query: AutomationCenterLegacyConflictQuery,
+) -> tuple[AutomationCenterLegacyRuleConflict, ...]:
+    """Return live legacy overlap evidence for supported Ticket actions.
+
+    The legacy rules remain separate owners. This check compares priority where
+    both contracts expose it; region, type, channel, customer, and tag filters
+    are treated as possibly overlapping when the contracts cannot prove them
+    disjoint.
     """
 
-    if query.priority.casefold() != "urgent":
-        return ()
     conflicts: list[AutomationCenterLegacyRuleConflict] = []
-    if support_ticket_settings_service.auto_assign_enabled(db):
+    if (
+        "support.ticket.assign_service_team" in query.action_keys
+        and query.priority.casefold() in {"", "urgent"}
+        and support_ticket_settings_service.auto_assign_enabled(db)
+    ):
         assignment_rules = db.scalars(
             select(TicketAssignmentRule)
             .where(TicketAssignmentRule.is_active.is_(True))
@@ -121,6 +137,13 @@ def list_automation_center_ticket_assignment_conflicts(
             for rule in assignment_rules
             if _assignment_rule_can_overlap_urgent_ticket(rule)
         )
+    check_assignment = (
+        "support.ticket.assign_service_team" in query.action_keys
+        and query.priority.casefold() in {"", "urgent"}
+    )
+    check_priority = "support.ticket.set_priority" in query.action_keys
+    if not check_assignment and not check_priority:
+        return ()
     automation_rules = db.scalars(
         select(TicketAutomationRule)
         .where(TicketAutomationRule.is_active.is_(True))
@@ -133,7 +156,13 @@ def list_automation_center_ticket_assignment_conflicts(
             rule_name=rule.name,
         )
         for rule in automation_rules
-        if _automation_rule_can_overlap_urgent_ticket(rule)
+        if (check_assignment and _automation_rule_can_overlap_urgent_ticket(rule))
+        or (
+            check_priority
+            and _automation_rule_can_overlap_priority_ticket(
+                rule, priority=query.priority.casefold()
+            )
+        )
     )
     return tuple(conflicts)
 

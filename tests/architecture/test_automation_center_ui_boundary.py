@@ -9,7 +9,7 @@ def _source(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_hub_route_is_permission_gated_and_admits_only_the_draft_pilot() -> None:
+def test_hub_route_is_permission_gated_and_uses_the_capability_rule_builder() -> None:
     source = _source("app/web/admin/automation_center.py")
     assert 'require_permission("automation:hub:read")' in source
     assert "@router.get" in source
@@ -17,7 +17,7 @@ def test_hub_route_is_permission_gated_and_admits_only_the_draft_pilot() -> None
     assert "RULE_READ_PERMISSION" in source
     assert "RULE_CREATE_PERMISSION" in source
     assert "RUN_READ_PERMISSION" in source
-    assert '"/ticket-assignment/drafts"' in source
+    assert '"/rules"' in source
     assert '"support:ticket:update"' in source
 
 
@@ -49,11 +49,12 @@ def test_hub_presents_governance_and_rule_lifecycle_controls() -> None:
     assert "Activation unavailable" in template
 
 
-def test_ticket_assignment_form_supports_customer_scope_and_draft_editing() -> None:
-    template = _source("templates/admin/automation/ticket_assignment_draft.html")
-    assert "A new support ticket is created." in template
-    assert "Ticket priority is" in template
-    assert "Assign service team" in template
+def test_rule_builder_uses_registered_options_and_supports_multiple_steps() -> None:
+    template = _source("templates/admin/automation/rule_builder.html")
+    assert "builder_options|tojson" in template
+    assert "Add condition" in template
+    assert "Add action" in template
+    assert "actions-json" in template
     assert 'name="customer_scope" value="company"' in template
     assert 'name="customer_scope" value="selected"' in template
     assert "customer-search" in template

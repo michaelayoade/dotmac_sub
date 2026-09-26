@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from app.models.support import TicketPriority
 from app.services.owner_commands import CommandContext
 
 
@@ -23,6 +24,19 @@ class AssignTicketServiceTeamFromAutomationCommand:
 
     ticket_id: UUID
     service_team_id: UUID
+    event_id: UUID
+    rule_id: UUID
+    rule_version_id: UUID
+    step_index: int
+    context: CommandContext
+
+
+@dataclass(frozen=True, slots=True)
+class SetTicketPriorityFromAutomationCommand:
+    """One replay-safe Automation Center request to set Ticket priority."""
+
+    ticket_id: UUID
+    priority: TicketPriority
     event_id: UUID
     rule_id: UUID
     rule_version_id: UUID
