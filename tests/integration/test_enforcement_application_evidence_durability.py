@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from routeros_api.exceptions import RouterOsApiCommunicationError
@@ -165,6 +166,10 @@ def test_evidence_write_does_not_wait_on_the_callers_subscription_lock(engine):
             offer_id=offer.id,
             status=SubscriptionStatus.active,
             billing_mode=BillingMode.prepaid,
+            # ck_subscriptions_active_billing_anchor: an active subscription
+            # carries its billing anchor.
+            start_at=datetime(2026, 6, 1, tzinfo=UTC),
+            next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
         )
         setup.add(subscription)
         setup.commit()
@@ -244,6 +249,10 @@ def _seed_blocked_subscription_with_nas(session_factory) -> tuple[uuid.UUID, uui
             offer_id=offer.id,
             status=SubscriptionStatus.active,
             billing_mode=BillingMode.prepaid,
+            # ck_subscriptions_active_billing_anchor: an active subscription
+            # carries its billing anchor.
+            start_at=datetime(2026, 6, 1, tzinfo=UTC),
+            next_billing_at=datetime(2026, 7, 1, tzinfo=UTC),
             ipv4_address="10.99.0.7",
             provisioning_nas_device_id=nas.id,
         )
