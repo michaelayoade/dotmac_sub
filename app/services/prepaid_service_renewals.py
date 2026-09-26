@@ -947,6 +947,12 @@ def correct_unused_prepaid_service_renewal(
 
     def operation() -> UnusedPrepaidRenewalCorrectionResult:
         query = command.query
+        idempotency_key = (command.context.idempotency_key or "").strip()
+        if not idempotency_key:
+            _error(
+                "unused_renewal_correction_missing_idempotency_key",
+                "Unused prepaid renewal correction requires an idempotency key.",
+            )
         lock_account(db, str(query.account_id))
         subscription = lock_for_update(db, Subscription, query.subscription_id)
         if subscription is None or subscription.subscriber_id != query.account_id:
@@ -958,7 +964,7 @@ def correct_unused_prepaid_service_renewal(
         if (
             existing is not None
             and existing.reversal_ledger_entry_id is not None
-            and existing.reversal_idempotency_key == command.context.idempotency_key
+            and existing.reversal_idempotency_key == idempotency_key
         ):
             assert existing.reversal_ledger_entry_id is not None
             remaining = round_money(
@@ -1011,7 +1017,7 @@ def correct_unused_prepaid_service_renewal(
                         "renewal during relocation"
                     ),
                     preview_fingerprint=current.reversal_preview_fingerprint,
-                    idempotency_key=command.context.idempotency_key,
+                    idempotency_key=idempotency_key,
                 ),
             ),
         )
