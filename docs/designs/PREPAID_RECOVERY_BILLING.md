@@ -28,7 +28,10 @@ to `financial.prepaid_draft_reconciliation`.
    page disables Bill Now and links to that invoice. The administrator reviews
    and, only when legitimate, closes it through the invoice owner.
 2. On the suspended prepaid service, select **Bill now** and review the exact
-   full-cycle draft preview. Confirmation creates a draft only.
+   full-cycle draft preview. The operator may provide an explicit UTC service
+   start when Finance has approved a historical recovery period; otherwise the
+   preview starts at the confirmation request time. The selected start is part
+   of the owner fingerprint. Confirmation creates a draft only.
 3. Open that draft invoice and select **Reconcile prepaid draft** when the
    authoritative owner offers the action.
 4. Review its exact payment-backed and reviewed-opening funding breakdown,
