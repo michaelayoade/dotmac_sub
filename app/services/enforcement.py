@@ -107,6 +107,25 @@ class EnforcementOutcome:
         )
 
 
+_SSH_NOT_CONFIGURED_DETAILS = frozenset(
+    {"Device has no SSH credentials", "Device has no management IP"}
+)
+
+
+def _is_ssh_not_configured(exc: BaseException) -> bool:
+    """True when ``DeviceProvisioner.ssh_session`` refused for missing config.
+
+    Matches the exact pre-connection refusals raised in
+    ``app/services/nas/provisioner.py`` (``HTTPException(400, ...)``), so a
+    real SSH transport failure is never mistaken for "not configured".
+    """
+    return (
+        isinstance(exc, HTTPException)
+        and exc.status_code == 400
+        and exc.detail in _SSH_NOT_CONFIGURED_DETAILS
+    )
+
+
 def _record_enforcement_application(
     *,
     subscription_id: UUID,
@@ -1093,9 +1112,17 @@ def _enforce_address_list_on_nas(
             "Address-list %s: SSH path failed for %s: %s — trying API.",
             action,
             getattr(nas_device, "name", "?"),
-            exc,
+            sanitize_exception(exc),
         )
-        ssh_outcome = EnforcementOutcome.failed_from(exc, path=EnforcementPath.ssh)
+        if _is_ssh_not_configured(exc):
+            # `DeviceProvisioner.ssh_session` refuses BEFORE connecting when the
+            # device has no SSH credentials or no management IP. That is a
+            # configuration absence (most MikroTik NAS are API-only), not a
+            # transport failure — recording it as `failed` would flood the
+            # evidence with false failures (ADR-0017 invariant).
+            ssh_outcome = EnforcementOutcome.not_applicable("no_ssh_credentials")
+        else:
+            ssh_outcome = EnforcementOutcome.failed_from(exc, path=EnforcementPath.ssh)
 
     api_dev = _nas_with_api_creds(db, nas_device)
     if api_dev is None:
