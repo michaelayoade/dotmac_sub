@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import admin_workflow_guidance
 from app.services.admin_workflow_guidance import AdminHelpAction
-from app.services.auth_dependencies import can
+from app.services.auth_dependencies import can, load_permission_keys
+from app.web.auth.dependencies import WebAuthInfo, require_admin_web_auth
 from app.web.templates import templates
 
 router = APIRouter(prefix="/help", tags=["web-admin-help"])
@@ -100,9 +101,17 @@ def help_center(
     category: str = Query(""),
     article: str = Query(""),
     db: Session = Depends(get_db),
+    auth: WebAuthInfo = Depends(require_admin_web_auth),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    # This route is available to every staff member, so it has no feature-level
+    # permission dependency to populate the request cache. The Help hierarchy
+    # still needs the same cached permissions as the contextual help control to
+    # decide which registered guides and actions may be shown.
+    request_auth = getattr(request.state, "auth", None)
+    if isinstance(request_auth, dict):
+        load_permission_keys(request_auth, db)
     query = q.strip().casefold()
     selected = category.strip()
     visible_sections = tuple(
@@ -137,6 +146,11 @@ def help_center(
         for item in ARTICLES
         if item.id in visible_guide_ids
     ]
+    visible_categories = tuple(
+        category_name
+        for category_name in admin_workflow_guidance.guidance_categories()
+        if any(item.category == category_name for item in permission_filtered_articles)
+    )
     articles = [
         item
         for item in permission_filtered_articles
@@ -157,7 +171,7 @@ def help_center(
             articles, selected_id=selected_article.id if selected_article else ""
         ),
         "selected_article": selected_article,
-        "categories": admin_workflow_guidance.guidance_categories(),
+        "categories": visible_categories,
         "query": q,
         "selected_category": selected,
     }

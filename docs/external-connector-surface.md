@@ -22,14 +22,14 @@ excluded, zero untracked Python, 15 conserved findings, and no syntax errors.
 
 | Category | Baseline |
 | --- | ---: |
-| `outbound_transport` | 43 |
+| `outbound_transport` | 44 |
 | `webhook_surface` | 4 |
 | `provider_credential` | 3 |
 | `connector_task` | 18 |
 | `sync_checkpoint` | 11 |
 | `delivery_retry` | 7 |
 
-### `outbound_transport` — 43 files
+### `outbound_transport` — 44 files
 
 `app/services/ai/client.py`, `app/services/ai/voice_transcription.py`,
 `app/services/bandwidth_metrics_adapter.py`, `app/services/core_router_metrics.py`,
@@ -53,7 +53,8 @@ excluded, zero untracked Python, 15 conserved findings, and no syntax errors.
 `app/services/secrets.py`, `app/services/sms.py`,
 `app/services/team_inbox_media.py`, `app/services/uisp.py`,
 `app/services/web_integrations.py`, `app/services/web_network_monitoring.py`,
-`app/services/web_system_export_tool.py`, `app/tasks/tr069.py`,
+`app/services/web_system_export_tool.py`,
+`app/services/zeptomail_delivery_transport.py`, `app/tasks/tr069.py`,
 `app/team_inbox_smtp.py`, `scripts/network/bulk_tr069_rebind.py`,
 `scripts/network/setup_genieacs.py`,
 `scripts/one_off/send_important_account_batch.py`, and

@@ -18,6 +18,8 @@ from app.models.support import (
     TicketStatus,
     parse_ticket_status,
 )
+from app.models.ticket_workflow import TicketAssignmentRule
+from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.customer_identity_resolution import (
     AUTOMATION_SUPPRESSION_REASON_IDENTITY_REVIEW,
     identity_resolution_requires_manual_review,
@@ -39,6 +41,101 @@ class TicketAutomationProposal:
     status: TicketStatus | None = None
     due_in_hours: int | None = None
     tag: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationCenterTicketAssignmentConflictQuery:
+    """The fixed first Automation Center rule shape to check for overlap."""
+
+    priority: str
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationCenterLegacyRuleConflict:
+    """One active legacy rule that could also assign an incoming Ticket."""
+
+    surface_key: str
+    rule_id: UUID
+    rule_name: str
+
+
+def _normalized_values(value: object) -> frozenset[str]:
+    values = value if isinstance(value, list | tuple | set) else (value,)
+    return frozenset(
+        str(item).strip().casefold() for item in values if str(item).strip()
+    )
+
+
+def _allows_value(value: object, expected: str) -> bool:
+    values = _normalized_values(value)
+    return not values or expected.casefold() in values
+
+
+def _assignment_rule_can_overlap_urgent_ticket(rule: TicketAssignmentRule) -> bool:
+    """Conservatively identify active legacy rules that can set a Ticket team."""
+
+    config = rule.match_config if isinstance(rule.match_config, dict) else {}
+    if rule.team_id is None or config.get("assignee_person_id"):
+        return False
+    return _allows_value(config.get("entity_types"), "ticket") and _allows_value(
+        config.get("priorities"), "urgent"
+    )
+
+
+def _automation_rule_can_overlap_urgent_ticket(rule: TicketAutomationRule) -> bool:
+    if (
+        rule.trigger is not AutomationTrigger.ticket_created
+        or rule.action_type is not AutomationActionType.assign_team
+    ):
+        return False
+    conditions = rule.conditions if isinstance(rule.conditions, dict) else {}
+    return _allows_value(conditions.get("priority"), "urgent")
+
+
+def list_automation_center_ticket_assignment_conflicts(
+    db: Session,
+    query: AutomationCenterTicketAssignmentConflictQuery,
+) -> tuple[AutomationCenterLegacyRuleConflict, ...]:
+    """Return live legacy overlap evidence for the fixed urgent-ticket pilot.
+
+    A constrained legacy rule remains a conflict when it could apply to any
+    urgent Ticket. The draft rule intentionally has no region, type, source,
+    or tag constraint with which to prove the two paths disjoint.
+    """
+
+    if query.priority.casefold() != "urgent":
+        return ()
+    conflicts: list[AutomationCenterLegacyRuleConflict] = []
+    if support_ticket_settings_service.auto_assign_enabled(db):
+        assignment_rules = db.scalars(
+            select(TicketAssignmentRule)
+            .where(TicketAssignmentRule.is_active.is_(True))
+            .order_by(TicketAssignmentRule.created_at, TicketAssignmentRule.id)
+        )
+        conflicts.extend(
+            AutomationCenterLegacyRuleConflict(
+                surface_key="support.ticket_assignment_rules",
+                rule_id=rule.id,
+                rule_name=rule.name,
+            )
+            for rule in assignment_rules
+            if _assignment_rule_can_overlap_urgent_ticket(rule)
+        )
+    automation_rules = db.scalars(
+        select(TicketAutomationRule)
+        .where(TicketAutomationRule.is_active.is_(True))
+        .order_by(TicketAutomationRule.sort_order, TicketAutomationRule.id)
+    )
+    conflicts.extend(
+        AutomationCenterLegacyRuleConflict(
+            surface_key="support.ticket_creation_automation",
+            rule_id=rule.id,
+            rule_name=rule.name,
+        )
+        for rule in automation_rules
+        if _automation_rule_can_overlap_urgent_ticket(rule)
+    )
+    return tuple(conflicts)
 
 
 def evaluate_rules(

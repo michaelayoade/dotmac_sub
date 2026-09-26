@@ -58,7 +58,10 @@ SERVICES: tuple[SOTService, ...] = (
             "and modeled PON. The subscriber is derived only through the "
             "subscription bridge. MAC, name, address, work-order, map, "
             "and registration inference cannot select identity. Existing "
-            "disagreements fail closed into reviewed repair."
+            "disagreements fail closed into reviewed repair. "
+            "Legacy wan_mode and ip_mode columns are non-authoritative "
+            "compatibility fields: model validators normalize known bridge "
+            "aliases and database checks reject invalid persisted values."
         ),
         contract=ServiceContract(
             concerns=(

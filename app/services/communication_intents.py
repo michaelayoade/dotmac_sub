@@ -490,7 +490,8 @@ def record_delivery_outcome(db: Session, notification: Notification) -> None:
             campaign_recipient.delivered_at = notification.sent_at or datetime.now(UTC)
             campaign_recipient.failed_reason = None
         elif (
-            notification.status == NotificationStatus.failed
+            notification.status
+            in {NotificationStatus.failed, NotificationStatus.bounced}
             and notification.send_at is None
         ):
             campaign_recipient.status = CampaignRecipientStatus.failed.value
@@ -515,12 +516,17 @@ def record_delivery_outcome(db: Session, notification: Notification) -> None:
         .all()
     )
     states = {status for status, _send_at in delivery_rows}
-    if states & {NotificationStatus.queued, NotificationStatus.sending}:
+    if states & {
+        NotificationStatus.queued,
+        NotificationStatus.sending,
+        NotificationStatus.submitted,
+    }:
         intent_record.status = "delivering"
     elif states and states <= {NotificationStatus.delivered}:
         intent_record.status = "delivered"
     elif any(
-        status == NotificationStatus.failed and send_at is not None
+        status in {NotificationStatus.failed, NotificationStatus.bounced}
+        and send_at is not None
         for status, send_at in delivery_rows
     ):
         intent_record.status = "retrying"

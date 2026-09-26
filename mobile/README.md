@@ -119,6 +119,11 @@ and iOS Info.plist; for a white-label build, override `BRAND_PAYMENT_SCHEME` in
 the Dart build *and* the matching native entries (Gradle `-PpaymentScheme=`,
 iOS `CFBundleURLSchemes`).
 
+Gateway return links are owned by `PaymentLinkHandler`, which verifies the
+returned reference with the API and refreshes billing data. Flutter's default
+deep-link router is disabled for this app because a URL cannot reconstruct the
+in-memory checkout context required to open `/pay`.
+
 ## How auth works
 
 1. `POST /auth/login` returns either a token pair **or** an MFA challenge
@@ -194,10 +199,13 @@ bearer-auth API clients:
 1. `POST /api/v1/payments/initiate {invoice_id}` → `{provider_type,
    provider_public_key, payment_reference, customer_email, amount, currency}`.
    Self-scoped to the caller's own invoice; no `billing:*` permission required.
-2. The app opens `PaymentWebViewScreen`, which runs the **Paystack** or
-   **Flutterwave** inline JS keyed by that public key + reference. On success the
-   provider callback redirects to a `dotmacpay://success?reference=…` sentinel
-   the WebView intercepts.
+2. The app opens the server-returned, provider-hosted HTTPS checkout in
+   `PaymentWebViewScreen`. Browser-based bank and 3-D Secure redirects remain in
+   that WebView. Native-wallet links (including OPay custom, Android
+   `intent://`, and iOS/Android app links) are handed to the installed app while
+   the checkout stays on the back stack. The WebView intercepts the API's HTTPS
+   verification callback (or the legacy `dotmacpay://success` sentinel) and
+   returns the reference to the owning payment flow.
 3. `POST /api/v1/payments/verify {reference}` → verifies with the provider,
    records the `Payment`, allocates it to the invoice (idempotent on the
    provider's external id), and returns the result.
@@ -207,8 +215,8 @@ Requirements:
   (`default_payment_provider_type` + the provider public/secret keys).
 - `webview_flutter` needs Android `minSdkVersion >= 19` (default is fine) and,
   for iOS, no extra setup for https content.
-- The provider inline JS loads from the internet, so the device/emulator needs
-  network access.
+- The provider-hosted checkout loads from the internet, so the device/emulator
+  needs network access.
 
 ## Crash reporting (GlitchTip)
 

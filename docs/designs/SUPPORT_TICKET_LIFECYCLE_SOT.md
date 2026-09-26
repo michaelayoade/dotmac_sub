@@ -163,7 +163,17 @@ The lifecycle owner persists Region and final team state and stages assignment
 notifications, audit evidence, and the `ticket.created` event in its root
 transaction. Audit and event evidence include the creation routing mode and
 final team identifier, including a null identifier for intentional
-unassignment.
+unassignment. Standard (non-silent) creation also stages the bounded
+`support.ticket.created` Automation Center event with the operator tenant,
+Ticket UUID, and normalized priority. It does not invoke Automation Center
+assignment inline.
+
+When the Automation Center capability is later enabled, its declared
+service-team action enters `support.ticket_lifecycle` through the typed
+`AssignTicketServiceTeamFromAutomationCommand`. The command locks and verifies
+the active Service Team, retains event/rule-version/step provenance in audit
+evidence, and uses the stable runtime command identity for replay. It does not
+give the Automation Center direct Ticket writes.
 
 The admin create form passes the typed
 `TicketCreationAcknowledgementMode.customer_email` intent to the lifecycle

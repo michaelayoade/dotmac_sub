@@ -23,7 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship, validates
 
 from app.db import Base
 
@@ -2413,6 +2413,14 @@ class OntAssignment(Base):
             unique=True,
             postgresql_where=text("is_active"),
         ),
+        CheckConstraint(
+            "wan_mode IS NULL OR wan_mode IN ('routing', 'bridging')",
+            name="ck_ont_assignments_wan_mode_valid",
+        ),
+        CheckConstraint(
+            "ip_mode IS NULL OR ip_mode IN ('inactive', 'static_ip', 'dhcp')",
+            name="ck_ont_assignments_ip_mode_valid",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -2459,6 +2467,39 @@ class OntAssignment(Base):
         default=MgmtIpMode.dhcp,
         doc="IP assignment mode: dhcp or static_ip",
     )
+
+    @validates("wan_mode")
+    def _normalize_wan_mode(self, _key: str, value: object) -> OnuMode | None:
+        if value is None:
+            return None
+        if isinstance(value, OnuMode):
+            return value
+        normalized = str(value).strip().lower()
+        if normalized in {"bridge", "bridged", "setup_via_onu"}:
+            return OnuMode.bridging
+        try:
+            return OnuMode(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid ONT assignment WAN mode: {value!r}") from exc
+
+    @validates("ip_mode")
+    def _normalize_ip_mode(self, _key: str, value: object) -> MgmtIpMode | None:
+        if value is None:
+            return None
+        if isinstance(value, MgmtIpMode):
+            return value
+        normalized = str(value).strip().lower()
+        # A bridge WAN setting has no representation in the legacy IP-mode
+        # field. Keep the assignment loadable and use its valid neutral mode.
+        if normalized in {"bridge", "bridged"}:
+            return MgmtIpMode.dhcp
+        if normalized == "static":
+            normalized = MgmtIpMode.static_ip.value
+        try:
+            return MgmtIpMode(normalized)
+        except ValueError as exc:
+            raise ValueError(f"Invalid ONT assignment IP mode: {value!r}") from exc
+
     static_ip: Mapped[str | None] = mapped_column(
         String(64), doc="Static IP address (when ip_mode=static_ip)"
     )

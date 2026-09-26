@@ -849,7 +849,7 @@ def test_active_payment_arrangement_shields_prepaid_suspension(
     assert _prepaid_locks(db_session, subscription) == []
 
 
-def test_submitted_payment_proof_shields_prepaid_suspension(
+def test_submitted_payment_proof_does_not_block_prepaid_suspension(
     db_session, subscriber_account, subscription
 ):
     from app.models.payment_proof import PaymentProof, PaymentProofStatus
@@ -872,10 +872,10 @@ def test_submitted_payment_proof_shields_prepaid_suspension(
 
     db_session.refresh(subscriber_account)
     db_session.refresh(subscription)
-    assert result["suspended"] == 0
-    assert subscriber_account.prepaid_deactivation_at is None
-    assert subscription.status == SubscriptionStatus.active
-    assert _prepaid_locks(db_session, subscription) == []
+    assert result["suspended"] == 1
+    assert subscriber_account.prepaid_deactivation_at is not None
+    assert subscription.status == SubscriptionStatus.suspended
+    assert len(_prepaid_locks(db_session, subscription)) == 1
 
 
 def test_billing_health_is_observed_but_does_not_block_prepaid_suspension(

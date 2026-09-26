@@ -57,6 +57,9 @@ class AutomationTriggerCapability:
     entity_id_field: str
     fields: tuple[AutomationConditionField, ...]
     author_permission: str
+    #: A trigger may be admitted for draft authoring before its durable event
+    #: producer and identity contract are ready for runtime delivery.
+    runtime_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +83,10 @@ class AutomationActionCapability:
     author_permission: str
     runtime_scope: str
     idempotency: str
+    #: An action may be admitted for draft authoring before its runtime
+    #: event-to-command adapter is ready. Publication must reject it until this
+    #: flag is enabled in a later reviewed slice.
+    runtime_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)

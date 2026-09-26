@@ -14,6 +14,13 @@
         android:label="Dotmac Selfcare"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Payment returns are consumed by PaymentLinkHandler (app_links),
+             which verifies their reference with the API. Do not also hand
+             them to Flutter's default deep-link router: a URL cannot carry
+             the in-memory CheckoutArgs required by /pay. -->
+        <meta-data
+            android:name="flutter_deeplinking_enabled"
+            android:value="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -65,6 +72,15 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- Paystack's OPay handoff. The package query supports Android 11+
+             package visibility; intent:// execution is validated in
+             MainActivity before it is sent to the OS. -->
+        <package android:name="team.opay.pay"/>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="opay"/>
+        </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

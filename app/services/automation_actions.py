@@ -53,14 +53,63 @@ AutomationActionExecutor = Callable[
     [Session, ExecuteAutomationActionCommand], AutomationActionOutcome
 ]
 
-# Module-adapter PRs add exact key -> typed adapter entries here. The immutable
-# mapping prevents runtime registration from turning a configuration change
-# into executable code admission.
-_ACTION_EXECUTORS: Mapping[str, AutomationActionExecutor] = MappingProxyType({})
-
 
 class AutomationActionExecutorError(ValueError):
     pass
+
+
+def _uuid_input(inputs: tuple[AutomationActionInputValue, ...], *, key: str) -> UUID:
+    values = [item.value for item in inputs if item.key == key]
+    if len(values) != 1:
+        raise AutomationActionExecutorError(
+            f"Automation action requires exactly one {key!r} input."
+        )
+    try:
+        return UUID(str(values[0]))
+    except (TypeError, ValueError) as exc:
+        raise AutomationActionExecutorError(
+            f"Automation action input {key!r} must be a UUID."
+        ) from exc
+
+
+def _assign_support_ticket_service_team(
+    db: Session, command: ExecuteAutomationActionCommand
+) -> AutomationActionOutcome:
+    from app.services.support import Tickets
+    from app.services.support_ticket_contracts import (
+        AssignTicketServiceTeamFromAutomationCommand,
+    )
+
+    if command.target.entity_type != "support.ticket":
+        raise AutomationActionExecutorError(
+            "The support ticket assignment action received the wrong target type."
+        )
+    Tickets.assign_ticket_service_team_from_automation(
+        db,
+        command=AssignTicketServiceTeamFromAutomationCommand(
+            ticket_id=command.target.entity_id,
+            service_team_id=_uuid_input(command.inputs, key="service_team_id"),
+            event_id=command.event_id,
+            rule_id=command.rule_id,
+            rule_version_id=command.rule_version_id,
+            step_index=command.step_index,
+            context=command.context,
+        ),
+    )
+    return AutomationActionOutcome(
+        disposition=AutomationActionDisposition.succeeded,
+        outcome_code="support_ticket_service_team_assigned",
+    )
+
+
+# Module-adapter PRs add exact key -> typed adapter entries here. The immutable
+# mapping prevents runtime registration from turning a configuration change
+# into executable code admission.
+_ACTION_EXECUTORS: Mapping[str, AutomationActionExecutor] = MappingProxyType(
+    {
+        "support.ticket.assign_service_team": _assign_support_ticket_service_team,
+    }
+)
 
 
 def action_executor(action_key: str) -> AutomationActionExecutor:
@@ -78,11 +127,17 @@ def runtime_registry_errors() -> tuple[str, ...]:
         for module in automation_capabilities.registered_module_manifests()
         for action in module.actions
     }
+    runtime_declared = {
+        action.key
+        for module in automation_capabilities.registered_module_manifests()
+        for action in module.actions
+        if action.runtime_enabled
+    }
     executable = set(_ACTION_EXECUTORS)
     errors = [
         *(
             f"declared action {key!r} has no executor"
-            for key in sorted(declared - executable)
+            for key in sorted(runtime_declared - executable)
         ),
         *(
             f"executor {key!r} has no capability declaration"

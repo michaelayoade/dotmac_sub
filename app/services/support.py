@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import secrets
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.sales import Lead
+from app.models.service_team import ServiceTeam
 from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber
 from app.models.support import (
@@ -95,6 +96,7 @@ from app.services.sales import lifecycle as lead_lifecycle
 from app.services.session_hooks import run_after_commit
 from app.services.staff_notifications import queue_staff_email
 from app.services.support_ticket_contracts import (
+    AssignTicketServiceTeamFromAutomationCommand,
     InternalOperationalTicketSource,
     SupportTicketCommentRealtimeChange,
     SupportTicketCommentRealtimeHint,
@@ -260,11 +262,17 @@ def ticket_owner_command(name: str):
 
             db_session_adapter.release_read_transaction(db)
             actor = str(kwargs.get("actor_id") or "support-system")
-            context = CommandContext.system(
-                actor=actor,
-                scope=f"support.ticket:{name}",
-                reason=f"execute canonical Ticket {name} command",
-                idempotency_key=_command_idempotency_key(kwargs.get("request")),
+            command = kwargs.get("command")
+            command_context = getattr(command, "context", None)
+            context = (
+                command_context
+                if isinstance(command_context, CommandContext)
+                else CommandContext.system(
+                    actor=actor,
+                    scope=f"support.ticket:{name}",
+                    reason=f"execute canonical Ticket {name} command",
+                    idempotency_key=_command_idempotency_key(kwargs.get("request")),
+                )
             )
             result = execute_owner_command(
                 db,
@@ -274,7 +282,10 @@ def ticket_owner_command(name: str):
             )
             if name == "create" and isinstance(result, Ticket):
                 _notify_workqueue(result, "added")
-            elif name == "update" and isinstance(result, Ticket):
+            elif name in {
+                "update",
+                "assign_ticket_service_team_from_automation",
+            } and isinstance(result, Ticket):
                 previous = db.info.pop("_support_previous_assignee_id", None)
                 _notify_workqueue(
                     result,
@@ -2441,6 +2452,63 @@ class Tickets:
         )
 
     @staticmethod
+    def _stage_automation_ticket_created_event(
+        db: Session,
+        ticket: Ticket,
+        *,
+        dispatch_after_commit: bool,
+    ) -> None:
+        """Stage the bounded event identity used by Automation Center rules.
+
+        The existing custom ticket event remains for its legacy consumers. This
+        separate envelope is intentionally small: it contains only the
+        operator tenant, Ticket identity, and declared condition fields.
+        """
+
+        from app.services.operator_tenant import OPERATOR_TENANT_ID
+
+        emit_event(
+            db,
+            EventType.support_ticket_created,
+            {
+                "tenant_id": str(OPERATOR_TENANT_ID),
+                "ticket_id": str(ticket.id),
+                "priority": str(ticket.priority or "").strip().lower(),
+            },
+            actor="support.ticket_lifecycle",
+            subscriber_id=ticket.subscriber_id,
+            account_id=ticket.customer_account_id or ticket.subscriber_id,
+            dispatch_after_commit=dispatch_after_commit,
+        )
+
+    @staticmethod
+    def _ticket_creation_audit_actor(
+        request: object | None,
+        actor_id: str | None,
+    ):
+        """Return the authenticated Ticket creator as a typed audit actor."""
+
+        from app.services.audit_adapter import AuditActor
+
+        state = getattr(request, "state", None)
+        auth = getattr(state, "auth", None)
+        principal_type = (
+            str(auth.get("principal_type") or "").strip().lower()
+            if isinstance(auth, Mapping)
+            else str(getattr(state, "actor_type", "") or "").strip().lower()
+        )
+        resolved_actor_id = str(
+            actor_id or getattr(state, "actor_id", "") or ""
+        ).strip()
+        if principal_type == "api_key" and resolved_actor_id:
+            return AuditActor.api_key(resolved_actor_id)
+        if principal_type == "service" and resolved_actor_id:
+            return AuditActor.service(resolved_actor_id)
+        if resolved_actor_id:
+            return AuditActor.user(resolved_actor_id)
+        return AuditActor.system("support.ticket_lifecycle")
+
+    @staticmethod
     def _stage_create(
         db: Session,
         payload: TicketCreate,
@@ -2584,13 +2652,14 @@ class Tickets:
                 metadata=audit_metadata,
             )
         else:
-            log_audit_event(
-                db=db,
-                request=request,
+            from app.services.audit_adapter import stage_audit_event
+
+            stage_audit_event(
+                db,
                 action="create",
                 entity_type="support_ticket",
                 entity_id=str(ticket.id),
-                actor_id=actor_id,
+                actor=Tickets._ticket_creation_audit_actor(request, actor_id),
                 metadata=audit_metadata,
             )
         Tickets._emit_ticket_event(
@@ -2603,6 +2672,12 @@ class Tickets:
             creation_acknowledgement_mode=acknowledgement_mode,
             creation_consequence_mode=consequence_mode,
         )
+        if consequence_mode is TicketCreationConsequenceMode.standard:
+            Tickets._stage_automation_ticket_created_event(
+                db,
+                ticket,
+                dispatch_after_commit=dispatch_event_after_commit,
+            )
         from app.services import sla_operational_notifications
 
         sla_operational_notifications.emit_ticket_created(db, ticket)
@@ -2750,6 +2825,62 @@ class Tickets:
         if not ticket or not ticket.is_active:
             raise _ticket_error("ticket_not_found", "Ticket not found")
         return ticket
+
+    @staticmethod
+    @ticket_owner_command("assign_ticket_service_team_from_automation")
+    def assign_ticket_service_team_from_automation(
+        db: Session,
+        *,
+        command: AssignTicketServiceTeamFromAutomationCommand,
+    ) -> Ticket:
+        """Apply one declared automation assignment through the Ticket owner."""
+
+        active_team = db.scalar(
+            select(ServiceTeam)
+            .where(
+                ServiceTeam.id == command.service_team_id,
+                ServiceTeam.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if active_team is None:
+            raise _ticket_error(
+                "automation_assignment_team_unavailable",
+                "The automation rule's Service Team is no longer active.",
+                service_team_id=str(command.service_team_id),
+            )
+        ticket = db.scalar(
+            select(Ticket)
+            .where(Ticket.id == command.ticket_id, Ticket.is_active.is_(True))
+            .with_for_update()
+        )
+        if ticket is None:
+            raise _ticket_error("ticket_not_found", "Ticket not found")
+        if ticket.service_team_id == command.service_team_id:
+            return ticket
+        updated = Tickets.update(
+            db,
+            ticket_id=str(command.ticket_id),
+            payload=TicketUpdate(service_team_id=command.service_team_id),
+            actor_id=command.context.actor,
+        )
+        from app.services.audit_adapter import AuditActor, stage_audit_event
+
+        stage_audit_event(
+            db,
+            action="automation_service_team_assigned",
+            entity_type="support_ticket",
+            entity_id=str(updated.id),
+            actor=AuditActor.service(command.context.actor),
+            metadata={
+                "event_id": str(command.event_id),
+                "rule_id": str(command.rule_id),
+                "rule_version_id": str(command.rule_version_id),
+                "step_index": command.step_index,
+                "service_team_id": str(command.service_team_id),
+            },
+        )
+        return updated
 
     @staticmethod
     @ticket_owner_command("set_satisfaction")

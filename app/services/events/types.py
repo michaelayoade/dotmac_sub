@@ -34,6 +34,9 @@ class EventType(enum.Enum):
     # Automation Center control-plane events
     automation_rule_changed = "automation.rule_changed"
 
+    # Support ticket lifecycle events
+    support_ticket_created = "support.ticket.created"
+
     # Subscriber events
     subscriber_created = "subscriber.created"
     subscriber_updated = "subscriber.updated"

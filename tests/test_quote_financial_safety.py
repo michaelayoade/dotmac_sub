@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from fastapi import HTTPException
 
 from app.models.party import Party
 from app.models.project import ProjectTemplate
@@ -203,6 +204,22 @@ def test_removing_the_last_line_makes_the_quote_unsendable_again(
         sales_service.quotes.update(
             db_session, str(quote.id), QuoteUpdate(status=QuoteStatus.sent)
         )
+
+
+def test_line_mutation_cannot_cross_the_quote_route_scope(db_session, subscriber):
+    """Nested quote routes must not mutate a line from another Quote."""
+    quote = _draft(db_session, subscriber)
+    other_quote = _draft(db_session, subscriber)
+    line = _add_line(db_session, quote)
+
+    with pytest.raises(HTTPException, match="Quote line item not found"):
+        sales_service.quote_line_items.delete(
+            db_session,
+            str(line.id),
+            expected_quote_id=other_quote.id,
+        )
+
+    assert db_session.get(QuoteLineItem, line.id) is not None
 
 
 def test_a_zero_priced_line_is_allowed(db_session, subscriber):

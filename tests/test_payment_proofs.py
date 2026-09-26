@@ -411,6 +411,8 @@ def test_verify_creates_succeeded_payment_and_notifies(db_session):
     assert payment.status == PaymentStatus.succeeded
     assert Decimal(str(payment.amount)) == Decimal("5000.00")
     assert "TRF-123" == payment.external_id
+    assert payment.paid_at is not None
+    assert payment.paid_at.replace(tzinfo=UTC) == datetime(2026, 6, 9, tzinfo=UTC)
 
     notes = (
         db_session.query(Notification)

@@ -1908,24 +1908,15 @@ def _dunning_shield_reason(db: Session, account_id) -> str | None:
 
     Mirrors the event-driven overdue path (``EnforcementHandler.
     _suspension_shield_reason``) so the two enforcement systems agree: a
-    customer with an admin-approved payment arrangement or a bank-transfer
-    proof under review must NOT be dunned/suspended. The scheduled dunning
-    runner previously ignored this shield entirely.
+    customer with an admin-approved payment arrangement or an in-force service
+    extension must NOT be dunned/suspended. A submitted payment proof is
+    unverified evidence, not payment or coverage, and therefore is not a
+    shield. The scheduled dunning runner previously ignored these shields
+    entirely.
     """
-    from app.models.payment_proof import PaymentProof, PaymentProofStatus
-
     arrangement_reason = active_arrangement_shield_reason(db, account_id)
     if arrangement_reason:
         return arrangement_reason
-    proof_id = (
-        db.query(PaymentProof.id)
-        .filter(PaymentProof.account_id == account_id)
-        .filter(PaymentProof.status == PaymentProofStatus.submitted)
-        .limit(1)
-        .scalar()
-    )
-    if proof_id:
-        return f"payment proof {proof_id} pending review"
     from app.services.service_extensions import extension_shield_reason
 
     return extension_shield_reason(db, account_id)
@@ -1938,18 +1929,7 @@ def _bulk_dunning_shield_reasons(
     if not account_ids:
         return {}
     ids = {coerce_uuid(str(account_id)) for account_id in account_ids}
-    from app.models.payment_proof import PaymentProof, PaymentProofStatus
-
     reasons = bulk_active_arrangement_shield_reasons(db, ids)
-
-    proof_rows = (
-        db.query(PaymentProof.account_id, PaymentProof.id)
-        .filter(PaymentProof.account_id.in_(ids))
-        .filter(PaymentProof.status == PaymentProofStatus.submitted)
-        .all()
-    )
-    for account_id, proof_id in proof_rows:
-        reasons.setdefault(account_id, f"payment proof {proof_id} pending review")
 
     from app.services.service_extensions import bulk_extension_shield_reasons
 

@@ -442,6 +442,84 @@ def stage_reversal(
     return reversal
 
 
+def stage_legacy_reversal(
+    db: Session,
+    command: StageReversalCommand,
+    *,
+    context: CommandContext,
+) -> CustomerPostingGroup:
+    """Stage a linked reversal for legacy owners not yet command-wrapped.
+
+    This preserves the single writer for posting rows while bounded legacy
+    invoice/account-credit flows are migrated to ``execute_owner_command``.
+    Callers still supply a typed command context, and the function remains
+    flush-only.
+    """
+
+    original = db.get(CustomerPostingGroup, command.original_group_id)
+    if original is None:
+        raise _error(
+            "posting_group_not_found",
+            "Reversal requires an existing posting group.",
+            group_id=str(command.original_group_id),
+        )
+    already = db.execute(
+        select(CustomerPostingGroup).where(
+            CustomerPostingGroup.reverses_group_id == command.original_group_id
+        )
+    ).scalar_one_or_none()
+    if already is not None:
+        replay_key = command.idempotency_key or context.idempotency_key
+        if (
+            already.producer_owner == command.producer_owner.value
+            and already.idempotency_key == replay_key
+        ):
+            return already
+        raise _error(
+            "posting_group_already_reversed",
+            "A posting group has one active reversal chain.",
+            group_id=str(command.original_group_id),
+            reversal_id=str(already.id),
+        )
+
+    reversal = CustomerPostingGroup(
+        account_id=original.account_id,
+        currency=original.currency,
+        authority=permitted_authority(db),
+        command_kind=PostingCommandKind.reversal,
+        producer_owner=command.producer_owner.value,
+        source_kind=command.source_kind.value,
+        source_id=command.source_id,
+        occurred_at=command.occurred_at,
+        command_id=context.command_id,
+        correlation_id=context.correlation_id,
+        causation_id=context.causation_id,
+        idempotency_key=command.idempotency_key or context.idempotency_key,
+        reverses_group_id=original.id,
+        actor=context.actor,
+        reason=context.reason,
+    )
+    db.add(reversal)
+    db.flush()
+
+    for item in original.effects:
+        db.add(
+            CustomerPositionEffect(
+                group_id=reversal.id,
+                effect=item.effect,
+                amount=item.amount,
+                currency=item.currency,
+                obligation_id=item.obligation_id,
+                invoice_id=item.invoice_id,
+                payment_id=item.payment_id,
+                credit_note_id=item.credit_note_id,
+                entitlement_id=item.entitlement_id,
+            )
+        )
+    db.flush()
+    return reversal
+
+
 def resolve_position(
     db: Session,
     *,
@@ -611,4 +689,5 @@ __all__ = [
     "resolve_positions",
     "stage_posting_group",
     "stage_reversal",
+    "stage_legacy_reversal",
 ]

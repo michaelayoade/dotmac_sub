@@ -2,6 +2,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.models.catalog import (
     AccessType,
     BillingCycle,
@@ -23,9 +25,11 @@ from app.models.network import (
     IPAssignment,
     IPv4Address,
     IPVersion,
+    MgmtIpMode,
     OLTDevice,
     OntAssignment,
     OntUnit,
+    OnuMode,
     PonPort,
 )
 from app.models.network_monitoring import DeviceType, NetworkDevice, PopSite
@@ -241,6 +245,49 @@ def test_customer_list_excludes_reseller_users(db_session):
     emails = {item["email"] for item in context["customers"]}
     assert customer.email in emails
     assert reseller.email not in emails
+
+
+def test_customer_search_loads_bridge_mode_ont_assignment(db_session):
+    customer = _make_customer(
+        db_session, f"bridge-ont-{uuid.uuid4().hex[:8]}@example.com"
+    )
+    ont = OntUnit(serial_number=f"ONT-{uuid.uuid4().hex}")
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            subscriber_id=customer.id,
+            active=True,
+            wan_mode="bridge",
+            ip_mode="bridge",
+        )
+    )
+    db_session.commit()
+
+    context = _build_context(
+        db_session,
+        search=customer.email,
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        page=1,
+        per_page=25,
+    )
+
+    assert [item["email"] for item in context["customers"]] == [customer.email]
+    assignment = context["customers"][0]["raw"].ont_assignments[0]
+    assert assignment.wan_mode is OnuMode.bridging
+    assert assignment.ip_mode is MgmtIpMode.dhcp
+
+
+def test_ont_assignment_rejects_unknown_mode_values():
+    with pytest.raises(ValueError, match="Invalid ONT assignment WAN mode"):
+        OntAssignment(ont_unit_id=uuid.uuid4(), wan_mode="pppoe")
+
+    with pytest.raises(ValueError, match="Invalid ONT assignment IP mode"):
+        OntAssignment(ont_unit_id=uuid.uuid4(), ip_mode="bridge_mode")
 
 
 def test_customer_billing_filter_uses_profiles_and_non_billable_authority(db_session):

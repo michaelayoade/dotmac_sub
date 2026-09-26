@@ -124,6 +124,8 @@ class MaterialRequestItem {
     this.notes,
     this.approvedQuantity,
     this.issuedQuantity,
+    this.outstandingQuantity,
+    this.outOfStock = false,
     this.fulfilledQuantity,
   });
 
@@ -133,7 +135,9 @@ class MaterialRequestItem {
   final String? itemName;
   final String? notes;
   final int? approvedQuantity;
-  final int? issuedQuantity;
+  final double? issuedQuantity;
+  final double? outstandingQuantity;
+  final bool outOfStock;
   final int? fulfilledQuantity;
 
   factory MaterialRequestItem.fromJson(
@@ -148,7 +152,9 @@ class MaterialRequestItem {
         (json['item'] is Map ? _string((json['item'] as Map)['name']) : null),
     notes: _string(json['notes']),
     approvedQuantity: _int(json['approved_quantity']),
-    issuedQuantity: _int(json['issued_quantity'] ?? json['quantity_issued']),
+    issuedQuantity: _double(json['issued_quantity'] ?? json['quantity_issued']),
+    outstandingQuantity: _double(json['outstanding_quantity']),
+    outOfStock: json['out_of_stock'] == true,
     fulfilledQuantity: _int(
       json['fulfilled_quantity'] ?? json['quantity_fulfilled'],
     ),
@@ -183,6 +189,7 @@ class MaterialRequest {
     this.supportSystem,
     this.supportReference,
     this.supportStatus,
+    this.fulfillmentStatus,
     this.items = const [],
   });
 
@@ -212,6 +219,7 @@ class MaterialRequest {
   final String? supportSystem;
   final String? supportReference;
   final String? supportStatus;
+  final String? fulfillmentStatus;
   final List<MaterialRequestItem> items;
 
   factory MaterialRequest.fromJson(
@@ -247,6 +255,7 @@ class MaterialRequest {
     supportSystem: _string(json['support_system']),
     supportReference: _string(json['support_reference']),
     supportStatus: _string(json['support_status']),
+    fulfillmentStatus: _string(json['fulfillment_status']),
     items: _mapList(json['items']).map(MaterialRequestItem.fromJson).toList(),
   );
 

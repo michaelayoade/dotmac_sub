@@ -18873,6 +18873,13 @@
     "200": "ea0d95a95ab9"
    }
   },
+  "POST /api/v1/webhooks/zeptomail/delivery": {
+   "params": [],
+   "request": null,
+   "responses": {
+    "200": "d17815b9f4dc"
+   }
+  },
   "POST /api/v1/wireguard-provision/register": {
    "params": [],
    "request": "c67603dda8a8",
@@ -19767,8 +19774,8 @@
   "FieldMaterialRequestCancel": "00daeee69caa",
   "FieldMaterialRequestCreate": "beb591240e6a",
   "FieldMaterialRequestItemCreate": "04759e76cb22",
-  "FieldMaterialRequestItemRead": "1e218709f934",
-  "FieldMaterialRequestRead": "881af457f920",
+  "FieldMaterialRequestItemRead": "d04dea5dd7cd",
+  "FieldMaterialRequestRead": "6aad073795fb",
   "FieldMaterialRequestSubmit": "0bac3c573aa7",
   "FieldMeResponse": "92ccd05b3f23",
   "FieldMovementRead": "e6afbc3e60fc",
@@ -20230,7 +20237,7 @@
   "NotificationDeliveryRead": "35de3a12d809",
   "NotificationDeliveryUpdate": "6e0eaee67ab3",
   "NotificationRead": "c4d3c42ac632",
-  "NotificationStatus": "f5434418b4b8",
+  "NotificationStatus": "0ff606574696",
   "NotificationTemplateCreate": "6c702deb5b87",
   "NotificationTemplateRead": "559866507b94",
   "NotificationTemplateUpdate": "05eed01689f4",

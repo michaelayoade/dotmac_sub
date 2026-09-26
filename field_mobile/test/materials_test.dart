@@ -56,6 +56,38 @@ JobDetail _testJobDetail() => JobDetail(
 );
 
 void main() {
+  test(
+    'ERP partial quantities preserve decimals and unknown legacy values',
+    () {
+      final line = MaterialRequestItem.fromJson({
+        'id': 'line-1',
+        'item_id': 'cable',
+        'quantity': 5,
+        'issued_quantity': '2.5',
+        'outstanding_quantity': '2.5',
+        'out_of_stock': true,
+      });
+      expect(line.quantity, 5);
+      expect(line.issuedQuantity, 2.5);
+      expect(line.outstandingQuantity, 2.5);
+      expect(line.outOfStock, isTrue);
+      final legacy = MaterialRequestItem.fromJson({
+        'id': 'line-2',
+        'item_id': 'router',
+        'quantity': 1,
+      });
+      expect(legacy.issuedQuantity, isNull);
+      expect(legacy.outstandingQuantity, isNull);
+      final request = MaterialRequest.fromJson({
+        'id': 'request-1',
+        'status': 'pending_stock',
+        'fulfillment_status': 'partially_issued',
+        'can_cancel': false,
+      });
+      expect(request.fulfillmentStatus, 'partially_issued');
+      expect(request.canCancel, isFalse);
+    },
+  );
   late ProviderContainer container;
   late FakeHttpAdapter adapter;
   late ApiClient client;
