@@ -740,7 +740,7 @@ class _ActiveDepositCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Bank transfer pending',
+                    'Top-up pending',
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
