@@ -203,8 +203,10 @@ does afterwards, so evidence of it must not share that transaction's fate.
   rollback of the caller's transaction around the real per-NAS helper, through
   the real `EnforcementHandler` raising `EnforcementProjectionError`, and through
   the real scheduled cleanup task rolling back; and that the write never waits
-  on the caller's subscription lock. The record's owner is contracted, so slice
-  2 may read it.
+  on the caller's subscription lock. The record's owner is contracted
+  (`access.enforcement_evidence`). Slice 2 may read the record only after the
+  shadow comparison against logs and router state is recorded; its readers must
+  tolerate dangling ids and never treat the record as the intended state.
 - Fallback retirement: the warning-only failure logs stay until the readiness
   projection slice lands, then are reduced to structured records.
 - Schema contract step: additive table only; no existing column changes.

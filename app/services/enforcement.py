@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from ipaddress import IPv4Address
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -53,9 +53,6 @@ from app.services.enforcement_evidence import (
 from app.services.nas import DeviceProvisioner
 from app.services.radius_address_lists import suspended_address_list
 from app.services.secrets import resolve_secret
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

@@ -61,6 +61,16 @@ coordinators, locks its own authoritative records, stages its domain event in th
 same caller transaction, and never enters the public owner-command executor.
 Adapters cannot call participant writers directly.
 
+Transaction mode `out_of_band_evidence` is a separate, declared exception to
+this boundary, approved per use by its own ADR (first: ADR 0017,
+`access.enforcement_evidence`). An observation collector may record evidence of
+an external, irreversible effect on its own independent unit of work so the
+evidence survives the caller's rollback. It never joins the caller's
+transaction, emits no domain event, never enters the owner-command executor,
+and never raises into the caller except to propagate a task time limit. The
+service-to-ADR binding is enforced by
+`tests/architecture/test_out_of_band_evidence_ratchet.py`.
+
 ## Consequences
 
 Transaction ownership is executable and tied to the canonical manifest. A

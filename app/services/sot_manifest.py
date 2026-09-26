@@ -52,9 +52,11 @@ class TransactionMode(StrEnum):
     COORDINATOR_MANAGED = "coordinator_managed"
     # Evidence of an external, irreversible effect, written by its owner on an
     # independent unit of work so it survives the caller's rollback. It never
-    # joins the caller's transaction, emits no domain event and never raises.
-    # Allowed only for observation collectors and only under a recorded ADR
-    # (first use: ADR 0017, enforcement application evidence).
+    # joins the caller's transaction, emits no domain event and never raises
+    # into the caller except to propagate a task time limit. Allowed only for
+    # observation collectors, each bound to its own approving ADR by
+    # tests/architecture/test_out_of_band_evidence_ratchet.py (first use:
+    # ADR 0017, enforcement application evidence).
     OUT_OF_BAND_EVIDENCE = "out_of_band_evidence"
 
 

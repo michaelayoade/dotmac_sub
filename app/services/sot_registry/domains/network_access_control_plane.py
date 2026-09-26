@@ -1203,7 +1203,6 @@ DOMAIN = DomainSOT(
                 "single-flight access-control recovery execution",
             ),
             depends_on=(
-                "access.enforcement_evidence",
                 "access.radius_projection",
                 "access.radius_state",
                 "sessions.radius_resolution",

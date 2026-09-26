@@ -157,6 +157,16 @@ or CLI adapters, and they cannot initiate or complete a transaction. This mode
 records nested ownership explicitly; it is not a compatibility path for an
 adapter-owned transaction.
 
+Manifest transaction mode `out_of_band_evidence` is the one declared exception
+to "nested helpers never commit independently". It is limited to an
+observation collector recording evidence of an external, irreversible effect,
+which it writes on its own `db_session_adapter.create_session()` unit of work so
+the record survives the caller's rollback. It never joins or reads back the
+caller's transaction, emits no domain event, and never raises into the caller
+except to propagate a task time limit. Every use needs its own approving ADR,
+registered in `tests/architecture/test_out_of_band_evidence_ratchet.py`; the
+first is ADR 0017 (`access.enforcement_evidence`).
+
 ## 4. Concurrency and idempotency
 
 Every retryable or externally triggered command defines:
