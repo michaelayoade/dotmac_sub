@@ -1201,9 +1201,9 @@ DOMAIN = DomainSOT(
                 "typed access-state CoA/disconnect execution",
                 "NAS-evidenced accounting-session closure",
                 "single-flight access-control recovery execution",
-                "enforcement application evidence observation",
             ),
             depends_on=(
+                "access.enforcement_evidence",
                 "access.radius_projection",
                 "access.radius_state",
                 "sessions.radius_resolution",
@@ -1219,11 +1219,93 @@ DOMAIN = DomainSOT(
                 "interruption. "
                 "The periodic recovery loop is single-flight and caps attempts "
                 "rather than successes. "
-                "Sole writer of EnforcementApplication (ADR 0017): one current-"
-                "state observation per (subscription, NAS, effect) of each "
-                "address-list block/unblock and API session-kick attempt, "
-                "written out-of-band so it survives the caller's rollback. It "
-                "is evidence, never the intended access state."
+                "Hands each final per-NAS address-list and session-kick "
+                "outcome to access.enforcement_evidence (ADR 0017)."
+            ),
+        ),
+        SOTService(
+            name="access.enforcement_evidence",
+            module="app.services.enforcement_evidence",
+            owns=("enforcement application evidence observation",),
+            notes=(
+                "One current-state EnforcementApplication row per "
+                "(subscription, NAS device, effect): the typed outcome of each "
+                "address-list block/unblock and session-kick attempt. Written "
+                "out-of-band so the evidence of an irreversible device effect "
+                "survives the caller's rollback. It is evidence, never the "
+                "intended access state."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="enforcement application evidence observation",
+                        role=OwnerRole.OBSERVATION_COLLECTOR,
+                        input_names=(
+                            "final per-NAS enforcement attempt outcome",
+                            "NAS device response to the enforcement command",
+                        ),
+                        canonical_writer="access.enforcement_evidence",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="final per-NAS enforcement attempt outcome",
+                        owner="access.session_enforcement",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "typed EnforcementOutcome from the per-NAS helpers in "
+                            "app/services/enforcement.py"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="NAS device response to the enforcement command",
+                        owner="external:routeros",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "RouterOS API/SSH result or exception, classified once "
+                            "by app/services/nas/enforcement_failure.py"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OUT_OF_BAND_EVIDENCE,
+                    boundary=(
+                        "one db_session_adapter.create_session() unit of work "
+                        "per record, independent of the caller (ADR 0017)"
+                    ),
+                    locking=(
+                        "no foreign keys; SET LOCAL lock_timeout 2s; never waits "
+                        "on the caller's subscription row lock"
+                    ),
+                    idempotency=(
+                        "upsert ON CONFLICT (subscription_id, nas_device_id, "
+                        "effect); the row is current state, not a log"
+                    ),
+                    retries=(
+                        "none; a failed write logs ERROR and is dropped, except "
+                        "a Celery soft time limit, which is re-raised"
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="access.enforcement_evidence",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="access.enforcement_evidence",
+                ),
+                steward="network access",
+                design_refs=(
+                    "docs/adr/0017-enforcement-application-evidence.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_enforcement_application_writer.py",
+                    "tests/test_enforcement_application_outcomes.py",
+                    "tests/test_enforcement_failure_classifier.py",
+                    "tests/architecture/test_enforcement_application_single_writer.py",
+                    "tests/integration/test_enforcement_application_evidence_durability.py",
+                ),
             ),
         ),
         SOTService(

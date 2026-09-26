@@ -65,29 +65,26 @@ does afterwards, so evidence of it must not share that transaction's fate.
    `last_attempt_at`, `last_success_at` and the path used (`ssh`, `api`).
    It is an observation: a fact about what happened on a device, not a decision.
 
-   **Registry status.** `access.session_enforcement` is on the shrink-only
-   legacy manifest baseline (`tests/architecture/sot_manifest_legacy_baseline.txt`):
-   it is registered but has no typed `ServiceContract`. This decision adds the
-   observation to its `owns` and does not expand the baseline. A complete
-   contract must cover every concern the service owns (its existing CoA,
-   session-closure and recovery responsibilities included) with inputs,
-   transaction mode, domain and owner-command error codes and an event
-   contract. That is a migration of the whole legacy service, recorded as a
-   follow-up, not part of this decision. The manifest also has no field for an
-   out-of-band evidence writer that emits no domain event; that gap must be
-   resolved when the service is contracted.
+   **Registry status.** The observation has its own contracted service,
+   `access.enforcement_evidence` (`app/services/enforcement_evidence.py`), in
+   transaction mode `out_of_band_evidence`. That mode is added to the SOT
+   manifest by this decision and validated narrowly: observation collectors
+   only, an approving ADR cited in `design_refs`, and no event contract; within
+   that shape it needs no domain error codes or events, because the writer never
+   raises into its caller and emits nothing
+   (`tests/architecture/test_sot_manifest_out_of_band_evidence.py`).
+   `access.session_enforcement` performs the attempts and depends on it. Its own
+   CoA, session-closure and recovery concerns remain on the shrink-only legacy
+   manifest baseline as pre-existing debt, independent of this record.
+   `app/services/enforcement.py` is also registered under `sessions.enforcement`;
+   which name owns `update_subscription_sessions` is settled when that service
+   is contracted.
 
-   Drift control until then: `tests/architecture/test_enforcement_application_single_writer.py`
-   (single writer, alias-resolving, with a planted-violation proof). Retirement
-   trigger: `access.session_enforcement` receives a complete `ServiceContract`
-   before any readiness projection reads this record (slice 2), or by
-   2026-12-31, whichever is first. `app/services/enforcement.py` is also
-   registered under `sessions.enforcement`; which of the two names owns
-   `update_subscription_sessions` is settled in that contract work.
-
-2. **Canonical writer.** `access.session_enforcement` is the only writer. The
-   writer is a private function in `app/services/enforcement.py`. No adapter,
-   handler, task or other service writes the model (architecture-tested).
+2. **Canonical writer.** `access.enforcement_evidence` is the only writer,
+   through `record_enforcement_application` in
+   `app/services/enforcement_evidence.py`. `access.session_enforcement` calls it
+   with each final per-NAS outcome. No adapter, handler, task or other service
+   writes the model (architecture-tested).
 
 3. **Approved exception: out-of-band evidence write.** The writer opens its own
    short unit of work with `db_session_adapter.create_session()`, upserts the row
@@ -99,7 +96,7 @@ does afterwards, so evidence of it must not share that transaction's fate.
    `_record_mikrotik_auth_attempt` (`app/services/nas/_mikrotik.py`). The
    exception is limited to:
    - evidence of an external, irreversible effect or its failure;
-   - a private writer inside the owning module;
+   - one writer function inside the owning module;
    - a record the calling transaction never reads back;
    - id-only keys (`subscription_id`, `nas_device_id`) with **no foreign keys**,
      because callers hold `SELECT … FOR UPDATE` on the subscription row
@@ -159,7 +156,7 @@ does afterwards, so evidence of it must not share that transaction's fate.
 
 ## Invariants
 
-- Exactly one writer of `EnforcementApplication`: `access.session_enforcement`.
+- Exactly one writer of `EnforcementApplication`: `access.enforcement_evidence`.
 - A recorded row survives a rollback of the transaction that performed the
   enforcement attempt.
 - Writing evidence never blocks on, or deadlocks against, the caller's
@@ -192,8 +189,8 @@ does afterwards, so evidence of it must not share that transaction's fate.
 ## Migration and cutover
 
 - Old owner and paths: none. Failures were log-only.
-- New owner and paths: `access.session_enforcement` writes
-  `enforcement_applications` from `_enforce_address_list_on_nas` (address-list
+- New owner and paths: `access.enforcement_evidence` writes
+  `enforcement_applications` for `access.session_enforcement`, from `_enforce_address_list_on_nas` (address-list
   block/unblock), the suspend/cancel kick in `disconnect_subscription_sessions`
   and the profile-refresh kick in `update_subscription_sessions` (API then SSH,
   one final outcome per NAS).
@@ -206,9 +203,8 @@ does afterwards, so evidence of it must not share that transaction's fate.
   rollback of the caller's transaction around the real per-NAS helper, through
   the real `EnforcementHandler` raising `EnforcementProjectionError`, and through
   the real scheduled cleanup task rolling back; and that the write never waits
-  on the caller's subscription lock. The remaining gate before slice 2 lets any
-  projection or alert depend on the record is the `ServiceContract` in
-  section 1.
+  on the caller's subscription lock. The record's owner is contracted, so slice
+  2 may read it.
 - Fallback retirement: the warning-only failure logs stay until the readiness
   projection slice lands, then are reduced to structured records.
 - Schema contract step: additive table only; no existing column changes.
@@ -232,11 +228,13 @@ does afterwards, so evidence of it must not share that transaction's fate.
 - Unit: a classifier table test including near-miss cases; outcome mapping for
   applied / not applicable / failed, including the SSH-then-no-API case, the
   unconfirmed API kick, and the no-SSH-credentials case.
-- Architecture: only `app/services/enforcement.py` writes the model, with a
-  planted-violation sensitivity proof.
-- SOT registry: `access.session_enforcement` declares the observation in `owns`
-  and remains on the shrink-only legacy manifest baseline until the contract
-  follow-up in section 1 (no new baseline entry).
+- Architecture: only `app/services/enforcement_evidence.py` writes the model,
+  with a planted-violation sensitivity proof; the `out_of_band_evidence`
+  manifest rules have their own positive and negative tests.
+- SOT registry: `access.enforcement_evidence` carries a complete
+  `ServiceContract` (mode `out_of_band_evidence`) and every registered contract
+  validates; `access.session_enforcement` is unchanged on the legacy baseline
+  (no new baseline entry).
 
 ## Rollback or forward-fix
 

@@ -3,7 +3,7 @@
 Unlike ``tests/test_enforcement_application_outcomes.py`` (which patches this
 writer out to unit-test outcome classification), these tests run the actual
 upsert against a real SQLite database, bound in place of
-``app.services.enforcement.db_session_adapter.create_session`` so the writer's
+``app.services.enforcement_evidence.db_session_adapter.create_session`` so the writer's
 own out-of-band-session behaviour is exercised rather than the caller's
 session.
 
@@ -54,7 +54,7 @@ def patch_create_session(writer_sessionmaker, monkeypatch):
     """Route the writer's out-of-band session at the test engine, a NEW
     session per call — matching the real writer's own per-call session."""
     monkeypatch.setattr(
-        "app.services.enforcement.db_session_adapter.create_session",
+        "app.services.enforcement_evidence.db_session_adapter.create_session",
         lambda: writer_sessionmaker(),
     )
 
@@ -232,10 +232,10 @@ class TestEnforcementApplicationWriter:
             raise RuntimeError("no database available")
 
         monkeypatch.setattr(
-            "app.services.enforcement.db_session_adapter.create_session", _boom
+            "app.services.enforcement_evidence.db_session_adapter.create_session", _boom
         )
 
-        with caplog.at_level(logging.ERROR, logger="app.services.enforcement"):
+        with caplog.at_level(logging.ERROR, logger="app.services.enforcement_evidence"):
             _record_enforcement_application(
                 subscription_id=uuid4(),
                 nas_device_id=uuid4(),
@@ -261,11 +261,11 @@ class TestEnforcementApplicationWriter:
         )
         broken_sessionmaker = sessionmaker(bind=broken_engine)
         monkeypatch.setattr(
-            "app.services.enforcement.db_session_adapter.create_session",
+            "app.services.enforcement_evidence.db_session_adapter.create_session",
             lambda: broken_sessionmaker(),
         )
 
-        with caplog.at_level(logging.ERROR, logger="app.services.enforcement"):
+        with caplog.at_level(logging.ERROR, logger="app.services.enforcement_evidence"):
             _record_enforcement_application(
                 subscription_id=uuid4(),
                 nas_device_id=uuid4(),
@@ -305,7 +305,8 @@ def test_a_task_time_limit_is_re_raised_not_swallowed(monkeypatch):
         raise SoftTimeLimitExceeded()
 
     monkeypatch.setattr(
-        "app.services.enforcement.db_session_adapter.create_session", _time_limit
+        "app.services.enforcement_evidence.db_session_adapter.create_session",
+        _time_limit,
     )
     with pytest.raises(SoftTimeLimitExceeded):
         _record_enforcement_application(

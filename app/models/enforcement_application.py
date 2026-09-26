@@ -5,7 +5,7 @@ observation of the outcome of an enforcement attempt (address-list block,
 address-list unblock, or session kick). It is a fact, not a decision: no
 resolver or projection may read it as the intended access state.
 
-``access.session_enforcement`` (``app/services/enforcement.py``) is the sole
+``access.enforcement_evidence`` (``app/services/enforcement_evidence.py``) is the sole
 writer (ADR-0017). No foreign keys are declared on ``subscription_id`` or
 ``nas_device_id`` deliberately: the writer opens an out-of-band session while
 the calling transaction may hold ``SELECT ... FOR UPDATE`` on the subscription

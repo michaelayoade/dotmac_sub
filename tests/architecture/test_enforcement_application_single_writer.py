@@ -23,7 +23,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-OWNER_MODULE = "app/services/enforcement.py"
+OWNER_MODULE = "app/services/enforcement_evidence.py"
 
 _TARGET_CLASS = "EnforcementApplication"
 _TABLE_LITERAL = "enforcement_applications"
@@ -185,7 +185,7 @@ class TestScannerSensitivity:
         services_dir.mkdir(parents=True)
 
         # Owner module: also constructs the class, but must be excluded by name.
-        (services_dir / "enforcement.py").write_text(
+        (services_dir / "enforcement_evidence.py").write_text(
             "class EnforcementApplication:\n"
             "    pass\n\n"
             "def _record_enforcement_application():\n"
@@ -261,13 +261,13 @@ class TestScannerSensitivity:
         assert "app/services/bad_module_dialect.py" in offenders
         assert "app/services/bad_module_bulk.py" in offenders
         assert "app/services/bad_module_qualified.py" in offenders
-        assert "app/services/enforcement.py" not in offenders
+        assert "app/services/enforcement_evidence.py" not in offenders
         assert "app/models/enforcement_application.py" not in offenders
 
     def test_a_near_miss_is_not_flagged(self, tmp_path: Path) -> None:
         services_dir = tmp_path / "app" / "services"
         services_dir.mkdir(parents=True)
-        (services_dir / "enforcement.py").write_text(
+        (services_dir / "enforcement_evidence.py").write_text(
             "class EnforcementApplication:\n    pass\n"
         )
 
