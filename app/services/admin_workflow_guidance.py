@@ -1028,7 +1028,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("review-automation-access", "Review Automation Center access", 0),
         _action("review-automation-modules", "Review eligible modules and events", 1),
         _action(
-            "review-automation-rules", "Review central rules and execution evidence", 2
+            "review-automation-custom-fields",
+            "Review custom-field automation boundaries",
+            2,
+        ),
+        _action(
+            "review-automation-rules", "Review central rules and execution evidence", 3
         ),
         _action(
             "save-ticket-assignment-draft",
