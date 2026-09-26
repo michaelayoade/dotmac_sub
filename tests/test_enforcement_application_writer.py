@@ -290,3 +290,27 @@ def test_classify_enforcement_failure_is_the_only_source_of_failure_class():
         RuntimeError("no route to host")
     )
     assert _failed_outcome().failure_class == failure_class
+
+
+def test_a_task_time_limit_is_re_raised_not_swallowed(monkeypatch):
+    """ADR-0017 section 7: write failures are swallowed, but a Celery soft time
+    limit must reach the task so it cannot run past its budget."""
+    from billiard.exceptions import SoftTimeLimitExceeded
+
+    # Sensitivity: the pinned billiard makes this an Exception subclass, so a
+    # bare `except Exception` WOULD swallow it without the explicit re-raise.
+    assert issubclass(SoftTimeLimitExceeded, Exception)
+
+    def _time_limit():
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(
+        "app.services.enforcement.db_session_adapter.create_session", _time_limit
+    )
+    with pytest.raises(SoftTimeLimitExceeded):
+        _record_enforcement_application(
+            subscription_id=uuid4(),
+            nas_device_id=uuid4(),
+            effect=EnforcementEffect.address_list_block,
+            outcome=_failed_outcome(),
+        )

@@ -116,7 +116,12 @@ does afterwards, so evidence of it must not share that transaction's fate.
    - address lists (SSH, then API): an SSH failure followed by "no API
      credentials" stays the SSH failure, not `not_capable`;
    - session kick (API, then SSH): a later tier's success supersedes an earlier
-     failure;
+     failure; when the SSH tier also fails it keeps the earlier classified cause
+     (e.g. `auth_rejected`), because the SSH helpers swallow their exceptions; and
+     when the SSH tier cannot run at all (no username, non-MikroTik, no SSH
+     credentials, or `access.mikrotik_session_kill` disabled) it is
+     configuration absence, not a failure (`_ssh_kick_outcome`,
+     `_ssh_kick_possible`);
    - `applied` requires confirmation: the RouterOS API kick's read-back returns
      only the sessions it confirmed gone, so an empty or partial result with no
      exception is `failed`/`command_failed` (`session_kick_unconfirmed n/m`);

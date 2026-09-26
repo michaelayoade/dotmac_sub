@@ -313,3 +313,137 @@ class TestApiKickSession:
         outcome = record.call_args.kwargs["outcome"]
         assert outcome.outcome == EnforcementOutcomeValue.applied
         assert outcome.path == EnforcementPath.api
+
+
+class TestSshKickTierPrecedence:
+    """The SSH tier's final-outcome rules (ADR-0017 section 4), tested on the
+    pure helper both kick paths use, so a tier-precedence regression cannot
+    hide inside the large disconnect/update functions."""
+
+    def _auth_rejected(self):
+        from app.services.enforcement import EnforcementOutcome
+
+        return EnforcementOutcome.failed_from(
+            _ROUTEROS_LOGIN_REJECTION, path=EnforcementPath.api
+        )
+
+    def test_ssh_success_supersedes_an_earlier_api_failure(self):
+        from app.services.enforcement import _ssh_kick_outcome
+
+        outcome = _ssh_kick_outcome(
+            self._auth_rejected(), ssh_possible=True, kicked=2, remaining=2, targeted=2
+        )
+        assert outcome.outcome == EnforcementOutcomeValue.applied
+        assert outcome.path == EnforcementPath.ssh
+
+    def test_a_silent_ssh_failure_keeps_the_classified_api_cause(self):
+        """The Eagle case: the API rejected the login and the SSH fallback
+        failed without an exception. auth_rejected is the actionable cause."""
+        from app.services.enforcement import _ssh_kick_outcome
+
+        prior = self._auth_rejected()
+        assert prior.failure_class == EnforcementFailureClass.auth_rejected
+        outcome = _ssh_kick_outcome(
+            prior, ssh_possible=True, kicked=0, remaining=1, targeted=1
+        )
+        assert outcome == prior
+
+    def test_ssh_not_possible_with_no_earlier_failure_is_not_applicable(self):
+        from app.services.enforcement import EnforcementOutcome, _ssh_kick_outcome
+
+        for prior in (None, EnforcementOutcome.not_applicable("no_api_credentials")):
+            outcome = _ssh_kick_outcome(
+                prior, ssh_possible=False, kicked=0, remaining=1, targeted=1
+            )
+            assert outcome.outcome == EnforcementOutcomeValue.not_applicable
+            assert outcome.failure_class is None
+
+    def test_ssh_ran_and_left_sessions_with_no_earlier_failure_is_failed(self):
+        from app.services.enforcement import _ssh_kick_outcome
+
+        outcome = _ssh_kick_outcome(
+            None, ssh_possible=True, kicked=1, remaining=3, targeted=4
+        )
+        assert outcome.outcome == EnforcementOutcomeValue.failed
+        assert outcome.failure_class == EnforcementFailureClass.command_failed
+        assert outcome.detail == "session_kick_unconfirmed 2/4"
+
+
+class TestSshKickPossible:
+    def _device(self, *, ssh_username="admin", vendor=NasVendor.mikrotik):
+        device = _mikrotik_device()
+        device.vendor = vendor
+        device.ssh_username = ssh_username
+        return device
+
+    def test_kill_control_disabled_means_ssh_cannot_run(self):
+        from app.services.enforcement import _ssh_kick_possible
+
+        with patch(
+            "app.services.enforcement._mikrotik_kill_enabled", return_value=False
+        ):
+            assert _ssh_kick_possible(MagicMock(), self._device(), "alice") is False
+
+    def test_missing_username_or_ssh_or_non_mikrotik_means_ssh_cannot_run(self):
+        from app.services.enforcement import _ssh_kick_possible
+
+        with patch(
+            "app.services.enforcement._mikrotik_kill_enabled", return_value=True
+        ):
+            assert _ssh_kick_possible(MagicMock(), self._device(), None) is False
+            assert (
+                _ssh_kick_possible(
+                    MagicMock(), self._device(ssh_username=None), "alice"
+                )
+                is False
+            )
+            assert (
+                _ssh_kick_possible(
+                    MagicMock(), self._device(vendor=NasVendor.huawei), "alice"
+                )
+                is False
+            )
+            # Sensitivity: the fully configured case really is possible.
+            assert _ssh_kick_possible(MagicMock(), self._device(), "alice") is True
+
+
+class TestTimeLimitPropagatesThroughRecording:
+    def test_a_time_limit_while_recording_an_api_success_is_not_swallowed(self):
+        """Recording happens outside the helper's try blocks, so a Celery soft
+        time limit raised by the writer reaches the task instead of being
+        caught as an enforcement failure (ADR-0017 section 7)."""
+        import pytest
+        from billiard.exceptions import SoftTimeLimitExceeded
+
+        db = MagicMock()
+        nas_device = _mikrotik_device()
+        api_dev = _mikrotik_device()
+        no_ssh = MagicMock()
+        no_ssh.__enter__.side_effect = HTTPException(
+            status_code=400, detail="Device has no SSH credentials"
+        )
+
+        with (
+            patch(
+                "app.services.enforcement.DeviceProvisioner.ssh_session",
+                return_value=no_ssh,
+            ),
+            patch("app.services.enforcement._nas_with_api_creds", return_value=api_dev),
+            patch(
+                "app.services.nas._mikrotik.apply_mikrotik_address_list_via_api",
+                return_value=True,
+            ),
+            patch(
+                "app.services.enforcement._record_enforcement_application",
+                side_effect=SoftTimeLimitExceeded(),
+            ),
+            pytest.raises(SoftTimeLimitExceeded),
+        ):
+            _enforce_address_list_on_nas(
+                db,
+                nas_device,
+                "suspended",
+                "10.0.0.1",
+                add=True,
+                subscription_id=uuid4(),
+            )
