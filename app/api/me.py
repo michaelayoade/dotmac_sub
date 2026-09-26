@@ -190,6 +190,9 @@ PAYMENT_CHARGE_ERROR_MESSAGE = (
     "We could not charge that saved card. Please use another payment method or "
     "try again later."
 )
+QUOTE_DEPOSIT_START_ERROR_MESSAGE = (
+    "Online payment is temporarily unavailable. Please try again later."
+)
 CARD_SAVE_SUCCESS_MESSAGE = "Your card was saved for future payments."
 CARD_SAVE_ERROR_MESSAGE = (
     "Payment was recorded, but we could not save this card. You can add a card "
@@ -1516,7 +1519,11 @@ def my_quote_deposit_initiate(
                 quote_id=quote_id,
                 idempotency_key=payload.idempotency_key,
                 redirect_url=(
-                    str(request.url_for("my_quote_deposit_verify"))
+                    str(
+                        request.url_for(
+                            "my_quote_deposit_verify", quote_id=str(quote_id)
+                        )
+                    )
                     if request
                     else payload.redirect_url or "dotmac://success"
                 ),
@@ -1524,6 +1531,19 @@ def my_quote_deposit_initiate(
         )
     except quote_deposits.QuoteDepositError as exc:
         raise HTTPException(status_code=409, detail=exc.message) from exc
+    except (DomainError, ValueError) as exc:
+        logger.warning(
+            "quote_deposit_initiation_unavailable",
+            extra={
+                "quote_id": str(quote_id),
+                "error_code": getattr(exc, "code", type(exc).__name__),
+            },
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=QUOTE_DEPOSIT_START_ERROR_MESSAGE,
+        ) from exc
     return outcome.to_response()
 
 

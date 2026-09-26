@@ -424,7 +424,10 @@ def test_deposit_adapters_compose_named_credit_owners() -> None:
     assert "PaymentAllocation(" not in deposit_owner
     assert "LedgerEntry(" not in deposit_owner
     assert "PaymentAllocations.preview(" in application_owner
-    assert "PaymentAllocations.stage_confirm(" in application_owner
+    assert (
+        "PaymentAllocations.stage_confirm_at_reviewed_boundary_for_owner("
+        in application_owner
+    )
     assert "PaymentAllocation(" not in application_owner
     assert "LedgerEntry(" not in application_owner
     assert '"/billing/topup/preview"' in customer_route

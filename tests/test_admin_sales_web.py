@@ -876,6 +876,31 @@ def test_quote_detail_context_line_items_deposit_and_accept_state(db_session):
     assert accepted["status_val"] == "accepted"
 
 
+def test_quote_line_item_edit_route_delegates_the_submitted_fields(monkeypatch):
+    request = SimpleNamespace(state=SimpleNamespace(actor_id="sales-agent"))
+    captured: dict[str, object] = {}
+
+    def update_line(_db, **kwargs) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(web_sales, "update_quote_line_item_from_form", update_line)
+
+    response = admin_sales.quote_line_item_update(
+        request,
+        "3f31f9f0-efce-4e1d-a60d-160fb039d8a0",
+        "4f31f9f0-efce-4e1d-a60d-160fb039d8a0",
+        description="Updated fibre drop",
+        quantity="2",
+        unit_price="1500.00",
+        db=object(),
+    )
+
+    assert response.status_code == 303
+    assert captured["quote_id"] == "3f31f9f0-efce-4e1d-a60d-160fb039d8a0"
+    assert captured["item_id"] == "4f31f9f0-efce-4e1d-a60d-160fb039d8a0"
+    assert captured["description"] == "Updated fibre drop"
+
+
 # ---------------------------------------------------------------------------
 # Context builders — sales orders
 # ---------------------------------------------------------------------------

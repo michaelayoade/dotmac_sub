@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.logging import sanitize_exception
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.wireguard import WireGuardServer
 from app.schemas.wireguard import WireGuardServerCreate, WireGuardServerUpdate
@@ -703,7 +704,7 @@ def test_router_connection(
             500,
         )
     except Exception as e:
-        error_msg = str(e)
+        error_msg = sanitize_exception(e)
         if "Connection refused" in error_msg:
             error_msg = "Connection refused - check host and port"
         elif "timed out" in error_msg.lower():

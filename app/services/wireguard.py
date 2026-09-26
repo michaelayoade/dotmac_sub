@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.logging import sanitize_exception
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.wireguard import (
     WireGuardConnectionLog,
@@ -60,7 +61,7 @@ def _safe_disconnect_pool(pool) -> None:
     try:
         pool.disconnect()
     except Exception as e:  # pragma: no cover - defensive
-        logger.warning("Error disconnecting RouterOS pool: %s", e)
+        logger.warning("Error disconnecting RouterOS pool: %s", sanitize_exception(e))
 
 
 def _ensure_utc_aware(dt: datetime) -> datetime:
@@ -1417,9 +1418,9 @@ class RouterSyncService:
                 return True, "Peer added to router"
 
         except routeros_api.exceptions.RouterOsApiCommunicationError as e:
-            return False, f"Router communication error: {e}"
+            return False, f"Router communication error: {sanitize_exception(e)}"
         except Exception as e:
-            return False, f"Failed to sync peer to router: {e}"
+            return False, f"Failed to sync peer to router: {sanitize_exception(e)}"
         finally:
             # RouterOsApiPool construction already performed the API login, so
             # the session exists on the router. Disconnect on every path (incl.
@@ -1472,9 +1473,9 @@ class RouterSyncService:
                 return True, "Peer not found on router (already removed)"
 
         except routeros_api.exceptions.RouterOsApiCommunicationError as e:
-            return False, f"Router communication error: {e}"
+            return False, f"Router communication error: {sanitize_exception(e)}"
         except Exception as e:
-            return False, f"Failed to remove peer from router: {e}"
+            return False, f"Failed to remove peer from router: {sanitize_exception(e)}"
         finally:
             # See sync_peer_to_router: disconnect on every path so the
             # already-logged-in session is never orphaned on the router.

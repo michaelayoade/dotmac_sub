@@ -81,17 +81,13 @@ from app.models.sales import (
 )
 from app.models.subscriber import Subscriber
 from app.schemas.portal import MyQuotesResponse, QuoteItem
-from app.schemas.sales import (
-    LeadCreate,
-    QuoteCreate,
-    QuoteLineItemCreate,
-)
+from app.schemas.sales import LeadCreate, QuoteCreate
 from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.sales import quote_acceptance
-from app.services.sales.service import leads, quote_line_items, quotes
+from app.services.sales.service import leads, quotes
 from app.services.sales.service_request_types import (
     ServiceRequestKind,
     ServiceRequestOption,
@@ -631,12 +627,6 @@ class SelfServeQuotes:
             }
         )
         currency = _resolve_currency(db)
-        estimate = (
-            compute_estimate(db, feasibility, currency)
-            if service_option is ServiceRequestOption.fiber_installation
-            else None
-        )
-
         # The map-pin contract: reused downstream for estimate/survey/billing.
         install = {
             "latitude": latitude,
@@ -694,29 +684,13 @@ class SelfServeQuotes:
                         if service_option.kind is ServiceRequestKind.relocation
                         else cfg["deposit_percent"]
                     ),
-                    "estimate_provisional": (
-                        estimate["provisional"] if estimate else True
-                    ),
-                    "pricing_mode": estimate["pricing_mode"] if estimate else "staff",
+                    # The customer submits location and feasibility evidence,
+                    # not a commercial estimate. Sales authors every price.
+                    "estimate_provisional": True,
+                    "pricing_mode": "staff",
                 },
             ),
         )
-        for item in estimate["line_items"] if estimate else ():
-            metadata = (
-                {"sub_offer_id": item["sub_offer_id"]}
-                if item.get("sub_offer_id")
-                else None
-            )
-            quote_line_items.create(
-                db,
-                QuoteLineItemCreate(
-                    quote_id=quote.id,
-                    description=item["description"],
-                    quantity=Decimal("1.000"),
-                    unit_price=item["unit_price"],
-                    metadata_=metadata,
-                ),
-            )
         from app.services.sales import quote_payment_review
 
         quote_uuid = quote.id
