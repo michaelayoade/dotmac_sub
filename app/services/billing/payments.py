@@ -4553,6 +4553,10 @@ class PaymentAllocations(ListResponseMixin):
             to_decimal(consumption_entry.amount) + increment
         )
         payment.updated_at = datetime.now(UTC)
+        # The invoice finalizer recalculates from persisted allocation evidence.
+        # This session intentionally disables autoflush, so persist the amended
+        # allocation and its paired evidence before deriving the invoice status.
+        db.flush()
         _finalize_invoice_payment_effects(db, invoice)
         db.flush()
         return PaymentAllocationResult(allocation=allocation, preview=preview)
