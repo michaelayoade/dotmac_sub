@@ -751,7 +751,7 @@ class _ActiveDepositCard extends StatelessWidget {
             const SizedBox(height: 8),
             Text('Reference: ${deposit.reference}'),
             Text('Amount: ${Fmt.money(deposit.amount, deposit.currency)}'),
-            if (expiresAt != null) Text('Expires: ${Fmt.date(expiresAt)}'),
+            if (expiresAt != null) Text('Expires: ${Fmt.dateTime(expiresAt)}'),
             if (deposit.rejectionReason != null) ...[
               const SizedBox(height: 8),
               Text('Reason: ${deposit.rejectionReason}'),
