@@ -331,8 +331,9 @@ def contract_validation_errors(
             )
         if not any(ref.startswith("docs/adr/") for ref in contract.design_refs):
             errors.append(
-                f"service {service.name!r} out-of-band evidence mode must cite the "
-                "approving ADR in design_refs"
+                f"service {service.name!r} out-of-band evidence mode must cite an "
+                "ADR in design_refs (the approving service-to-ADR binding is "
+                "enforced by tests/architecture/test_out_of_band_evidence_ratchet.py)"
             )
         if contract.events is not None:
             errors.append(

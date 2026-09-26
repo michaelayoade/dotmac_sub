@@ -109,7 +109,12 @@ def test_every_out_of_band_evidence_service_is_bound_to_its_approving_adr() -> N
 
 
 def test_known_legacy_out_of_band_writers_still_exist() -> None:
-    """If a legacy writer is migrated or removed, update the list (two-way)."""
+    """If a legacy writer is migrated or removed, update the list.
+
+    One-directional by design: this does not detect a NEW out-of-band writer
+    that skips the mode. A scan for create_session() plus commit in
+    app/services outside the approved and legacy lists is an open follow-up.
+    """
     for entry in KNOWN_LEGACY_OUT_OF_BAND_WRITERS:
         module, function = entry.split("::")
         text = _read_repo_text(module)

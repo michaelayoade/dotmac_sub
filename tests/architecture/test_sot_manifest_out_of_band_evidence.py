@@ -119,7 +119,7 @@ def test_out_of_band_evidence_must_cite_an_adr() -> None:
         _evidence_service(design_refs=("docs/SOT_RELATIONSHIP_MAP.md",)),
         service_names=_NAMES,
     )
-    assert any("must cite the approving ADR" in error for error in errors)
+    assert any("must cite an ADR in design_refs" in error for error in errors)
 
 
 def test_out_of_band_evidence_refuses_an_event_contract() -> None:
