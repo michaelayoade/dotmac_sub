@@ -4719,6 +4719,24 @@ consume the same connection-health payload and semantic presentation; raw
 session dots on subscription views remain observation surfaces outside that
 verdict.
 
+
+**Enforcement application evidence** (`access.session_enforcement`,
+`app/services/enforcement.py`; ADR 0017): `EnforcementApplication`
+(`enforcement_applications`) is a durable observation with one current-state
+row per (subscription, NAS device, effect) for address-list block, address-list
+unblock and API session kick. It records the typed outcome (`applied`,
+`failed`, `not_applicable`), the failure class from the single classifier in
+`app/services/nas/enforcement_failure.py`, a sanitized detail, attempt counts,
+first failure and last success. `access.session_enforcement` is its only
+writer (`tests/architecture/test_enforcement_application_single_writer.py`),
+and writes it through an approved out-of-band unit of work so the evidence of
+an irreversible device effect survives the caller's rollback; keys are id-only
+with no foreign keys so the write cannot deadlock against the caller's
+subscription row lock. It is evidence, never the intended access state:
+readiness projections, the retrying reconciler (rebuilding from the lifecycle's
+access state), `access_enforcement` signals and alerts are later slices of
+ADR 0017.
+
 ## Subscriber Sessions
 
 Dependency order:

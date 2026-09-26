@@ -1201,6 +1201,7 @@ DOMAIN = DomainSOT(
                 "typed access-state CoA/disconnect execution",
                 "NAS-evidenced accounting-session closure",
                 "single-flight access-control recovery execution",
+                "enforcement application evidence observation",
             ),
             depends_on=(
                 "access.radius_projection",
@@ -1217,7 +1218,12 @@ DOMAIN = DomainSOT(
                 "accounting mirror, and polling never sends a second customer "
                 "interruption. "
                 "The periodic recovery loop is single-flight and caps attempts "
-                "rather than successes."
+                "rather than successes. "
+                "Sole writer of EnforcementApplication (ADR 0017): one current-"
+                "state observation per (subscription, NAS, effect) of each "
+                "address-list block/unblock and API session-kick attempt, "
+                "written out-of-band so it survives the caller's rollback. It "
+                "is evidence, never the intended access state."
             ),
         ),
         SOTService(

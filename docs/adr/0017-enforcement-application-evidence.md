@@ -65,6 +65,18 @@ does afterwards, so evidence of it must not share that transaction's fate.
    `last_attempt_at`, `last_success_at` and the path used (`ssh`, `api`).
    It is an observation: a fact about what happened on a device, not a decision.
 
+   **Registry status.** `access.session_enforcement` is on the shrink-only
+   legacy manifest baseline (`tests/architecture/sot_manifest_legacy_baseline.txt`):
+   it is registered but has no typed `ServiceContract`. This decision adds the
+   observation to its `owns` and does not expand the baseline. A complete
+   contract must cover every concern the service owns (its existing CoA,
+   session-closure and recovery responsibilities included) with inputs,
+   transaction mode, domain and owner-command error codes and an event
+   contract. That is a migration of the whole legacy service, recorded as a
+   follow-up, not part of this decision. The manifest also has no field for an
+   out-of-band evidence writer that emits no domain event; that gap must be
+   resolved when the service is contracted.
+
 2. **Canonical writer.** `access.session_enforcement` is the only writer. The
    writer is a private function in `app/services/enforcement.py`. No adapter,
    handler, task or other service writes the model (architecture-tested).
