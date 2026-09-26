@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../config/env.dart';
 import '../../core/payment_app_launcher.dart';
 import '../../core/payment_navigation.dart';
+import '../../core/payment_return_coordinator.dart';
 import '../../models/payment_flow.dart';
 import '../../models/reseller.dart';
 import '../../models/topup.dart';
@@ -84,7 +87,7 @@ class CheckoutArgs {
 /// handed to the operating system while this checkout remains on the back
 /// stack. The screen then pops the reference back to the caller (which verifies
 /// it). Pops `null` on cancel.
-class PaymentWebViewScreen extends StatefulWidget {
+class PaymentWebViewScreen extends ConsumerStatefulWidget {
   const PaymentWebViewScreen({
     super.key,
     required this.args,
@@ -95,17 +98,27 @@ class PaymentWebViewScreen extends StatefulWidget {
   final PaymentAppLauncher paymentAppLauncher;
 
   @override
-  State<PaymentWebViewScreen> createState() => _PaymentWebViewScreenState();
+  ConsumerState<PaymentWebViewScreen> createState() =>
+      _PaymentWebViewScreenState();
 }
 
-class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
+class _PaymentWebViewScreenState extends ConsumerState<PaymentWebViewScreen>
+    with WidgetsBindingObserver {
   late final WebViewController _controller;
+  late final PaymentReturnCoordinator _paymentReturns;
+  late final Object _returnListenerToken;
   bool _loading = true;
+  bool _allowPop = false;
+  bool _completionPending = false;
+  bool _awaitingExternalAppReturn = false;
   String? _loadError;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _paymentReturns = ref.read(paymentReturnCoordinatorProvider);
+    _returnListenerToken = _paymentReturns.attach(_handleAppReturn);
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
@@ -127,6 +140,69 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
       ..loadRequest(Uri.parse(widget.args.checkoutUrl));
   }
 
+  @override
+  void dispose() {
+    _paymentReturns.detach(_returnListenerToken);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed ||
+        !_awaitingExternalAppReturn ||
+        _completionPending) {
+      return;
+    }
+    _awaitingExternalAppReturn = false;
+    _restoreCheckout();
+  }
+
+  Future<void> _restoreCheckout() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _loadError = null;
+    });
+    try {
+      await _controller.loadRequest(Uri.parse(widget.args.checkoutUrl));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadError = 'The secure payment page could not be loaded.';
+      });
+    }
+  }
+
+  bool _handleAppReturn(Uri uri) {
+    if (uri.scheme != Brand.paymentScheme) return false;
+    if (uri.host == 'cancel') {
+      _finishCheckout();
+      return true;
+    }
+    if (uri.host != 'success') return false;
+
+    final returnedReference = uri.queryParameters['reference'] ??
+        uri.queryParameters['trxref'];
+    if (returnedReference != null &&
+        returnedReference != widget.args.reference) {
+      return false;
+    }
+    _finishCheckout(returnedReference ?? widget.args.reference);
+    return true;
+  }
+
+  void _finishCheckout([String? reference]) {
+    if (!mounted || _completionPending) return;
+    _completionPending = true;
+    _awaitingExternalAppReturn = false;
+    setState(() => _allowPop = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop<String>(reference);
+    });
+  }
+
   Future<NavigationDecision> _handleNavigation(
       NavigationRequest request) async {
     final target = resolvePaymentNavigation(
@@ -135,29 +211,31 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
     );
     switch (target.disposition) {
       case PaymentNavigationDisposition.complete:
-        if (mounted) {
-          Navigator.of(context).pop(target.reference ?? widget.args.reference);
-        }
+        _finishCheckout(target.reference ?? widget.args.reference);
         return NavigationDecision.prevent;
       case PaymentNavigationDisposition.cancel:
-        if (mounted) Navigator.of(context).pop();
+        _finishCheckout();
         return NavigationDecision.prevent;
       case PaymentNavigationDisposition.navigateInWebView:
         return NavigationDecision.navigate;
       case PaymentNavigationDisposition.tryExternalApp:
+        _awaitingExternalAppReturn = true;
         final result = await widget.paymentAppLauncher.launch(
           target.uri!,
           nonBrowserOnly: true,
         );
+        if (!result.launched) _awaitingExternalAppReturn = false;
         return result.launched
             ? NavigationDecision.prevent
             : NavigationDecision.navigate;
       case PaymentNavigationDisposition.launchExternalApp:
+        _awaitingExternalAppReturn = true;
         final result = await widget.paymentAppLauncher.launch(
           target.uri!,
           nonBrowserOnly: false,
         );
         if (result.launched) return NavigationDecision.prevent;
+        _awaitingExternalAppReturn = false;
         final fallbackUrl = result.fallbackUrl;
         if (fallbackUrl != null) {
           await _controller.loadRequest(fallbackUrl);
@@ -211,11 +289,10 @@ class _PaymentWebViewScreenState extends State<PaymentWebViewScreen> {
     // Guard the system/back-button: while the checkout is active, confirm
     // before popping (and pop `null` = cancelled, matching the cancel sentinel).
     return PopScope(
-      canPop: false,
+      canPop: _allowPop,
       onPopInvokedWithResult: (didPop, _) async {
-        if (didPop) return;
-        final navigator = Navigator.of(context);
-        if (await _confirmLeave()) navigator.pop();
+        if (didPop || _allowPop) return;
+        if (await _confirmLeave()) _finishCheckout();
       },
       child: Scaffold(
         appBar: AppBar(title: const Text('Complete payment')),

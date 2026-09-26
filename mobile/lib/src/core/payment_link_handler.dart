@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/env.dart';
 import '../providers/data_providers.dart';
 import 'api_exception.dart';
+import 'payment_return_coordinator.dart';
 
 /// Catches the payment gateway's `<scheme>://success|cancel` return when a
 /// 3-D Secure / bank flow leaves the in-app WebView and the OS hands the link
@@ -42,6 +43,7 @@ class PaymentLinkHandler {
 
   Future<void> _handle(Uri uri) async {
     if (!_isPaymentReturn(uri)) return;
+    if (_ref.read(paymentReturnCoordinatorProvider).dispatch(uri)) return;
     final messenger = _messengerKey.currentState;
 
     if (uri.host == 'cancel') {
