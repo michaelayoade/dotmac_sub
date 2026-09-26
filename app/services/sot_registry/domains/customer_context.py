@@ -46,6 +46,86 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="customer.search",
+            module="app.services.customer_search",
+            owns=("bounded active customer search and customer identity selection",),
+            depends_on=("customer.accounts",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="bounded active customer search and customer identity selection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "typed customer search query",
+                            "selected canonical customer identities",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed customer search query",
+                        owner="customer.search",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "validated CustomerSearchQuery provided by an authorized adapter"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="selected canonical customer identities",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="active Subscriber identities resolved by customer.search",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer accounts",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="active Subscriber identity and account labels",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Search and identity resolution read canonical customer rows; "
+                        "they do not change customer state or commit writes."
+                    ),
+                    locking="Read projections acquire no mutation locks.",
+                    idempotency=(
+                        "The same normalized query and account snapshot produce the "
+                        "same bounded customer matches."
+                    ),
+                    retries="Read-only search and identity resolution are safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="customer search adapters",
+                    fail_closed_on=("selected active customer no longer exists",),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.search",
+                    verification=(
+                        "customer search service and Automation Center customer-scope checks"
+                    ),
+                    cutover_gate=(
+                        "customer pickers resolve canonical active Subscriber identities"
+                    ),
+                    fallback_retirement=(
+                        "no picker may infer customer identity from display labels"
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/designs/AUTOMATION_CENTER_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_customer_search_services.py",
+                    "tests/architecture/test_customer_search_performance.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.canonical_profile_patch",
             module="app.services.customer_canonical_profile_patch",
             owns=("typed transaction-neutral canonical Customer profile patches",),

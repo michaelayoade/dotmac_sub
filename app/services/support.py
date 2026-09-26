@@ -2474,6 +2474,9 @@ class Tickets:
                 "tenant_id": str(OPERATOR_TENANT_ID),
                 "ticket_id": str(ticket.id),
                 "priority": str(ticket.priority or "").strip().lower(),
+                "customer_id": str(ticket.customer_account_id or ticket.subscriber_id)
+                if ticket.customer_account_id or ticket.subscriber_id
+                else None,
             },
             actor="support.ticket_lifecycle",
             subscriber_id=ticket.subscriber_id,

@@ -42,6 +42,9 @@ def build_automation_center_data(
     can_read_rules: bool,
     can_read_runs: bool,
     can_create_rules: bool,
+    can_update_rules: bool,
+    can_publish_rules: bool,
+    can_operate_rules: bool,
     can_read_support_tickets: bool,
     can_update_support_tickets: bool,
 ) -> dict[str, object]:
@@ -109,6 +112,10 @@ def build_automation_center_data(
         "legacy_surfaces": legacy_surfaces,
         "can_read_rules": can_read_rules,
         "can_read_runs": can_read_runs,
+        "can_create_rules": can_create_rules,
+        "can_update_rules": can_update_rules,
+        "can_publish_rules": can_publish_rules,
+        "can_operate_rules": can_operate_rules,
         "authoring_available": ready_count > 0 and not registry_errors,
         "ticket_assignment_draft_authoring_available": (
             ticket_assignment_draft_authoring_available

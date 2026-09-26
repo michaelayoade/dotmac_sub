@@ -30,7 +30,7 @@ def test_hub_is_registered_and_visible_only_with_hub_permission() -> None:
     assert '"/admin/automation"' in navigation
 
 
-def test_hub_presents_governance_and_honest_dormant_state() -> None:
+def test_hub_presents_governance_and_rule_lifecycle_controls() -> None:
     template = _source("templates/admin/automation/index.html")
     for heading in (
         "Module registry",
@@ -41,14 +41,22 @@ def test_hub_presents_governance_and_honest_dormant_state() -> None:
     ):
         assert heading in template
     assert "Deployment creates no rules and causes no business side effects" in template
-    assert "New ticket-assignment draft" in template
+    assert "New rule" in template
+    assert 'action="/admin/automation/rules/{{ rule.rule_id }}/publish"' in template
+    assert 'action="/admin/automation/rules/{{ rule.rule_id }}/pause"' in template
+    assert 'action="/admin/automation/rules/{{ rule.rule_id }}/resume"' in template
+    assert "rule.runtime_ready" in template
+    assert "Activation unavailable" in template
 
 
-def test_ticket_assignment_draft_form_is_explicitly_non_executable() -> None:
+def test_ticket_assignment_form_supports_customer_scope_and_draft_editing() -> None:
     template = _source("templates/admin/automation/ticket_assignment_draft.html")
     assert "A new support ticket is created." in template
     assert "Ticket priority is" in template
     assert "Assign service team" in template
+    assert 'name="customer_scope" value="company"' in template
+    assert 'name="customer_scope" value="selected"' in template
+    assert "customer-search" in template
     assert "Saving creates a draft only" in template
 
 

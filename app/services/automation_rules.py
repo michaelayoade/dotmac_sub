@@ -13,7 +13,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.automation import (
@@ -21,7 +21,7 @@ from app.models.automation import (
     AutomationRuleStatus,
     AutomationRuleVersion,
 )
-from app.services import automation_actions, automation_capabilities
+from app.services import automation_actions, automation_capabilities, customer_search
 from app.services.automation_contracts import (
     AutomationActionCapability,
     AutomationConditionField,
@@ -122,6 +122,36 @@ class ReplaceAutomationRuleDraftCommand:
     actions: tuple[AutomationActionStep, ...]
     permission_keys: frozenset[str]
     context: CommandContext
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationRuleSummary:
+    rule_id: UUID
+    name: str
+    trigger_key: str
+    status: AutomationRuleStatus
+    active_version: int | None
+    draft_version: int | None
+    customer_ids: tuple[UUID, ...]
+    runtime_ready: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GetAutomationRuleEditorQuery:
+    tenant_id: UUID
+    rule_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationRuleEditorState:
+    rule_id: UUID
+    name: str
+    trigger_key: str
+    status: AutomationRuleStatus
+    has_active_version: bool
+    version: int | None
+    customer_ids: tuple[UUID, ...]
+    service_team_id: UUID | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +308,118 @@ def _stored_mapping_list(
     return tuple(items)
 
 
+def _selected_customer_ids(conditions: list[dict[str, object]]) -> tuple[UUID, ...]:
+    for condition in conditions:
+        if (
+            condition.get("field_key") == "customer_id"
+            and condition.get("operator") == AutomationOperator.in_values.value
+        ):
+            value = condition.get("value")
+            if isinstance(value, list):
+                try:
+                    return tuple(UUID(str(item)) for item in value)
+                except (TypeError, ValueError):
+                    return ()
+    return ()
+
+
+def _validate_customer_targets(
+    db: Session, conditions: list[dict[str, object]]
+) -> None:
+    for condition in conditions:
+        if condition.get("field_key") != "customer_id":
+            continue
+        value = condition.get("value")
+        if (
+            condition.get("operator") != AutomationOperator.in_values.value
+            or not isinstance(value, list)
+            or not value
+        ):
+            raise _error(
+                "customer_scope_invalid",
+                "Choose at least one customer for a customer-specific rule.",
+            )
+        try:
+            customer_ids = tuple(UUID(str(item)) for item in value)
+        except (TypeError, ValueError) as exc:
+            raise _error(
+                "customer_scope_invalid", "A selected customer is invalid."
+            ) from exc
+        if len(set(customer_ids)) != len(customer_ids):
+            raise _error(
+                "customer_scope_invalid", "A customer can only be selected once."
+            )
+        if len(customer_ids) > 100:
+            raise _error(
+                "customer_scope_invalid",
+                "A rule can include no more than 100 customers.",
+            )
+        inactive = tuple(
+            customer_id
+            for customer_id in customer_ids
+            if customer_search.get_customer_match(db, customer_id, active_only=True)
+            is None
+        )
+        if inactive:
+            raise _error(
+                "customer_scope_invalid",
+                "A selected customer is no longer active.",
+            )
+
+
+def _editor_state(
+    *, rule: AutomationRule, version: AutomationRuleVersion | None
+) -> AutomationRuleEditorState:
+    customer_ids = _selected_customer_ids(version.conditions) if version else ()
+    service_team_id: UUID | None = None
+    if version is not None:
+        for action in version.actions:
+            if action.get("action_key") != "support.ticket.assign_service_team":
+                continue
+            inputs = _stored_mapping_list(action.get("inputs")) or ()
+            value = next(
+                (
+                    item.get("value")
+                    for item in inputs
+                    if item.get("key") == "service_team_id"
+                ),
+                None,
+            )
+            try:
+                service_team_id = UUID(str(value))
+            except (TypeError, ValueError):
+                service_team_id = None
+            break
+    return AutomationRuleEditorState(
+        rule_id=rule.id,
+        name=rule.name,
+        trigger_key=rule.trigger_key,
+        status=AutomationRuleStatus(rule.status),
+        has_active_version=rule.active_version_id is not None,
+        version=version.version if version else None,
+        customer_ids=customer_ids,
+        service_team_id=service_team_id,
+    )
+
+
+def _runtime_ready(*, trigger_key: str, version: AutomationRuleVersion | None) -> bool:
+    if version is None:
+        return False
+    try:
+        trigger = automation_capabilities.trigger_capability(trigger_key)
+        if not trigger.runtime_enabled:
+            return False
+        for action in version.actions:
+            capability = automation_capabilities.action_capability(
+                str(action.get("action_key") or "")
+            )
+            if not capability.runtime_enabled:
+                return False
+    except automation_capabilities.AutomationCapabilityError:
+        return False
+    return not automation_actions.runtime_registry_errors()
+
+
 def _validate_conditions(
     trigger_key: str, conditions: tuple[AutomationCondition, ...]
 ) -> list[dict[str, object]]:
@@ -403,6 +545,7 @@ def _live_legacy_rule_conflicts(
 
 def _validate_definition(
     *,
+    db: Session,
     trigger_key: str,
     conditions: tuple[AutomationCondition, ...],
     actions: tuple[AutomationActionStep, ...],
@@ -412,6 +555,7 @@ def _validate_definition(
     trigger = automation_capabilities.trigger_capability(trigger_key)
     _require_permission(permission_keys, trigger.author_permission)
     serialized_conditions = _validate_conditions(trigger_key, conditions)
+    _validate_customer_targets(db, serialized_conditions)
     if not actions:
         raise _error("actions_required", "An automation rule requires an action.")
     serialized_actions: list[dict[str, object]] = []
@@ -468,6 +612,7 @@ def _validate_persisted_definition(
             "The draft trigger schema is no longer current.",
         )
     fields = {field.key: field for field in trigger.fields}
+    _validate_customer_targets(db, version.conditions)
     for condition in version.conditions:
         field_key = str(condition.get("field_key") or "")
         field = fields.get(field_key)
@@ -638,6 +783,7 @@ def create_rule(
         if not _KEY_PATTERN.fullmatch(key) or not name:
             raise _error("identity_invalid", "Rule key or name is invalid.")
         trigger_schema, conditions, actions = _validate_definition(
+            db=db,
             trigger_key=command.trigger_key,
             conditions=command.conditions,
             actions=command.actions,
@@ -718,6 +864,7 @@ def replace_draft(
         if rule.status == AutomationRuleStatus.retired.value:
             raise _error("retired", "A retired rule cannot be changed.")
         trigger_schema, conditions, actions = _validate_definition(
+            db=db,
             trigger_key=rule.trigger_key,
             conditions=command.conditions,
             actions=command.actions,
@@ -894,7 +1041,7 @@ def change_rule_status(
 
 def list_rules(
     db: Session, query: ListAutomationRulesQuery
-) -> tuple[AutomationRule, ...]:
+) -> tuple[AutomationRuleSummary, ...]:
     statement = select(AutomationRule).where(
         AutomationRule.tenant_id == query.tenant_id
     )
@@ -902,7 +1049,79 @@ def list_rules(
         statement = statement.where(
             AutomationRule.status != AutomationRuleStatus.retired.value
         )
-    return tuple(db.scalars(statement.order_by(AutomationRule.name, AutomationRule.id)))
+    rules = tuple(
+        db.scalars(statement.order_by(AutomationRule.name, AutomationRule.id))
+    )
+    if not rules:
+        return ()
+
+    rule_ids = tuple(rule.id for rule in rules)
+    active_version_ids = tuple(
+        rule.active_version_id for rule in rules if rule.active_version_id is not None
+    )
+    version_filters = [
+        and_(
+            AutomationRuleVersion.rule_id.in_(rule_ids),
+            AutomationRuleVersion.published_at.is_(None),
+        )
+    ]
+    if active_version_ids:
+        version_filters.append(AutomationRuleVersion.id.in_(active_version_ids))
+    versions = tuple(
+        db.scalars(select(AutomationRuleVersion).where(or_(*version_filters)))
+    )
+    versions_by_id = {version.id: version for version in versions}
+    drafts_by_rule_id = {
+        version.rule_id: version for version in versions if version.published_at is None
+    }
+    summaries: list[AutomationRuleSummary] = []
+    for rule in rules:
+        active = versions_by_id.get(rule.active_version_id)
+        draft = drafts_by_rule_id.get(rule.id)
+        displayed = draft or active
+        summaries.append(
+            AutomationRuleSummary(
+                rule_id=rule.id,
+                name=rule.name,
+                trigger_key=rule.trigger_key,
+                status=AutomationRuleStatus(rule.status),
+                active_version=active.version if active else None,
+                draft_version=draft.version if draft else None,
+                customer_ids=(
+                    _selected_customer_ids(displayed.conditions)
+                    if displayed is not None
+                    else ()
+                ),
+                runtime_ready=_runtime_ready(
+                    trigger_key=rule.trigger_key,
+                    version=displayed,
+                ),
+            )
+        )
+    return tuple(summaries)
+
+
+def get_rule_editor_state(
+    db: Session, query: GetAutomationRuleEditorQuery
+) -> AutomationRuleEditorState:
+    rule = _rule(
+        db,
+        tenant_id=query.tenant_id,
+        rule_id=query.rule_id,
+        lock=False,
+    )
+    version = db.scalar(
+        select(AutomationRuleVersion)
+        .where(
+            AutomationRuleVersion.rule_id == rule.id,
+            AutomationRuleVersion.published_at.is_(None),
+        )
+        .order_by(AutomationRuleVersion.version.desc())
+        .limit(1)
+    )
+    if version is None and rule.active_version_id is not None:
+        version = db.get(AutomationRuleVersion, rule.active_version_id)
+    return _editor_state(rule=rule, version=version)
 
 
 def get_rule(db: Session, *, tenant_id: UUID, rule_id: UUID) -> AutomationRule:

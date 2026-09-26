@@ -94,6 +94,7 @@ DOMAIN = DomainSOT(
             owns=("automation rule definitions and immutable versions",),
             depends_on=(
                 "automation.capability_registry",
+                "customer.search",
                 "support.ticket_assignment_rule_configuration",
                 "support.ticket_automation_rule_configuration",
             ),
@@ -106,6 +107,7 @@ DOMAIN = DomainSOT(
                             "typed automation rule lifecycle command",
                             "declared automation capabilities",
                             "tenant-scoped automation rule records",
+                            "company-wide or selected-customer rule scope",
                             "active ticket assignment rules",
                             "active ticket-creation automation rules",
                         ),
@@ -136,6 +138,15 @@ DOMAIN = DomainSOT(
                         owner="automation.rule_definitions",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="AutomationRule and AutomationRuleVersion rows",
+                    ),
+                    AuthorityInput(
+                        name="selected customer scope evidence",
+                        owner="customer.search",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "the exact selected set of currently active canonical "
+                            "customer identities"
+                        ),
                     ),
                     AuthorityInput(
                         name="active ticket assignment rules",
@@ -182,6 +193,7 @@ DOMAIN = DomainSOT(
                         "automation.rule_definitions.condition_field_undeclared",
                         "automation.rule_definitions.condition_operator_unsupported",
                         "automation.rule_definitions.condition_value_invalid",
+                        "automation.rule_definitions.customer_scope_invalid",
                         "automation.rule_definitions.action_inputs_invalid",
                         "automation.rule_definitions.action_target_mismatch",
                         "automation.rule_definitions.trigger_runtime_unavailable",
@@ -197,6 +209,7 @@ DOMAIN = DomainSOT(
                     fail_closed_on=(
                         "unknown or stale capability contract",
                         "missing central or module permission",
+                        "missing or inactive customer scope member",
                         "legacy-exclusive capability conflict",
                     ),
                 ),

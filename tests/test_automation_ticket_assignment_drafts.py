@@ -22,6 +22,7 @@ def test_ticket_assignment_pilot_is_draftable_but_not_runtime_enabled() -> None:
     assert not trigger.runtime_enabled
     assert not action.runtime_enabled
     trigger_schema, conditions, actions = automation_rules._validate_definition(
+        db=SimpleNamespace(),
         trigger_key=trigger.key,
         conditions=(
             automation_rules.AutomationCondition(
@@ -44,11 +45,52 @@ def test_ticket_assignment_pilot_is_draftable_but_not_runtime_enabled() -> None:
         permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
     )
 
-    assert trigger_schema == 2
+    assert trigger_schema == 3
     assert conditions[0]["value"] == "urgent"
     assert actions[0]["action_key"] == action.key
     assert EventType.support_ticket_created not in HANDLED_EVENT_TYPES
     assert not runtime_registry_errors()
+    assert not automation_rules._runtime_ready(
+        trigger_key=trigger.key,
+        version=SimpleNamespace(actions=[{"action_key": action.key}]),
+    )
+
+
+def test_ticket_assignment_can_target_selected_customers(monkeypatch) -> None:
+    customer_id = UUID("9d501e67-4252-45de-8b42-0e74f8a8e307")
+    monkeypatch.setattr(
+        automation_rules.customer_search,
+        "get_customer_match",
+        lambda _db, requested_id, *, active_only=False: (
+            SimpleNamespace(id=requested_id) if active_only else None
+        ),
+    )
+    trigger_schema, conditions, _actions = automation_rules._validate_definition(
+        db=SimpleNamespace(),
+        trigger_key="support.ticket.created",
+        conditions=(
+            automation_rules.AutomationCondition(
+                field_key="customer_id",
+                operator=AutomationOperator.in_values,
+                value=(customer_id,),
+            ),
+        ),
+        actions=(
+            automation_rules.AutomationActionStep(
+                action_key="support.ticket.assign_service_team",
+                inputs=(
+                    automation_rules.AutomationActionValue(
+                        key="service_team_id",
+                        value=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+                    ),
+                ),
+            ),
+        ),
+        permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
+    )
+
+    assert trigger_schema == 3
+    assert conditions[0]["value"] == [str(customer_id)]
 
 
 def test_ticket_assignment_pilot_cannot_be_published_before_runtime_admission() -> None:

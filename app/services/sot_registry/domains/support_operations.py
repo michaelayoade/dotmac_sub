@@ -97,7 +97,7 @@ DOMAIN = DomainSOT(
                 ),
                 events=EventContract(
                     event_types=("ticket.assignment_rule_changed",),
-                    schema_version=1,
+                    schema_version=2,
                     delivery_owner="observability.audit_log",
                     compatibility="Version 1 records rule identity and change type only.",
                     replay="TicketAssignmentRule rows plus audit evidence reconstruct changes.",
@@ -747,13 +747,14 @@ DOMAIN = DomainSOT(
                         "support.resolution_confirmation_due",
                         "support.ticket_sla_breach_due",
                     ),
-                    schema_version=1,
+                    schema_version=2,
                     delivery_owner="events.dispatcher",
                     compatibility=(
                         "Version 1 carries stable Ticket/account identifiers and bounded "
                         "change evidence, including the explicit creation consequence mode; "
-                        "private comment bodies and attachments are not placed in transport "
-                        "events."
+                        "the dedicated support.ticket.created envelope carries the canonical "
+                        "customer account identity for customer-scoped automation. Private "
+                        "comment bodies and attachments are not placed in transport events."
                     ),
                     replay=(
                         "Canonical Ticket rows, official comments, links/merges, access "
@@ -1728,7 +1729,7 @@ DOMAIN = DomainSOT(
                 key="support.ticket.created",
                 label="New support ticket created",
                 event_type="support.ticket.created",
-                event_schema_version=2,
+                event_schema_version=3,
                 entity_type="support.ticket",
                 tenant_id_field="tenant_id",
                 entity_id_field="ticket_id",
@@ -1746,6 +1747,12 @@ DOMAIN = DomainSOT(
                             "high",
                             "urgent",
                         ),
+                    ),
+                    AutomationConditionField(
+                        key="customer_id",
+                        label="Customer",
+                        value_type=AutomationValueType.uuid,
+                        operators=(AutomationOperator.in_values,),
                     ),
                 ),
                 author_permission="support:ticket:read",
