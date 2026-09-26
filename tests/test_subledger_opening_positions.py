@@ -39,6 +39,7 @@ from app.services.billing.shadow_verification import (
     RecordPhase3SubledgerParityCommand,
     RecordPostCutoverAccountOpeningPreviewCommand,
     RecordPostCutoverMigratedAccountOpeningPreviewCommand,
+    ReviewedMigratedOpeningIdentity,
     ReviewedMigratedOpeningSource,
     record_phase3_opening_preview,
     record_phase3_subledger_parity,
@@ -183,6 +184,49 @@ def _capture(db, preview, *, key: str):
             review_reference="pytest:finance-reviewed-opening-run",
         ),
     )
+
+
+def test_reviewed_pppoe_identity_is_bound_to_opening_request_evidence():
+    from app.services.billing.shadow_verification import (
+        _migrated_opening_request_payload,
+        _normalize_reviewed_migrated_identity,
+    )
+
+    identity = _normalize_reviewed_migrated_identity(
+        ReviewedMigratedOpeningIdentity(
+            kind="pppoe_username",
+            value=" 10005437 ",
+        )
+    )
+    assert identity is not None
+    assert identity.value == "10005437"
+
+    payload = _migrated_opening_request_payload(
+        RecordPostCutoverMigratedAccountOpeningPreviewCommand(
+            account_id=UUID("e49ada43-819f-4bce-a389-c19e46bc4a7b"),
+            source=ReviewedMigratedOpeningSource(
+                position_at=datetime(2026, 8, 2, 20, 9, 39, tzinfo=UTC),
+                legacy_position=Decimal("55250.00"),
+                evidence_ref="ticket-28519",
+                evidence_sha256="a" * 64,
+            ),
+            reviewed_identity=identity,
+            code_version="pytest",
+            database_schema_version="pytest",
+        ),
+        source=ReviewedMigratedOpeningSource(
+            position_at=datetime(2026, 8, 2, 20, 9, 39, tzinfo=UTC),
+            legacy_position=Decimal("55250.00"),
+            evidence_ref="ticket-28519",
+            evidence_sha256="a" * 64,
+        ),
+        currency="NGN",
+    )
+
+    assert payload["reviewed_identity"] == {
+        "kind": "pppoe_username",
+        "value": "10005437",
+    }
 
 
 def test_single_account_opening_preview_requires_active_authority(

@@ -10,6 +10,9 @@ from app.services.sot_registry.domains.authorization_control_plane import (
 from app.services.sot_registry.domains.automation_control_plane import (
     DOMAIN as AUTOMATION_CONTROL_PLANE,
 )
+from app.services.sot_registry.domains.custom_fields_control_plane import (
+    DOMAIN as CUSTOM_FIELDS_CONTROL_PLANE,
+)
 from app.services.sot_registry.domains.customer_context import (
     DOMAIN as CUSTOMER_CONTEXT,
 )
@@ -95,6 +98,7 @@ DOMAIN_DECLARATIONS = (
     WORKFORCE_OPERATIONS,
     SUPPORT_OPERATIONS,
     AUTOMATION_CONTROL_PLANE,
+    CUSTOM_FIELDS_CONTROL_PLANE,
     TENANCY,
     AI_ADVISORY,
     PROVISIONING_OPERATIONS,

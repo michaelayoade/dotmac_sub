@@ -194,24 +194,32 @@ class Quote {
 
   bool get isAccepted => status == 'accepted';
   bool get isRelocation => serviceOption?.kind == ServiceRequestKind.relocation;
-  String get statusLabel => switch (status) {
-        'draft' ||
-        'sent'
-            when isRelocation &&
-                paymentReviewStatus == 'approved' &&
-                !canPayDeposit =>
-          'Approved — booking pending',
-        'draft' ||
-        'sent' when paymentReviewStatus == 'approved' =>
-          'Approved — payment required',
-        'draft' || 'sent' => 'Awaiting staff review',
-        'accepted' => isRelocation
-            ? 'Accepted — relocation scheduled'
-            : 'Accepted — installation scheduled',
-        'rejected' => 'Declined',
-        'expired' => 'Expired',
-        _ => status,
-      };
+  String get paymentReviewDisplayMessage =>
+      depositPaid ? 'Paid' : paymentReviewMessage;
+
+  String get statusLabel {
+    if (status == 'accepted') {
+      return isRelocation
+          ? 'Accepted — relocation scheduled'
+          : 'Accepted — installation scheduled';
+    }
+    if (depositPaid) return 'Paid';
+    return switch (status) {
+      'draft' ||
+      'sent'
+          when isRelocation &&
+              paymentReviewStatus == 'approved' &&
+              !canPayDeposit =>
+        'Approved — booking pending',
+      'draft' ||
+      'sent' when paymentReviewStatus == 'approved' =>
+        'Approved — payment required',
+      'draft' || 'sent' => 'Awaiting staff review',
+      'rejected' => 'Declined',
+      'expired' => 'Expired',
+      _ => status,
+    };
+  }
 
   factory Quote.fromJson(Map<String, dynamic> json) => Quote(
         id: _str(json['id']),

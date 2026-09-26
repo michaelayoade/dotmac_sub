@@ -445,10 +445,11 @@ implementation.
   invoice or payment intent. Missing or unauthorized quotations render the same
   not-found state.
 - Review state: Draft/Sent Quotes without a current approval show `Awaiting
-  staff review` and no payment action. Approved Quotes show `Approved — Payment
-  required`. Rejected Quotes show the owner-supplied rejection message. Mobile
-  must consume `can_pay_deposit`; it must not infer payment eligibility from
-  Quote status or deposit amount.
+  staff review` and no payment action. Approved unpaid Quotes show `Approved —
+  Payment required`. Rejected Quotes show the owner-supplied rejection message.
+  A paid Quote shows `Paid` and no payment action, including when its linked
+  deposit Invoice is paid. Mobile consumes `deposit_paid` and `can_pay_deposit`;
+  it must not infer payment eligibility from Quote status or deposit amount.
 - Customer service requests show the selected installation or relocation type
   and coverage before review. A move that changes access technology requires
   the customer to choose a compatible destination plan before pinning the new

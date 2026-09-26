@@ -3499,6 +3499,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/custom-fields/{target_type}/{target_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:target_id!",
+    "path:target_type!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "cec3259880c5",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/customer-experience/handoffs": {
    "params": [
     "header:authorization",
@@ -18982,6 +18995,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "PUT /api/v1/custom-fields/{target_type}/{target_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:target_id!",
+    "path:target_type!"
+   ],
+   "request": "8db3a6997209",
+   "responses": {
+    "200": "bacbad5c3274",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "PUT /api/v1/field/locations/sharing": {
    "params": [
     "header:authorization",
@@ -19572,6 +19598,10 @@
   "CreditNoteVoidPreviewRead": "d5406fcd111e",
   "CreditNoteVoidRequest": "7591fdab7cef",
   "CurrencySettingsResponse": "914ef6200eb8",
+  "CustomFieldValueItem": "376cacc9d5de",
+  "CustomFieldValueList": "77ee77d65990",
+  "CustomFieldValueResult": "95a711d8d526",
+  "CustomFieldValueWrite": "5f5f664acd5f",
   "CustomerActionKey": "cfaea899bd65",
   "CustomerDefaultsResponse": "c0892eba5f8c",
   "CustomerDeviceCommandKind": "cb81f2ec8d71",
@@ -19962,6 +19992,7 @@
   "IpPoolCreate": "e65b5896ac52",
   "IpPoolRead": "6feed1c5aefd",
   "IpPoolUpdate": "21a949c9cfb8",
+  "JsonValue": "44136fa355b3",
   "JumpHostCreate": "1e899b5ee0b9",
   "JumpHostRead": "7deddb7a22f2",
   "JumpHostUpdate": "044c2505f8b9",

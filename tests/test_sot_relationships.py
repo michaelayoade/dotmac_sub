@@ -21,6 +21,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "workforce_operations",
         "support_operations",
         "automation_control_plane",
+        "custom_fields_control_plane",
         "tenancy",
         "ai_advisory",
         "provisioning_operations",

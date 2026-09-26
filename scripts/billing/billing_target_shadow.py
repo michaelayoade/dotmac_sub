@@ -19,6 +19,8 @@ Subcommands::
     poetry run python -m scripts.billing.billing_target_shadow pending-erp-exports [--limit 50]
     poetry run python -m scripts.billing.billing_target_shadow preview-legacy-renewal-tax-invoice-correction --account <id> --subscription <id> --adjustment <id> --entitlement <id> --expected-invoice-total <amount> --expected-remaining-credit <amount>
     poetry run python -m scripts.billing.billing_target_shadow correct-legacy-renewal-tax-invoice --account <id> --subscription <id> --adjustment <id> --entitlement <id> --expected-invoice-total <amount> --expected-remaining-credit <amount> --preview-fingerprint <sha256> --actor user:<id> --reason <approval-ref> --idempotency-key <key>
+    poetry run python -m scripts.billing.billing_target_shadow preview-unused-prepaid-renewal-correction --account <id> --subscription <id> --adjustment <id> --entitlement <id>
+    poetry run python -m scripts.billing.billing_target_shadow correct-unused-prepaid-renewal --account <id> --subscription <id> --adjustment <id> --entitlement <id> --preview-fingerprint <sha256> --actor user:<id> --reason <approval-ref> --idempotency-key <key>
 
 Preview commands are read-only. Explicit capture, correction, execution, and
 authority-activation commands make only their documented owner-controlled
@@ -486,9 +488,15 @@ def _cmd_preview_post_cutover_account_opening(db, args) -> int:
 def _cmd_preview_migrated_account_opening(db, args) -> int:
     from app.services.billing.shadow_verification import (
         RecordPostCutoverMigratedAccountOpeningPreviewCommand,
+        ReviewedMigratedOpeningIdentity,
         ReviewedMigratedOpeningSource,
         record_post_cutover_migrated_account_opening_preview,
     )
+
+    if bool(args.reviewed_identity_kind) != bool(args.reviewed_identity_value):
+        raise SystemExit(
+            "--reviewed-identity-kind and --reviewed-identity-value must be supplied together"
+        )
 
     result = record_post_cutover_migrated_account_opening_preview(
         db,
@@ -499,6 +507,14 @@ def _cmd_preview_migrated_account_opening(db, args) -> int:
                 legacy_position=Decimal(args.legacy_position),
                 evidence_ref=args.source_evidence_ref,
                 evidence_sha256=args.source_evidence_sha256,
+            ),
+            reviewed_identity=(
+                ReviewedMigratedOpeningIdentity(
+                    kind=args.reviewed_identity_kind,
+                    value=args.reviewed_identity_value,
+                )
+                if args.reviewed_identity_kind and args.reviewed_identity_value
+                else None
             ),
             code_version=args.code_version,
             database_schema_version=args.schema_version,
@@ -696,6 +712,81 @@ def _cmd_correct_legacy_renewal_tax_invoice(
             "invoice_total": result.invoice_total,
             "tax_total": result.tax_total,
             "remaining_credit": result.remaining_credit,
+            "preview_fingerprint": result.preview_fingerprint,
+            "replayed": result.replayed,
+        }
+    )
+    return 0
+
+
+def _unused_prepaid_renewal_correction_query(args: argparse.Namespace):
+    from app.services.prepaid_service_renewals import (
+        UnusedPrepaidRenewalCorrectionQuery,
+    )
+
+    return UnusedPrepaidRenewalCorrectionQuery(
+        account_id=UUID(args.account),
+        subscription_id=UUID(args.subscription),
+        adjustment_id=UUID(args.adjustment),
+        entitlement_id=UUID(args.entitlement),
+    )
+
+
+def _cmd_preview_unused_prepaid_renewal_correction(db, args) -> int:
+    from app.services.prepaid_service_renewals import (
+        preview_unused_prepaid_renewal_correction,
+    )
+
+    result = preview_unused_prepaid_renewal_correction(
+        db, _unused_prepaid_renewal_correction_query(args)
+    )
+    _emit(
+        {
+            "account_id": result.account_id,
+            "subscription_id": result.subscription_id,
+            "adjustment_id": result.adjustment_id,
+            "entitlement_id": result.entitlement_id,
+            "period_start": result.period_start,
+            "period_end": result.period_end,
+            "amount": result.amount,
+            "currency": result.currency,
+            "funding_before": result.funding_before,
+            "funding_after": result.funding_after,
+            "reversal_preview_fingerprint": result.reversal_preview_fingerprint,
+            "actionable": result.actionable,
+            "reason": result.reason,
+            "preview_fingerprint": result.fingerprint,
+            "financial_state_changed": False,
+        }
+    )
+    return 0
+
+
+def _cmd_correct_unused_prepaid_renewal(db, args) -> int:
+    from app.services.prepaid_service_renewals import (
+        CorrectUnusedPrepaidRenewalCommand,
+        correct_unused_prepaid_service_renewal,
+    )
+
+    result = correct_unused_prepaid_service_renewal(
+        db,
+        CorrectUnusedPrepaidRenewalCommand(
+            context=_context(
+                args.reason,
+                idempotency_key=args.idempotency_key,
+                actor=args.actor,
+                scope="billing:ledger:write",
+            ),
+            query=_unused_prepaid_renewal_correction_query(args),
+            expected_preview_fingerprint=args.preview_fingerprint,
+        ),
+    )
+    _emit(
+        {
+            "adjustment_id": result.adjustment_id,
+            "entitlement_id": result.entitlement_id,
+            "reversal_ledger_entry_id": result.reversal_ledger_entry_id,
+            "remaining_funding": result.remaining_funding,
             "preview_fingerprint": result.preview_fingerprint,
             "replayed": result.replayed,
         }
@@ -1148,6 +1239,8 @@ def main() -> int:
     p.add_argument("--legacy-position", required=True)
     p.add_argument("--source-evidence-ref", required=True)
     p.add_argument("--source-evidence-sha256", required=True)
+    p.add_argument("--reviewed-identity-kind", choices=["pppoe_username"])
+    p.add_argument("--reviewed-identity-value")
     p.add_argument("--code-version", required=True)
     p.add_argument("--schema-version", required=True)
     p.add_argument("--currency", default="NGN")
@@ -1212,6 +1305,30 @@ def main() -> int:
     p.add_argument("--reason", required=True)
     p.add_argument("--idempotency-key", required=True)
     p.set_defaults(func=_cmd_correct_legacy_renewal_tax_invoice)
+
+    p = sub.add_parser(
+        "preview-unused-prepaid-renewal-correction",
+        help="preview reversal of one unused direct prepaid renewal",
+    )
+    p.add_argument("--account", required=True)
+    p.add_argument("--subscription", required=True)
+    p.add_argument("--adjustment", required=True)
+    p.add_argument("--entitlement", required=True)
+    p.set_defaults(func=_cmd_preview_unused_prepaid_renewal_correction)
+
+    p = sub.add_parser(
+        "correct-unused-prepaid-renewal",
+        help="atomically reverse one approved unused prepaid renewal",
+    )
+    p.add_argument("--account", required=True)
+    p.add_argument("--subscription", required=True)
+    p.add_argument("--adjustment", required=True)
+    p.add_argument("--entitlement", required=True)
+    p.add_argument("--preview-fingerprint", required=True)
+    p.add_argument("--actor", required=True)
+    p.add_argument("--reason", required=True)
+    p.add_argument("--idempotency-key", required=True)
+    p.set_defaults(func=_cmd_correct_unused_prepaid_renewal)
 
     p = sub.add_parser(
         "approve-verification",

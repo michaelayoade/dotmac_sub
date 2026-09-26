@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from app.services.custom_field_contracts import (
+    CustomFieldDomainCapabilities,
+    CustomFieldTargetCapability,
+)
 from app.services.sot_manifest import (
     AuthorityInput,
     AuthorityKind,
@@ -1362,4 +1366,26 @@ DOMAIN = DomainSOT(
     "translate Party membership to their current principal-facing "
     "identifiers through the owner's resolver and never write team rows "
     "or restore settings mirrors.",
+    custom_fields=CustomFieldDomainCapabilities(
+        targets=(
+            CustomFieldTargetCapability(
+                key="project",
+                label="Projects",
+                entity_id_type="uuid",
+                read_permission="project:read",
+                write_permission="project:update",
+                detail_path_template="/admin/projects/{target_id}",
+                maximum_active_fields=50,
+            ),
+            CustomFieldTargetCapability(
+                key="work_order",
+                label="Work orders",
+                entity_id_type="uuid",
+                read_permission="operations:dispatch:read",
+                write_permission="operations:dispatch:write",
+                detail_path_template="/admin/dispatch/work-orders/{target_id}",
+                maximum_active_fields=50,
+            ),
+        ),
+    ),
 )

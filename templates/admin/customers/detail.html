@@ -807,6 +807,10 @@
 
             </div>
         </div>
+        {% if custom_field_values %}
+        {% include "admin/customers/_custom_fields.html" %}
+        {% endif %}
+
 
     </div>
 

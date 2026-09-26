@@ -254,6 +254,12 @@ from app.models.csat import (  # noqa: F401
     CsatSourceType,
     SupportCsatRequest,
 )
+from app.models.custom_fields import (  # noqa: F401
+    CustomFieldDefinition,
+    CustomFieldDefinitionStatus,
+    CustomFieldType,
+    CustomFieldValue,
+)
 from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoff,
     CustomerExperienceHandoffEvent,
@@ -293,6 +299,13 @@ from app.models.domain_settings import (  # noqa: F401
 from app.models.durable_timer import (  # noqa: F401
     DurableTimer,
     TimerStatus,
+)
+from app.models.enforcement_application import (  # noqa: F401
+    EnforcementApplication,
+    EnforcementEffect,
+    EnforcementFailureClass,
+    EnforcementOutcomeValue,
+    EnforcementPath,
 )
 from app.models.enforcement_lock import (  # noqa: F401
     AccessRestrictionMode,

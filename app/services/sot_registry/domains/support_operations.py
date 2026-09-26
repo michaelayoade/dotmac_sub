@@ -12,6 +12,10 @@ from app.services.automation_contracts import (
     AutomationValueType,
     LegacyAutomationSurface,
 )
+from app.services.custom_field_contracts import (
+    CustomFieldDomainCapabilities,
+    CustomFieldTargetCapability,
+)
 from app.services.sot_manifest import (
     AuthorityInput,
     AuthorityKind,
@@ -1787,6 +1791,19 @@ DOMAIN = DomainSOT(
                 owner_service="support.ticket_automation_rule_configuration",
                 management_path="/admin/support/automation",
                 conflict_scopes=(),
+            ),
+        ),
+    ),
+    custom_fields=CustomFieldDomainCapabilities(
+        targets=(
+            CustomFieldTargetCapability(
+                key="support_ticket",
+                label="Support tickets",
+                entity_id_type="uuid",
+                read_permission="support:ticket:read",
+                write_permission="support:ticket:update",
+                detail_path_template="/admin/support/tickets/{target_id}",
+                maximum_active_fields=50,
             ),
         ),
     ),

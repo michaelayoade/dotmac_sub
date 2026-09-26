@@ -179,9 +179,13 @@ _IPV4_PROJECTION_BLOCKERS: dict[IPv4ServedProjectionDecision, str] = {
 
 
 def prepaid_bill_now_preview_context(
-    db: Session, *, subscription_id: str
+    db: Session, *, subscription_id: str, effective_at: datetime | None = None
 ) -> dict[str, object]:
-    preview = preview_prepaid_recovery_draft(db, subscription_id=UUID(subscription_id))
+    preview = preview_prepaid_recovery_draft(
+        db,
+        subscription_id=UUID(subscription_id),
+        effective_at=effective_at,
+    )
     return {"prepaid_bill_now_preview": preview}
 
 

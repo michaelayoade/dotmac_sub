@@ -39,9 +39,10 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import conversation_lead_relationships
 from app.services import customer_search as customer_search_service
+from app.services import web_custom_fields as web_custom_fields_service
 from app.services import web_sales as web_sales_service
 from app.services import web_sales_dashboard as dashboard_service
-from app.services.auth_dependencies import can, require_permission
+from app.services.auth_dependencies import can, load_permission_keys, require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition
@@ -521,6 +522,16 @@ def lead_detail(
             raise HTTPException(status_code=404, detail="Conversation not found.")
     context = _ctx(request, db, "sales-leads")
     context.update(web_sales_service.build_lead_detail_context(db, lead_id=lead_id))
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_target_value_context(
+            db,
+            target_type="lead",
+            target_id=context["lead"].id,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            auth=auth,
+        )
+    )
     context["inbox_conversation_id"] = inbox_conversation_id
     result = request.query_params.get("result")
     if result == "created":
@@ -1403,6 +1414,16 @@ def quote_create(
 def quote_detail(request: Request, quote_id: str, db: Session = Depends(get_db)):
     context = _ctx(request, db, "sales-quotes")
     context.update(web_sales_service.build_quote_detail_context(db, quote_id=quote_id))
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_target_value_context(
+            db,
+            target_type="quote",
+            target_id=context["quote"].id,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            auth=auth,
+        )
+    )
     return templates.TemplateResponse("admin/sales/quotes/detail.html", context)
 
 
@@ -2022,5 +2043,15 @@ def sales_order_detail(request: Request, order_id: str, db: Session = Depends(ge
     context = _ctx(request, db, "sales-orders")
     context.update(
         web_sales_service.build_sales_order_detail_context(db, sales_order_id=order_id)
+    )
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_target_value_context(
+            db,
+            target_type="sales_order",
+            target_id=context["order"].id,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            auth=auth,
+        )
     )
     return templates.TemplateResponse("admin/sales/sales_orders/detail.html", context)

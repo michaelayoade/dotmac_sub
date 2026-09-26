@@ -335,6 +335,9 @@ def _customer_quote_view(item: dict[str, object]) -> dict[str, object]:
         "relocation_work_order_id",
     ):
         item.setdefault(key, None)
+    if item.get("deposit_paid") is True:
+        item["payment_review_message"] = "Paid"
+        item["can_pay_deposit"] = False
     visible = item.get("status") == "accepted"
     item["pricing_visible"] = visible
     if not visible:

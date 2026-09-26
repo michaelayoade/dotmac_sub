@@ -63,7 +63,10 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
             '/pay',
             extra: CheckoutArgs.invoice(initiation),
           );
-          if (returned == null) return;
+          if (returned == null) {
+            ref.invalidate(quotesProvider);
+            return;
+          }
           reference = returned;
         }
         final result = await billing.verifyPayment(
@@ -97,7 +100,10 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
         );
         if (!mounted) return;
         final result = await context.push<String>('/pay', extra: args);
-        if (result == null) return; // cancelled
+        if (result == null) {
+          ref.invalidate(quotesProvider);
+          return;
+        }
         reference = result;
       }
 
@@ -109,6 +115,9 @@ class _QuotesScreenState extends ConsumerState<QuotesScreen> {
             : 'Payment is pending confirmation.',
       );
     } on ApiException catch (e) {
+      if (e.message.toLowerCase().contains('already paid')) {
+        ref.invalidate(quotesProvider);
+      }
       _snack(e.message);
     } finally {
       if (mounted) setState(() => _payingId = null);
@@ -305,14 +314,16 @@ class _QuoteCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      quote.paymentReviewMessage,
+                      quote.paymentReviewDisplayMessage,
                       style: text.bodySmall,
                     ),
                   ),
                 ],
               ),
             ),
-            if (actionsAvailable && quote.canPayDeposit) ...[
+            if (actionsAvailable &&
+                quote.canPayDeposit &&
+                !quote.depositPaid) ...[
               const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,

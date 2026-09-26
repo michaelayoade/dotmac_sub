@@ -82,6 +82,30 @@ class QuotePaymentPage:
 
 
 @dataclass(frozen=True, slots=True)
+class QuoteDepositSettlementQuery:
+    subscriber_id: UUID
+    quote_ids: tuple[UUID, ...]
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteDepositSettlement:
+    quote_id: UUID
+    invoice_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteDepositSettlements:
+    subscriber_id: UUID
+    observed_at: datetime
+    settlements: tuple[QuoteDepositSettlement, ...]
+
+    @property
+    def paid_quote_ids(self) -> frozenset[UUID]:
+        return frozenset(row.quote_id for row in self.settlements)
+
+
+@dataclass(frozen=True, slots=True)
 class InitiateQuoteDepositCommand:
     quote_id: UUID
     idempotency_key: str
@@ -297,7 +321,7 @@ def quote_payment_page(db: Session, query: QuotePaymentQuery) -> QuotePaymentPag
         query.observed_at
     ):
         raise _error("quote_expired", "This Quote has expired")
-    if _native_deposit_invoice_paid(db, quote.id):
+    if _native_deposit_invoice_paid(db, quote.id, quote.subscriber_id):
         raise _error("already_paid", "This Quote deposit is already paid")
     amount = _authoritative_quote_deposit_amount(db, quote)
     if amount <= Decimal("0.00"):
@@ -339,22 +363,57 @@ def _quote_row(db: Session, subscriber_id: str, quote_id: str) -> QuoteMirror:
     return row
 
 
-def _native_deposit_invoice_paid(db: Session, quote_id: UUID) -> bool:
-    """Read paid state through the structural Quote-to-Invoice identity."""
+def _native_deposit_invoice_paid(
+    db: Session,
+    quote_id: UUID,
+    subscriber_id: UUID,
+) -> bool:
+    """Read paid state through the scoped structural Quote-to-Invoice link."""
 
-    return (
-        db.scalar(
-            select(Invoice.id)
-            .join(
-                QuoteDepositInvoiceLink,
-                QuoteDepositInvoiceLink.invoice_id == Invoice.id,
-            )
-            .where(
-                QuoteDepositInvoiceLink.quote_id == quote_id,
-                Invoice.status == InvoiceStatus.paid,
-            )
+    settlements = resolve_quote_deposit_settlements(
+        db,
+        QuoteDepositSettlementQuery(
+            subscriber_id=subscriber_id,
+            quote_ids=(quote_id,),
+            observed_at=datetime.now(UTC),
+        ),
+    )
+    return quote_id in settlements.paid_quote_ids
+
+
+def resolve_quote_deposit_settlements(
+    db: Session,
+    query: QuoteDepositSettlementQuery,
+) -> QuoteDepositSettlements:
+    """Resolve paid Quote deposits from scoped structural Invoice links."""
+    quote_ids = tuple(dict.fromkeys(query.quote_ids))
+    if not quote_ids:
+        return QuoteDepositSettlements(
+            subscriber_id=query.subscriber_id,
+            observed_at=query.observed_at,
+            settlements=(),
         )
-        is not None
+
+    rows = db.execute(
+        select(QuoteDepositInvoiceLink.quote_id, Invoice.id)
+        .join(Invoice, Invoice.id == QuoteDepositInvoiceLink.invoice_id)
+        .join(Quote, Quote.id == QuoteDepositInvoiceLink.quote_id)
+        .where(
+            Quote.id.in_(quote_ids),
+            Quote.subscriber_id == query.subscriber_id,
+            QuoteDepositInvoiceLink.account_id == query.subscriber_id,
+            Invoice.account_id == query.subscriber_id,
+            Invoice.status == InvoiceStatus.paid,
+        )
+        .order_by(QuoteDepositInvoiceLink.quote_id, Invoice.id)
+    ).all()
+    return QuoteDepositSettlements(
+        subscriber_id=query.subscriber_id,
+        observed_at=query.observed_at,
+        settlements=tuple(
+            QuoteDepositSettlement(quote_id=quote_id, invoice_id=invoice_id)
+            for quote_id, invoice_id in rows
+        ),
     )
 
 
@@ -616,7 +675,7 @@ def _initiate_deposit_native(
     payment_review = quote_payment_review.resolve_payment_review(quote)
     if not payment_review.approval_current:
         raise HTTPException(status_code=409, detail=payment_review.message)
-    if _native_deposit_invoice_paid(db, quote.id):
+    if _native_deposit_invoice_paid(db, quote.id, coerce_uuid(str(subscriber_id))):
         raise HTTPException(status_code=409, detail="Deposit already paid")
     payload = selfserve.build_portal_quote_payload(db, quote)
     deposit = Decimal(str(payload.get("deposit_amount") or "0"))

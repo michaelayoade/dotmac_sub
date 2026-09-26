@@ -184,12 +184,30 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/automation", "/admin/automation/ticket-assignment/new"),
         "Confirm that your role has Automation Center access before opening the hub.",
         "Review the module registry to see which modules and events are eligible for central automation.",
+        "Review how registered custom fields are governed when a module exposes them to central automation.",
         "Review central rules and recent execution evidence only when your role grants those additional permissions.",
         "Use the ticket-assignment pilot to choose an active service team and save an urgent-ticket rule as a draft.",
         "Use the existing automation ownership section to identify workflows that remain managed outside the hub.",
         notes=(
             "The registry, published rules, and execution evidence remain read-only. The pilot saves a draft only; it cannot publish, assign a ticket, or start automation.",
-            "Custom fields, publishing, and migration of existing rules are outside this delivery sequence.",
+            "Publishing and migration of existing rules are outside this delivery sequence.",
+        ),
+    ),
+    _guide(
+        "custom-fields-center",
+        "Administration",
+        "Manage custom fields",
+        "Tenant administrators",
+        "Add governed information fields to explicitly registered module records without changing their database schema.",
+        ("/admin/custom-fields",),
+        "Confirm that your role has hub access and the field-definition permission needed for the intended action.",
+        "Choose a registered target, create a typed draft, and define its validation and placement.",
+        "Review the draft contract before activating it; structural rules lock after activation.",
+        "Retire a field instead of deleting it so existing values and audit history remain attributable.",
+        notes=(
+            "Registered targets cover subscribers, projects, support tickets, work orders, leads, quotes, and sales orders; both central and module permissions apply.",
+            "Legacy subscriber custom fields remain separately owned and are not migrated or dual-written.",
+            "Sensitive values require separate read and write permissions and never appear in domain events.",
         ),
     ),
     _guide(
@@ -1010,18 +1028,29 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("review-automation-access", "Review Automation Center access", 0),
         _action("review-automation-modules", "Review eligible modules and events", 1),
         _action(
-            "review-automation-rules", "Review central rules and execution evidence", 2
+            "review-automation-custom-fields",
+            "Review custom-field automation boundaries",
+            2,
+        ),
+        _action(
+            "review-automation-rules", "Review central rules and execution evidence", 3
         ),
         _action(
             "save-ticket-assignment-draft",
             "Save an urgent-ticket assignment draft",
-            3,
+            4,
         ),
         _action(
             "confirm-automation-boundary",
             "Confirm the remaining module ownership boundary",
-            4,
+            5,
         ),
+    ),
+    "custom-fields-center": (
+        _action("review-custom-field-access", "Review custom-field access", 0),
+        _action("define-custom-field", "Define a typed custom-field draft", 1),
+        _action("review-custom-field-contract", "Review the field contract", 2),
+        _action("retire-custom-field", "Retire a custom field safely", 3),
     ),
     "admin-workspace": (
         _action("choose-work-area", "Choose the right work area", 0, 1),
@@ -1847,7 +1876,10 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "system", "System Overview", ("system-overview",), "system:settings:read"
     ),
     AdminHelpNavigationSection(
-        "settings", "Settings", ("settings", "smtp-senders"), "system:settings:read"
+        "settings",
+        "Settings",
+        ("settings", "smtp-senders", "custom-fields-center"),
+        "system:settings:read",
     ),
     AdminHelpNavigationSection(
         "meta",

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.services.custom_field_contracts import (
+    CustomFieldDomainCapabilities,
+    CustomFieldTargetCapability,
+    LegacyCustomFieldSurface,
+)
 from app.services.sot_manifest import (
     AuthorityInput,
     AuthorityKind,
@@ -2802,4 +2807,26 @@ DOMAIN = DomainSOT(
     "policy from subscription status or invoice rows, and consume usage "
     "totals with their server-owned provenance instead of reconstructing "
     "headlines from partial client data.",
+    custom_fields=CustomFieldDomainCapabilities(
+        targets=(
+            CustomFieldTargetCapability(
+                key="subscriber",
+                label="Subscribers",
+                entity_id_type="uuid",
+                read_permission="customer:read",
+                write_permission="customer:update",
+                detail_path_template="/admin/customers/person/{target_id}",
+                maximum_active_fields=50,
+            ),
+        ),
+        legacy_surfaces=(
+            LegacyCustomFieldSurface(
+                key="subscriber.operator_defined_fields",
+                label="Legacy subscriber custom fields",
+                owner_service="customer.accounts",
+                management_path="/api/v1/subscribers/{target_id}/custom-fields",
+                migration_state="retained_no_migration",
+            ),
+        ),
+    ),
 )
