@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
 from fastapi import HTTPException
 from routeros_api.exceptions import RouterOsApiCommunicationError
 
@@ -62,9 +61,7 @@ class TestEnforceAddressListOnNas:
                 "app.services.enforcement.DeviceProvisioner.ssh_session",
                 return_value=_working_ssh_cm(),
             ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
             result = _enforce_address_list_on_nas(
                 db, nas_device, "blocked", "10.0.0.5", add=True, subscription_id=sub_id
@@ -92,12 +89,8 @@ class TestEnforceAddressListOnNas:
                 "app.services.enforcement.DeviceProvisioner.ssh_session",
                 side_effect=_SSH_NOT_CONFIGURED,
             ),
-            patch(
-                "app.services.enforcement._nas_with_api_creds", return_value=None
-            ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._nas_with_api_creds", return_value=None),
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
             result = _enforce_address_list_on_nas(
                 db, nas_device, "blocked", "10.0.0.5", add=True, subscription_id=sub_id
@@ -120,16 +113,12 @@ class TestEnforceAddressListOnNas:
                 "app.services.enforcement.DeviceProvisioner.ssh_session",
                 side_effect=_SSH_NOT_CONFIGURED,
             ),
-            patch(
-                "app.services.enforcement._nas_with_api_creds", return_value=api_dev
-            ),
+            patch("app.services.enforcement._nas_with_api_creds", return_value=api_dev),
             patch(
                 "app.services.nas._mikrotik.apply_mikrotik_address_list_via_api",
                 side_effect=_ROUTEROS_LOGIN_REJECTION,
             ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
             result = _enforce_address_list_on_nas(
                 db, nas_device, "blocked", "10.0.0.5", add=True, subscription_id=sub_id
@@ -154,12 +143,8 @@ class TestEnforceAddressListOnNas:
                 "app.services.enforcement.DeviceProvisioner.ssh_session",
                 side_effect=OSError(errno.EHOSTUNREACH, "no route to host"),
             ),
-            patch(
-                "app.services.enforcement._nas_with_api_creds", return_value=None
-            ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._nas_with_api_creds", return_value=None),
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
             result = _enforce_address_list_on_nas(
                 db, nas_device, "blocked", "10.0.0.5", add=True, subscription_id=sub_id
@@ -182,16 +167,12 @@ class TestEnforceAddressListOnNas:
                 "app.services.enforcement.DeviceProvisioner.ssh_session",
                 side_effect=_SSH_NOT_CONFIGURED,
             ),
-            patch(
-                "app.services.enforcement._nas_with_api_creds", return_value=api_dev
-            ),
+            patch("app.services.enforcement._nas_with_api_creds", return_value=api_dev),
             patch(
                 "app.services.nas._mikrotik.apply_mikrotik_address_list_via_api",
                 return_value=True,
             ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
             result = _enforce_address_list_on_nas(
                 db, nas_device, "blocked", "10.0.0.5", add=True, subscription_id=sub_id
@@ -212,9 +193,7 @@ class TestEnforceAddressListOnNas:
                 "app.services.enforcement.DeviceProvisioner.ssh_session",
                 return_value=_working_ssh_cm(),
             ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
             result = _enforce_address_list_on_nas(
                 db, nas_device, "blocked", "10.0.0.5", add=True, subscription_id=None
@@ -233,9 +212,7 @@ class TestEnforceAddressListOnNas:
                 "app.services.enforcement.DeviceProvisioner.ssh_session",
                 return_value=_working_ssh_cm(),
             ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
             result = _enforce_address_list_on_nas(
                 db,
@@ -262,9 +239,7 @@ class TestApiKickSession:
         with patch(
             "app.services.enforcement._record_enforcement_application"
         ) as record:
-            result = _api_kick_session(
-                db, nas_device, "alice", subscription_id=sub_id
-            )
+            result = _api_kick_session(db, nas_device, "alice", subscription_id=sub_id)
 
         assert result is False
         outcome = record.call_args.kwargs["outcome"]
@@ -278,20 +253,14 @@ class TestApiKickSession:
         sub_id = uuid4()
 
         with (
-            patch(
-                "app.services.enforcement._nas_with_api_creds", return_value=api_dev
-            ),
+            patch("app.services.enforcement._nas_with_api_creds", return_value=api_dev),
             patch(
                 "app.services.nas._mikrotik.disconnect_mikrotik_pppoe_bulk",
                 side_effect=TimeoutError(),
             ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
-            result = _api_kick_session(
-                db, nas_device, "alice", subscription_id=sub_id
-            )
+            result = _api_kick_session(db, nas_device, "alice", subscription_id=sub_id)
 
         assert result is False
         outcome = record.call_args.kwargs["outcome"]
@@ -306,20 +275,14 @@ class TestApiKickSession:
         sub_id = uuid4()
 
         with (
-            patch(
-                "app.services.enforcement._nas_with_api_creds", return_value=api_dev
-            ),
+            patch("app.services.enforcement._nas_with_api_creds", return_value=api_dev),
             patch(
                 "app.services.nas._mikrotik.disconnect_mikrotik_pppoe_bulk",
                 return_value={"alice"},
             ),
-            patch(
-                "app.services.enforcement._record_enforcement_application"
-            ) as record,
+            patch("app.services.enforcement._record_enforcement_application") as record,
         ):
-            result = _api_kick_session(
-                db, nas_device, "alice", subscription_id=sub_id
-            )
+            result = _api_kick_session(db, nas_device, "alice", subscription_id=sub_id)
 
         assert result is True
         outcome = record.call_args.kwargs["outcome"]
