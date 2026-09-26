@@ -50,6 +50,14 @@ class TransactionMode(StrEnum):
     PARTICIPANT = "participant"
     OWNER_MANAGED = "owner_managed"
     COORDINATOR_MANAGED = "coordinator_managed"
+    # Evidence of an external, irreversible effect, written by its owner on an
+    # independent unit of work so it survives the caller's rollback. It never
+    # joins the caller's transaction, emits no domain event and never raises
+    # into the caller except to propagate a task time limit. Allowed only for
+    # observation collectors, each bound to its own approving ADR by
+    # tests/architecture/test_out_of_band_evidence_ratchet.py (first use:
+    # ADR 0017, enforcement application evidence).
+    OUT_OF_BAND_EVIDENCE = "out_of_band_evidence"
 
 
 class AuthorityMigrationState(StrEnum):
@@ -309,11 +317,35 @@ def contract_validation_errors(
             transaction_label,
             transaction_value,
         )
+    out_of_band = transaction.mode is TransactionMode.OUT_OF_BAND_EVIDENCE
+    if out_of_band:
+        non_observation = sorted(
+            concern.name
+            for concern in contract.concerns
+            if concern.role is not OwnerRole.OBSERVATION_COLLECTOR
+        )
+        if non_observation:
+            errors.append(
+                f"service {service.name!r} out-of-band evidence mode allows only "
+                "observation collectors; not: " + ", ".join(non_observation)
+            )
+        if not any(ref.startswith("docs/adr/") for ref in contract.design_refs):
+            errors.append(
+                f"service {service.name!r} out-of-band evidence mode must cite an "
+                "ADR in design_refs (the approving service-to-ADR binding is "
+                "enforced by tests/architecture/test_out_of_band_evidence_ratchet.py)"
+            )
+        if contract.events is not None:
+            errors.append(
+                f"service {service.name!r} out-of-band evidence mode emits no "
+                "domain events; remove the event contract"
+            )
     if roles & _TRANSACTIONAL_WRITER_ROLES:
         if transaction.mode not in {
             TransactionMode.PARTICIPANT,
             TransactionMode.OWNER_MANAGED,
             TransactionMode.COORDINATOR_MANAGED,
+            TransactionMode.OUT_OF_BAND_EVIDENCE,
         }:
             errors.append(
                 f"service {service.name!r} has a writer/coordinator role but "
@@ -331,6 +363,7 @@ def contract_validation_errors(
         TransactionMode.PARTICIPANT,
         TransactionMode.OWNER_MANAGED,
         TransactionMode.COORDINATOR_MANAGED,
+        TransactionMode.OUT_OF_BAND_EVIDENCE,
     }:
         errors.append(
             f"service {service.name!r} has no writer/coordinator concern for "
@@ -349,7 +382,7 @@ def contract_validation_errors(
             f"service {service.name!r} has retryable codes absent from domain "
             f"codes: {', '.join(unknown_retryable)}"
         )
-    if roles & _WRITER_ROLES and not error_contract.domain_codes:
+    if roles & _WRITER_ROLES and not error_contract.domain_codes and not out_of_band:
         errors.append(
             f"service {service.name!r} writes state but declares no domain error codes"
         )
@@ -367,7 +400,7 @@ def contract_validation_errors(
                 f"codes: {', '.join(missing_boundary_errors)}"
             )
 
-    if roles & _WRITER_ROLES:
+    if roles & _WRITER_ROLES and not out_of_band:
         if contract.events is None:
             errors.append(
                 f"service {service.name!r} writes state but has no event contract"

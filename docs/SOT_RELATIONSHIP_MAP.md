@@ -1099,6 +1099,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `access.walled_garden_policy` | captive network readiness | `policy` | canonical captive network settings ← `control.settings_spec`<br>captive restriction protocol ← `access.walled_garden_policy` | `read_only` | `complete` | network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_walled_garden_policy.py`<br>`tests/test_radius_shadow_handler_integration.py`<br>`tests/architecture/test_grace_walled_garden_ownership.py`<br>`tests/architecture/test_walled_garden_policy_boundary.py` |
 | `access.walled_garden_policy` | effective hard-reject/captive restriction | `policy` | canonical subscriber access identity ← `customer.accounts`<br>canonical reseller scope ← `customer.identity_scope`<br>canonical captive network settings ← `control.settings_spec`<br>canonical enforcement locks ← `access.subscription_lifecycle`<br>captive restriction protocol ← `access.walled_garden_policy` | `read_only` | `complete` | network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_walled_garden_policy.py`<br>`tests/test_radius_shadow_handler_integration.py`<br>`tests/architecture/test_grace_walled_garden_ownership.py`<br>`tests/architecture/test_walled_garden_policy_boundary.py` |
 | `access.walled_garden_policy` | most-restrictive-active-lock resolution | `resolver` | canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>canonical enforcement locks ← `access.subscription_lifecycle`<br>captive restriction protocol ← `access.walled_garden_policy` | `read_only` | `complete` | network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/audits/BILLING_SOT_AUDIT_2026-07-12.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_walled_garden_policy.py`<br>`tests/test_radius_shadow_handler_integration.py`<br>`tests/architecture/test_grace_walled_garden_ownership.py`<br>`tests/architecture/test_walled_garden_policy_boundary.py` |
+| `access.enforcement_evidence` | enforcement application evidence observation | `observation_collector` | final per-NAS enforcement attempt outcome ← `access.session_enforcement`<br>NAS device response to the enforcement command ← `external:routeros` | `out_of_band_evidence` | `native` | network access | `docs/adr/0017-enforcement-application-evidence.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_enforcement_application_writer.py`<br>`tests/test_enforcement_application_outcomes.py`<br>`tests/test_enforcement_failure_classifier.py`<br>`tests/architecture/test_enforcement_application_single_writer.py`<br>`tests/integration/test_enforcement_application_evidence_durability.py` |
 | `access.fup_rule_engine` | FUP policy and rule definitions (CRUD) | `command_writer` | authenticated FUP policy command context ← `auth.permission_gate`<br>canonical catalog offer ← `service_intent.catalog_policy`<br>FUP policy mutation protocol ← `access.fup_rule_engine` | `owner_managed` | `complete` | network access | `docs/designs/FUP_CONSUMPTION_WINDOWS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_fup_ui_gaps.py`<br>`tests/test_fup_period_aware_evaluation.py`<br>`tests/test_fup_submonthly_safeguards.py`<br>`tests/architecture/test_fup_rule_engine_boundary.py` |
 | `access.fup_rule_engine` | FUP rule evaluation and simulation | `policy` | canonical FUP policy and rule definitions ← `access.fup_rule_engine`<br>period-scoped FUP usage observations ← `access.fup_usage_windows`<br>FUP rule evaluation protocol ← `access.fup_rule_engine` | `owner_managed` | `complete` | network access | `docs/designs/FUP_CONSUMPTION_WINDOWS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_fup_ui_gaps.py`<br>`tests/test_fup_period_aware_evaluation.py`<br>`tests/test_fup_submonthly_safeguards.py`<br>`tests/architecture/test_fup_rule_engine_boundary.py` |
 | `access.fup_runtime_state` | FUP per-subscription runtime state rows | `projection_writer` | canonical subscription offer state ← `access.subscription_lifecycle`<br>resolved FUP enforcement consequence ← `access.fup_enforcement_sweep`<br>applied access consequence evidence ← `access.session_enforcement` | `participant` | `complete` | network access | `docs/designs/FUP_CONSUMPTION_WINDOWS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_fup_runtime_state_owner.py`<br>`tests/architecture/test_fup_runtime_state_boundary.py`<br>`tests/test_fup_lift_enforcement.py`<br>`tests/test_fup_evaluate_commits.py` |
@@ -4718,6 +4719,26 @@ Customer portal, reseller, support context, API, and mobile verdict surfaces
 consume the same connection-health payload and semantic presentation; raw
 session dots on subscription views remain observation surfaces outside that
 verdict.
+
+
+**Enforcement application evidence** (`access.enforcement_evidence`,
+`app/services/enforcement_evidence.py`; ADR 0017): `EnforcementApplication`
+(`enforcement_applications`) is a durable observation with one current-state
+row per (subscription, NAS device, effect) for address-list block, address-list
+unblock and API session kick. It records the typed outcome (`applied`,
+`failed`, `not_applicable`), the failure class from the single classifier in
+`app/services/nas/enforcement_failure.py`, a sanitized detail, attempt counts,
+first failure and last success. `access.session_enforcement` performs the
+attempts and hands each final per-NAS outcome to `access.enforcement_evidence`,
+the only writer (`tests/architecture/test_enforcement_application_single_writer.py`),
+which is contracted in transaction mode `out_of_band_evidence` and writes
+through its own unit of work so the evidence of
+an irreversible device effect survives the caller's rollback; keys are id-only
+with no foreign keys so the write cannot deadlock against the caller's
+subscription row lock. It is evidence, never the intended access state:
+readiness projections, the retrying reconciler (rebuilding from the lifecycle's
+access state), `access_enforcement` signals and alerts are later slices of
+ADR 0017.
 
 ## Subscriber Sessions
 

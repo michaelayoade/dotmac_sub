@@ -25,7 +25,8 @@ authoritative documents in the same change that updates the contract.
   transactions.
 - Adapters create and close sessions. A registered public command owner controls
   the atomic business transaction. Nested helpers use `flush()` and never
-  commit independently.
+  commit independently; the only exception is a declared
+  `out_of_band_evidence` writer approved by its own ADR (see ADR 0002).
 - An optional participant consequence may use only
   `app.services.owner_commands.execute_owner_savepoint`; its callback remains
   flush-only, and the owner must record durable failure evidence after rollback.

@@ -32,17 +32,49 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.enforcement_application import (
+    EnforcementEffect,
+    EnforcementFailureClass,
+    EnforcementOutcomeValue,
+    EnforcementPath,
+)
 from app.models.radius import RadiusClient
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.domain_errors import DomainError
+from app.services.enforcement_evidence import (
+    EnforcementOutcome,
+)
+from app.services.enforcement_evidence import (
+    record_enforcement_application as _record_enforcement_application,
+)
 from app.services.nas import DeviceProvisioner
 from app.services.radius_address_lists import suspended_address_list
 from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
+
+
+_SSH_NOT_CONFIGURED_DETAILS = frozenset(
+    {"Device has no SSH credentials", "Device has no management IP"}
+)
+
+
+def _is_ssh_not_configured(exc: BaseException) -> bool:
+    """True when ``DeviceProvisioner.ssh_session`` refused for missing config.
+
+    Matches the exact pre-connection refusals raised in
+    ``app/services/nas/provisioner.py`` (``HTTPException(400, ...)``), so a
+    real SSH transport failure is never mistaken for "not configured".
+    """
+    return (
+        isinstance(exc, HTTPException)
+        and exc.status_code == 400
+        and exc.detail in _SSH_NOT_CONFIGURED_DETAILS
+    )
+
 
 _TERMINAL_SESSION_SETTLE_TIMEOUT_SECONDS = 15.0
 _TERMINAL_SESSION_POLL_INTERVAL_SECONDS = 0.5
@@ -688,10 +720,29 @@ def update_subscription_sessions(
                 )
                 if disconnect.terminal:
                     count += 1
-                elif _api_kick_session(db, nas_device, username):
-                    count += 1
-                elif _disconnect_mikrotik_session(db, nas_device, username):
-                    count += 1
+                else:
+                    api_ok, kick_outcome = _api_kick_outcome(db, nas_device, username)
+                    if api_ok:
+                        count += 1
+                    elif _disconnect_mikrotik_session(db, nas_device, username):
+                        count += 1
+                        kick_outcome = EnforcementOutcome.applied(
+                            path=EnforcementPath.ssh
+                        )
+                    else:
+                        kick_outcome = _ssh_kick_outcome(
+                            kick_outcome,
+                            ssh_possible=_ssh_kick_possible(db, nas_device, username),
+                            kicked=0,
+                            remaining=1,
+                            targeted=1,
+                        )
+                    _record_enforcement_application(
+                        subscription_id=subscription.id,
+                        nas_device_id=nas_device.id,
+                        effect=EnforcementEffect.session_kick,
+                        outcome=kick_outcome,
+                    )
     if count:
         logger.info(
             "Updated %s active sessions for subscription %s (%s).",
@@ -799,32 +850,125 @@ def _remove_mikrotik_address_list(
         return False
 
 
-def _api_kick_session(db: Session, nas_device: NasDevice, username: str | None) -> bool:
-    """Disconnect one PPPoE session via the RouterOS API (read-back verified).
+def _ssh_kick_possible(
+    db: Session, nas_device: NasDevice, username: str | None
+) -> bool:
+    """Whether the SSH kick tier can actually send a command.
 
-    The profile-change refresh path historically fell straight from CoA to SSH;
-    on API-only MikroTik NAS (no SSH creds — the common case) that left the
-    session live on the old profile. This mirrors the API tier of the
-    suspend/cancel disconnect path.
+    ``_disconnect_mikrotik_session``/``_disconnect_mikrotik_hotspot_session``
+    return a bare ``False`` without attempting anything when there is no
+    username, the NAS is not MikroTik, or ``access.mikrotik_session_kill`` is
+    disabled. Those are configuration absence, never a kick failure.
+    """
+    return bool(
+        username
+        and nas_device.vendor == NasVendor.mikrotik
+        and nas_device.ssh_username
+        and _mikrotik_kill_enabled(db)
+    )
+
+
+def _ssh_kick_outcome(
+    prior: EnforcementOutcome | None,
+    *,
+    ssh_possible: bool,
+    kicked: int,
+    remaining: int,
+    targeted: int,
+) -> EnforcementOutcome:
+    """Final per-NAS kick outcome after the SSH tier (ADR-0017 section 4).
+
+    Pure so the tier-precedence rules are unit-tested directly:
+    - SSH kicked every remaining session: ``applied`` via SSH (a later tier's
+      success supersedes an earlier failure);
+    - otherwise keep a real earlier (API) failure: it carries the classified
+      cause (e.g. ``auth_rejected``), which the SSH tier cannot, because its
+      helpers swallow their exceptions;
+    - SSH could not run and nothing failed earlier: ``not_applicable``;
+    - SSH ran and left sessions: ``failed``/``command_failed`` with the count.
+    """
+    if ssh_possible and kicked >= remaining:
+        return EnforcementOutcome.applied(path=EnforcementPath.ssh)
+    if prior is not None and prior.outcome is EnforcementOutcomeValue.failed:
+        return prior
+    if not ssh_possible:
+        return EnforcementOutcome.not_applicable("no_kick_transport")
+    return _unconfirmed_kick(
+        EnforcementPath.ssh, unconfirmed=remaining - kicked, targeted=targeted
+    )
+
+
+def _api_kick_outcome(
+    db: Session, nas_device: NasDevice, username: str | None
+) -> tuple[bool, EnforcementOutcome]:
+    """Kick one PPPoE session via the RouterOS API and classify the result.
+
+    ``disconnect_mikrotik_pppoe_bulk`` returns only the logins its read-back
+    CONFIRMED gone, so a session that is still present is a real failure even
+    though nothing raised. ``applied`` is recorded only on confirmation.
     """
     if not username:
-        return False
+        return False, EnforcementOutcome.not_applicable("no_username")
     if nas_device.vendor != NasVendor.mikrotik:
-        return False
+        return False, EnforcementOutcome.not_applicable("nas_vendor_not_mikrotik")
     api_dev = _nas_with_api_creds(db, nas_device)
     if api_dev is None:
-        return False
+        return False, EnforcementOutcome.not_applicable("no_api_credentials")
     try:
         from app.services.nas._mikrotik import disconnect_mikrotik_pppoe_bulk
 
-        return bool(disconnect_mikrotik_pppoe_bulk(api_dev, {username}))
+        confirmed = disconnect_mikrotik_pppoe_bulk(api_dev, {username})
     except Exception as exc:
         logger.warning(
             "API kick (profile refresh) failed on %s: %s",
             getattr(api_dev, "name", "?"),
             sanitize_exception(exc),
         )
-        return False
+        return False, EnforcementOutcome.failed_from(exc, path=EnforcementPath.api)
+    if username in confirmed:
+        return True, EnforcementOutcome.applied(path=EnforcementPath.api)
+    return False, _unconfirmed_kick(EnforcementPath.api, unconfirmed=1, targeted=1)
+
+
+def _unconfirmed_kick(
+    path: EnforcementPath, *, unconfirmed: int, targeted: int
+) -> EnforcementOutcome:
+    """A kick that raised nothing but left sessions in place: a real failure."""
+    return EnforcementOutcome(
+        outcome=EnforcementOutcomeValue.failed,
+        failure_class=EnforcementFailureClass.command_failed,
+        path=path,
+        detail=f"session_kick_unconfirmed {unconfirmed}/{targeted}",
+    )
+
+
+def _api_kick_session(
+    db: Session,
+    nas_device: NasDevice,
+    username: str | None,
+    *,
+    subscription_id: UUID | None = None,
+) -> bool:
+    """Disconnect one PPPoE session via the RouterOS API (read-back verified).
+
+    The profile-change refresh path historically fell straight from CoA to SSH;
+    on API-only MikroTik NAS (no SSH creds — the common case) that left the
+    session live on the old profile. This mirrors the API tier of the
+    suspend/cancel disconnect path.
+
+    Records the API attempt (ADR-0017) when ``subscription_id`` is supplied.
+    Callers that fall back to SSH afterwards record the FINAL per-NAS result
+    themselves via ``_api_kick_outcome`` instead.
+    """
+    ok, outcome = _api_kick_outcome(db, nas_device, username)
+    if subscription_id is not None:
+        _record_enforcement_application(
+            subscription_id=subscription_id,
+            nas_device_id=nas_device.id,
+            effect=EnforcementEffect.session_kick,
+            outcome=outcome,
+        )
+    return ok
 
 
 def _enforce_address_list_on_nas(
@@ -834,14 +978,28 @@ def _enforce_address_list_on_nas(
     address: str,
     *,
     add: bool,
+    subscription_id: UUID | None = None,
 ) -> bool:
     """Add (``add=True``) or remove an address-list block on one NAS.
 
     Tries SSH first (unchanged behaviour for SSH-credentialed devices), then
     falls back to the RouterOS API for API-only MikroTik NAS. Both paths are
     idempotent.
+
+    Records the attempt once (ADR-0017) when ``subscription_id`` is supplied;
+    the returned bool is unchanged either way — recording is observation
+    only. Where SSH fails and the API fallback is not applicable (no API
+    credentials), the SSH failure is kept rather than overwritten by
+    ``not_applicable``.
     """
     action = "add" if add else "remove"
+    effect = (
+        EnforcementEffect.address_list_block
+        if add
+        else EnforcementEffect.address_list_unblock
+    )
+    ok = False
+    ssh_outcome: EnforcementOutcome
     try:
         with DeviceProvisioner.ssh_session(nas_device) as ssh:
             if add:
@@ -853,17 +1011,69 @@ def _enforce_address_list_on_nas(
                     nas_device, list_name, address, ssh=ssh
                 )
         if ok:
-            return True
+            ssh_outcome = EnforcementOutcome.applied(path=EnforcementPath.ssh)
+        elif nas_device.vendor != NasVendor.mikrotik:
+            ssh_outcome = EnforcementOutcome.not_applicable("nas_vendor_not_mikrotik")
+        else:
+            # `_apply_mikrotik_address_list`/`_remove_mikrotik_address_list`
+            # already swallow the underlying exception (unchanged behaviour),
+            # so no exception object survives here to classify from.
+            ssh_outcome = EnforcementOutcome(
+                outcome=EnforcementOutcomeValue.failed,
+                failure_class=EnforcementFailureClass.command_failed,
+                path=EnforcementPath.ssh,
+                detail="mikrotik_address_list_command_failed",
+            )
     except Exception as exc:
+        ok = False
         logger.warning(
             "Address-list %s: SSH path failed for %s: %s — trying API.",
             action,
             getattr(nas_device, "name", "?"),
-            exc,
+            sanitize_exception(exc),
         )
+        if _is_ssh_not_configured(exc):
+            # `DeviceProvisioner.ssh_session` refuses BEFORE connecting when the
+            # device has no SSH credentials or no management IP. That is a
+            # configuration absence (most MikroTik NAS are API-only), not a
+            # transport failure — recording it as `failed` would flood the
+            # evidence with false failures (ADR-0017 invariant).
+            ssh_outcome = EnforcementOutcome.not_applicable("no_ssh_credentials")
+        elif nas_device.vendor != NasVendor.mikrotik:
+            # Address lists are a MikroTik concept; an SSH failure on another
+            # vendor is not an address-list enforcement failure.
+            ssh_outcome = EnforcementOutcome.not_applicable("nas_vendor_not_mikrotik")
+        else:
+            ssh_outcome = EnforcementOutcome.failed_from(exc, path=EnforcementPath.ssh)
+
+    # Record OUTSIDE the try: a re-raised task time limit from the writer must
+    # propagate, never be caught above as an SSH failure (ADR-0017 section 7).
+    if ok:
+        if subscription_id is not None:
+            _record_enforcement_application(
+                subscription_id=subscription_id,
+                nas_device_id=nas_device.id,
+                effect=effect,
+                outcome=ssh_outcome,
+            )
+        return True
 
     api_dev = _nas_with_api_creds(db, nas_device)
     if api_dev is None:
+        # API fallback not applicable. Keep a real SSH failure rather than
+        # overwriting it with not_applicable (ADR-0017 §4).
+        final_outcome = (
+            ssh_outcome
+            if ssh_outcome.outcome == EnforcementOutcomeValue.failed
+            else EnforcementOutcome.not_applicable("no_api_credentials")
+        )
+        if subscription_id is not None:
+            _record_enforcement_application(
+                subscription_id=subscription_id,
+                nas_device_id=nas_device.id,
+                effect=effect,
+                outcome=final_outcome,
+            )
         return False
     try:
         from app.services.nas._mikrotik import (
@@ -872,8 +1082,20 @@ def _enforce_address_list_on_nas(
         )
 
         if add:
-            return apply_mikrotik_address_list_via_api(api_dev, list_name, address)
-        return remove_mikrotik_address_list_via_api(api_dev, list_name, address)
+            api_ok = apply_mikrotik_address_list_via_api(api_dev, list_name, address)
+        else:
+            api_ok = remove_mikrotik_address_list_via_api(api_dev, list_name, address)
+        if api_ok:
+            final_outcome = EnforcementOutcome.applied(path=EnforcementPath.api)
+        else:
+            # No exception raised, but nothing was applied (e.g. an empty
+            # list/address input) — a real failure, never not_applicable.
+            final_outcome = EnforcementOutcome(
+                outcome=EnforcementOutcomeValue.failed,
+                failure_class=EnforcementFailureClass.command_failed,
+                path=EnforcementPath.api,
+                detail="mikrotik_address_list_api_returned_false",
+            )
     except Exception as exc:
         logger.warning(
             "Address-list %s: API fallback failed for %s: %s",
@@ -881,7 +1103,18 @@ def _enforce_address_list_on_nas(
             getattr(api_dev, "name", "?"),
             sanitize_exception(exc),
         )
-        return False
+        api_ok = False
+        final_outcome = EnforcementOutcome.failed_from(exc, path=EnforcementPath.api)
+    # Record OUTSIDE the try (see above): a successful apply is never turned
+    # into a False return by a time limit raised while recording it.
+    if subscription_id is not None:
+        _record_enforcement_application(
+            subscription_id=subscription_id,
+            nas_device_id=nas_device.id,
+            effect=effect,
+            outcome=final_outcome,
+        )
+    return bool(api_ok)
 
 
 def _open_radacct_sessions_for_username(
@@ -1109,6 +1342,10 @@ def disconnect_subscription_sessions(
             if idx not in coa_ok and username
         }
         api_confirmed: set[str] = set()
+        # One FINAL session_kick outcome per NAS across the API and SSH tiers
+        # (ADR-0017 section 4): a later tier's success supersedes an earlier
+        # failure, and "raised nothing but left sessions" is a real failure.
+        kick_outcome: EnforcementOutcome | None = None
         api_dev = (
             _nas_with_api_creds(db, nas_device)
             if _mikrotik_api_session_kick_enabled(db)
@@ -1128,17 +1365,36 @@ def disconnect_subscription_sessions(
                     len(fallback),
                     getattr(api_dev, "name", "?"),
                 )
+                if fallback <= api_confirmed:
+                    kick_outcome = EnforcementOutcome.applied(path=EnforcementPath.api)
+                else:
+                    kick_outcome = _unconfirmed_kick(
+                        EnforcementPath.api,
+                        unconfirmed=len(fallback - api_confirmed),
+                        targeted=len(fallback),
+                    )
             except Exception as exc:
                 logger.warning(
                     "API kick failed on %s: %s — trying SSH.",
                     getattr(nas_device, "name", "?"),
                     sanitize_exception(exc),
                 )
+                kick_outcome = EnforcementOutcome.failed_from(
+                    exc, path=EnforcementPath.api
+                )
 
         # SSH last resort, only for sessions the API did not confirm gone.
         remaining = fallback - api_confirmed
         if not remaining:
+            if kick_outcome is not None:
+                _record_enforcement_application(
+                    subscription_id=subscription.id,
+                    nas_device_id=nas_device.id,
+                    effect=EnforcementEffect.session_kick,
+                    outcome=kick_outcome,
+                )
             continue
+        ssh_kicked = 0
         try:
             with DeviceProvisioner.ssh_session(nas_device) as ssh:
                 for idx, (_, username, _session_id, _framed_ip) in enumerate(entries):
@@ -1146,15 +1402,50 @@ def disconnect_subscription_sessions(
                         continue
                     if _disconnect_mikrotik_session(db, nas_device, username, ssh=ssh):
                         count += 1
+                        ssh_kicked += 1
                     elif _disconnect_mikrotik_hotspot_session(
                         db, nas_device, username, ssh=ssh
                     ):
                         count += 1
+                        ssh_kicked += 1
+            kick_outcome = _ssh_kick_outcome(
+                kick_outcome,
+                ssh_possible=nas_device.vendor == NasVendor.mikrotik
+                and _mikrotik_kill_enabled(db),
+                kicked=ssh_kicked,
+                remaining=len(remaining),
+                targeted=len(fallback),
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to open SSH session for kick on %s: %s",
                 getattr(nas_device, "name", "?"),
-                exc,
+                sanitize_exception(exc),
+            )
+            ssh_ruled_out = (
+                _is_ssh_not_configured(exc)
+                or nas_device.vendor != NasVendor.mikrotik
+                or not _mikrotik_kill_enabled(db)
+            )
+            if (
+                kick_outcome is not None
+                and kick_outcome.outcome is EnforcementOutcomeValue.failed
+            ):
+                # Keep the earlier classified cause (e.g. API auth_rejected);
+                # same precedence as _ssh_kick_outcome (ADR-0017 section 4).
+                pass
+            elif ssh_ruled_out:
+                kick_outcome = EnforcementOutcome.not_applicable("no_kick_transport")
+            else:
+                kick_outcome = EnforcementOutcome.failed_from(
+                    exc, path=EnforcementPath.ssh
+                )
+        if kick_outcome is not None:
+            _record_enforcement_application(
+                subscription_id=subscription.id,
+                nas_device_id=nas_device.id,
+                effect=EnforcementEffect.session_kick,
+                outcome=kick_outcome,
             )
 
     if count:
@@ -1538,7 +1829,12 @@ def apply_subscription_address_list_block(db: Session, subscription_id: str) -> 
         return 0
     for nas_device in targets.values():
         if _enforce_address_list_on_nas(
-            db, nas_device, list_name, subscription.ipv4_address, add=True
+            db,
+            nas_device,
+            list_name,
+            subscription.ipv4_address,
+            add=True,
+            subscription_id=subscription.id,
         ):
             count += 1
     return count
@@ -1587,7 +1883,12 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
         return 0
     for nas_device in targets.values():
         if _enforce_address_list_on_nas(
-            db, nas_device, list_name, subscription.ipv4_address, add=False
+            db,
+            nas_device,
+            list_name,
+            subscription.ipv4_address,
+            add=False,
+            subscription_id=subscription.id,
         ):
             count += 1
     return count
