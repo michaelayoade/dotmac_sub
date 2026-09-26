@@ -1153,4 +1153,3 @@ from app.models.work_link import (  # noqa: F401
 )
 from app.models.work_order import WorkOrder  # noqa: F401
 from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401
-

@@ -675,9 +675,7 @@ def _initiate_deposit_native(
     payment_review = quote_payment_review.resolve_payment_review(quote)
     if not payment_review.approval_current:
         raise HTTPException(status_code=409, detail=payment_review.message)
-    if _native_deposit_invoice_paid(
-        db, quote.id, coerce_uuid(str(subscriber_id))
-    ):
+    if _native_deposit_invoice_paid(db, quote.id, coerce_uuid(str(subscriber_id))):
         raise HTTPException(status_code=409, detail="Deposit already paid")
     payload = selfserve.build_portal_quote_payload(db, quote)
     deposit = Decimal(str(payload.get("deposit_amount") or "0"))
