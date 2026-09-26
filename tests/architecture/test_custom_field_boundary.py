@@ -113,8 +113,8 @@ def test_permission_matching_honors_registered_wildcards() -> None:
     assert permission_granted(
         frozenset({"custom_fields:*"}), "custom_fields:value:write"
     )
-    assert permission_granted(frozenset({"crm:*"}), "crm:lead:read")
-    assert not permission_granted(frozenset({"crm:lead:read"}), "crm:lead:write")
+    assert permission_granted(frozenset({"legacy:*"}), "legacy:lead:read")
+    assert not permission_granted(frozenset({"legacy:lead:read"}), "legacy:lead:write")
 
 
 def test_legacy_subscriber_fields_are_not_migrated_or_dual_written() -> None:

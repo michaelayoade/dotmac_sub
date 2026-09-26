@@ -319,7 +319,7 @@ def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 53
+    assert len(guides) == 54
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id

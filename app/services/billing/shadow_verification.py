@@ -2084,9 +2084,7 @@ def _migrated_opening_request_payload(
     source: ReviewedMigratedOpeningSource,
     currency: str,
 ) -> dict[str, object]:
-    reviewed_identity = _normalize_reviewed_migrated_identity(
-        command.reviewed_identity
-    )
+    reviewed_identity = _normalize_reviewed_migrated_identity(command.reviewed_identity)
     return {
         "account_id": str(command.account_id),
         "currency": currency,
@@ -2384,9 +2382,7 @@ def resolve_post_cutover_migrated_opening_evidence(
             "Opening-position currency must be a three-letter code.",
         )
     source = _normalize_reviewed_migrated_source(query.source)
-    reviewed_identity = _normalize_reviewed_migrated_identity(
-        query.reviewed_identity
-    )
+    reviewed_identity = _normalize_reviewed_migrated_identity(query.reviewed_identity)
 
     authority = db.scalar(select(CustomerSubledgerAuthorityCutover).limit(1))
     if authority is None:

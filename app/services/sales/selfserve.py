@@ -903,6 +903,7 @@ def build_portal_quote_payload(
         relocation_paid
         if is_relocation
         else quote.id in (paid_deposit_quote_ids or frozenset())
+        or bool(deposit_meta.get("paid"))
     )
     payment_review_message = (
         "Paid"

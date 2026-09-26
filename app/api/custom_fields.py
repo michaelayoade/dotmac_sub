@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import JsonValue
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -79,7 +81,7 @@ def list_custom_field_values(
                 required=row.definition.required,
                 sensitive=row.definition.sensitive,
                 redacted=row.redacted,
-                value=row.value,
+                value=cast(JsonValue | None, row.value),
             )
             for row in rows
         ],

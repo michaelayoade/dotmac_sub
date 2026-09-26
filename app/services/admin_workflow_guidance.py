@@ -184,6 +184,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/automation", "/admin/automation/ticket-assignment/new"),
         "Confirm that your role has Automation Center access before opening the hub.",
         "Review the module registry to see which modules and events are eligible for central automation.",
+        "Review how registered custom fields are governed when a module exposes them to central automation.",
         "Review central rules and recent execution evidence only when your role grants those additional permissions.",
         "Use the ticket-assignment pilot to choose an active service team and save an urgent-ticket rule as a draft.",
         "Use the existing automation ownership section to identify workflows that remain managed outside the hub.",
@@ -1040,6 +1041,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             4,
         ),
     ),
+    "custom-fields-center": (
+        _action("review-custom-field-access", "Review custom-field access", 0),
+        _action("define-custom-field", "Define a typed custom-field draft", 1),
+        _action("review-custom-field-contract", "Review the field contract", 2),
+        _action("retire-custom-field", "Retire a custom field safely", 3),
+    ),
     "admin-workspace": (
         _action("choose-work-area", "Choose the right work area", 0, 1),
         _action("start-customer-work", "Start customer work", 2, 3),
@@ -1864,7 +1871,10 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "system", "System Overview", ("system-overview",), "system:settings:read"
     ),
     AdminHelpNavigationSection(
-        "settings", "Settings", ("settings", "smtp-senders"), "system:settings:read"
+        "settings",
+        "Settings",
+        ("settings", "smtp-senders", "custom-fields-center"),
+        "system:settings:read",
     ),
     AdminHelpNavigationSection(
         "meta",

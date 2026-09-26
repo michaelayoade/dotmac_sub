@@ -300,6 +300,13 @@ from app.models.durable_timer import (  # noqa: F401
     DurableTimer,
     TimerStatus,
 )
+from app.models.enforcement_application import (  # noqa: F401
+    EnforcementApplication,
+    EnforcementEffect,
+    EnforcementFailureClass,
+    EnforcementOutcomeValue,
+    EnforcementPath,
+)
 from app.models.enforcement_lock import (  # noqa: F401
     AccessRestrictionMode,
     EnforcementLock,
@@ -1147,10 +1154,3 @@ from app.models.work_link import (  # noqa: F401
 from app.models.work_order import WorkOrder  # noqa: F401
 from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401
 
-from app.models.enforcement_application import (  # noqa: F401
-    EnforcementApplication,
-    EnforcementEffect,
-    EnforcementFailureClass,
-    EnforcementOutcomeValue,
-    EnforcementPath,
-)
