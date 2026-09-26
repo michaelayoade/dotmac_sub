@@ -47,6 +47,74 @@ def test_setup_loki_is_idempotent(monkeypatch):
         root_logger.handlers = original_handlers
 
 
+def test_setup_loki_attaches_the_credential_filter_before_registering(monkeypatch):
+    from app.logging import SensitiveQueryFilter
+
+    fake_module = types.SimpleNamespace(LokiHandler=_FakeLokiHandler)
+    monkeypatch.setitem(sys.modules, "logging_loki", fake_module)
+
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    root_logger.handlers = []
+    try:
+        assert (
+            monitoring_module._setup_loki("dotmac-sub", "srv1", "test", "http://loki")
+            is True
+        )
+        (handler,) = [
+            h for h in root_logger.handlers if isinstance(h, _FakeLokiHandler)
+        ]
+        assert any(isinstance(f, SensitiveQueryFilter) for f in handler.filters)
+    finally:
+        root_logger.handlers = original_handlers
+
+
+def test_scrub_event_credentials_redacts_exception_and_logentry_values():
+    secret = "hunter2"
+    event = {
+        "exception": {
+            "values": [
+                {"type": "RuntimeError", "value": f"failure =password={secret} .tag=1"}
+            ]
+        },
+        "logentry": {
+            "message": f"failure =password={secret} .tag=1",
+            "formatted": f"failure =password={secret} .tag=1",
+            "params": [f"=password={secret} .tag=1", "unrelated"],
+        },
+        "message": f"failure =password={secret} .tag=1",
+    }
+    assert secret in event["exception"]["values"][0]["value"]  # sensitivity proof
+
+    scrubbed = monitoring_module._scrub_event_credentials(event, {})
+
+    assert secret not in scrubbed["exception"]["values"][0]["value"]
+    assert secret not in scrubbed["logentry"]["message"]
+    assert secret not in scrubbed["logentry"]["formatted"]
+    assert secret not in scrubbed["logentry"]["params"][0]
+    assert scrubbed["logentry"]["params"][1] == "unrelated"
+    assert secret not in scrubbed["message"]
+    assert "=password=<redacted>" in scrubbed["exception"]["values"][0]["value"]
+
+
+def test_scrub_event_credentials_is_defensive_about_unexpected_shapes():
+    # Must never raise, and must still return an event, regardless of shape.
+    assert monitoring_module._scrub_event_credentials({}, {}) == {}
+    malformed = {"exception": {"values": "not-a-list"}}
+    assert monitoring_module._scrub_event_credentials(malformed, {}) == malformed
+
+
+def test_scrub_breadcrumb_credentials_redacts_message():
+    secret = "hunter2"
+    breadcrumb = {"message": f"failure =password={secret} .tag=1"}
+    assert secret in breadcrumb["message"]  # sensitivity proof
+
+    scrubbed = monitoring_module._scrub_breadcrumb_credentials(breadcrumb, {})
+
+    assert secret not in scrubbed["message"]
+    assert "=password=<redacted>" in scrubbed["message"]
+
+
 def test_setup_sentry_captures_error_logs(monkeypatch):
     init_calls: list[dict] = []
 
@@ -92,3 +160,8 @@ def test_setup_sentry_captures_error_logs(monkeypatch):
     ]
     assert logging_integrations
     assert logging_integrations[0].kwargs["level"] == logging.WARNING
+    assert init_calls[0]["before_send"] is monitoring_module._scrub_event_credentials
+    assert (
+        init_calls[0]["before_breadcrumb"]
+        is monitoring_module._scrub_breadcrumb_credentials
+    )

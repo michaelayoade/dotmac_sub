@@ -13,6 +13,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.logging import sanitize_exception
 from app.models.catalog import (
     NasDevice,
     NasVendor,
@@ -436,7 +437,7 @@ def disconnect_mikrotik_pppoe_bulk(device: NasDevice, logins: set[str]) -> set[s
                             "API kick: remove failed for %s on %s: %s",
                             row.get("name"),
                             getattr(device, "name", "?"),
-                            exc,
+                            sanitize_exception(exc),
                         )
         # Read-back: any wanted login still present was NOT dropped.
         still = {str(row.get("name") or "").strip() for row in _as_dict_list(res.get())}
@@ -538,7 +539,7 @@ def remove_mikrotik_address_list_via_api(
                             "API address-list remove failed for %s on %s: %s",
                             address,
                             getattr(device, "name", "?"),
-                            exc,
+                            sanitize_exception(exc),
                         )
         return not any(
             _address_list_matches(r, list_name, address)
@@ -830,7 +831,7 @@ def get_mikrotik_api_status(
                 method="rest",
                 success=False,
                 execution_time_ms=elapsed_ms,
-                error=str(exc),
+                error=sanitize_exception(exc),
             )
 
     started = time.perf_counter()
@@ -846,7 +847,7 @@ def get_mikrotik_api_status(
             )
         return status
     except Exception as api_exc:
-        rest_msg = str(rest_error) if rest_error else "not attempted"
+        rest_msg = sanitize_exception(rest_error) if rest_error else "not attempted"
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         if db is not None:
             _record_mikrotik_auth_attempt(
@@ -854,11 +855,14 @@ def get_mikrotik_api_status(
                 method="routeros_api",
                 success=False,
                 execution_time_ms=elapsed_ms,
-                error=str(api_exc),
+                error=sanitize_exception(api_exc),
             )
         raise HTTPException(
             status_code=400,
-            detail=f"MikroTik API test failed. REST error: {rest_msg}. RouterOS API error: {api_exc}",
+            detail=(
+                f"MikroTik API test failed. REST error: {rest_msg}. "
+                f"RouterOS API error: {sanitize_exception(api_exc)}"
+            ),
         ) from api_exc
 
 
