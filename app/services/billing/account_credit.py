@@ -954,11 +954,6 @@ class AccountCreditApplications:
                     invoice_id=invoice.id,
                     amount=amount,
                 )
-                preview = PaymentAllocations.preview_at_reviewed_boundary_for_owner(
-                    db,
-                    request,
-                    funding_position_at=funding_position_at,
-                )
                 existing = (
                     db.query(PaymentAllocation)
                     .filter(PaymentAllocation.payment_id == payment.id)
@@ -982,6 +977,11 @@ class AccountCreditApplications:
                     )
                     allocation = allocation_result.allocation
                 else:
+                    preview = PaymentAllocations.preview_at_reviewed_boundary_for_owner(
+                        db,
+                        request,
+                        funding_position_at=funding_position_at,
+                    )
                     allocation_result = (
                         PaymentAllocations.stage_confirm_at_reviewed_boundary_for_owner(
                             db,
