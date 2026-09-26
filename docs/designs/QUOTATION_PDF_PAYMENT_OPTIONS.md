@@ -60,6 +60,11 @@ provider/reconciliation provenance. Migration 476 backfills both links from
 legacy metadata only during the controlled schema migration. Ambiguous multiple
 payable Invoice links fail closed rather than selecting one opportunistically.
 
+Customer quote lists resolve paid deposit state from the structural
+`QuoteDepositInvoiceLink` and canonical `Invoice.status`. A paid quote displays
+`Paid` and suppresses both the deposit action and payment-required review text,
+regardless of stale Quote metadata.
+
 ## Artifact delivery
 
 Admin download generates or reuses the content-addressed `QuotePdfExport` and

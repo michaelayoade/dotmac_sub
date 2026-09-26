@@ -5692,7 +5692,10 @@ outcome; they do not embed their own geocode lookups or spatial write logic.
    customer/staff notification consequences.
 7. `sales.quote_payment_eligibility`: owns the authenticated customer Quote
    payment eligibility and authoritative payable-deposit projection consumed by
-   the customer GET route and Quote delivery.
+   the customer GET route and Quote delivery. Its typed settlement query reads
+   paid Quote-deposit Invoice links for customer Quote lists, so a settled Quote
+   is presented as Paid and has no payment action even if older Quote metadata
+   or a mirror snapshot is stale.
 8. `sales.quote_acceptance`: owns the atomic accepted-Quote conversion from
    Lead/Party through Subscriber, SalesOrder and lines, Project, configured
    Tasks/WorkOrders, audit, and transactional outbox evidence.
@@ -5724,6 +5727,9 @@ Quote-request and deposit surfaces branch on the explicit
 `sales.selfserve`, and its deposit "already paid" decision belongs to the paid
 deposit Invoice in the billing ledger — never to a mirror flag the CRM could
 stale-sync.
+Customer Quote cards use that same invoice evidence to display Paid and suppress
+the payment action. Review copy such as "Approved — payment required" does not
+override a settled Invoice.
 Customer service-request quotes record one typed installation or relocation
 choice and a map-pinned destination. A relocation also records an owned active
 source Subscription and verifies that its current access type matches the
