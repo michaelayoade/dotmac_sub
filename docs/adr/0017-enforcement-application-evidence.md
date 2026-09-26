@@ -77,6 +77,14 @@ does afterwards, so evidence of it must not share that transaction's fate.
    out-of-band evidence writer that emits no domain event; that gap must be
    resolved when the service is contracted.
 
+   Drift control until then: `tests/architecture/test_enforcement_application_single_writer.py`
+   (single writer, alias-resolving, with a planted-violation proof). Retirement
+   trigger: `access.session_enforcement` receives a complete `ServiceContract`
+   before any readiness projection reads this record (slice 2), or by
+   2026-12-31, whichever is first. `app/services/enforcement.py` is also
+   registered under `sessions.enforcement`; which of the two names owns
+   `update_subscription_sessions` is settled in that contract work.
+
 2. **Canonical writer.** `access.session_enforcement` is the only writer. The
    writer is a private function in `app/services/enforcement.py`. No adapter,
    handler, task or other service writes the model (architecture-tested).
@@ -101,12 +109,22 @@ does afterwards, so evidence of it must not share that transaction's fate.
    This is the third copy of the pattern. A shared out-of-band evidence helper is
    a recorded extraction candidate, not part of this decision.
 
-4. **Typed outcomes.** The per-NAS enforcement functions return a typed
-   `EnforcementOutcome` value (applied / not applicable / failed with class and
-   sanitized detail) instead of `bool`. Where SSH is tried first and the API is
-   the fallback, the final recorded outcome keeps the most specific real failure:
-   an SSH failure followed by "no API credentials" stays an SSH failure class,
-   not `not_capable`.
+4. **Typed outcomes, final per NAS.** The per-NAS enforcement paths compute a
+   typed `EnforcementOutcome` (applied / not applicable / failed with class and
+   sanitized detail) instead of a bare `bool`, and record ONE final outcome per
+   (subscription, NAS, effect) across their tiers:
+   - address lists (SSH, then API): an SSH failure followed by "no API
+     credentials" stays the SSH failure, not `not_capable`;
+   - session kick (API, then SSH): a later tier's success supersedes an earlier
+     failure;
+   - `applied` requires confirmation: the RouterOS API kick's read-back returns
+     only the sessions it confirmed gone, so an empty or partial result with no
+     exception is `failed`/`command_failed` (`session_kick_unconfirmed n/m`);
+   - configuration absence is `not_applicable`, never a failure: no SSH
+     credentials or management IP (the exact pre-connection refusals of
+     `DeviceProvisioner.ssh_session`), a non-MikroTik NAS, or no transport;
+   - a `not_applicable` outcome clears the row's failure streak
+     (`attempt_count`, `first_failed_at`).
 
 5. **One classifier.** Failure classification lives once in the NAS transport
    layer (`app/services/nas/`). It matches exception types first (routeros_api,
@@ -120,7 +138,11 @@ does afterwards, so evidence of it must not share that transaction's fate.
 7. **Evidence-write failure.** If the out-of-band write itself fails, the writer
    logs at `ERROR` (so GlitchTip opens an issue) and continues. It never raises
    into the caller, because the device effect has already happened and failing
-   the caller could re-trigger effects.
+   the caller could re-trigger effects. The one exception is Celery's
+   `SoftTimeLimitExceeded`, which is re-raised so a task cannot run past its
+   budget. Known bound: waiting for a pooled connection is limited by the pool
+   timeout, not by `lock_timeout`; under pool saturation the caller can wait up
+   to that timeout while holding its own locks, and the failure is then logged.
 
 8. **Later slices, same owner.** Stateless `ActionReadiness` projections per NAS
    ("can Sub enforce here?") and per subscription ("is the intended access state
@@ -166,15 +188,21 @@ does afterwards, so evidence of it must not share that transaction's fate.
 
 - Old owner and paths: none. Failures were log-only.
 - New owner and paths: `access.session_enforcement` writes
-  `enforcement_applications` from `_enforce_address_list_on_nas` and the API/SSH
-  kick paths.
+  `enforcement_applications` from `_enforce_address_list_on_nas` (address-list
+  block/unblock), the suspend/cancel kick in `disconnect_subscription_sessions`
+  and the profile-refresh kick in `update_subscription_sessions` (API then SSH,
+  one final outcome per NAS).
 - Backfill/repair: none. The table starts empty; history before the cutover is
   only in logs.
 - Shadow or verification phase: slice 1 records without changing behaviour; the
   record is compared against logs and router state before any projection or
   alert depends on it.
-- Cutover gate and evidence: Postgres-lane tests prove survival across the
-  dispatcher, Celery and lock-compatibility cases.
+- Cutover gate and evidence: slice 1 (shadow) is gated on Postgres-lane proof
+  that the evidence survives a rollback of the caller's transaction around the
+  real per-NAS helper, and never waits on the caller's subscription lock. Tests
+  that drive the real `EnforcementHandler` and the scheduled cleanup task end to
+  end are required before slice 2 lets any projection or alert depend on the
+  record.
 - Fallback retirement: the warning-only failure logs stay until the readiness
   projection slice lands, then are reduced to structured records.
 - Schema contract step: additive table only; no existing column changes.
@@ -183,19 +211,24 @@ does afterwards, so evidence of it must not share that transaction's fate.
 
 - Postgres-lane integration tests (the SQLite lane shares one connection and
   cannot prove independence):
-  - a `subscription_resumed` event through the real `EnforcementHandler` with the
-    NAS rejecting authentication and a second step failing: the handler raises,
-    and a fresh connection sees the row with `auth_rejected` and
-    `attempt_count = 1`;
-  - the scheduled cleanup task rolls back and the row survives;
-  - with `SELECT … FOR UPDATE` held on the subscription row, the evidence write
-    completes within a 200 ms `lock_timeout`.
+  - slice 1 (present): the real `_enforce_address_list_on_nas` runs inside a
+    transaction that is rolled back while the API raises the RouterOS login
+    rejection; a fresh connection sees the row with `auth_rejected`,
+    `attempt_count = 1` and the secret redacted;
+  - slice 1 (present): with `SELECT … FOR UPDATE` held on the subscription row,
+    the evidence write completes promptly (the writer sets a 2 s `lock_timeout`;
+    the test requires completion in under 1.5 s);
+  - before slice 2: a `subscription_resumed` event through the real
+    `EnforcementHandler` with a second step failing, and the scheduled cleanup
+    task rolling back; the row survives both.
 - Unit: a classifier table test including near-miss cases; outcome mapping for
-  applied / not applicable / failed, including the SSH-then-no-API case.
+  applied / not applicable / failed, including the SSH-then-no-API case, the
+  unconfirmed API kick, and the no-SSH-credentials case.
 - Architecture: only `app/services/enforcement.py` writes the model, with a
   planted-violation sensitivity proof.
 - SOT registry: `access.session_enforcement` declares the observation in `owns`
-  and carries a complete `ServiceContract`.
+  and remains on the shrink-only legacy manifest baseline until the contract
+  follow-up in section 1 (no new baseline entry).
 
 ## Rollback or forward-fix
 

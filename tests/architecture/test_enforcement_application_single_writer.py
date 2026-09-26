@@ -27,7 +27,17 @@ OWNER_MODULE = "app/services/enforcement.py"
 
 _TARGET_CLASS = "EnforcementApplication"
 _TABLE_LITERAL = "enforcement_applications"
-_DML_CALL_NAMES = {"insert", "update", "delete"}
+_DML_CALL_NAMES = {
+    "insert",
+    "update",
+    "delete",
+    "pg_insert",
+    "sqlite_insert",
+    "mysql_insert",
+    "bulk_insert_mappings",
+    "bulk_update_mappings",
+    "bulk_save_objects",
+}
 _RAW_SQL_CALL_NAMES = {"text", "execute"}
 
 
@@ -40,28 +50,46 @@ def _call_name(call: ast.Call) -> str | None:
     return None
 
 
-def _is_enforcement_application_reference(node: ast.expr) -> bool:
-    """True for the bare class name or its ``.__table__`` attribute."""
-    if isinstance(node, ast.Name):
-        return node.id == _TARGET_CLASS
-    if isinstance(node, ast.Attribute):
+def _is_dml_call(call: ast.Call) -> bool:
+    name = _call_name(call)
+    return name is not None and (name in _DML_CALL_NAMES or name.endswith("_insert"))
+
+
+class _ModuleAliases:
+    """Names that denote the model class or its table in one module.
+
+    Resolves ``import ... as X`` and ``t = <class>.__table__`` so aliasing or
+    one level of indirection cannot hide a second writer.
+    """
+
+    def __init__(self, tree: ast.AST) -> None:
+        self.classes: set[str] = {_TARGET_CLASS}
+        self.tables: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name == _TARGET_CLASS:
+                        self.classes.add(alias.asname or alias.name)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and self.is_table(node.value):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.tables.add(target.id)
+
+    def is_class(self, node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id in self.classes
+
+    def is_table(self, node: ast.expr) -> bool:
+        if isinstance(node, ast.Name) and node.id in self.tables:
+            return True
         return (
-            node.attr == "__table__"
-            and isinstance(node.value, ast.Name)
-            and node.value.id == _TARGET_CLASS
+            isinstance(node, ast.Attribute)
+            and node.attr == "__table__"
+            and self.is_class(node.value)
         )
-    return False
 
-
-def _constructs_enforcement_application(call: ast.Call) -> bool:
-    return _call_name(call) == _TARGET_CLASS
-
-
-def _dml_references_enforcement_application(call: ast.Call) -> bool:
-    if _call_name(call) not in _DML_CALL_NAMES:
-        return False
-    arguments = [*call.args, *(keyword.value for keyword in call.keywords)]
-    return any(_is_enforcement_application_reference(arg) for arg in arguments)
+    def references_model(self, node: ast.expr) -> bool:
+        return self.is_class(node) or self.is_table(node)
 
 
 def _string_constants(node: ast.expr) -> list[str]:
@@ -87,17 +115,20 @@ def _raw_sql_names_the_table(call: ast.Call) -> bool:
     return False
 
 
-def _is_offending_call(call: ast.Call) -> bool:
-    return (
-        _constructs_enforcement_application(call)
-        or _dml_references_enforcement_application(call)
-        or _raw_sql_names_the_table(call)
-    )
+def _is_offending_call(call: ast.Call, aliases: _ModuleAliases) -> bool:
+    if aliases.is_class(call.func):
+        return True  # constructing the model
+    if _is_dml_call(call):
+        arguments = [*call.args, *(keyword.value for keyword in call.keywords)]
+        if any(aliases.references_model(arg) for arg in arguments):
+            return True
+    return _raw_sql_names_the_table(call)
 
 
 def _module_is_offender(tree: ast.AST) -> bool:
+    aliases = _ModuleAliases(tree)
     return any(
-        isinstance(node, ast.Call) and _is_offending_call(node)
+        isinstance(node, ast.Call) and _is_offending_call(node, aliases)
         for node in ast.walk(tree)
     )
 
@@ -179,6 +210,31 @@ class TestScannerSensitivity:
             '    session.execute(text("DELETE FROM enforcement_applications"))\n'
         )
 
+        # Aliased import: `as EA` must not hide construction.
+        (services_dir / "bad_module_alias.py").write_text(
+            "from app.models.enforcement_application import "
+            "EnforcementApplication as EA\n\n"
+            "def sneaky_alias(db):\n"
+            "    db.add(EA(subscription_id=1))\n"
+        )
+
+        # The owner's own shape copied elsewhere: a dialect insert on a
+        # table bound through a variable.
+        (services_dir / "bad_module_dialect.py").write_text(
+            "from sqlalchemy.dialects.postgresql import insert as pg_insert\n"
+            "from app.models.enforcement_application import EnforcementApplication\n\n"
+            "def sneaky_upsert(session):\n"
+            "    table = EnforcementApplication.__table__\n"
+            "    session.execute(pg_insert(table).values())\n"
+        )
+
+        # ORM bulk write.
+        (services_dir / "bad_module_bulk.py").write_text(
+            "from app.models.enforcement_application import EnforcementApplication\n\n"
+            "def sneaky_bulk(session):\n"
+            "    session.bulk_insert_mappings(EnforcementApplication, [{}])\n"
+        )
+
         models_dir = tmp_path / "app" / "models"
         models_dir.mkdir(parents=True)
         (models_dir / "enforcement_application.py").write_text(
@@ -190,6 +246,9 @@ class TestScannerSensitivity:
         assert "app/services/bad_module.py" in offenders
         assert "app/services/bad_module_dml.py" in offenders
         assert "app/services/bad_module_sql.py" in offenders
+        assert "app/services/bad_module_alias.py" in offenders
+        assert "app/services/bad_module_dialect.py" in offenders
+        assert "app/services/bad_module_bulk.py" in offenders
         assert "app/services/enforcement.py" not in offenders
         assert "app/models/enforcement_application.py" not in offenders
 

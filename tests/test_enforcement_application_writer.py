@@ -155,7 +155,7 @@ class TestEnforcementApplicationWriter:
         assert row.last_success_at is not None
         assert row.failure_class is None
 
-    def test_not_applicable_after_a_failure_leaves_attempt_state_unchanged(
+    def test_not_applicable_after_a_failure_clears_the_failure_streak(
         self, patch_create_session, writer_sessionmaker
     ):
         sub_id, nas_id = uuid4(), uuid4()
@@ -179,9 +179,12 @@ class TestEnforcementApplicationWriter:
         )
 
         row = _get_row(writer_sessionmaker, sub_id, nas_id, effect)
+        # Sensitivity: the prior failure really had a live streak to clear.
+        assert failed_attempt_count == 1
+        assert failed_first_failed_at is not None
         assert row.outcome == "not_applicable"
-        assert row.attempt_count == failed_attempt_count
-        assert row.first_failed_at == failed_first_failed_at
+        assert row.attempt_count == 0
+        assert row.first_failed_at is None
         assert row.failure_class is None
 
     def test_one_row_per_subscription_nas_effect_and_a_different_effect_gets_its_own_row(

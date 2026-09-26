@@ -268,6 +268,31 @@ class TestApiKickSession:
         assert outcome.failure_class == EnforcementFailureClass.timeout
         assert outcome.path == EnforcementPath.api
 
+    def test_api_returning_no_confirmation_records_failed_not_applied(self):
+        """The read-back returned nothing and nothing raised: the session is
+        still live. That must never be recorded as applied."""
+        db = MagicMock()
+        nas_device = _mikrotik_device()
+        api_dev = _mikrotik_device()
+        sub_id = uuid4()
+
+        with (
+            patch("app.services.enforcement._nas_with_api_creds", return_value=api_dev),
+            patch(
+                "app.services.nas._mikrotik.disconnect_mikrotik_pppoe_bulk",
+                return_value=set(),
+            ),
+            patch("app.services.enforcement._record_enforcement_application") as record,
+        ):
+            result = _api_kick_session(db, nas_device, "alice", subscription_id=sub_id)
+
+        assert result is False
+        outcome = record.call_args.kwargs["outcome"]
+        assert outcome.outcome == EnforcementOutcomeValue.failed
+        assert outcome.failure_class == EnforcementFailureClass.command_failed
+        assert outcome.path == EnforcementPath.api
+        assert outcome.detail == "session_kick_unconfirmed 1/1"
+
     def test_api_success_records_applied_api(self):
         db = MagicMock()
         nas_device = _mikrotik_device()
