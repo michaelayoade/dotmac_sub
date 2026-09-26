@@ -15,6 +15,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -1930,6 +1931,14 @@ class ReviewedMigratedOpeningSource:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewedMigratedOpeningIdentity:
+    """Finance-reviewed legacy identity when the retained Splynx link is absent."""
+
+    kind: Literal["pppoe_username"]
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
 class RecordPostCutoverMigratedAccountOpeningPreviewCommand:
     """Record a bounded migrated-account opening for independent approval."""
 
@@ -1937,6 +1946,7 @@ class RecordPostCutoverMigratedAccountOpeningPreviewCommand:
     source: ReviewedMigratedOpeningSource
     code_version: str
     database_schema_version: str
+    reviewed_identity: ReviewedMigratedOpeningIdentity | None = None
     currency: str = "NGN"
     cohort_name: str = "post_cutover_single_migrated_prepaid_account"
     policy_version: str = "adr-0007-phase-3-post-cutover-migrated-account-v1"
@@ -1949,6 +1959,7 @@ class ResolvePostCutoverMigratedOpeningEvidenceQuery:
 
     account_id: UUID
     source: ReviewedMigratedOpeningSource
+    reviewed_identity: ReviewedMigratedOpeningIdentity | None = None
     currency: str = "NGN"
     expected_authority_cutover_id: UUID | None = None
 
@@ -2048,16 +2059,46 @@ def _normalize_reviewed_migrated_source(
     )
 
 
+def _normalize_reviewed_migrated_identity(
+    identity: ReviewedMigratedOpeningIdentity | None,
+) -> ReviewedMigratedOpeningIdentity | None:
+    if identity is None:
+        return None
+    if identity.kind != "pppoe_username":
+        raise _error(
+            "invalid_reviewed_identity",
+            "Only a reviewed PPPoE username identity is supported.",
+        )
+    value = identity.value.strip()
+    if not value or len(value) > 120:
+        raise _error(
+            "invalid_reviewed_identity",
+            "Reviewed legacy identity value must be non-empty and bounded.",
+        )
+    return ReviewedMigratedOpeningIdentity(kind=identity.kind, value=value)
+
+
 def _migrated_opening_request_payload(
     command: RecordPostCutoverMigratedAccountOpeningPreviewCommand,
     *,
     source: ReviewedMigratedOpeningSource,
     currency: str,
 ) -> dict[str, object]:
+    reviewed_identity = _normalize_reviewed_migrated_identity(
+        command.reviewed_identity
+    )
     return {
         "account_id": str(command.account_id),
         "currency": currency,
         "source_position_at": source.position_at.isoformat(),
+        "reviewed_identity": (
+            {
+                "kind": reviewed_identity.kind,
+                "value": reviewed_identity.value,
+            }
+            if reviewed_identity is not None
+            else None
+        ),
         "legacy_position": str(source.legacy_position),
         "source_evidence_ref": source.evidence_ref,
         "source_evidence_sha256": source.evidence_sha256,
@@ -2343,6 +2384,9 @@ def resolve_post_cutover_migrated_opening_evidence(
             "Opening-position currency must be a three-letter code.",
         )
     source = _normalize_reviewed_migrated_source(query.source)
+    reviewed_identity = _normalize_reviewed_migrated_identity(
+        query.reviewed_identity
+    )
 
     authority = db.scalar(select(CustomerSubledgerAuthorityCutover).limit(1))
     if authority is None:
@@ -2384,11 +2428,30 @@ def resolve_post_cutover_migrated_opening_evidence(
             account_id=str(query.account_id),
         )
     if account.splynx_customer_id is None:
-        raise _error(
-            "post_cutover_scope_requires_migrated_account",
-            "Reviewed migrated opening repair requires retained migrated identity.",
-            account_id=str(query.account_id),
-        )
+        if reviewed_identity is None:
+            raise _error(
+                "post_cutover_scope_requires_migrated_account",
+                "Reviewed migrated opening repair requires retained migrated identity.",
+                account_id=str(query.account_id),
+            )
+        from app.models.catalog import AccessCredential
+
+        matching_credentials = db.scalars(
+            select(AccessCredential).where(
+                AccessCredential.username == reviewed_identity.value,
+                AccessCredential.is_active.is_(True),
+            )
+        ).all()
+        if (
+            len(matching_credentials) != 1
+            or matching_credentials[0].subscriber_id != query.account_id
+        ):
+            raise _error(
+                "reviewed_identity_not_unique",
+                "Reviewed PPPoE identity must resolve to exactly one active credential.",
+                account_id=str(query.account_id),
+                identity_kind=reviewed_identity.kind,
+            )
     if query.account_id not in candidate_prepaid_funding_account_ids(db):
         raise _error(
             "account_not_in_funding_cohort",
@@ -2440,13 +2503,25 @@ def resolve_post_cutover_migrated_opening_evidence(
         currency=currency,
         authority=BillingRecordAuthority.shadow,
     )
+    if account.splynx_customer_id is not None:
+        identity_fingerprint = _digest(
+            {"splynx_customer_id": str(account.splynx_customer_id)}
+        )
+    else:
+        assert reviewed_identity is not None
+        identity_fingerprint = _digest(
+            {
+                "reviewed_identity_kind": reviewed_identity.kind,
+                "reviewed_identity_value": reviewed_identity.value,
+                "source_evidence_ref": source.evidence_ref,
+                "source_evidence_sha256": source.evidence_sha256,
+            }
+        )
     return PostCutoverMigratedOpeningEvidence(
         account_id=query.account_id,
         currency=currency,
         account_created_at=_utc(account.created_at),
-        migrated_identity_fingerprint=_digest(
-            {"splynx_customer_id": str(account.splynx_customer_id)}
-        ),
+        migrated_identity_fingerprint=identity_fingerprint,
         authority_cutover_id=authority.id,
         authority_cutover_at=_utc(authority.cutover_at),
         authority_verification_run_id=authority.verification_run_id,
@@ -3052,6 +3127,7 @@ def _record_post_cutover_migrated_account_opening_preview(
         ResolvePostCutoverMigratedOpeningEvidenceQuery(
             account_id=command.account_id,
             source=normalized_source,
+            reviewed_identity=command.reviewed_identity,
             currency=currency,
         ),
     )

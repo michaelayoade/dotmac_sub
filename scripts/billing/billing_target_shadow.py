@@ -488,9 +488,15 @@ def _cmd_preview_post_cutover_account_opening(db, args) -> int:
 def _cmd_preview_migrated_account_opening(db, args) -> int:
     from app.services.billing.shadow_verification import (
         RecordPostCutoverMigratedAccountOpeningPreviewCommand,
+        ReviewedMigratedOpeningIdentity,
         ReviewedMigratedOpeningSource,
         record_post_cutover_migrated_account_opening_preview,
     )
+
+    if bool(args.reviewed_identity_kind) != bool(args.reviewed_identity_value):
+        raise SystemExit(
+            "--reviewed-identity-kind and --reviewed-identity-value must be supplied together"
+        )
 
     result = record_post_cutover_migrated_account_opening_preview(
         db,
@@ -501,6 +507,14 @@ def _cmd_preview_migrated_account_opening(db, args) -> int:
                 legacy_position=Decimal(args.legacy_position),
                 evidence_ref=args.source_evidence_ref,
                 evidence_sha256=args.source_evidence_sha256,
+            ),
+            reviewed_identity=(
+                ReviewedMigratedOpeningIdentity(
+                    kind=args.reviewed_identity_kind,
+                    value=args.reviewed_identity_value,
+                )
+                if args.reviewed_identity_kind and args.reviewed_identity_value
+                else None
             ),
             code_version=args.code_version,
             database_schema_version=args.schema_version,
@@ -1225,6 +1239,8 @@ def main() -> int:
     p.add_argument("--legacy-position", required=True)
     p.add_argument("--source-evidence-ref", required=True)
     p.add_argument("--source-evidence-sha256", required=True)
+    p.add_argument("--reviewed-identity-kind", choices=["pppoe_username"])
+    p.add_argument("--reviewed-identity-value")
     p.add_argument("--code-version", required=True)
     p.add_argument("--schema-version", required=True)
     p.add_argument("--currency", default="NGN")
