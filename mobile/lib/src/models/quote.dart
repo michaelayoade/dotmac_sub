@@ -198,6 +198,11 @@ class Quote {
       depositPaid ? 'Paid' : paymentReviewMessage;
 
   String get statusLabel {
+    if (status == 'accepted') {
+      return isRelocation
+          ? 'Accepted — relocation scheduled'
+          : 'Accepted — installation scheduled';
+    }
     if (depositPaid) return 'Paid';
     return switch (status) {
       'draft' ||
@@ -210,9 +215,6 @@ class Quote {
       'sent' when paymentReviewStatus == 'approved' =>
         'Approved — payment required',
       'draft' || 'sent' => 'Awaiting staff review',
-      'accepted' => isRelocation
-          ? 'Accepted — relocation scheduled'
-          : 'Accepted — installation scheduled',
       'rejected' => 'Declined',
       'expired' => 'Expired',
       _ => status,

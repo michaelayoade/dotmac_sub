@@ -740,7 +740,10 @@ class _ActiveDepositCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Top-up pending',
+                    deposit.providerType == 'direct_bank_transfer' &&
+                            deposit.phase == TopupRequestPhase.awaitingReceipt
+                        ? 'Bank transfer pending'
+                        : 'Top-up pending',
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
