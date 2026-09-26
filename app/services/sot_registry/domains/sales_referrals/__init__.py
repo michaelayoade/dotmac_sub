@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from app.services.custom_field_contracts import (
+    CustomFieldDomainCapabilities,
+    CustomFieldTargetCapability,
+)
 from app.services.sot_registry.domains.sales_referrals.acquisition import (
     SERVICES as ACQUISITION_SERVICES,
 )
@@ -56,4 +60,35 @@ DOMAIN = DomainSOT(
     "handlers request outcomes from these owners and translate domain "
     "errors at the boundary. CRM and dotmac_mkt have no customer-lifecycle "
     "or attribution authority.",
+    custom_fields=CustomFieldDomainCapabilities(
+        targets=(
+            CustomFieldTargetCapability(
+                key="lead",
+                label="Leads",
+                entity_id_type="uuid",
+                read_permission="crm:lead:read",
+                write_permission="crm:lead:write",
+                detail_path_template="/admin/sales/leads/{target_id}",
+                maximum_active_fields=50,
+            ),
+            CustomFieldTargetCapability(
+                key="quote",
+                label="Quotes",
+                entity_id_type="uuid",
+                read_permission="crm:quote:read",
+                write_permission="crm:quote:write",
+                detail_path_template="/admin/sales/quotes/{target_id}",
+                maximum_active_fields=50,
+            ),
+            CustomFieldTargetCapability(
+                key="sales_order",
+                label="Sales orders",
+                entity_id_type="uuid",
+                read_permission="crm:sales_order:read",
+                write_permission="crm:sales_order:write",
+                detail_path_template="/admin/sales/sales-order/{target_id}",
+                maximum_active_fields=50,
+            ),
+        ),
+    ),
 )

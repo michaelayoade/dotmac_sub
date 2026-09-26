@@ -19,11 +19,13 @@ from starlette.datastructures import FormData, UploadFile
 from app.csrf import CSRF_COOKIE_NAME, CSRFValidationError
 from app.db import get_db
 from app.models.stored_file import StoredFile
+from app.services import web_custom_fields as web_custom_fields_service
 from app.services import web_dispatch_work_orders as work_orders_service
 from app.services import web_work_order_expenses as expense_web
 from app.services.auth_dependencies import (
     can,
     grant_scopes_for_permission,
+    load_permission_keys,
     require_permission,
     require_scoped_permission,
 )
@@ -237,6 +239,16 @@ def _expense_detail_response(
     context = _ctx(request, db)
     context.update(state)
     context.update({"notice": notice, "error": error})
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_target_value_context(
+            db,
+            target_type="work_order",
+            target_id=state["work_order"].id,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            auth=auth,
+        )
+    )
     return templates.TemplateResponse(
         "admin/dispatch/work_order_detail.html", context, status_code=status_code
     )

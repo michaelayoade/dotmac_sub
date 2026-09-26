@@ -152,25 +152,26 @@ but equivalent state and actions resolve through the same backend owners.
 12. `workforce_operations`
 13. `support_operations`
 14. `automation_control_plane`
-15. `tenancy`
-16. `ai_advisory`
-17. `provisioning_operations`
-18. `regulatory_reporting`
-19. `feature_control_plane`
-20. `authorization_control_plane`
-21. `scheduler_control_plane`
-22. `network_access_control_plane`
-23. `service_intent_control_plane`
-24. `integration_control_plane`
-25. `ui_list_projection`
-26. `ui_bulk_actions`
-27. `ui_display_formatting`
-28. `ui_action_forms`
-29. `ui_semantic_presentation`
-30. `vpn_remote_access`
-31. `geospatial`
-32. `sales_referrals`
-33. `migration_source`
+15. `custom_fields_control_plane`
+16. `tenancy`
+17. `ai_advisory`
+18. `provisioning_operations`
+19. `regulatory_reporting`
+20. `feature_control_plane`
+21. `authorization_control_plane`
+22. `scheduler_control_plane`
+23. `network_access_control_plane`
+24. `service_intent_control_plane`
+25. `integration_control_plane`
+26. `ui_list_projection`
+27. `ui_bulk_actions`
+28. `ui_display_formatting`
+29. `ui_action_forms`
+30. `ui_semantic_presentation`
+31. `vpn_remote_access`
+32. `geospatial`
+33. `sales_referrals`
+34. `migration_source`
 
 Rule: each change should finish one coherent domain boundary: define the owner
 service, migrate the highest-risk callers, and add focused tests. Avoid broad
@@ -923,6 +924,9 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `automation.capability_registry` | automation capability declarations and compatibility validation | `policy` | SOT domain automation declarations ← `automation.capability_registry` | `read_only` | `native` | platform automation | `docs/designs/AUTOMATION_CENTER_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/architecture/test_automation_capability_registry.py` |
 | `automation.rule_definitions` | automation rule definitions and immutable versions | `authoritative_record` | typed automation rule lifecycle command ← `automation.rule_definitions`<br>declared automation capabilities ← `automation.capability_registry`<br>tenant-scoped automation rule records ← `automation.rule_definitions`<br>active ticket assignment rules ← `support.ticket_assignment_rule_configuration`<br>active ticket-creation automation rules ← `support.ticket_automation_rule_configuration` | `owner_managed` | `native` | platform automation | `docs/designs/AUTOMATION_CENTER_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_automation_rules.py`<br>`tests/architecture/test_automation_rule_boundary.py` |
 | `automation.execution` | automation execution decisions and run evidence | `application_coordinator` | durable domain event evidence ← `events.store`<br>published automation rule versions ← `automation.rule_definitions`<br>declared automation runtime adapters ← `automation.capability_registry`<br>tenant-scoped automation run evidence ← `automation.execution` | `coordinator_managed` | `native` | platform automation | `docs/designs/AUTOMATION_CENTER_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_automation_runtime.py`<br>`tests/architecture/test_automation_runtime_boundary.py` |
+| `custom_fields.capability_registry` | custom-field module and target declarations | `policy` | SOT domain custom-field declarations ← `custom_fields.capability_registry` | `read_only` | `native` | platform administration | `docs/designs/CUSTOM_FIELDS_CENTER_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/architecture/test_custom_field_boundary.py` |
+| `custom_fields.capability_registry` | custom-field target identity resolution | `resolver` | SOT domain custom-field declarations ← `custom_fields.capability_registry`<br>canonical target records ← `customer.accounts` | `read_only` | `native` | platform administration | `docs/designs/CUSTOM_FIELDS_CENTER_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/architecture/test_custom_field_boundary.py` |
+| `custom_fields.records` | custom-field definitions and typed entity values | `authoritative_record` | typed custom-field commands ← `custom_fields.records`<br>registered target contracts ← `custom_fields.capability_registry`<br>tenant-scoped custom-field records ← `custom_fields.records` | `owner_managed` | `native` | platform administration | `docs/designs/CUSTOM_FIELDS_CENTER_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/test_custom_fields.py`<br>`tests/architecture/test_custom_field_boundary.py` |
 | `tenancy.operator_tenant` | operator tenant identity | `authoritative_record` | deterministic operator tenant id ← `tenancy.operator_tenant` | `owner_managed` | `native` | platform | `docs/adr/0009-operator-tenant-bridge.md`<br>`docs/PLATFORM_ADOPTION_LEDGER.md`<br>`tests/test_operator_tenant.py`<br>`tests/integration/test_operator_tenant_transaction_scope.py`<br>`tests/architecture/test_kernel_import_boundary.py` |
 | `tenancy.operator_tenant` | operator tenant provisioning | `command_writer` | deterministic operator tenant id ← `tenancy.operator_tenant` | `owner_managed` | `native` | platform | `docs/adr/0009-operator-tenant-bridge.md`<br>`docs/PLATFORM_ADOPTION_LEDGER.md`<br>`tests/test_operator_tenant.py`<br>`tests/integration/test_operator_tenant_transaction_scope.py`<br>`tests/architecture/test_kernel_import_boundary.py` |
 | `tenancy.operator_tenant` | operator tenant transaction scope installation | `command_writer` | deterministic operator tenant id ← `tenancy.operator_tenant`<br>root database transaction lifecycle observation ← `runtime.db_sessions` | `owner_managed` | `native` | platform | `docs/adr/0009-operator-tenant-bridge.md`<br>`docs/PLATFORM_ADOPTION_LEDGER.md`<br>`tests/test_operator_tenant.py`<br>`tests/integration/test_operator_tenant_transaction_scope.py`<br>`tests/architecture/test_kernel_import_boundary.py` |

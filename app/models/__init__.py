@@ -254,6 +254,12 @@ from app.models.csat import (  # noqa: F401
     CsatSourceType,
     SupportCsatRequest,
 )
+from app.models.custom_fields import (  # noqa: F401
+    CustomFieldDefinition,
+    CustomFieldDefinitionStatus,
+    CustomFieldType,
+    CustomFieldValue,
+)
 from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoff,
     CustomerExperienceHandoffEvent,

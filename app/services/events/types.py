@@ -33,6 +33,8 @@ class EventType(enum.Enum):
 
     # Automation Center control-plane events
     automation_rule_changed = "automation.rule_changed"
+    custom_field_definition_changed = "custom_field.definition_changed"
+    custom_field_value_changed = "custom_field.value_changed"
 
     # Support ticket lifecycle events
     support_ticket_created = "support.ticket.created"

@@ -31,6 +31,10 @@
         {% endif %}
     {% endcall %}
 
+    {% if custom_field_values %}
+    {% include "admin/customers/_custom_fields.html" %}
+    {% endif %}
+
     <div class="grid gap-6 xl:grid-cols-12">
         <div class="space-y-6 xl:col-span-8">
             {% call project_card(title='Description', subtitle='Scope and customer context.', icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-6 4h10M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>') %}

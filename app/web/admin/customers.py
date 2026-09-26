@@ -42,6 +42,7 @@ from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import (
     web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
 )
+from app.services import web_custom_fields as web_custom_fields_service
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services import (
     web_customer_availability as web_customer_availability_service,
@@ -61,6 +62,7 @@ from app.services.audit_helpers import (
 from app.services.auth_dependencies import (
     can,
     has_permission,
+    load_permission_keys,
     require_any_permission,
     require_permission,
 )
@@ -889,6 +891,14 @@ def person_detail(
     auth = getattr(getattr(request, "state", None), "auth", None) or {}
     from app.services import location_capture
 
+    custom_field_context = web_custom_fields_service.build_target_value_context(
+        db,
+        target_type="subscriber",
+        target_id=detail_data["customer"].id,
+        permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+        auth=auth,
+    )
+
     can_confirm_location = bool(auth) and has_permission(auth, db, "customer:write")
     can_unsuspend_account = bool(auth) and has_permission(auth, db, "customer:update")
     location_capture_enabled = can_confirm_location and location_capture.prompt_enabled(
@@ -954,6 +964,7 @@ def person_detail(
             "can_read_service_extensions": show_service_extensions,
             "can_create_service_extension": can_create_service_extension,
             "party_binding_repair": party_binding_repair,
+            **custom_field_context,
             "sidebar_stats": sidebar_stats,
         },
     )
