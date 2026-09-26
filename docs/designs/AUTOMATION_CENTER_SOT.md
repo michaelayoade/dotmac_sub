@@ -105,9 +105,10 @@ blocks publication and identifies the legacy rule. The check is deliberately
 conservative where the Automation Center rule has no condition that proves a
 legacy region, type, source, or tag rule cannot overlap.
 
-The runtime capability remains gated until focused acceptance checks cover
-event delivery, customer scoping, replay, assignment audit, rule activation,
-pause behavior, and active legacy-rule conflicts.
+Support ticket creation and service-team assignment are admitted to the runtime
+by this reviewed code contract. Focused checks for event delivery, customer
+scoping, replay, assignment audit, activation, pause behavior, and legacy-rule
+conflicts run with the pull request's CI suite before merge.
 
 The current ticket-assignment and ticket-creation automation pages are listed
 as legacy ownership links. Their rules are not moved by this implementation
@@ -125,6 +126,7 @@ writers for the same decision.
 ## Deployment
 
 Schema changes are additive. Permissions are seeded as assignable and are not
-granted broadly. The runtime handler ships disabled until at least one module
-adapter is reviewed and its capability is enabled. Deployment creates no rules
-and produces no new business side effects by itself.
+granted broadly. The runtime handler is registered for the reviewed Support
+Ticket trigger; it only acts on rules an authorized administrator has
+explicitly activated. Deployment creates no rules and produces no new business
+side effects by itself.

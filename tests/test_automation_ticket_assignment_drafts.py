@@ -13,14 +13,14 @@ from app.services.events.types import EventType
 from app.web.admin.automation_center import _pilot_rule_key
 
 
-def test_ticket_assignment_pilot_is_draftable_but_not_runtime_enabled() -> None:
+def test_ticket_assignment_pilot_is_runtime_enabled() -> None:
     trigger = automation_capabilities.trigger_capability("support.ticket.created")
     action = automation_capabilities.action_capability(
         "support.ticket.assign_service_team"
     )
 
-    assert not trigger.runtime_enabled
-    assert not action.runtime_enabled
+    assert trigger.runtime_enabled
+    assert action.runtime_enabled
     trigger_schema, conditions, actions = automation_rules._validate_definition(
         db=SimpleNamespace(),
         trigger_key=trigger.key,
@@ -48,9 +48,9 @@ def test_ticket_assignment_pilot_is_draftable_but_not_runtime_enabled() -> None:
     assert trigger_schema == 3
     assert conditions[0]["value"] == "urgent"
     assert actions[0]["action_key"] == action.key
-    assert EventType.support_ticket_created not in HANDLED_EVENT_TYPES
+    assert EventType.support_ticket_created in HANDLED_EVENT_TYPES
     assert not runtime_registry_errors()
-    assert not automation_rules._runtime_ready(
+    assert automation_rules._runtime_ready(
         trigger_key=trigger.key,
         version=SimpleNamespace(actions=[{"action_key": action.key}]),
     )
@@ -93,9 +93,25 @@ def test_ticket_assignment_can_target_selected_customers(monkeypatch) -> None:
     assert conditions[0]["value"] == [str(customer_id)]
 
 
-def test_ticket_assignment_pilot_cannot_be_published_before_runtime_admission() -> None:
+def test_ticket_assignment_rejects_an_inactive_selected_customer(monkeypatch) -> None:
+    customer_id = UUID("9d501e67-4252-45de-8b42-0e74f8a8e307")
+    monkeypatch.setattr(
+        automation_rules.customer_search,
+        "get_customer_match",
+        lambda *_args, **_kwargs: None,
+    )
     rule = SimpleNamespace(trigger_key="support.ticket.created")
-    version = SimpleNamespace(conditions=[], actions=[])
+    version = SimpleNamespace(
+        trigger_schema_version=3,
+        conditions=[
+            {
+                "field_key": "customer_id",
+                "operator": "in",
+                "value": [str(customer_id)],
+            }
+        ],
+        actions=[],
+    )
 
     with pytest.raises(automation_rules.AutomationRuleError) as exc_info:
         automation_rules._validate_persisted_definition(
@@ -105,9 +121,7 @@ def test_ticket_assignment_pilot_cannot_be_published_before_runtime_admission() 
             permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
         )
 
-    assert (
-        exc_info.value.code == "automation.rule_definitions.trigger_runtime_unavailable"
-    )
+    assert exc_info.value.code == "automation.rule_definitions.customer_scope_invalid"
 
 
 def test_ticket_assignment_draft_key_is_stable_and_safe() -> None:
