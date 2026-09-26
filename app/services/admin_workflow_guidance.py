@@ -1033,12 +1033,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action(
             "save-ticket-assignment-draft",
             "Save an urgent-ticket assignment draft",
-            3,
+            4,
         ),
         _action(
             "confirm-automation-boundary",
             "Confirm the remaining module ownership boundary",
-            4,
+            5,
         ),
     ),
     "custom-fields-center": (
