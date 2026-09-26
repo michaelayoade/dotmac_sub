@@ -1540,10 +1540,13 @@ SERVICES: tuple[SOTService, ...] = (
         notes=(
             "This read owner resolves authorized Subscriber ownership, active "
             "Draft/Sent state, current staff approval of the exact commercial "
-            "snapshot, expiry, paid-deposit evidence, the authoritative "
-            "deposit amount, and Paystack availability. Quote email delivery "
-            "consumes the same typed query before presenting the immutable PDF "
-            "payment route; GET rendering creates no invoice or payment intent."
+            "snapshot, expiry, paid-deposit evidence from scoped structural "
+            "Invoice links, the authoritative deposit amount, and Paystack "
+            "availability. Customer quote-list reads use the typed settlement "
+            "query so payment state cannot drift from the billing ledger. Quote "
+            "email delivery consumes the same eligibility query before presenting "
+            "the immutable PDF payment route; GET rendering creates no invoice "
+            "or payment intent."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1607,7 +1610,9 @@ SERVICES: tuple[SOTService, ...] = (
                 mode=TransactionMode.READ_ONLY,
                 boundary=(
                     "quote_payment_page resolves authorization, state, amount, "
-                    "settlement, and provider eligibility without writing state"
+                    "settlement, and provider eligibility; the typed settlement "
+                    "query projects paid Invoice evidence for customer Quote lists "
+                    "without writing state"
                 ),
                 locking=(
                     "The query takes no lock; the protected POST command locks and "

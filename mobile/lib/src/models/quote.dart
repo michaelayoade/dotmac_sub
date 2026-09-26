@@ -194,7 +194,12 @@ class Quote {
 
   bool get isAccepted => status == 'accepted';
   bool get isRelocation => serviceOption?.kind == ServiceRequestKind.relocation;
-  String get statusLabel => switch (status) {
+  String get paymentReviewDisplayMessage =>
+      depositPaid ? 'Paid' : paymentReviewMessage;
+
+  String get statusLabel {
+    if (depositPaid) return 'Paid';
+    return switch (status) {
         'draft' ||
         'sent'
             when isRelocation &&
@@ -212,6 +217,7 @@ class Quote {
         'expired' => 'Expired',
         _ => status,
       };
+  }
 
   factory Quote.fromJson(Map<String, dynamic> json) => Quote(
         id: _str(json['id']),
