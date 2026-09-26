@@ -964,10 +964,14 @@ def _offer_settled_account_credit(
         return
     if round_money(to_decimal(settlement.unallocated_amount)) <= 0:
         return
+    # Evaluate newly settled funds at the payment's own paid-at boundary.
+    # Using the current prepaid position can hide valid invoice funding behind
+    # later service debits and leave a funded invoice overdue.
     AccountCreditApplications.offer_available_credit(
         db,
         str(payment.account_id),
         payments=(payment,),
+        funding_position_at=payment.paid_at,
     )
 
 
@@ -4207,6 +4211,7 @@ def _build_payment_allocation_preview(
     payload: PaymentAllocationPreviewRequest,
     *,
     funding_position_at: datetime | None = None,
+    allow_existing_allocation: bool = False,
 ) -> PaymentAllocationPreview:
     payment = get_by_id(db, Payment, payload.payment_id)
     if not payment:
@@ -4258,7 +4263,7 @@ def _build_payment_allocation_preview(
         .filter(PaymentAllocation.invoice_id == invoice.id)
         .first()
     )
-    if existing:
+    if existing and not allow_existing_allocation:
         raise HTTPException(
             status_code=409,
             detail="Payment already has allocation evidence for this invoice",
@@ -4480,6 +4485,72 @@ class PaymentAllocations(ListResponseMixin):
             finalization_mode=PaymentAllocationFinalizationMode.standard,
             funding_position_at=funding_position_at,
         )
+
+    @staticmethod
+    def stage_increase_existing_at_reviewed_boundary(
+        db: Session,
+        *,
+        payment_id: UUID,
+        invoice_id: UUID,
+        amount: Decimal,
+        funding_position_at: datetime,
+    ) -> PaymentAllocationResult:
+        """Top up an existing allocation from newly evidenced payment credit.
+
+        A payment/invoice pair is unique, so a second allocation row cannot
+        represent a later top-up. Settlement-driven account-credit recovery
+        increases the existing allocation and its paired ledger entries
+        atomically, using the same reviewed funding boundary as the normal
+        allocation owner.
+        """
+        payment = lock_for_update(db, Payment, payment_id)
+        invoice = lock_for_update(db, Invoice, invoice_id)
+        if payment is None or invoice is None:
+            raise HTTPException(status_code=404, detail="Payment or invoice not found")
+        allocation = (
+            db.query(PaymentAllocation)
+            .filter(PaymentAllocation.payment_id == payment.id)
+            .filter(PaymentAllocation.invoice_id == invoice.id)
+            .filter(PaymentAllocation.is_active.is_(True))
+            .with_for_update()
+            .first()
+        )
+        if allocation is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Existing allocation evidence is required for a top-up",
+            )
+        if allocation.ledger_entry_id is None or allocation.consumption_ledger_entry_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Existing allocation lacks paired ledger evidence",
+            )
+        preview = _build_payment_allocation_preview(
+            db,
+            PaymentAllocationPreviewRequest(
+                payment_id=payment.id,
+                invoice_id=invoice.id,
+                amount=amount,
+            ),
+            funding_position_at=funding_position_at,
+            allow_existing_allocation=True,
+        )
+        invoice_entry = lock_for_update(db, LedgerEntry, allocation.ledger_entry_id)
+        consumption_entry = lock_for_update(
+            db, LedgerEntry, allocation.consumption_ledger_entry_id
+        )
+        if invoice_entry is None or consumption_entry is None:
+            raise HTTPException(status_code=409, detail="Allocation ledger evidence is unavailable")
+        increment = round_money(preview.amount)
+        allocation.amount = round_money(to_decimal(allocation.amount) + increment)
+        invoice_entry.amount = round_money(to_decimal(invoice_entry.amount) + increment)
+        consumption_entry.amount = round_money(
+            to_decimal(consumption_entry.amount) + increment
+        )
+        payment.updated_at = datetime.now(UTC)
+        _finalize_invoice_payment_effects(db, invoice)
+        db.flush()
+        return PaymentAllocationResult(allocation=allocation, preview=preview)
 
     @staticmethod
     def stage_confirm_reviewed_document_correction(
