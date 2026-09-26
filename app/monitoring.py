@@ -15,7 +15,10 @@ Environment variables:
 
 import logging
 import os
+from typing import Any
 from urllib.parse import urlparse
+
+from app.logging import SensitiveQueryFilter, redact_routeros_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +88,9 @@ def _setup_loki(
             },
             version="1",
         )
+        # Filter must be attached before the handler is registered: once it's
+        # on root_logger.handlers, a record can already be in flight to it.
+        handler.addFilter(SensitiveQueryFilter())
         # Add to root logger so all logs are pushed
         root_logger = logging.getLogger()
         if _has_matching_loki_handler(root_logger, loki_url):
@@ -95,6 +101,50 @@ def _setup_loki(
     except Exception as e:
         logger.warning(f"Failed to configure Loki handler: {e}")
         return False
+
+
+def _scrub_event_credentials(event: Any, _hint: Any) -> Any:
+    """Redact RouterOS API credentials from a Sentry/GlitchTip event.
+
+    Covers the exception message(s), the log-record message/params (both the
+    structured ``logentry`` and the flat ``message`` Sentry also populates for
+    a plain ``logger.warning("...")`` call). Defensive: scrubbing must never
+    block error reporting, so any unexpected event shape is left as-is rather
+    than raising.
+    """
+    try:
+        exc_values = (event.get("exception") or {}).get("values") or []
+        for value in exc_values:
+            if isinstance(value, dict) and isinstance(value.get("value"), str):
+                value["value"] = redact_routeros_credentials(value["value"])
+
+        logentry = event.get("logentry")
+        if isinstance(logentry, dict):
+            for key in ("message", "formatted"):
+                if isinstance(logentry.get(key), str):
+                    logentry[key] = redact_routeros_credentials(logentry[key])
+            params = logentry.get("params")
+            if isinstance(params, list):
+                logentry["params"] = [
+                    redact_routeros_credentials(p) if isinstance(p, str) else p
+                    for p in params
+                ]
+
+        if isinstance(event.get("message"), str):
+            event["message"] = redact_routeros_credentials(event["message"])
+    except Exception:  # noqa: BLE001 - scrubbing must never block reporting
+        logger.warning("Event credential scrub failed; sending event as-is")
+    return event
+
+
+def _scrub_breadcrumb_credentials(breadcrumb: Any, _hint: Any) -> Any:
+    """Redact RouterOS API credentials from a Sentry/GlitchTip breadcrumb."""
+    try:
+        if isinstance(breadcrumb.get("message"), str):
+            breadcrumb["message"] = redact_routeros_credentials(breadcrumb["message"])
+    except Exception:  # noqa: BLE001 - scrubbing must never block reporting
+        logger.warning("Breadcrumb credential scrub failed; sending as-is")
+    return breadcrumb
 
 
 def _setup_sentry(
@@ -140,6 +190,15 @@ def _setup_sentry(
             ],
             # Don't send PII by default
             send_default_pii=False,
+            before_send=_scrub_event_credentials,
+            before_breadcrumb=_scrub_breadcrumb_credentials,
+            # A decrypted RouterOS API password can be a local variable in a
+            # frame on the captured stack (e.g. `password` in
+            # _mikrotik_routeros_auth or RouterSyncService). Sentry's local
+            # variable capture walks every frame's locals independent of
+            # before_send/before_breadcrumb, which only see the rendered
+            # exception/message text — so the scrubber above cannot reach it.
+            include_local_variables=False,
         )
         logger.info(
             f"GlitchTip error tracking enabled: app={app_name}, server={server}, "

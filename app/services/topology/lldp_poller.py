@@ -59,6 +59,7 @@ from routeros_api.exceptions import (
 from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import Session
 
+from app.logging import sanitize_exception as _sanitize_exc
 from app.models.event_store import EventStatus
 from app.models.network_monitoring import (
     NetworkDevice,
@@ -115,16 +116,6 @@ ROUTER_REST_READ_TIMEOUT = 12.0
 # attempting new devices before that so the run finishes cleanly (upsert +
 # prune) instead of timing out mid-fleet.
 TIME_BUDGET_SECONDS = 240.0
-
-# routeros_api surfaces the cleartext password in some exception strings; strip
-# it before anything reaches the logs.
-_PASSWORD_RE = re.compile(r"=password=[^\x00 ]*")
-
-
-def _sanitize_exc(exc: BaseException) -> str:
-    """Strip routeros_api's cleartext =password=... from exception text."""
-    message = _PASSWORD_RE.sub("=password=<redacted>", str(exc))
-    return message or type(exc).__name__
 
 
 def _norm(value: str | None) -> str:

@@ -24,6 +24,8 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from app.logging import sanitize_exception
+
 if TYPE_CHECKING:
     from app.models.catalog import NasDevice
 
@@ -309,7 +311,7 @@ class MikroTikAdapter(BaseNasVendorAdapter):
         except Exception as exc:
             return StatusResult(
                 success=False,
-                message=f"Failed to get status: {exc}",
+                message=f"Failed to get status: {sanitize_exception(exc)}",
                 data={},
                 source="error",
             )

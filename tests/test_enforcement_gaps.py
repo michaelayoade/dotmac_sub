@@ -7,6 +7,7 @@ Covers:
 - EnforcementHandler event routing
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -822,3 +823,56 @@ class TestAddressListApiFallback:
         assert result is True
         session_kick_enabled.assert_not_called()
         api_apply.assert_called_once_with(nas_device, "blocked", "10.0.0.10")
+
+
+class TestAddressListApiFallbackCredentialRedaction:
+    def test_api_fallback_failure_log_never_contains_the_routeros_password(
+        self, caplog
+    ):
+        """routeros_api embeds the raw ``/login`` word (incl. the cleartext
+        password) in exception text on auth failure. The API-fallback warning
+        must never surface it, even though the call site only ever sees
+        ``exc`` and cannot know its text shape.
+        """
+        from app.services.enforcement import _enforce_address_list_on_nas
+
+        db = MagicMock()
+        nas_device = MagicMock(spec=NasDevice)
+        nas_device.name = "BNG-API"
+
+        ssh_cm = MagicMock()
+        ssh_cm.__enter__.side_effect = RuntimeError("ssh unavailable")
+
+        secret = "hunter2CLEARTEXT"
+        api_exc = RuntimeError(
+            'Error "invalid user name or password ..." executing command '
+            f"b'/login =name=Eagle_API =password={secret} .tag=1'"
+        )
+        # Sensitivity proof: the raw exception genuinely carries the secret,
+        # so an assertion against the unredacted text would fail to catch a
+        # regression only if this line itself were false.
+        assert secret in str(api_exc)
+
+        with (
+            patch(
+                "app.services.enforcement.DeviceProvisioner.ssh_session",
+                return_value=ssh_cm,
+            ),
+            patch(
+                "app.services.enforcement._nas_with_api_creds",
+                return_value=nas_device,
+            ),
+            patch(
+                "app.services.nas._mikrotik.remove_mikrotik_address_list_via_api",
+                side_effect=api_exc,
+            ),
+            caplog.at_level(logging.WARNING, logger="app.services.enforcement"),
+        ):
+            result = _enforce_address_list_on_nas(
+                db, nas_device, "blocked", "10.0.0.10", add=False
+            )
+
+        assert result is False
+        rendered_messages = [record.getMessage() for record in caplog.records]
+        assert not any(secret in message for message in rendered_messages)
+        assert any("=password=<redacted>" in message for message in rendered_messages)

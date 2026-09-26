@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import signal
 import time
 from collections.abc import AsyncIterator
@@ -22,6 +21,8 @@ import redis.asyncio as redis
 from routeros_api import RouterOsApiPool
 
 from app.config import settings
+from app.logging import install_log_redaction
+from app.logging import sanitize_exception as _sanitize_exc
 from app.models.catalog import (
     CatalogOffer,
     NasDevice,
@@ -36,14 +37,6 @@ from app.services.poller_health import POLLER_HEALTH_KEY
 from app.services.queue_mapping import queue_mapping
 
 logger = logging.getLogger(__name__)
-
-_PASSWORD_RE = re.compile(r"=password=[^\x00 ]*")
-
-
-def _sanitize_exc(exc: BaseException) -> str:
-    """Strip routeros_api's cleartext =password=... from exception text."""
-    message = _PASSWORD_RE.sub("=password=<redacted>", str(exc))
-    return message or type(exc).__name__
 
 
 def _error_category(exc: BaseException) -> str:
@@ -313,7 +306,9 @@ class MikroTikConnection:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, self._pool.disconnect)
             except Exception as e:
-                logger.warning(f"Error disconnecting from {self.host}: {e}")
+                logger.warning(
+                    f"Error disconnecting from {self.host}: {_sanitize_exc(e)}"
+                )
             self._pool = None
             self._connection = None
 
@@ -566,7 +561,7 @@ class DevicePool:
                         logger.warning(
                             "Skipping NAS %s: api_password decrypt failed (%s)",
                             device_id,
-                            exc,
+                            _sanitize_exc(exc),
                         )
                         continue
                     if not api_password:
@@ -746,7 +741,7 @@ class DevicePool:
 
         for result in results:
             if isinstance(result, BaseException):
-                logger.error(f"Polling error: {result}")
+                logger.error(f"Polling error: {_sanitize_exc(result)}")
                 continue
             device_id, stats = result
             if stats:
@@ -901,7 +896,7 @@ class BandwidthPoller:
             # Drop this cycle's samples (the next cycle re-reads current rates).
             logger.warning(
                 "bandwidth sample publish failed (%s); dropping %d samples",
-                exc,
+                _sanitize_exc(exc),
                 len(samples),
             )
             return
@@ -936,7 +931,7 @@ class BandwidthPoller:
             cutoff = time.time() - ACTIVE_VIEWER_TTL_SECONDS
             members = await r.zrangebyscore(ACTIVE_VIEWERS_KEY, cutoff, "+inf")
         except Exception as exc:
-            logger.debug("active viewer lookup failed: %s", exc)
+            logger.debug("active viewer lookup failed: %s", _sanitize_exc(exc))
             return set()
         result: set[str] = set()
         for member in members:
@@ -1021,7 +1016,7 @@ class BandwidthPoller:
                 try:
                     await self._poll_once()
                 except Exception as e:
-                    logger.error(f"Polling error: {e}")
+                    logger.error(f"Polling error: {_sanitize_exc(e)}")
 
                 # Calculate sleep time to maintain consistent interval
                 elapsed = time.monotonic() - start
@@ -1056,6 +1051,10 @@ async def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    # basicConfig's plain-text format is kept as-is (Loki queries depend on
+    # it); this only adds the same credential/query redaction the JSON
+    # handlers get via configure_logging().
+    install_log_redaction()
 
     poller = BandwidthPoller()
 

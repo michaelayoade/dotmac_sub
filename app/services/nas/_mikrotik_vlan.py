@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, cast
 
+from app.logging import sanitize_exception
 from app.models.catalog import NasDevice
 from app.services.nas._mikrotik import _mikrotik_routeros_auth
 
@@ -197,9 +198,14 @@ def ensure_vlan_interface(
             details={"name": iface_name, "vlan_id": vlan_id},
         )
     except Exception as exc:
-        logger.error("Failed to create VLAN %d on %s: %s", vlan_id, device.name, exc)
+        logger.error(
+            "Failed to create VLAN %d on %s: %s",
+            vlan_id,
+            device.name,
+            sanitize_exception(exc),
+        )
         return VlanProvisioningResult(
-            success=False, message=f"Failed to create VLAN: {exc}"
+            success=False, message=f"Failed to create VLAN: {sanitize_exception(exc)}"
         )
     finally:
         pool.disconnect()
@@ -265,10 +271,10 @@ def ensure_vlan_ip_address(
             address,
             interface_name,
             device.name,
-            exc,
+            sanitize_exception(exc),
         )
         return VlanProvisioningResult(
-            success=False, message=f"Failed to assign IP: {exc}"
+            success=False, message=f"Failed to assign IP: {sanitize_exception(exc)}"
         )
     finally:
         pool.disconnect()
@@ -343,10 +349,11 @@ def ensure_pppoe_server(
             "Failed to create PPPoE server on %s/%s: %s",
             device.name,
             interface_name,
-            exc,
+            sanitize_exception(exc),
         )
         return VlanProvisioningResult(
-            success=False, message=f"Failed to create PPPoE server: {exc}"
+            success=False,
+            message=f"Failed to create PPPoE server: {sanitize_exception(exc)}",
         )
     finally:
         pool.disconnect()
@@ -575,9 +582,14 @@ def remove_vlan_interface(
             details={"vlan_id": vlan_id, "name": vlan_name},
         )
     except Exception as exc:
-        logger.error("Failed to remove VLAN %d from %s: %s", vlan_id, device.name, exc)
+        logger.error(
+            "Failed to remove VLAN %d from %s: %s",
+            vlan_id,
+            device.name,
+            sanitize_exception(exc),
+        )
         return VlanProvisioningResult(
-            success=False, message=f"Failed to remove VLAN: {exc}"
+            success=False, message=f"Failed to remove VLAN: {sanitize_exception(exc)}"
         )
     finally:
         pool.disconnect()
@@ -651,8 +663,12 @@ def get_vlan_status(
 
         return result
     except Exception as exc:
-        logger.error("Failed to check VLAN status on %s: %s", device.name, exc)
-        result["error"] = str(exc)
+        logger.error(
+            "Failed to check VLAN status on %s: %s",
+            device.name,
+            sanitize_exception(exc),
+        )
+        result["error"] = sanitize_exception(exc)
         return result
     finally:
         pool.disconnect()
