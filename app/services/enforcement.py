@@ -1605,12 +1605,24 @@ def disconnect_subscription_sessions(
                 getattr(nas_device, "name", "?"),
                 sanitize_exception(exc),
             )
-            if not _is_ssh_not_configured(exc):
+            ssh_ruled_out = (
+                _is_ssh_not_configured(exc)
+                or nas_device.vendor != NasVendor.mikrotik
+                or not _mikrotik_kill_enabled(db)
+            )
+            if (
+                kick_outcome is not None
+                and kick_outcome.outcome is EnforcementOutcomeValue.failed
+            ):
+                # Keep the earlier classified cause (e.g. API auth_rejected);
+                # same precedence as _ssh_kick_outcome (ADR-0017 section 4).
+                pass
+            elif ssh_ruled_out:
+                kick_outcome = EnforcementOutcome.not_applicable("no_kick_transport")
+            else:
                 kick_outcome = EnforcementOutcome.failed_from(
                     exc, path=EnforcementPath.ssh
                 )
-            elif kick_outcome is None:
-                kick_outcome = EnforcementOutcome.not_applicable("no_kick_transport")
         if kick_outcome is not None:
             _record_enforcement_application(
                 subscription_id=subscription.id,
