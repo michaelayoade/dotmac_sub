@@ -12,6 +12,7 @@ still credited the payment to it.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -25,13 +26,23 @@ from app.models.billing import (
     LedgerSource,
     Payment,
     PaymentAllocation,
+    PaymentSettlement,
+    PaymentSettlementOrigin,
     PaymentStatus,
 )
 from app.models.subscriber import Subscriber
-from app.schemas.billing import PaymentCreate
+from app.schemas.billing import (
+    PaymentAllocationConfirm,
+    PaymentAllocationPreviewRequest,
+    PaymentCreate,
+)
 from app.services import billing as billing_service
 from app.services.billing._common import get_account_credit_balance
-from app.services.billing.payments import _finalize_invoice_payment_effects
+from app.services.billing.account_credit import AccountCreditApplications
+from app.services.billing.payments import (
+    PaymentAllocations,
+    _finalize_invoice_payment_effects,
+)
 
 
 def _invoice(db_session, account_id, total: str, number: str) -> Invoice:
@@ -99,6 +110,32 @@ def _active_payment_ledger(db_session, payment_id) -> list[LedgerEntry]:
         .filter(LedgerEntry.is_active.is_(True))
         .all()
     )
+
+
+def _settle_payment(db_session, payment: Payment) -> None:
+    entry = LedgerEntry(
+        account_id=payment.account_id,
+        payment_id=payment.id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.payment,
+        amount=payment.amount,
+        currency=payment.currency,
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        PaymentSettlement(
+            payment_id=payment.id,
+            unallocated_ledger_entry_id=entry.id,
+            amount=payment.amount,
+            unallocated_amount=payment.amount,
+            prepaid_amount=Decimal("0.00"),
+            currency=payment.currency,
+            origin=PaymentSettlementOrigin.system,
+        )
+    )
+    db_session.commit()
+    db_session.refresh(payment)
 
 
 def test_reallocation_releases_the_old_invoice(db_session, subscriber):
@@ -200,6 +237,56 @@ def test_reallocation_to_the_same_invoice_is_a_no_op(db_session, subscriber):
     assert inv.balance_due == Decimal("0.00")
     assert len(_active_allocs(db_session, payment.id)) == 1
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal("0.00")
+
+
+def test_settled_credit_tops_up_existing_allocation_at_payment_boundary(
+    db_session, subscriber
+):
+    invoice = _invoice(db_session, subscriber.id, "10000.00", "INV-SETTLED-TOPUP")
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("10000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime.now(UTC),
+    )
+    db_session.add(payment)
+    db_session.flush()
+    _settle_payment(db_session, payment)
+
+    first = PaymentAllocations.preview(
+        db_session,
+        PaymentAllocationPreviewRequest(
+            payment_id=payment.id,
+            invoice_id=invoice.id,
+            amount=Decimal("2500.00"),
+        ),
+    )
+    PaymentAllocations.confirm(
+        db_session,
+        PaymentAllocationConfirm(
+            payment_id=payment.id,
+            invoice_id=invoice.id,
+            amount=Decimal("2500.00"),
+            preview_fingerprint=first.fingerprint,
+            idempotency_key="pytest-settled-topup-initial",
+        ),
+    )
+
+    result = AccountCreditApplications.apply(
+        db_session,
+        str(subscriber.id),
+        funding_position_at=payment.paid_at,
+    )
+    db_session.refresh(invoice)
+    db_session.refresh(payment)
+
+    assert result.applied == Decimal("7500.00")
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    allocation = _active_allocs(db_session, payment.id)
+    assert len(allocation) == 1
+    assert allocation[0].amount == Decimal("10000.00")
 
 
 def test_reallocation_rejects_another_accounts_invoice(db_session, subscriber):

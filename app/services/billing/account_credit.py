@@ -867,7 +867,12 @@ class AccountCreditApplications:
         return result
 
     @staticmethod
-    def apply(db: Session, account_id: str) -> AccountCreditApplicationResult:
+    def apply(
+        db: Session,
+        account_id: str,
+        *,
+        funding_position_at: datetime | None = None,
+    ) -> AccountCreditApplicationResult:
         result = AccountCreditApplicationResult(account_id=str(account_id))
         lock_account(db, str(account_id))
 
@@ -881,7 +886,10 @@ class AccountCreditApplications:
         credit_by_currency = {
             currency: round_money(
                 get_spendable_account_credit_balance(
-                    db, str(account_id), currency=currency
+                    db,
+                    str(account_id),
+                    currency=currency,
+                    after=funding_position_at,
                 )
             )
             for currency in currencies
@@ -895,7 +903,11 @@ class AccountCreditApplications:
         if result.available_credit <= 0:
             return result
 
-        sources = _source_payments(db, str(account_id))
+        sources = _source_payments(
+            db,
+            str(account_id),
+            funding_position_at=funding_position_at,
+        )
         backed_by_currency: dict[str, Decimal] = {}
         for payment, room in sources:
             currency = (payment.currency or "NGN").upper()
@@ -942,25 +954,63 @@ class AccountCreditApplications:
                     invoice_id=invoice.id,
                     amount=amount,
                 )
-                preview = PaymentAllocations.preview(db, request)
-                confirmation = PaymentAllocations.stage_confirm(
-                    db,
-                    PaymentAllocationConfirm(
-                        **request.model_dump(),
-                        preview_fingerprint=preview.fingerprint,
-                        idempotency_key=_allocation_key(payment, invoice),
-                    ),
+                existing = (
+                    db.query(PaymentAllocation)
+                    .filter(PaymentAllocation.payment_id == payment.id)
+                    .filter(PaymentAllocation.invoice_id == invoice.id)
+                    .filter(PaymentAllocation.is_active.is_(True))
+                    .first()
                 )
-                applied = round_money(to_decimal(confirmation.allocation.amount))
+                if existing is not None and funding_position_at is not None:
+                    previous = round_money(to_decimal(existing.amount))
+                    allocation_result = (
+                        PaymentAllocations.stage_increase_existing_at_reviewed_boundary(
+                            db,
+                            payment_id=payment.id,
+                            invoice_id=invoice.id,
+                            amount=amount,
+                            funding_position_at=funding_position_at,
+                        )
+                    )
+                    applied = round_money(
+                        to_decimal(allocation_result.allocation.amount) - previous
+                    )
+                    allocation = allocation_result.allocation
+                else:
+                    preview = PaymentAllocations.preview_at_reviewed_boundary_for_owner(
+                        db,
+                        request,
+                        funding_position_at=funding_position_at,
+                    )
+                    allocation_result = (
+                        PaymentAllocations.stage_confirm_at_reviewed_boundary_for_owner(
+                            db,
+                            PaymentAllocationConfirm(
+                                **request.model_dump(),
+                                preview_fingerprint=preview.fingerprint,
+                                idempotency_key=_allocation_key(payment, invoice),
+                            ),
+                            funding_position_at=funding_position_at,
+                        )
+                    )
+                    applied = round_money(
+                        to_decimal(allocation_result.allocation.amount)
+                    )
+                    allocation = allocation_result.allocation
                 result.applied = round_money(result.applied + applied)
-                result.allocation_ids.append(str(confirmation.allocation.id))
+                result.allocation_ids.append(str(allocation.id))
                 _stage_application_posting(
                     db,
-                    allocation=confirmation.allocation,
+                    allocation=allocation,
                     invoice=invoice,
                     payment=payment,
                     currency=currency,
                     amount=applied,
+                    idempotency_suffix=(
+                        f":topup:{payment.id}:{invoice.id}:{amount}"
+                        if existing is not None and funding_position_at is not None
+                        else None
+                    ),
                 )
                 if str(invoice.id) not in result.invoices_touched:
                     result.invoices_touched.append(str(invoice.id))
@@ -1087,6 +1137,7 @@ class AccountCreditApplications:
         account_id: str,
         *,
         payments: Sequence[Payment] = (),
+        funding_position_at: datetime | None = None,
     ) -> AccountCreditApplicationResult:
         """Offer an account's now-spendable credit to its open receivables.
 
@@ -1103,7 +1154,11 @@ class AccountCreditApplications:
         for payment in payments:
             if payment in db:
                 db.expire(payment, ["settlement"])
-        return AccountCreditApplications.apply(db, str(account_id))
+        return AccountCreditApplications.apply(
+            db,
+            str(account_id),
+            funding_position_at=funding_position_at,
+        )
 
     @staticmethod
     def preview_invoice_void_release(
@@ -1734,6 +1789,7 @@ def _stage_application_posting(
     payment,
     currency: str,
     amount,
+    idempotency_suffix: str | None = None,
 ) -> None:
     """One shadow posting group per credit-to-invoice allocation.
 
@@ -1794,7 +1850,9 @@ def _stage_application_posting(
                     invoice_id=invoice.id,
                 ),
             ),
-            idempotency_key=f"posting:payment_allocation:{allocation.id}",
+            idempotency_key=(
+                f"posting:payment_allocation:{allocation.id}{idempotency_suffix or ''}"
+            ),
         ),
         context=current_command_context(db),
     )
