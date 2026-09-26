@@ -26,6 +26,12 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Effective state, provenance, health, scope, and audit",
             },
             {
+                "name": "Custom Fields",
+                "url": "/admin/custom-fields",
+                "description": "Define installation-specific fields for registered records",
+                "permission": "custom_fields:hub:read",
+            },
+            {
                 "name": "Preferences & Security",
                 "url": "/admin/system/config/preferences",
                 "description": "Landing page, 2FA, portal title",

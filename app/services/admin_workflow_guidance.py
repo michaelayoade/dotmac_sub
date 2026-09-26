@@ -189,7 +189,24 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use the existing automation ownership section to identify workflows that remain managed outside the hub.",
         notes=(
             "The registry, published rules, and execution evidence remain read-only. The pilot saves a draft only; it cannot publish, assign a ticket, or start automation.",
-            "Custom fields, publishing, and migration of existing rules are outside this delivery sequence.",
+            "Publishing and migration of existing rules are outside this delivery sequence.",
+        ),
+    ),
+    _guide(
+        "custom-fields-center",
+        "Administration",
+        "Manage custom fields",
+        "Tenant administrators",
+        "Add governed information fields to explicitly registered module records without changing their database schema.",
+        ("/admin/custom-fields",),
+        "Confirm that your role has hub access and the field-definition permission needed for the intended action.",
+        "Choose a registered target, create a typed draft, and define its validation and placement.",
+        "Review the draft contract before activating it; structural rules lock after activation.",
+        "Retire a field instead of deleting it so existing values and audit history remain attributable.",
+        notes=(
+            "Registered targets cover subscribers, projects, support tickets, work orders, leads, quotes, and sales orders; both central and module permissions apply.",
+            "Legacy subscriber custom fields remain separately owned and are not migrated or dual-written.",
+            "Sensitive values require separate read and write permissions and never appear in domain events.",
         ),
     ),
     _guide(

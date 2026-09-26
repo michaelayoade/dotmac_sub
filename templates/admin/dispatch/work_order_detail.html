@@ -9,6 +9,9 @@
 {% call detail_header(title=work_order.title, subtitle=work_order.public_id, back_href='/admin/dispatch/work-orders', status=status_presentation_badge(work_order_status_presentation(work_order.status), size='sm'), color='cyan', color2='emerald') %}{% endcall %}
 {% if notice %}<div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">{{ notice }}</div>{% endif %}
 {% if error %}<div class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">{{ error }}</div>{% endif %}
+{% if custom_field_values %}
+{% include "admin/customers/_custom_fields.html" %}
+{% endif %}
 <div class="grid gap-6 xl:grid-cols-12"><div class="space-y-6 xl:col-span-8">
 {% call card('Work order details', color='cyan') %}
 <dl class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">

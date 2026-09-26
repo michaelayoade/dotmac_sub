@@ -1,0 +1,78 @@
+<section aria-labelledby="record-custom-fields-heading" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="flex flex-col gap-2 border-b border-slate-100 px-5 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h3 id="record-custom-fields-heading" class="font-semibold text-slate-900 dark:text-white">Custom fields</h3>
+            <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Installation-specific {{ custom_field_target_label | lower }} information governed from Settings.</p>
+        </div>
+        {% if can(request, 'custom_fields:hub:read') %}
+        <a href="/admin/custom-fields?target={{ custom_field_target_type }}" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Manage definitions</a>
+        {% endif %}
+    </div>
+
+    {% if request.query_params.get('custom_fields_status') == 'saved' %}
+    <div role="status" class="mx-5 mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Custom field saved.
+    </div>
+    {% elif request.query_params.get('custom_fields_error') %}
+    <div role="alert" class="mx-5 mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+        {{ request.query_params.get('custom_fields_error') }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-5 p-5 md:grid-cols-2">
+        {% for row in custom_field_values %}
+        {% set field = row.definition %}
+        <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 p-4 dark:border-slate-700 dark:bg-slate-900/30">
+            <div class="mb-2 flex items-start justify-between gap-3">
+                <div>
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">
+                        {{ field.label }}{% if field.required %}<span class="ml-1 text-rose-600" aria-label="required">*</span>{% endif %}
+                    </p>
+                    {% if field.description %}<p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{{ field.description }}</p>{% endif %}
+                </div>
+                {% if field.sensitive %}<span class="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">Sensitive</span>{% endif %}
+            </div>
+
+            {% set can_edit_field = can_write_custom_fields and field.show_in_form and (not field.sensitive or can_write_sensitive_custom_fields) %}
+            {% if can_edit_field %}
+            <form method="post" action="/admin/custom-fields/targets/{{ custom_field_target_type }}/{{ custom_field_target_id }}/{{ field.id }}" class="space-y-3">
+                {% include "components/forms/csrf_input.html" %}
+                {% if field.field_type == 'textarea' %}
+                <textarea name="value" rows="3" {% if field.required %}required{% endif %} class="block w-full rounded-lg border-slate-300 bg-white text-sm text-slate-900 shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">{{ '' if row.redacted or row.value is none else row.value }}</textarea>
+                {% elif field.field_type == 'boolean' %}
+                <select name="value" {% if field.required %}required{% endif %} class="block w-full rounded-lg border-slate-300 bg-white text-sm text-slate-900 shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    {% if not field.required %}<option value="">Not set</option>{% endif %}
+                    <option value="true" {% if row.value is sameas true %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if row.value is sameas false %}selected{% endif %}>No</option>
+                </select>
+                {% elif field.field_type == 'select' %}
+                <select name="value" {% if field.required %}required{% endif %} class="block w-full rounded-lg border-slate-300 bg-white text-sm text-slate-900 shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    {% if not field.required %}<option value="">Not set</option>{% endif %}
+                    {% for option in field.options %}<option value="{{ option }}" {% if row.value == option %}selected{% endif %}>{{ option }}</option>{% endfor %}
+                </select>
+                {% elif field.field_type == 'multiselect' %}
+                <select name="value" multiple {% if field.required %}required{% endif %} class="block min-h-28 w-full rounded-lg border-slate-300 bg-white text-sm text-slate-900 shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                    {% for option in field.options %}<option value="{{ option }}" {% if row.value and option in row.value %}selected{% endif %}>{{ option }}</option>{% endfor %}
+                </select>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400">Hold Ctrl or Command to select more than one option.</p>
+                {% else %}
+                {% set input_type = 'number' if field.field_type in ['integer', 'decimal', 'currency'] else ('date' if field.field_type == 'date' else ('email' if field.field_type == 'email' else ('url' if field.field_type == 'url' else ('tel' if field.field_type == 'phone' else 'text')))) %}
+                <input type="{{ input_type }}" name="value" value="{{ '' if row.redacted or row.value is none else row.value }}" {% if field.field_type in ['decimal', 'currency'] %}step="any"{% elif field.field_type == 'integer' %}step="1"{% endif %} {% if field.field_type == 'datetime' %}placeholder="2026-09-09T14:30:00+01:00"{% endif %} {% if field.required %}required{% endif %} class="block w-full rounded-lg border-slate-300 bg-white text-sm text-slate-900 shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                {% if field.field_type == 'datetime' %}<p class="text-[11px] text-slate-500 dark:text-slate-400">Include a timezone offset, for example +01:00.</p>{% endif %}
+                {% endif %}
+                {% if row.redacted %}<p class="text-[11px] text-violet-600 dark:text-violet-300">The current value is hidden. Saving replaces it.</p>{% endif %}
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2">Save field</button>
+            </form>
+            {% else %}
+            <p class="break-words text-sm font-medium text-slate-800 dark:text-slate-200">
+                {% if row.redacted %}••••••••
+                {% elif row.value is none or row.value == '' %}<span class="font-normal text-slate-500 dark:text-slate-400">Not set</span>
+                {% elif field.field_type == 'boolean' %}{{ 'Yes' if row.value else 'No' }}
+                {% elif field.field_type == 'multiselect' %}{{ row.value | join(', ') }}
+                {% else %}{{ row.value }}{% endif %}
+            </p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>

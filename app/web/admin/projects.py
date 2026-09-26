@@ -31,9 +31,11 @@ from app.schemas.infrastructure import (
     InfrastructureType,
 )
 from app.services import infrastructure_catalogue
+from app.services import web_custom_fields as web_custom_fields_service
 from app.services import web_projects as projects_web_service
 from app.services.auth_dependencies import (
     can,
+    load_permission_keys,
     require_any_permission,
     require_permission,
 )
@@ -876,6 +878,16 @@ def project_detail(request: Request, project_ref: str, db: Session = Depends(get
             can_read_vendor_operations=can(request, "inventory:read"),
             can_read_vendor_routes=can(request, "network:fiber:read"),
             can_read_vendor_financials=can(request, "finance:ap:read"),
+        )
+    )
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_target_value_context(
+            db,
+            target_type="project",
+            target_id=project.id,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            auth=auth,
         )
     )
     return templates.TemplateResponse("admin/projects/project_detail.html", context)

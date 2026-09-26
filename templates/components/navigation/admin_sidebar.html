@@ -322,7 +322,7 @@
             "legal",
             "design-system"
         ], permission="system:settings:read") }}
-    {{ nav_link("Settings", "/admin/settings", icon_settings, "settings-hub",
+    {{ nav_link("Settings", "/admin/system/settings-hub", icon_settings, "settings-hub",
         active_pages=[
             "settings-hub",
             "billing-setup",
@@ -333,7 +333,8 @@
             "config-billing-notif",
             "company-info",
             "system-branding",
-            "system-email"
+            "system-email",
+            "custom-fields-center"
         ], permission="system:settings:read") }}
     {{ nav_link("Meta connection", "/admin/crm/meta", icon_integrations, "meta-connection", permission="crm:conversation:read") }}
     {{ nav_link("Help center", "/admin/help", icon_support, "help-center") }}

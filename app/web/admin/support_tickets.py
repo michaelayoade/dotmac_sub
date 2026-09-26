@@ -29,12 +29,13 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.stored_file import StoredFile
 from app.services import support as support_service
+from app.services import web_custom_fields as web_custom_fields_service
 from app.services import web_support_ticket_bulk as support_ticket_bulk_service
 from app.services import (
     web_support_ticket_bulk_actions as support_ticket_bulk_actions_service,
 )
 from app.services import web_support_tickets as support_web_service
-from app.services.auth_dependencies import can, require_permission
+from app.services.auth_dependencies import can, load_permission_keys, require_permission
 from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition, file_uploads
 from app.services.list_query import ListQuery
@@ -538,6 +539,16 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
     context["handoff_notice"] = request.query_params.get("handoff_notice")
     context["handoff_error"] = request.query_params.get("handoff_error")
     context["action_error"] = request.query_params.get("action_error")
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_target_value_context(
+            db,
+            target_type="support_ticket",
+            target_id=context["ticket"].id,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            auth=auth,
+        )
+    )
     return templates.TemplateResponse("admin/support/tickets/detail.html", context)
 
 
