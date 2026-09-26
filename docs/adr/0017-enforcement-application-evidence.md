@@ -202,12 +202,13 @@ does afterwards, so evidence of it must not share that transaction's fate.
 - Shadow or verification phase: slice 1 records without changing behaviour; the
   record is compared against logs and router state before any projection or
   alert depends on it.
-- Cutover gate and evidence: slice 1 (shadow) is gated on Postgres-lane proof
-  that the evidence survives a rollback of the caller's transaction around the
-  real per-NAS helper, and never waits on the caller's subscription lock. Tests
-  that drive the real `EnforcementHandler` and the scheduled cleanup task end to
-  end are required before slice 2 lets any projection or alert depend on the
-  record.
+- Cutover gate and evidence: Postgres-lane proof that the evidence survives a
+  rollback of the caller's transaction around the real per-NAS helper, through
+  the real `EnforcementHandler` raising `EnforcementProjectionError`, and through
+  the real scheduled cleanup task rolling back; and that the write never waits
+  on the caller's subscription lock. The remaining gate before slice 2 lets any
+  projection or alert depend on the record is the `ServiceContract` in
+  section 1.
 - Fallback retirement: the warning-only failure logs stay until the readiness
   projection slice lands, then are reduced to structured records.
 - Schema contract step: additive table only; no existing column changes.
@@ -223,9 +224,11 @@ does afterwards, so evidence of it must not share that transaction's fate.
   - slice 1 (present): with `SELECT … FOR UPDATE` held on the subscription row,
     the evidence write completes promptly (the writer sets a 2 s `lock_timeout`;
     the test requires completion in under 1.5 s);
-  - before slice 2: a `subscription_resumed` event through the real
-    `EnforcementHandler` with a second step failing, and the scheduled cleanup
-    task rolling back; the row survives both.
+  - slice 1 (present): a `subscription_resumed` event through the real
+    `EnforcementHandler` with the NAS rejecting the API login and a second
+    restore step failing, so the handler raises and its session rolls back; and
+    the real `cleanup_subscription_block_sessions` task rolling back after a
+    failed commit. The row survives both.
 - Unit: a classifier table test including near-miss cases; outcome mapping for
   applied / not applicable / failed, including the SSH-then-no-API case, the
   unconfirmed API kick, and the no-SSH-credentials case.

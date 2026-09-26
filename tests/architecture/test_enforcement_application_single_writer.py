@@ -77,7 +77,11 @@ class _ModuleAliases:
                         self.tables.add(target.id)
 
     def is_class(self, node: ast.expr) -> bool:
-        return isinstance(node, ast.Name) and node.id in self.classes
+        if isinstance(node, ast.Name):
+            return node.id in self.classes
+        # Module-qualified access: `em.EnforcementApplication` after
+        # `import app.models.enforcement_application as em`.
+        return isinstance(node, ast.Attribute) and node.attr == _TARGET_CLASS
 
     def is_table(self, node: ast.expr) -> bool:
         if isinstance(node, ast.Name) and node.id in self.tables:
@@ -235,6 +239,13 @@ class TestScannerSensitivity:
             "    session.bulk_insert_mappings(EnforcementApplication, [{}])\n"
         )
 
+        # Module-qualified construction through a module alias.
+        (services_dir / "bad_module_qualified.py").write_text(
+            "import app.models.enforcement_application as em\n\n"
+            "def sneaky_qualified(db):\n"
+            "    db.add(em.EnforcementApplication(subscription_id=1))\n"
+        )
+
         models_dir = tmp_path / "app" / "models"
         models_dir.mkdir(parents=True)
         (models_dir / "enforcement_application.py").write_text(
@@ -249,6 +260,7 @@ class TestScannerSensitivity:
         assert "app/services/bad_module_alias.py" in offenders
         assert "app/services/bad_module_dialect.py" in offenders
         assert "app/services/bad_module_bulk.py" in offenders
+        assert "app/services/bad_module_qualified.py" in offenders
         assert "app/services/enforcement.py" not in offenders
         assert "app/models/enforcement_application.py" not in offenders
 

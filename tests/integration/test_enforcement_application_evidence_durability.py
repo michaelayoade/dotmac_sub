@@ -202,3 +202,192 @@ def test_evidence_write_does_not_wait_on_the_callers_subscription_lock(engine):
         ).scalar_one_or_none()
         assert row is not None, "the evidence write did not complete under the lock"
         assert row.failure_class == EnforcementFailureClass.auth_rejected.value
+
+
+def _seed_blocked_subscription_with_nas(session_factory) -> tuple[uuid.UUID, uuid.UUID]:
+    """A real subscription with a served IPv4 and a real API-only MikroTik NAS
+    as its provisioning NAS, so address-list enforcement targets that NAS."""
+    suffix = uuid.uuid4().hex[:12]
+    with session_factory() as setup:
+        nas = NasDevice(
+            name=f"E2E Eagle {suffix}",
+            vendor=NasVendor.mikrotik,
+            ip_address="192.0.2.20",
+            management_ip="192.0.2.20",
+        )
+        reseller = Reseller(
+            name=f"Enforcement E2E {suffix}",
+            code=f"enf-e2e-{suffix}",
+            is_active=True,
+        )
+        account = Subscriber(
+            first_name="Enforcement",
+            last_name="EndToEnd",
+            email=f"enf-e2e-{suffix}@example.com",
+            reseller=reseller,
+            billing_mode=BillingMode.prepaid,
+        )
+        offer = CatalogOffer(
+            name=f"Enforcement E2E Plan {suffix}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+            billing_mode=BillingMode.prepaid,
+            billing_cycle=BillingCycle.monthly,
+            status=OfferStatus.active,
+            is_active=True,
+        )
+        setup.add_all([nas, reseller, account, offer])
+        setup.flush()
+        subscription = Subscription(
+            subscriber_id=account.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.active,
+            billing_mode=BillingMode.prepaid,
+            ipv4_address="10.99.0.7",
+            provisioning_nas_device_id=nas.id,
+        )
+        setup.add(subscription)
+        setup.commit()
+        return subscription.id, nas.id
+
+
+def _evidence_row(session_factory, subscription_id, nas_device_id, effect):
+    with session_factory() as observer:
+        return observer.execute(
+            select(EnforcementApplication).where(
+                EnforcementApplication.subscription_id == subscription_id,
+                EnforcementApplication.nas_device_id == nas_device_id,
+                EnforcementApplication.effect == effect.value,
+            )
+        ).scalar_one_or_none()
+
+
+def test_evidence_survives_the_real_enforcement_handler_raising(engine):
+    """End to end through the real ``EnforcementHandler`` (the dispatcher path):
+    a ``subscription_resumed`` event removes the address-list block, the NAS
+    rejects the API login, and a second restore step also fails, so the handler
+    raises ``EnforcementProjectionError`` and its session rolls back. The
+    evidence of the failed unblock must still be there."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from app.services.events.handlers.enforcement import (
+        EnforcementHandler,
+        EnforcementProjectionError,
+    )
+    from app.services.events.types import Event, EventType
+
+    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    subscription_id, nas_device_id = _seed_blocked_subscription_with_nas(
+        session_factory
+    )
+    event = Event(
+        event_type=EventType.subscription_resumed,
+        payload={"subscription_id": str(subscription_id)},
+    )
+
+    with session_factory() as handler_db:
+        with (
+            # A second, unrelated restore step fails: the handler must raise.
+            patch(
+                "app.services.account_lifecycle.compute_account_status",
+                side_effect=RuntimeError("account status unavailable"),
+            ),
+            patch(
+                "app.services.events.handlers.enforcement.radius_reject_service"
+                ".enforce_subscription_reject_ip"
+            ),
+            patch(
+                "app.services.events.handlers.enforcement.radius_service"
+                ".reconcile_subscription_connectivity",
+                return_value=SimpleNamespace(ok=True, disposition=None),
+            ),
+            patch(
+                "app.services.events.handlers.enforcement.resolve_session_refresh_policy",
+                return_value=SimpleNamespace(enabled=False),
+            ),
+            patch(
+                "app.services.enforcement._address_list_block_enabled",
+                return_value=True,
+            ),
+            patch(
+                "app.services.enforcement._nas_with_api_creds",
+                side_effect=lambda _db, nas: nas,
+            ),
+            patch(
+                "app.services.nas._mikrotik.remove_mikrotik_address_list_via_api",
+                side_effect=_login_rejection(),
+            ),
+            pytest.raises(EnforcementProjectionError),
+        ):
+            EnforcementHandler().handle(handler_db, event)
+        handler_db.rollback()
+
+    row = _evidence_row(
+        session_factory,
+        subscription_id,
+        nas_device_id,
+        EnforcementEffect.address_list_unblock,
+    )
+    assert row is not None, "the handler's rollback erased the enforcement evidence"
+    assert row.outcome == EnforcementOutcomeValue.failed.value
+    assert row.failure_class == EnforcementFailureClass.auth_rejected.value
+    assert row.attempt_count == 1
+    assert _SECRET not in (row.detail or "")
+
+
+def test_evidence_survives_the_scheduled_cleanup_task_rolling_back(engine):
+    """End to end through the real ``cleanup_subscription_block_sessions`` task:
+    the address-list block runs and records, then the task's commit fails and it
+    rolls back and re-raises. The evidence must survive the task's rollback."""
+    import pytest
+
+    from app.services import enforcement_scheduled
+
+    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    subscription_id, nas_device_id = _seed_blocked_subscription_with_nas(
+        session_factory
+    )
+
+    def _session_whose_commit_fails():
+        session = session_factory()
+        session.commit = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            RuntimeError("commit failed after enforcement")
+        )
+        return session
+
+    with (
+        patch.object(
+            enforcement_scheduled, "SessionLocal", _session_whose_commit_fails
+        ),
+        patch(
+            "app.services.enforcement.disconnect_subscription_sessions", return_value=0
+        ),
+        patch(
+            "app.services.enforcement._address_list_block_enabled", return_value=True
+        ),
+        patch(
+            "app.services.enforcement._nas_with_api_creds",
+            side_effect=lambda _db, nas: nas,
+        ),
+        patch(
+            "app.services.nas._mikrotik.apply_mikrotik_address_list_via_api",
+            side_effect=_login_rejection(),
+        ),
+        pytest.raises(RuntimeError, match="commit failed after enforcement"),
+    ):
+        enforcement_scheduled.cleanup_subscription_block_sessions(
+            str(subscription_id), reason="suspended"
+        )
+
+    row = _evidence_row(
+        session_factory,
+        subscription_id,
+        nas_device_id,
+        EnforcementEffect.address_list_block,
+    )
+    assert row is not None, "the task's rollback erased the enforcement evidence"
+    assert row.outcome == EnforcementOutcomeValue.failed.value
+    assert row.failure_class == EnforcementFailureClass.auth_rejected.value
