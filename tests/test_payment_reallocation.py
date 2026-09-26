@@ -39,8 +39,10 @@ from app.schemas.billing import (
 from app.services import billing as billing_service
 from app.services.billing._common import get_account_credit_balance
 from app.services.billing.account_credit import AccountCreditApplications
-from app.services.billing.payments import PaymentAllocations
-from app.services.billing.payments import _finalize_invoice_payment_effects
+from app.services.billing.payments import (
+    PaymentAllocations,
+    _finalize_invoice_payment_effects,
+)
 
 
 def _invoice(db_session, account_id, total: str, number: str) -> Invoice:

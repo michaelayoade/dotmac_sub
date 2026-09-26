@@ -4520,7 +4520,10 @@ class PaymentAllocations(ListResponseMixin):
                 status_code=409,
                 detail="Existing allocation evidence is required for a top-up",
             )
-        if allocation.ledger_entry_id is None or allocation.consumption_ledger_entry_id is None:
+        if (
+            allocation.ledger_entry_id is None
+            or allocation.consumption_ledger_entry_id is None
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="Existing allocation lacks paired ledger evidence",
@@ -4540,7 +4543,9 @@ class PaymentAllocations(ListResponseMixin):
             db, LedgerEntry, allocation.consumption_ledger_entry_id
         )
         if invoice_entry is None or consumption_entry is None:
-            raise HTTPException(status_code=409, detail="Allocation ledger evidence is unavailable")
+            raise HTTPException(
+                status_code=409, detail="Allocation ledger evidence is unavailable"
+            )
         increment = round_money(preview.amount)
         allocation.amount = round_money(to_decimal(allocation.amount) + increment)
         invoice_entry.amount = round_money(to_decimal(invoice_entry.amount) + increment)

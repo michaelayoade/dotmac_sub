@@ -1778,8 +1778,7 @@ def _stage_application_posting(
                 ),
             ),
             idempotency_key=(
-                f"posting:payment_allocation:{allocation.id}"
-                f"{idempotency_suffix or ''}"
+                f"posting:payment_allocation:{allocation.id}{idempotency_suffix or ''}"
             ),
         ),
         context=current_command_context(db),
