@@ -7,15 +7,9 @@ upsert against a real SQLite database, bound in place of
 own out-of-band-session behaviour is exercised rather than the caller's
 session.
 
-NOTE: ``_record_enforcement_application``'s docstring promises "Never
-raises", but ``session = db_session_adapter.create_session()`` sits OUTSIDE
-the function's own ``try`` block (app/services/enforcement.py:149-150). A
-``create_session()`` failure is therefore NOT caught by this function and
-propagates to the caller — the opposite of the documented contract. This is
-reported, not fixed here; ``test_create_session_failure_actually_propagates``
-below pins the current (contract-violating) behaviour rather than the
-brief's assumption that it is swallowed, so a future fix is a visible test
-change instead of a silent one.
+Both failure points are swallowed and logged at ERROR: opening the session
+(an unreachable database) and executing the upsert. The session open sits
+inside the writer's ``try`` so neither can raise into the enforcement caller.
 """
 
 from __future__ import annotations
@@ -227,10 +221,9 @@ class TestEnforcementApplicationWriter:
         assert block_row.attempt_count == 2
         assert kick_row.attempt_count == 1
 
-    def test_create_session_failure_actually_propagates(self, monkeypatch):
-        """See module docstring: this documents the current contract
-        violation rather than the "never raises" claim in the writer's own
-        docstring."""
+    def test_create_session_failure_is_swallowed_and_logged(self, monkeypatch, caplog):
+        """An unreachable database at session-open time must never raise into
+        the enforcement caller (ADR-0017 §7): it is logged and swallowed."""
 
         def _boom():
             raise RuntimeError("no database available")
@@ -239,13 +232,19 @@ class TestEnforcementApplicationWriter:
             "app.services.enforcement.db_session_adapter.create_session", _boom
         )
 
-        with pytest.raises(RuntimeError, match="no database available"):
+        with caplog.at_level(logging.ERROR, logger="app.services.enforcement"):
             _record_enforcement_application(
                 subscription_id=uuid4(),
                 nas_device_id=uuid4(),
                 effect=EnforcementEffect.address_list_block,
                 outcome=_failed_outcome(),
             )
+
+        assert [
+            r
+            for r in caplog.records
+            if r.getMessage() == "enforcement_application_record_failed"
+        ], "a session-open failure must still be logged at ERROR"
 
     def test_execute_failure_is_swallowed_and_logged(
         self, writer_sessionmaker, monkeypatch, caplog

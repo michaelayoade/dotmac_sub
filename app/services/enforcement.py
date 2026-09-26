@@ -146,8 +146,11 @@ def _record_enforcement_application(
     caller here could re-trigger it. A write failure is logged at ``ERROR``
     (so it opens a GlitchTip issue) and swallowed.
     """
-    session = db_session_adapter.create_session()
+    session: Session | None = None
     try:
+        # Inside the try: an unreachable database at session-open time must
+        # be swallowed and logged like any other write failure (ADR-0017 §7).
+        session = db_session_adapter.create_session()
         now = datetime.now(UTC)
         table = cast("Table", EnforcementApplication.__table__)
         dialect_name = session.bind.dialect.name if session.bind is not None else ""
@@ -230,12 +233,14 @@ def _record_enforcement_application(
                 "detail": sanitize_exception(exc),
             },
         )
-        try:
-            session.rollback()
-        except Exception:
-            pass
+        if session is not None:
+            try:
+                session.rollback()
+            except Exception:
+                pass
     finally:
-        session.close()
+        if session is not None:
+            session.close()
 
 
 _TERMINAL_SESSION_SETTLE_TIMEOUT_SECONDS = 15.0
