@@ -34,39 +34,42 @@ class CheckoutArgs {
 
   /// Pay one invoice — the provider tx carries the invoice id for verification.
   factory CheckoutArgs.invoice(PaymentInitiation i) => CheckoutArgs(
-    providerType: i.providerType,
-    reference: i.paymentReference,
-    amount: i.amount,
-    currency: i.currency,
-    publicKey: i.providerPublicKey,
-    email: i.customerEmail,
-    checkoutUrl: secureCheckoutUrl(i.checkoutUrl),
-    metadata: {'invoice_id': i.invoiceId},
-  );
+        providerType: i.providerType,
+        reference: i.paymentReference,
+        amount: i.amount,
+        currency: i.currency,
+        publicKey: i.providerPublicKey,
+        email: i.customerEmail,
+        checkoutUrl: secureCheckoutUrl(i.checkoutUrl),
+        metadata: {'invoice_id': i.invoiceId},
+      );
 
   /// Top up the prepaid account — the tx carries the top-up intent id.
   factory CheckoutArgs.topup(TopupInitiation t) => CheckoutArgs(
-    providerType: t.providerType,
-    reference: t.paymentReference,
-    amount: t.amount,
-    currency: t.currency,
-    publicKey: t.providerPublicKey,
-    email: t.customerEmail,
-    checkoutUrl: secureCheckoutUrl(t.checkoutUrl),
-    metadata: {'payment_flow': 'account_topup', 'topup_intent_id': t.intentId},
-  );
+        providerType: t.providerType,
+        reference: t.paymentReference,
+        amount: t.amount,
+        currency: t.currency,
+        publicKey: t.providerPublicKey,
+        email: t.customerEmail,
+        checkoutUrl: secureCheckoutUrl(t.checkoutUrl),
+        metadata: {
+          'payment_flow': 'account_topup',
+          'topup_intent_id': t.intentId
+        },
+      );
 
   /// Reseller consolidated payment — metadata comes ready-made from the
   /// intent endpoint (payment_flow: reseller_consolidated).
   factory CheckoutArgs.resellerBilling(ResellerPayIntent i) => CheckoutArgs(
-    providerType: i.providerType,
-    reference: i.reference,
-    amount: i.amount,
-    currency: i.currency,
-    publicKey: i.publicKey,
-    checkoutUrl: secureCheckoutUrl(i.checkoutUrl),
-    metadata: i.metadata,
-  );
+        providerType: i.providerType,
+        reference: i.reference,
+        amount: i.amount,
+        currency: i.currency,
+        publicKey: i.publicKey,
+        checkoutUrl: secureCheckoutUrl(i.checkoutUrl),
+        metadata: i.metadata,
+      );
 
   static String secureCheckoutUrl(String? value) {
     final uri = Uri.tryParse(value ?? '');
