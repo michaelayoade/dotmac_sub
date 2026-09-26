@@ -52,6 +52,12 @@
             {% if prepaid_bill_now_eligibility and prepaid_bill_now_eligibility.eligible %}
             <form method="post" action="/admin/catalog/subscriptions/{{ subscription.id }}/bill-now/preview">
                 {% include "components/forms/csrf_input.html" %}
+                <label class="sr-only" for="prepaid-bill-now-effective-at">Service period start in UTC</label>
+                <input id="prepaid-bill-now-effective-at" name="effective_at" type="datetime-local"
+                       class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                       title="Optional historical service-period start in UTC"
+                       aria-describedby="prepaid-bill-now-effective-at-help">
+                <span id="prepaid-bill-now-effective-at-help" class="sr-only">Leave blank to start now. Enter a historical service-period start in UTC when finance has approved a backdated recovery period.</span>
                 <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">Bill now</button>
             </form>
             {% elif prepaid_bill_now_eligibility %}

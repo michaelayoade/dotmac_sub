@@ -1019,12 +1019,17 @@ def catalog_subscription_change_ont_submit(
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def catalog_subscription_bill_now_preview(
-    request: Request, subscription_id: str, db: Session = Depends(get_db)
+    request: Request,
+    subscription_id: str,
+    effective_at: datetime | None = Form(None),
+    db: Session = Depends(get_db),
 ) -> Response:
     try:
         preview_context = (
             web_catalog_subscription_workflows_service.prepaid_bill_now_preview_context(
-                db, subscription_id=subscription_id
+                db,
+                subscription_id=subscription_id,
+                effective_at=effective_at,
             )
         )
     except DomainError as exc:

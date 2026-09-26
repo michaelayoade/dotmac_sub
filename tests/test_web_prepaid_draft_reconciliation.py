@@ -456,3 +456,10 @@ def test_subscription_page_uses_owner_bill_now_eligibility_and_invoice_route():
     assert "prepaid_bill_now_eligibility.reason" in template
     assert "prepaid_bill_now_eligibility.existing_invoice_id" in template
     assert "Open existing invoice" in template
+
+
+def test_bill_now_form_accepts_an_explicit_utc_historical_start():
+    template = Path("templates/admin/catalog/subscription_detail.html").read_text()
+
+    assert 'name="effective_at"' in template
+    assert 'title="Optional historical service-period start in UTC"' in template
