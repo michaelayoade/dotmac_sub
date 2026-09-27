@@ -1,7 +1,7 @@
 name: dotmac_portal
 description: DotMac customer self-care mobile app (Flutter).
 publish_to: "none"
-version: 8.64.6+312
+version: 8.64.8+313
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
