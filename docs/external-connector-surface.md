@@ -116,7 +116,7 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/services/topology/test_coverage_metrics.py` | `<module>` | `outbound_transport` | `51fa94be3406bf06f9ae28167b6ac0160b8567ff79d95b4e9a88dded6fdc2b2e` |
 | `tests/test_ai_gateway.py` | `<module>` | `delivery_retry` | `8592de9de918a715812dd3b241f2f00930b30bc617bdf2674fdfc16abb797399` |
 | `tests/test_ai_gateway.py` | `<module>` | `outbound_transport` | `8592de9de918a715812dd3b241f2f00930b30bc617bdf2674fdfc16abb797399` |
-| `tests/test_crm_client_resilience.py` | `<module>` | `outbound_transport` | `58bc472074bb7bec95639e2575065066c05d8043983fa49bb10f3858d29320b0` |
+| `tests/test_crm_client_resilience.py` | `<module>` | `outbound_transport` | `974bab075ee7f50f5ca145ea60ed80a48b5ae9effd3ac222a0650b5b8db0af57` |
 | `tests/test_email_services.py` | `test_send_email_auth_failure_logs` | `outbound_transport` | `d683e108d08534885850232a8391432cb4ac57e01aa93845a184b09f2c238c2a` |
 | `tests/test_email_services.py` | `test_smtp_connection_auth_failure_logs` | `outbound_transport` | `d683e108d08534885850232a8391432cb4ac57e01aa93845a184b09f2c238c2a` |
 | `tests/test_genieacs_services.py` | `<module>` | `outbound_transport` | `cfc1341f06e824ad2bfc34a59d5adece457c40bea620b65d7badd43779956d99` |

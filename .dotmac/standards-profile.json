@@ -107,7 +107,7 @@
         "path": "tests/test_crm_client_resilience.py",
         "symbol": "<module>",
         "category": "outbound_transport",
-        "fingerprint": "58bc472074bb7bec95639e2575065066c05d8043983fa49bb10f3858d29320b0"
+        "fingerprint": "974bab075ee7f50f5ca145ea60ed80a48b5ae9effd3ac222a0650b5b8db0af57"
       },
       {
         "path": "tests/test_email_services.py",
