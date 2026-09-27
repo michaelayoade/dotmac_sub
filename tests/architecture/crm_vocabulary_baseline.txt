@@ -40,7 +40,7 @@
 #
 #
 #
-# --- app: 245 files ---
+# --- app: 242 files ---
 app/api/campaigns.py
 app/api/crm.py
 app/api/crm_referrals.py
@@ -180,7 +180,6 @@ app/services/integrations/registry.py
 app/services/integrations/runtime_execution.py
 app/services/lead_intake_ai.py
 app/services/migration_source_export.py
-app/services/module_manager.py
 app/services/ncc_categorisation.py
 app/services/ncc_complaints_report.py
 app/services/ncc_location.py
@@ -252,7 +251,6 @@ app/services/vendor_admin.py
 app/services/vendor_user_provisioning.py
 app/services/web_customer_details.py
 app/services/web_dispatch_work_orders.py
-app/services/web_integration_syncs.py
 app/services/web_integrations.py
 app/services/web_projects.py
 app/services/web_referrals.py
@@ -274,7 +272,6 @@ app/web/admin/crm_referrals.py
 app/web/admin/customer_retention.py
 app/web/admin/field_maps.py
 app/web/admin/inbox.py
-app/web/admin/integrations.py
 app/web/admin/lead_intake.py
 app/web/admin/meta_connection.py
 app/web/admin/projects.py
@@ -495,7 +492,7 @@ scripts/one_off/restore_crm_placeholder_identity.py
 scripts/one_off/review_carried_source_identity.py
 scripts/seed/seed_rbac.py
 #
-# --- tests: 243 files ---
+# --- tests: 245 files ---
 tests/architecture/adapter_keyword_service_call_baseline.txt
 tests/architecture/adapter_transaction_baseline.txt
 tests/architecture/connector_manifest_pins.json
@@ -653,6 +650,7 @@ tests/test_infrastructure_health.py
 tests/test_integration_capability_sync.py
 tests/test_integration_installations.py
 tests/test_integration_manifest_registry.py
+tests/test_integration_retired_crm_job.py
 tests/test_integrations_external_services.py
 tests/test_main_domain_routing.py
 tests/test_maps_vendor_route_domain.py
@@ -709,6 +707,7 @@ tests/test_sot_relationships.py
 tests/test_subscriber_lga_capture.py
 tests/test_subscription_billing_cadence.py
 tests/test_support_services.py
+tests/test_system_integration_contracts.py
 tests/test_team_inbox_email_routes.py
 tests/test_team_inbox_metrics.py
 tests/test_team_inbox_readiness_gate.py
@@ -740,4 +739,4 @@ tests/test_work_order_views.py
 tests/test_workqueue_parity.py
 tests/test_workqueue_web.py
 #
-# TOTAL: 690 files
+# TOTAL: 689 files

@@ -27,7 +27,7 @@ app/services/web_customer_availability.py 1
 app/services/web_customer_details.py 35
 app/services/web_customer_user_access.py 6
 app/services/web_fup.py 2
-app/services/web_integration_syncs.py 9
+app/services/web_integration_syncs.py 6
 app/services/web_integrations.py 8
 app/services/web_integrations_webhooks.py 5
 app/services/web_network_alarm_rules.py 2

@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 MODULE_KEY_MAP: dict[str, str] = {
     "network": "module_network_enabled",
     "integrations": "module_integrations_enabled",
-    "crm": "module_crm_enabled",
     "provisioning": "module_provisioning_enabled",
     "vpn": "module_vpn_enabled",
     "gis": "module_gis_enabled",
@@ -36,7 +35,6 @@ MODULE_LABELS: dict[str, str] = {
     "gis": "GIS",
     "reports": "Reports",
     "integrations": "Integrations",
-    "crm": "CRM",
 }
 
 MODULE_ORDER = [
@@ -46,7 +44,6 @@ MODULE_ORDER = [
     "gis",
     "reports",
     "integrations",
-    "crm",
 ]
 
 
