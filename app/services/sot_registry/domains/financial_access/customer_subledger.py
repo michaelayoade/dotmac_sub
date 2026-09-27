@@ -190,7 +190,7 @@ SERVICES: tuple[SOTService, ...] = (
             "auth.permission_gate",
             "billing.shadow_verification",
             "customer.accounts",
-            "events.audit",
+            "observability.audit_log",
             "events.dispatcher",
             "financial.customer_subledger",
             "financial.prepaid_funding_reconstruction",

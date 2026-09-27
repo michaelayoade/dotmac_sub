@@ -187,26 +187,35 @@ def upgrade() -> None:
         "native_prepaid_opening_repairs",
         ["original_cutover_batch_id"],
     )
-    with op.batch_alter_table("customer_subledger_opening_positions") as batch:
-        batch.alter_column(
-            "verification_run_id", existing_type=sa.UUID(), nullable=True
-        )
-        batch.add_column(sa.Column("native_repair_id", sa.UUID(), nullable=True))
-        batch.create_foreign_key(
-            "fk_customer_subledger_opening_native_repair",
-            "native_prepaid_opening_repairs",
-            ["native_repair_id"],
-            ["id"],
-            ondelete="RESTRICT",
-        )
-        batch.create_unique_constraint(
-            "uq_customer_subledger_opening_native_repair", ["native_repair_id"]
-        )
-        batch.create_check_constraint(
-            "ck_customer_subledger_opening_one_provenance",
-            "(verification_run_id IS NOT NULL AND native_repair_id IS NULL) OR "
-            "(verification_run_id IS NULL AND native_repair_id IS NOT NULL)",
-        )
+    op.alter_column(
+        "customer_subledger_opening_positions",
+        "verification_run_id",
+        existing_type=sa.UUID(),
+        nullable=True,
+    )
+    op.add_column(
+        "customer_subledger_opening_positions",
+        sa.Column("native_repair_id", sa.UUID(), nullable=True),
+    )
+    op.create_foreign_key(
+        "fk_customer_subledger_opening_native_repair",
+        "customer_subledger_opening_positions",
+        "native_prepaid_opening_repairs",
+        ["native_repair_id"],
+        ["id"],
+        ondelete="RESTRICT",
+    )
+    op.create_unique_constraint(
+        "uq_customer_subledger_opening_native_repair",
+        "customer_subledger_opening_positions",
+        ["native_repair_id"],
+    )
+    op.create_check_constraint(
+        "ck_customer_subledger_opening_one_provenance",
+        "customer_subledger_opening_positions",
+        "(verification_run_id IS NOT NULL AND native_repair_id IS NULL) OR "
+        "(verification_run_id IS NULL AND native_repair_id IS NOT NULL)",
+    )
     if op.get_bind().dialect.name == "postgresql":
         op.execute(
             """
@@ -234,20 +243,28 @@ def downgrade() -> None:
             DROP FUNCTION IF EXISTS native_prepaid_opening_repair_append_only();
             """
         )
-    with op.batch_alter_table("customer_subledger_opening_positions") as batch:
-        batch.drop_constraint(
-            "ck_customer_subledger_opening_one_provenance", type_="check"
-        )
-        batch.drop_constraint(
-            "uq_customer_subledger_opening_native_repair", type_="unique"
-        )
-        batch.drop_constraint(
-            "fk_customer_subledger_opening_native_repair", type_="foreignkey"
-        )
-        batch.drop_column("native_repair_id")
-        batch.alter_column(
-            "verification_run_id", existing_type=sa.UUID(), nullable=False
-        )
+    op.drop_constraint(
+        "ck_customer_subledger_opening_one_provenance",
+        "customer_subledger_opening_positions",
+        type_="check",
+    )
+    op.drop_constraint(
+        "uq_customer_subledger_opening_native_repair",
+        "customer_subledger_opening_positions",
+        type_="unique",
+    )
+    op.drop_constraint(
+        "fk_customer_subledger_opening_native_repair",
+        "customer_subledger_opening_positions",
+        type_="foreignkey",
+    )
+    op.drop_column("customer_subledger_opening_positions", "native_repair_id")
+    op.alter_column(
+        "customer_subledger_opening_positions",
+        "verification_run_id",
+        existing_type=sa.UUID(),
+        nullable=False,
+    )
     op.drop_index(
         "ix_native_prepaid_opening_cutover_batch",
         table_name="native_prepaid_opening_repairs",
