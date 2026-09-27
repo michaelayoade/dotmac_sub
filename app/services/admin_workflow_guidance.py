@@ -1670,6 +1670,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="system:settings:write",
         ),
         _action("investigate-integration", "Investigate integration failures", 3),
+        _action("retired-integration-jobs", "Handle retired connector jobs", 4),
     ),
     "notifications": (
         _action("choose-notification-area", "Choose a notification area", 0),
