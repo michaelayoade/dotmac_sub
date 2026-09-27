@@ -3,9 +3,9 @@
 The forward settlement owner now resolves prepaid anniversaries in the declared
 business timezone. This reconciler repairs historical rows that either exactly
 match the retired UTC-midnight calculation or prove that a lapsed payment was
-left on an earlier stale invoice period. The invoice, entitlement, payment
-settlement, subscription anchor, and access consequence must still form one
-unambiguous chain.
+left on an earlier stale invoice period. The invoice, entitlement, exact
+payment-settlement funding set, subscription anchor, and access consequence
+must still form one unambiguous chain.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ _REASONS: dict[PrepaidBillingCalendarDisposition, str] = {
         "The subscription has no explicit supported billing cadence."
     ),
     PrepaidBillingCalendarDisposition.ambiguous_payment: (
-        "The invoice does not have exactly one active succeeded payment allocation."
+        "The invoice does not have complete, exact succeeded-payment funding."
     ),
     PrepaidBillingCalendarDisposition.settlement_missing: (
         "The allocated payment has no canonical settlement evidence."
@@ -164,7 +164,8 @@ _REASONS: dict[PrepaidBillingCalendarDisposition, str] = {
 _ELIGIBLE_REASONS: dict[PrepaidBillingCalendarCorrectionKind, str] = {
     PrepaidBillingCalendarCorrectionKind.retired_utc_midnight: (
         "The invoice exactly matches the retired UTC-midnight calculation and "
-        "has one safe, internally consistent correction path."
+        "has one safe, internally consistent correction path, including every "
+        "exact funding allocation."
     ),
     PrepaidBillingCalendarCorrectionKind.lapsed_payment_period: (
         "The settled payment occurred after the stale invoice period began, "
@@ -203,6 +204,23 @@ def _now_utc() -> datetime:
 
 
 @dataclass(frozen=True, slots=True)
+class PrepaidBillingCalendarFundingEvidence:
+    """One exact allocation, payment, and settlement in the reviewed chain."""
+
+    allocation_id: UUID
+    payment_id: UUID
+    settlement_id: UUID
+    allocated_amount: Decimal
+    payment_amount: Decimal
+    settlement_amount: Decimal
+    currency: str
+    payment_effective_at: datetime
+    allocation_created_at: datetime
+    payment_updated_at: datetime
+    settlement_created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class PrepaidBillingCalendarPreview:
     invoice_id: UUID
     account_id: UUID
@@ -224,6 +242,11 @@ class PrepaidBillingCalendarPreview:
     fingerprint: str
     correction_kind: PrepaidBillingCalendarCorrectionKind | None = None
     active_lock_reasons: tuple[EnforcementReason, ...] = ()
+    funding_evidence: tuple[PrepaidBillingCalendarFundingEvidence, ...] = ()
+
+    @property
+    def payment_ids(self) -> tuple[UUID, ...]:
+        return tuple(item.payment_id for item in self.funding_evidence)
 
     @property
     def actionable(self) -> bool:
@@ -318,6 +341,7 @@ def _preview(
     proposed: PrepaidSettlementPeriod | None = None,
     correction_kind: PrepaidBillingCalendarCorrectionKind | None = None,
     active_locks: tuple[EnforcementLock, ...] = (),
+    funding_evidence: tuple[PrepaidBillingCalendarFundingEvidence, ...] = (),
 ) -> PrepaidBillingCalendarPreview:
     payload: dict[str, object] = {
         "invoice_id": str(invoice.id),
@@ -362,6 +386,22 @@ def _preview(
             if payment is not None
             else None
         ),
+        "funding_evidence": [
+            {
+                "allocation_id": str(item.allocation_id),
+                "payment_id": str(item.payment_id),
+                "settlement_id": str(item.settlement_id),
+                "allocated_amount": str(item.allocated_amount),
+                "payment_amount": str(item.payment_amount),
+                "settlement_amount": str(item.settlement_amount),
+                "currency": item.currency,
+                "payment_effective_at": item.payment_effective_at.isoformat(),
+                "allocation_created_at": item.allocation_created_at.isoformat(),
+                "payment_updated_at": item.payment_updated_at.isoformat(),
+                "settlement_created_at": item.settlement_created_at.isoformat(),
+            }
+            for item in funding_evidence
+        ],
         "proposed_start": proposed.starts_at.isoformat() if proposed else None,
         "proposed_end": proposed.ends_at.isoformat() if proposed else None,
         "correction_kind": correction_kind.value if correction_kind else None,
@@ -409,6 +449,7 @@ def _preview(
         fingerprint=_fingerprint(payload),
         correction_kind=correction_kind,
         active_lock_reasons=tuple(lock.reason for lock in active_locks),
+        funding_evidence=funding_evidence,
     )
 
 
@@ -550,59 +591,76 @@ def preview_prepaid_billing_calendar_reconciliation(
 
     allocations = list(
         db.scalars(
-            select(PaymentAllocation)
-            .join(Payment, Payment.id == PaymentAllocation.payment_id)
-            .where(
+            select(PaymentAllocation).where(
                 PaymentAllocation.invoice_id == invoice.id,
                 PaymentAllocation.is_active.is_(True),
                 PaymentAllocation.amount > Decimal("0.00"),
-                Payment.is_active.is_(True),
-                Payment.status == PaymentStatus.succeeded,
             )
         ).all()
     )
-    if len(allocations) != 1:
+    if not allocations:
         return _preview(
             invoice=invoice,
             line=line,
             subscription=subscription,
             disposition=PrepaidBillingCalendarDisposition.ambiguous_payment,
         )
-    payment = db.get(Payment, allocations[0].payment_id)
-    assert payment is not None
+    allocations.sort(key=lambda item: str(item.id))
+    payments = [db.get(Payment, allocation.payment_id) for allocation in allocations]
+    invoice_total = Decimal(str(invoice.total))
     if (
-        payment.account_id != invoice.account_id
-        or payment.currency != invoice.currency
-        or Decimal(str(invoice.total)) <= Decimal("0.00")
-        or Decimal(str(allocations[0].amount)) != Decimal(str(invoice.total))
-        or Decimal(str(payment.amount)) < Decimal(str(allocations[0].amount))
+        any(payment is None for payment in payments)
+        or invoice_total <= Decimal("0.00")
+        or sum(Decimal(str(item.amount)) for item in allocations) != invoice_total
+        or any(
+            payment is None
+            or not payment.is_active
+            or payment.status is not PaymentStatus.succeeded
+            or payment.account_id != invoice.account_id
+            or payment.currency != invoice.currency
+            or Decimal(str(payment.amount)) < Decimal(str(allocation.amount))
+            for allocation, payment in zip(allocations, payments, strict=True)
+        )
     ):
         return _preview(
             invoice=invoice,
             line=line,
             subscription=subscription,
-            payment=payment,
             disposition=PrepaidBillingCalendarDisposition.ambiguous_payment,
         )
-    settlement = db.scalar(
-        select(PaymentSettlement).where(PaymentSettlement.payment_id == payment.id)
-    )
-    if settlement is None or Decimal(str(settlement.amount)) != Decimal(
-        str(payment.amount)
-    ):
-        return _preview(
-            invoice=invoice,
-            line=line,
-            subscription=subscription,
-            payment=payment,
-            disposition=PrepaidBillingCalendarDisposition.settlement_missing,
+    validated_payments = tuple(payment for payment in payments if payment is not None)
+    settlements: list[PaymentSettlement] = []
+    for payment_item in validated_payments:
+        payment_settlements = list(
+            db.scalars(
+                select(PaymentSettlement).where(
+                    PaymentSettlement.payment_id == payment_item.id
+                )
+            ).all()
         )
+        if (
+            len(payment_settlements) != 1
+            or Decimal(str(payment_settlements[0].amount))
+            != Decimal(str(payment_item.amount))
+            or payment_settlements[0].currency != invoice.currency
+        ):
+            return _preview(
+                invoice=invoice,
+                line=line,
+                subscription=subscription,
+                payment=(payment_item if len(validated_payments) == 1 else None),
+                disposition=PrepaidBillingCalendarDisposition.settlement_missing,
+            )
+        settlements.append(payment_settlements[0])
+    payment_ids = tuple(payment_item.id for payment_item in validated_payments)
     has_return = bool(
         db.scalar(
-            select(PaymentRefund.id).where(PaymentRefund.payment_id == payment.id)
+            select(PaymentRefund.id).where(PaymentRefund.payment_id.in_(payment_ids))
         )
         or db.scalar(
-            select(PaymentReversal.id).where(PaymentReversal.payment_id == payment.id)
+            select(PaymentReversal.id).where(
+                PaymentReversal.payment_id.in_(payment_ids)
+            )
         )
     )
     if has_return:
@@ -610,11 +668,34 @@ def preview_prepaid_billing_calendar_reconciliation(
             invoice=invoice,
             line=line,
             subscription=subscription,
-            payment=payment,
+            payment=(validated_payments[0] if len(validated_payments) == 1 else None),
             disposition=PrepaidBillingCalendarDisposition.payment_returned,
         )
 
-    effective_at = _utc(payment.paid_at or payment.created_at)
+    funding_evidence = tuple(
+        PrepaidBillingCalendarFundingEvidence(
+            allocation_id=allocation.id,
+            payment_id=payment_item.id,
+            settlement_id=settlement.id,
+            allocated_amount=Decimal(str(allocation.amount)),
+            payment_amount=Decimal(str(payment_item.amount)),
+            settlement_amount=Decimal(str(settlement.amount)),
+            currency=payment_item.currency,
+            payment_effective_at=_utc(payment_item.paid_at or payment_item.created_at),
+            allocation_created_at=_utc(allocation.created_at),
+            payment_updated_at=_utc(payment_item.updated_at),
+            settlement_created_at=_utc(settlement.created_at),
+        )
+        for allocation, payment_item, settlement in zip(
+            allocations, validated_payments, settlements, strict=True
+        )
+    )
+    payment = validated_payments[0] if len(validated_payments) == 1 else None
+    effective_at = (
+        _utc(payment.paid_at or payment.created_at)
+        if payment is not None
+        else _utc(invoice.billing_period_start)
+    )
     legacy = resolve_prepaid_settlement_period(
         PrepaidSettlementPeriodQuery(
             effective_at=effective_at,
@@ -628,17 +709,23 @@ def preview_prepaid_billing_calendar_reconciliation(
             billing_cycle=subscription.billing_cycle,
         )
     )
-    coverage_decision = resolve_prepaid_subscription_settlement_period(
-        db,
-        PrepaidSubscriptionSettlementPeriodQuery(
-            subscription_id=subscription.id,
-            account_id=subscription.subscriber_id,
-            effective_at=effective_at,
-            billing_cycle=subscription.billing_cycle,
-            exclude_source_invoice_id=invoice.id,
-        ),
+    coverage_decision = (
+        resolve_prepaid_subscription_settlement_period(
+            db,
+            PrepaidSubscriptionSettlementPeriodQuery(
+                subscription_id=subscription.id,
+                account_id=subscription.subscriber_id,
+                effective_at=effective_at,
+                billing_cycle=subscription.billing_cycle,
+                exclude_source_invoice_id=invoice.id,
+            ),
+        )
+        if payment is not None
+        else None
     )
-    coverage_period = coverage_decision.period
+    coverage_period = (
+        coverage_decision.period if coverage_decision is not None else None
+    )
     proposed = payment_period
     correction_kind: PrepaidBillingCalendarCorrectionKind | None = None
     if (
@@ -650,20 +737,25 @@ def preview_prepaid_billing_calendar_reconciliation(
         )
     ):
         correction_kind = PrepaidBillingCalendarCorrectionKind.retired_utc_midnight
-    elif _lapsed_payment_period_candidate(
+    elif payment is not None and _lapsed_payment_period_candidate(
         invoice=invoice,
         subscription=subscription,
         proposed=payment_period,
     ):
         correction_kind = PrepaidBillingCalendarCorrectionKind.lapsed_payment_period
-    elif _extension_covered_payment_period_candidate(
-        db,
-        invoice=invoice,
-        subscription=subscription,
-        payment_effective_at=effective_at,
-        payment_period=payment_period,
-        coverage_period=coverage_period,
-        covered_through=coverage_decision.covered_through,
+    elif (
+        payment is not None
+        and coverage_decision is not None
+        and coverage_period is not None
+        and _extension_covered_payment_period_candidate(
+            db,
+            invoice=invoice,
+            subscription=subscription,
+            payment_effective_at=effective_at,
+            payment_period=payment_period,
+            coverage_period=coverage_period,
+            covered_through=coverage_decision.covered_through,
+        )
     ):
         correction_kind = (
             PrepaidBillingCalendarCorrectionKind.extension_covered_payment_period
@@ -677,6 +769,7 @@ def preview_prepaid_billing_calendar_reconciliation(
             payment=payment,
             proposed=proposed,
             disposition=PrepaidBillingCalendarDisposition.period_signature_mismatch,
+            funding_evidence=funding_evidence,
         )
 
     entitlements = list(
@@ -704,6 +797,7 @@ def preview_prepaid_billing_calendar_reconciliation(
             payment=payment,
             proposed=proposed,
             disposition=PrepaidBillingCalendarDisposition.entitlement_mismatch,
+            funding_evidence=funding_evidence,
         )
     if (
         correction_kind is PrepaidBillingCalendarCorrectionKind.retired_utc_midnight
@@ -717,6 +811,7 @@ def preview_prepaid_billing_calendar_reconciliation(
             payment=payment,
             proposed=proposed,
             disposition=PrepaidBillingCalendarDisposition.anchor_changed,
+            funding_evidence=funding_evidence,
         )
     if (
         correction_kind
@@ -741,6 +836,7 @@ def preview_prepaid_billing_calendar_reconciliation(
             payment=payment,
             proposed=proposed,
             disposition=PrepaidBillingCalendarDisposition.service_extension_present,
+            funding_evidence=funding_evidence,
         )
     if db.scalar(
         select(QuotaBucket.id).where(
@@ -765,6 +861,7 @@ def preview_prepaid_billing_calendar_reconciliation(
             payment=payment,
             proposed=proposed,
             disposition=PrepaidBillingCalendarDisposition.usage_period_present,
+            funding_evidence=funding_evidence,
         )
     if db.scalar(
         select(ServiceEntitlement.id).where(
@@ -783,6 +880,7 @@ def preview_prepaid_billing_calendar_reconciliation(
             payment=payment,
             proposed=proposed,
             disposition=PrepaidBillingCalendarDisposition.overlapping_entitlement,
+            funding_evidence=funding_evidence,
         )
     if db.scalar(
         select(Invoice.id)
@@ -805,6 +903,7 @@ def preview_prepaid_billing_calendar_reconciliation(
             payment=payment,
             proposed=proposed,
             disposition=PrepaidBillingCalendarDisposition.overlapping_invoice,
+            funding_evidence=funding_evidence,
         )
     active_locks = tuple(
         db.scalars(
@@ -826,6 +925,7 @@ def preview_prepaid_billing_calendar_reconciliation(
         disposition=PrepaidBillingCalendarDisposition.eligible,
         correction_kind=correction_kind,
         active_locks=active_locks,
+        funding_evidence=funding_evidence,
     )
 
 
@@ -984,27 +1084,26 @@ def reconcile_prepaid_billing_calendar(
         assert preliminary.subscription_id is not None
         assert preliminary.invoice_line_id is not None
         assert preliminary.entitlement_id is not None
-        assert preliminary.payment_id is not None
+        assert preliminary.funding_evidence
         subscription = lock_for_update(db, Subscription, preliminary.subscription_id)
         line = lock_for_update(db, InvoiceLine, preliminary.invoice_line_id)
         entitlement = lock_for_update(
             db, ServiceEntitlement, preliminary.entitlement_id
         )
-        payment = lock_for_update(db, Payment, preliminary.payment_id)
+        payment_ids = tuple(sorted(preliminary.payment_ids, key=str))
         allocation_ids = tuple(
-            db.scalars(
-                select(PaymentAllocation.id).where(
-                    PaymentAllocation.invoice_id == command.invoice_id
-                )
-            ).all()
+            sorted(
+                (item.allocation_id for item in preliminary.funding_evidence), key=str
+            )
         )
         settlement_ids = tuple(
-            db.scalars(
-                select(PaymentSettlement.id).where(
-                    PaymentSettlement.payment_id == preliminary.payment_id
-                )
-            ).all()
+            sorted(
+                (item.settlement_id for item in preliminary.funding_evidence), key=str
+            )
         )
+        locked_payments = [
+            lock_for_update(db, Payment, payment_id) for payment_id in payment_ids
+        ]
         locked_allocations = [
             lock_for_update(db, PaymentAllocation, allocation_id)
             for allocation_id in allocation_ids
@@ -1031,7 +1130,7 @@ def reconcile_prepaid_billing_calendar(
             subscription is None
             or line is None
             or entitlement is None
-            or payment is None
+            or any(item is None for item in locked_payments)
             or any(item is None for item in locked_allocations)
             or any(item is None for item in locked_settlements)
             or any(item is None for item in locked_enforcement_locks)
@@ -1153,7 +1252,26 @@ def reconcile_prepaid_billing_calendar(
             "correction_kind": current.correction_kind.value,
             "subscription_id": str(subscription.id),
             "entitlement_id": str(entitlement.id),
-            "payment_id": str(current.payment_id),
+            "payment_id": (
+                str(current.payment_id) if current.payment_id is not None else None
+            ),
+            "payment_ids": [str(payment_id) for payment_id in current.payment_ids],
+            "funding_evidence": [
+                {
+                    "allocation_id": str(item.allocation_id),
+                    "payment_id": str(item.payment_id),
+                    "settlement_id": str(item.settlement_id),
+                    "allocated_amount": str(item.allocated_amount),
+                    "payment_amount": str(item.payment_amount),
+                    "settlement_amount": str(item.settlement_amount),
+                    "currency": item.currency,
+                    "payment_effective_at": item.payment_effective_at.isoformat(),
+                    "allocation_created_at": item.allocation_created_at.isoformat(),
+                    "payment_updated_at": item.payment_updated_at.isoformat(),
+                    "settlement_created_at": item.settlement_created_at.isoformat(),
+                }
+                for item in current.funding_evidence
+            ],
             "previous_starts_at": previous_start.isoformat(),
             "previous_ends_at": previous_end.isoformat(),
             "corrected_starts_at": corrected_start.isoformat(),

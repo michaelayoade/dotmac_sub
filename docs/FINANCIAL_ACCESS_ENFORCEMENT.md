@@ -196,13 +196,16 @@ lapsed periods proved by an older stale anchor and strict documentary/payment-
 period ordering, and the exact signature where an applied extension was carried
 forward twice are owned by
 `financial.prepaid_billing_calendar_reconciliation`. Its admin queue is
-preview-first and fingerprint-bound: only one unambiguous invoice, payment
-settlement, base line, entitlement, calendar defect, and access-lock snapshot
-can be corrected. An applied extension is accepted only for the exact double-
-extension signature; other applied extensions, refunds, reversals, usage quota
-periods, coverage overlaps, multiple evidence rows, or an unproved anchor
-relationship are quarantined for manual review. Canceled and reversed extension
-history does not provide coverage and does not block an otherwise proved correction.
+preview-first and fingerprint-bound: only one unambiguous invoice, exact fully
+funding allocation/payment/settlement set, base line, entitlement, calendar
+defect, and access-lock snapshot can be corrected. Split allocations are
+supported only for the retired UTC-midnight defect, where payment timing is not
+an input to the corrected dates. An applied extension is accepted only for the
+exact double-extension signature; other applied extensions, refunds, reversals,
+usage quota periods, coverage overlaps, multiple evidence rows, or an unproved
+anchor relationship are quarantined for manual review. Canceled and reversed
+extension history does not provide coverage and does not block an otherwise
+proved correction.
 
 Every repair records zero economic delta and stages invoice evidence, audit,
 event, and idempotency rows atomically. A current lapsed-payment repair also

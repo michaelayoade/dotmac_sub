@@ -2028,8 +2028,8 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "one active paid invoice, one base-subscription line, "
-                        "one succeeded allocated settlement, one sourced active "
-                        "entitlement, and either the exact legacy anchor or a "
+                        "an exact fully funding succeeded allocation and settlement "
+                        "set, one sourced active entitlement, and either the exact legacy anchor or a "
                         "strictly older stale anchor"
                     ),
                 ),
@@ -2082,7 +2082,7 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 locking=(
                     "Lock account first, then invoice, subscription, invoice "
-                    "line, entitlement, payment, allocation, settlement, and "
+                    "line, entitlement, every reviewed payment, allocation, settlement, and "
                     "active enforcement locks; "
                     "expire and re-read the full chain before re-running the "
                     "resolver and reject changed or overlapping evidence."
@@ -2116,7 +2116,7 @@ SERVICES: tuple[SOTService, ...] = (
                 retryable_codes=(),
                 fail_closed_on=(
                     "non-paid or multi-line invoice evidence",
-                    "missing or multiple succeeded settlement allocations",
+                    "missing, underfunded, overfunded, or inconsistent succeeded settlement allocations",
                     "refund, reversal, ambiguous extension, or overlap",
                     "an overlapping rated quota period",
                     "a period/anchor relationship that proves neither a retired "
@@ -2130,7 +2130,7 @@ SERVICES: tuple[SOTService, ...] = (
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
-                    "Invoice, subscription, entitlement, payment, timezone, "
+                    "Invoice, subscription, entitlement, funding evidence, timezone, "
                     "before/after instants, correction kind, zero economic delta, "
                     "access outcome, and fingerprint retain their meaning; "
                     "additions are backward compatible."

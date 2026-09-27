@@ -177,6 +177,68 @@ def _chain(db, subscriber):
     return invoice, line, subscription, entitlement, payment
 
 
+def _split_funded_chain(db, subscriber):
+    invoice, line, subscription, entitlement, first_payment = _chain(db, subscriber)
+    first_allocation = (
+        db.query(PaymentAllocation)
+        .filter_by(invoice_id=invoice.id, payment_id=first_payment.id)
+        .one()
+    )
+    first_settlement = (
+        db.query(PaymentSettlement).filter_by(payment_id=first_payment.id).one()
+    )
+    first_amount = Decimal("387.50")
+    second_amount = Decimal("612.50")
+    first_payment.amount = first_amount
+    first_payment.paid_at = datetime(2023, 1, 12, 9, 0, tzinfo=UTC)
+    first_payment.created_at = first_payment.paid_at
+    first_allocation.amount = first_amount
+    first_settlement.amount = first_amount
+    first_settlement.prepaid_amount = first_amount
+
+    second_payment = Payment(
+        account_id=subscriber.id,
+        amount=second_amount,
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=PAID_AT,
+        created_at=PAID_AT,
+        is_active=True,
+    )
+    db.add(second_payment)
+    db.flush()
+    db.add_all(
+        [
+            PaymentSettlement(
+                payment_id=second_payment.id,
+                amount=second_amount,
+                unallocated_amount=Decimal("0.00"),
+                prepaid_amount=second_amount,
+                currency="NGN",
+                origin=PaymentSettlementOrigin.system,
+                idempotency_key=f"calendar-test-settlement-{second_payment.id}",
+                created_at=PAID_AT,
+            ),
+            PaymentAllocation(
+                payment_id=second_payment.id,
+                invoice_id=invoice.id,
+                amount=second_amount,
+                idempotency_key=f"calendar-test-allocation-{second_payment.id}",
+                is_active=True,
+            ),
+        ]
+    )
+    db.commit()
+    return (
+        invoice,
+        line,
+        subscription,
+        entitlement,
+        first_payment,
+        second_payment,
+    )
+
+
 def _lapsed_chain(db, subscriber):
     invoice, line, subscription, entitlement, payment = _chain(db, subscriber)
     invoice.paid_at = LAPSED_PAID_AT
@@ -348,6 +410,95 @@ def test_exact_legacy_chain_previews_and_reconciles_without_economic_change(
         )
         .one()
     )
+
+
+def test_exact_legacy_chain_accepts_complete_split_funding_without_money_change(
+    db_session, subscriber
+):
+    (
+        invoice,
+        line,
+        subscription,
+        entitlement,
+        first_payment,
+        second_payment,
+    ) = _split_funded_chain(db_session, subscriber)
+
+    preview = preview_prepaid_billing_calendar_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidBillingCalendarDisposition.eligible
+    assert preview.correction_kind is (
+        PrepaidBillingCalendarCorrectionKind.retired_utc_midnight
+    )
+    assert preview.payment_id is None
+    assert set(preview.payment_ids) == {first_payment.id, second_payment.id}
+    assert sum(item.allocated_amount for item in preview.funding_evidence) == Decimal(
+        "1000.00"
+    )
+    fingerprint = preview.fingerprint
+    invoice_id = invoice.id
+    db_session.commit()
+
+    result = reconcile_prepaid_billing_calendar(
+        db_session,
+        _command(
+            invoice_id,
+            fingerprint,
+            key="calendar-split-funding-repair",
+        ),
+    )
+
+    for row in (
+        invoice,
+        line,
+        subscription,
+        entitlement,
+        first_payment,
+        second_payment,
+    ):
+        db_session.refresh(row)
+    assert result.corrected_starts_at == WAT_START
+    assert result.corrected_ends_at == WAT_END
+    assert first_payment.amount == Decimal("387.50")
+    assert second_payment.amount == Decimal("612.50")
+    evidence = invoice.metadata_["prepaid_billing_calendar_reconciliation"]
+    assert set(evidence["payment_ids"]) == {
+        str(first_payment.id),
+        str(second_payment.id),
+    }
+    assert evidence["payment_id"] is None
+    assert len(evidence["funding_evidence"]) == 2
+    assert evidence["economic_delta"] == "0.00"
+
+
+def test_split_funding_does_not_infer_a_payment_timed_lapsed_repair(
+    db_session, subscriber
+):
+    invoice, _line, subscription, *_payments = _split_funded_chain(
+        db_session, subscriber
+    )
+    subscription.next_billing_at = STALE_ANCHOR
+    db_session.commit()
+
+    preview = preview_prepaid_billing_calendar_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidBillingCalendarDisposition.anchor_changed
+    assert preview.actionable is False
+
+
+def test_split_funding_rejects_any_non_succeeded_allocated_payment(
+    db_session, subscriber
+):
+    invoice, _line, _subscription, _entitlement, _first, second_payment = (
+        _split_funded_chain(db_session, subscriber)
+    )
+    second_payment.status = PaymentStatus.failed
+    db_session.commit()
+
+    preview = preview_prepaid_billing_calendar_reconciliation(db_session, invoice.id)
+
+    assert preview.disposition is PrepaidBillingCalendarDisposition.ambiguous_payment
+    assert preview.actionable is False
 
 
 def test_lapsed_payment_period_reconciles_evidence_and_restores_prepaid_access(

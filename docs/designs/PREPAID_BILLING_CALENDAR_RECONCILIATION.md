@@ -26,9 +26,11 @@ preview and again under lock:
 - one active, fully paid, non-proforma invoice with zero balance;
 - exactly one active `base_subscription` invoice line;
 - an explicit supported cadence on one prepaid subscription;
-- exactly one active succeeded payment allocation that fully funds the invoice,
-  with a same-account, same-currency canonical settlement for the payment;
-- no refund or reversal evidence for that payment;
+- active succeeded payment allocations whose exact sum fully funds the invoice,
+  with one same-account, same-currency canonical settlement for every payment;
+  multiple allocations are accepted only for the retired UTC-midnight defect,
+  whose corrected calendar dates do not depend on selecting a payment instant;
+- no refund or reversal evidence for any allocated payment;
 - the owner proves exactly one supported defect:
   - the invoice period exactly equals the retired UTC-midnight calculation and
     its anchor still equals that invoice end; or
@@ -53,10 +55,10 @@ investigation-only and has no automatic action. The operator cannot override a
 guard in the UI.
 
 Confirmation locks the account, invoice, subscription, base line, entitlement,
-payment, allocation, settlement, and active enforcement locks, expires the ORM
-snapshot, then re-reads and reclassifies the full chain. Lock identities and
-reasons are part of the reviewed fingerprint. A changed fingerprint fails
-closed before any calendar or access projection is written.
+every reviewed payment, allocation, settlement, and active enforcement lock,
+expires the ORM snapshot, then re-reads and reclassifies the full chain. Lock
+identities and reasons are part of the reviewed fingerprint. A changed
+fingerprint fails closed before any calendar or access projection is written.
 
 ## Atomic consequence
 
@@ -79,9 +81,9 @@ not restore access.
 The command never changes invoice total, balance, status, payment, settlement,
 allocation, or ledger entries. The economic delta is always zero. Before/after
 instants, correction kind, timezone, actor, reason, command, correlation,
-payment, entitlement, access outcome, fingerprint, and idempotency evidence are
-stored on the invoice and staged in audit and durable event rows in the same
-transaction.
+payments, allocations, settlements, entitlement, access outcome, fingerprint,
+and idempotency evidence are stored on the invoice and staged in audit and
+durable event rows in the same transaction.
 
 ## Page contract
 
