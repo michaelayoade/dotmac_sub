@@ -959,6 +959,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Configure the approved endpoint and credentials using the designated secret storage.",
         "Test or validate the connection before enabling it for normal delivery.",
         "Use sync and failure evidence to investigate problems without repeatedly sending the same operation.",
+        "Retired connector jobs remain available for history, but cannot be configured or run again. Create a current connector installation for any approved retained capability.",
     ),
     _guide(
         "notifications",
