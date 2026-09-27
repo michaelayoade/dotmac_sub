@@ -61,14 +61,16 @@ def test_runtime_health_card_uses_semantic_status_and_safe_responsive_layout() -
     assert "status-panel-negative" in template
     assert "status-panel-warning" in template
     assert "status-foreground" in template
-    assert "xl:flex-row" in template
-    assert "xl:w-80" in template
-    assert "sm:min-w-[22rem]" not in template
+    assert 'class="p-5"' in template
+    assert 'class="mt-5 grid w-full grid-cols-3' in template
+    assert "xl:flex-row" not in template
+    assert 'dark:bg-slate-800 dark:text-slate-300' in template
+    assert "bg-primary-600" in template
     assert ".dark .status-panel-positive" in design_system
     assert ".dark .status-panel-negative" in design_system
     assert ".dark .status-panel-warning" in design_system
-    assert ".xl\\:flex-row" in compiled_css
-    assert ".xl\\:w-80" in compiled_css
+    assert ".grid-cols-3" in compiled_css
+    assert ".dark\\:bg-slate-800" in compiled_css
 
 
 def test_rule_builder_uses_registered_options_and_supports_multiple_steps() -> None:
