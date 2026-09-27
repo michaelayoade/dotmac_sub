@@ -99,8 +99,9 @@ void main() {
   });
 
   group('intent codes route to their screens', () {
-    // The codes Sub's senders construct today (app/api/crm_webhooks.py,
-    // app/services/crm_ticket_pull.py, app/services/quotes_mirror.py).
+    // The codes Sub's senders construct (app/api/crm_webhooks.py,
+    // app/services/quotes_mirror.py), plus `ticket`, kept after its CRM
+    // poller producer was retired so in-flight pushes still route.
     test('chat_message opens live chat', () {
       expect(
         PushService.routeForNotificationData({

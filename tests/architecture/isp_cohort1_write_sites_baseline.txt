@@ -44,7 +44,6 @@
 2 service|app/services/brand_profiles.py
 1 service|app/services/crm_customer_name_repair.py
 1 service|app/services/crm_portal.py
-1 service|app/services/crm_ticket_pull.py
 20 service|app/services/customer_canonical_profile_patch.py
 1 service|app/services/customer_location_requests.py
 1 service|app/services/customer_portal_contacts.py
@@ -62,4 +61,4 @@
 1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 121
+TOTAL 120

@@ -80,8 +80,8 @@
       "outbound_transport": 44,
       "webhook_surface": 4,
       "provider_credential": 3,
-      "connector_task": 18,
-      "sync_checkpoint": 11,
+      "connector_task": 17,
+      "sync_checkpoint": 10,
       "delivery_retry": 7
     },
     "conserved_exclusions": [
@@ -108,12 +108,6 @@
         "symbol": "<module>",
         "category": "outbound_transport",
         "fingerprint": "58bc472074bb7bec95639e2575065066c05d8043983fa49bb10f3858d29320b0"
-      },
-      {
-        "path": "tests/test_crm_ticket_pull.py",
-        "symbol": "test_latest_crm_updated_at_watermark",
-        "category": "sync_checkpoint",
-        "fingerprint": "03c45fad7c1a26e5c6ade4222d19ad0190ce37795403d89308d1c3fd23143aeb"
       },
       {
         "path": "tests/test_email_services.py",

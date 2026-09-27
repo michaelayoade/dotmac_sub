@@ -571,23 +571,6 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         ),
     ),
     SourceSurface(
-        path="app/services/crm_ticket_pull.py",
-        family=EntryPointFamily.SERVICE,
-        authority=AuthorityRole.PARALLEL_WRITER,
-        boundary=BoundaryRole.PERSISTS,
-        reachability=Reachability.BACKGROUND_JOB,
-        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
-        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
-        owning_service="party.registry",
-        registry_declared=False,
-        open_question=None,
-        note=(
-            "A ticket importer that also writes the customer account's CRM provenance "
-            "id. Collecting an observation is legitimate; writing it onto the "
-            "authoritative row is what makes it parallel."
-        ),
-    ),
-    SourceSurface(
         path="app/services/customer_canonical_profile_patch.py",
         family=EntryPointFamily.SERVICE,
         authority=AuthorityRole.DECLARED_OWNER,

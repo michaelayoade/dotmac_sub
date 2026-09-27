@@ -221,8 +221,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.collections.run_bundle_reconcile": _c(
         "collections", STATE, GUARDED, HEALTH
     ),
-    "app.tasks.crm_ticket_pull.pull_crm_tickets": _c("crm", SWEEP, IDEMP, HEALTH),
-    "app.tasks.crm_ticket_pull.sync_crm_ticket": _c("crm", SWEEP, IDEMP, STATUS),
     "app.tasks.cross_app_drift.run_cross_app_drift_detection": _c(
         "monitoring",
         SWEEP,

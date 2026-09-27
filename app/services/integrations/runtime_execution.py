@@ -17,10 +17,7 @@ from app.models.integration_platform import (
     IntegrationCapabilityBinding,
     IntegrationInstallationState,
 )
-from app.services.integrations.connectors.dotmac_crm import (
-    DotmacCrmRunner,
-    RuntimeCrmObservationSource,
-)
+from app.services.integrations.connectors.dotmac_crm import DotmacCrmRunner
 from app.services.integrations.connectors.dotmac_erp import DotmacErpRunner
 from app.services.integrations.connectors.fiber_inquiry_http import (
     FiberInquiryHttpRunner,
@@ -304,20 +301,3 @@ def make_operation_executor(
         )
 
     return execute
-
-
-def crm_observation_source(
-    context: RuntimeExecutionContext,
-    *,
-    correlation_id: str,
-    trigger: OperationTrigger,
-    actor: str | None = None,
-) -> RuntimeCrmObservationSource:
-    return RuntimeCrmObservationSource(
-        make_operation_executor(
-            context,
-            correlation_id=correlation_id,
-            trigger=trigger,
-            actor=actor,
-        )
-    )

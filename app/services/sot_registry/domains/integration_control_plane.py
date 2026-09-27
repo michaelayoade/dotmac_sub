@@ -1302,12 +1302,13 @@ DOMAIN = DomainSOT(
                     ),
                     new_owner="integration.jobs",
                     verification=(
-                        "Exact-state activation, replay, stale-state, scheduler "
-                        "readiness, deployment-gate, and CRM sync tests."
+                        "Exact-state activation, replay, stale-state, and "
+                        "capability-dispatch tests."
                     ),
                     cutover_gate=(
-                        "Enabled crm.ticket_pull requires exactly one enabled "
-                        "ticket-observation binding and one active bound manual job."
+                        "Every executable job requires exactly one enabled "
+                        "capability binding. The CRM ticket-observation capability "
+                        "that first exercised this gate was retired 2026-09-27."
                     ),
                     fallback_retirement=(
                         "Unbound active jobs and independent interval scheduling "
@@ -1333,8 +1334,9 @@ DOMAIN = DomainSOT(
             owns=("integration sync orchestration", "sync run lifecycle"),
             depends_on=("integration.jobs", "integration.runtime"),
             notes=(
-                "CRM observation jobs resolve their version-pinned bindings "
-                "and execute only through the registered CRM runner."
+                "Sync jobs dispatch by their bound capability to a registered "
+                "handler; none is registered since the CRM ticket-observation "
+                "capability was retired, so every sync job fails closed."
             ),
         ),
         SOTService(

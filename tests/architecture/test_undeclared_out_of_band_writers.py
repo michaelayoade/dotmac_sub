@@ -382,8 +382,8 @@ BASELINE: dict[str, str] = {
     # -- imported function-locally at every real call site here. Every one is
     # -- a top-level Celery task or a standalone run_*() beat entry point with
     # -- no caller holding an open session -- verified by grepping every
-    # -- caller (crm_ticket_pull/support_tickets are the @celery_app.task
-    # -- functions themselves; the dotmac_erp run_*() functions are each
+    # -- caller (support_tickets is the @celery_app.task
+    # -- function itself; the dotmac_erp run_*() functions are each
     # -- called only from a top-level task in app/tasks/dotmac_erp_outbox.py,
     # -- or (run_repair_expense_claim_writebacks) not wired to a caller at
     # -- all yet, per its own docstring).
@@ -408,8 +408,6 @@ BASELINE: dict[str, str] = {
     "app/services/dotmac_erp/purchase_order_sync.py::run_repair_purchase_order_writebacks": (
         "adapter-owned session lifecycle (task/runner)"
     ),
-    "app/tasks/crm_ticket_pull.py::pull_crm_tickets": "adapter-owned session lifecycle (task/runner)",
-    "app/tasks/crm_ticket_pull.py::sync_crm_ticket": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/support_tickets.py::auto_confirm_resolved_tickets": (
         "adapter-owned session lifecycle (task/runner)"
     ),

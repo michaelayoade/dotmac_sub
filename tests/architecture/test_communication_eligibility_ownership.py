@@ -54,7 +54,6 @@ TRANSPORT_MODULES = {
 #: regression, and CI will not tell you off for it, so reviewers must.
 LEDGER_BYPASS_BACKLOG = {
     "app/services/billing_payment_receipts.py",
-    "app/services/crm_ticket_pull.py",
     "app/services/notification_adapter.py",
     "app/services/operational_escalation_delivery.py",
     "app/services/quotes_mirror.py",

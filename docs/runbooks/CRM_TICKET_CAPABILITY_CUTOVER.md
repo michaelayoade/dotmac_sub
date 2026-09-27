@@ -1,5 +1,13 @@
 # CRM ticket capability cutover
 
+> **Historical — the capability is retired (2026-09-27).** The CRM ticket
+> poller, its control, schedules, readiness gate, reconcile script and
+> importer were deleted; see [Retired — 2026-09-27](#retired--2026-09-27).
+> Commands below that invoke `scripts.integrations.verify_crm_ticket_readiness`,
+> `scripts.integrations.reconcile_crm_ticket_capability` or the ticket poller
+> no longer exist and are kept only as the record of how the cutover and its
+> retirement were performed. Do not run them.
+
 This runbook completes the explicit `dotmac.crm` ticket-observation cutover
 after migration 377 disabled legacy jobs that had no capability binding.
 
@@ -121,6 +129,40 @@ cutover receipt in `docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md`. Under
 Governance ADR 0018 rule 2 any STILL LIVE item blocks a decommission
 declaration, so **retiring this is what makes the CRM decommissionable**, and
 the last step of this procedure is to move that field to RETIRED.
+
+## Retired — 2026-09-27
+
+**Step 3 gate — passed.** The gate was observed read-only on production (`selfcare.dotmac.io`, host `vmi3348415`) at 2026-09-27T05:26Z. The queries ran in a `SET TRANSACTION READ ONLY` session inside `dotmac_sub_app`, which was then rolled back.
+
+- **Control (query 1).** `crm.ticket_observation.v1` runs arrived every five minutes, all `failed` / `crm_transport_error`, trigger `scheduled` / `celery-beat`. The last one was at 2026-08-18 13:01:38Z. The poller therefore stopped about 9.5 hours *before* the canonical control flip at 22:37Z. That is consistent with the binding and installation (the second kill switch) being disabled first. Query 1's last-ever runs are the positive control that makes the silence below mean "stopped".
+- **Observation (query 3):** 0 runs since the flip, and none after 13:01Z.
+- **Observation (query 4a):** 0 CRM-derived `support_tickets` created since the flip.
+- **Observation (query 4b), scoped exactly.** 0 subscribers were **created** with a `crm_subscriber_id` after the last run. This zero covers new subscribers only. It says nothing about CRM IDs later added to *existing* subscribers: `updated_at` is not a provenance signal (15,293 subscribers carry a CRM ID and ordinary activity updates them), so the query as written above cannot isolate a CRM stamp on an existing row. The absence of any run since 13:01Z, together with the disabled installation, is the evidence for that half.
+- **Item-4 state:**
+  - control false;
+  - binding `disabled`;
+  - installation `disabled`;
+  - job `is_active` still true. That is moot once the code is deleted, because no handler exists for the capability and the scheduler skips a job bound to it.
+- **Rendered `build_beat_schedule()` CRM keys:** `[]`, so the daily 03:40 entry cannot fire either.
+
+**Code removed in this change:**
+- the poller and its tasks;
+- the `crm.ticket_pull` control;
+- both `crm_ticket_pull_*` setting specs;
+- both schedule entries and the readiness gate;
+- the ticket webhook route;
+- the readiness resolver, the cutover reconcile script and the deploy readiness gate;
+- the one-off ticket importer.
+
+`tests/architecture/test_crm_ticket_pull_retired.py` scans `app/` and `scripts/` for the poller's schedule keys, task name, control, setting specs and environment reads, the ticket webhook receiver (`receive_crm_event`, `TICKET_EVENTS`) and the cutover tooling, and pins that the deleted modules stay deleted; `tests/architecture/test_integration_platform_boundary.py` pins that the deploy readiness gate stays out of `scripts/deploy.sh`. Historical CRM identifiers on tickets and subscribers stay as references only.
+
+**Credential — corrected disposition.** The live pointer was `env://CRM_SERVICE_TOKEN`, not an OpenBao path. Earlier guidance to "revoke it in OpenBao" did not apply.
+- `CRM_SERVICE_TOKEN` and the inert `CRM_TICKET_PULL_ENABLED=true` were removed from `/root/dotmac_sub/.env` on production. The file is still `600 root:root`, and no value was printed.
+- The running app keeps the variable in its process environment until the next deploy recreates the containers.
+- The issuing side cannot be revoked. The likely issuer is CRM's `api_keys` table (`dotmac_crm/scripts/provision_service_api_key.py`), and the CRM app and database have been destroyed. The exact key id is unknown.
+- **If CRM is ever restored from backup, disable the historical `selfcare-sync@dotmac.io` key before the restored app serves any request.**
+
+**Receipt.** `old_writer_retirement` in `TEMPORARY_CRM_CHAT_AUTHORITY.md` can move to RETIRED once this change is deployed and the containers are recreated. The deploy clears the last in-process copy of the credential.
 
 ## The sequence, and why the gate comes before the deletion
 
@@ -506,7 +548,7 @@ the fourth at all.
 | **Installation** | `integration_installations`, `connector_key='dotmac.crm'`, `state='enabled'` | disable — this is what retires the transport |
 | **Job** | `integration_jobs` bound to that binding, `is_active` | deactivate |
 | **Transport / DNS** | `integration_config_revisions.config_json ->> 'base_url'` on that installation — the dead `crm.dotmac.io` host | the revision rows are append-only history; disabling the installation is what stops them being used. Do **not** rewrite historical revisions |
-| **Credential** | `integration_config_revisions.secret_refs ->> 'service_credentials'` — a **pointer**, resolved only inside connection validation | revoke at the store the pointer names. Record the pointer, never the value |
+| **Credential** | `integration_config_revisions.secret_refs ->> 'service_credentials'` — a **pointer**, resolved only inside connection validation | revoke at the store the pointer names. Record the pointer, never the value. **Done 2026-09-27:** the pointer was `env://CRM_SERVICE_TOKEN` (not OpenBao); removed from the production `.env`; issuer destroyed, see *Retired* above |
 | **Webhook transport** | the `sync_crm_ticket` path — see the observation section | **turning the scheduler control off does not disable this.** Only revoking the webhook transport does |
 | **Monitoring binding** | not in this repository — Observer owns it | **RETIRED** 2026-08-30, Observability PR #13 (`393e8703`) — see below |
 

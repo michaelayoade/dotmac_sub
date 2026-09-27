@@ -82,7 +82,9 @@ class PushDestination {
 /// Keys are matched case-insensitively after trimming. Entries exist for the
 /// codes Sub's senders actually emit today:
 ///  * `chat_message`   — app/api/crm_webhooks.py (CRM chat wake-up)
-///  * `ticket`         — app/services/crm_ticket_pull.py (ticket closed)
+///  * `ticket`         — no current sender; its producer, the CRM ticket
+///                       poller, was retired 2026-09-27. Kept so a queued
+///                       push already in flight still routes.
 ///  * `quote`          — app/services/quotes_mirror.py (quote accepted)
 /// plus the notification `event_type`/`category` vocabulary the queued-push
 /// path (app/tasks/notifications.py) produces. Adding a code is a deliberate,

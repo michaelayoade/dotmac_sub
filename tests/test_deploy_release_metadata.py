@@ -39,7 +39,6 @@ def _run_deploy(
     proxy_ready: bool = True,
     migration_lock_failures: int = 0,
     manifest_pins_ready: bool = True,
-    crm_ticket_ready: bool = True,
     github_checks_ready: bool = True,
     background_runtime_ready: bool = True,
     declared_services: tuple[str, ...] = FULL_SERVICES,
@@ -112,9 +111,6 @@ if [[ "$*" == *"alembic upgrade heads"* ]]; then
 fi
 if [[ "$*" == *"scripts.integrations.verify_manifest_pins"* ]]; then
   exit {0 if manifest_pins_ready else 1}
-fi
-if [[ "$*" == *"scripts.integrations.verify_crm_ticket_readiness"* ]]; then
-  exit {0 if crm_ticket_ready else 1}
 fi
 if [[ "$*" == *"config --services"* ]]; then
   printf '%s\\n' {declared_services_literal}
@@ -414,11 +410,6 @@ def test_deploy_verifies_schema_then_warms_candidate_before_recreate(
         for index, command in enumerate(commands)
         if "scripts.integrations.verify_manifest_pins" in command
     )
-    crm_ticket = next(
-        index
-        for index, command in enumerate(commands)
-        if "scripts.integrations.verify_crm_ticket_readiness" in command
-    )
     candidate = next(
         index
         for index, command in enumerate(commands)
@@ -429,7 +420,7 @@ def test_deploy_verifies_schema_then_warms_candidate_before_recreate(
         index for index, command in enumerate(commands) if " up -d app" in command
     )
 
-    assert migration < verification < manifest_pins < crm_ticket < candidate < recreate
+    assert migration < verification < manifest_pins < candidate < recreate
     assert "run --no-deps -d" in candidate_command
     assert "run --rm --no-deps -d" not in candidate_command
 
@@ -448,25 +439,6 @@ def test_deploy_rejects_unavailable_manifest_pin_before_candidate(
     )
     commands = docker_log.read_text().splitlines()
     assert any("scripts.integrations.verify_manifest_pins" in item for item in commands)
-    assert not any("127.0.0.1:18002:8001" in item for item in commands)
-
-
-def test_deploy_rejects_unready_crm_ticket_cutover_before_candidate(
-    tmp_path: Path,
-) -> None:
-    result, env_file, docker_log = _run_deploy(
-        tmp_path,
-        crm_ticket_ready=False,
-    )
-
-    assert result.returncode != 0
-    assert (
-        "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_file.read_text()
-    )
-    commands = docker_log.read_text().splitlines()
-    assert any(
-        "scripts.integrations.verify_crm_ticket_readiness" in item for item in commands
-    )
     assert not any("127.0.0.1:18002:8001" in item for item in commands)
 
 

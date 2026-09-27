@@ -62,11 +62,10 @@ def _reason(path: str) -> ClassificationReason:
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
-        # The five root-level helpers the integration suite imports today.
+        # The four root-level helpers the integration suite imports today.
         ("tests/staff_identity_fixtures.py", ClassificationReason.test_shared_module),
         ("tests/referral_program_testkit.py", ClassificationReason.test_shared_module),
         ("tests/prepaid_funding_helpers.py", ClassificationReason.test_shared_module),
-        ("tests/test_crm_ticket_pull.py", ClassificationReason.test_shared_module),
         (
             "tests/test_integration_whatsapp_capability.py",
             ClassificationReason.test_shared_module,

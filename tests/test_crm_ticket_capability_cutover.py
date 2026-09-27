@@ -15,15 +15,10 @@ from app.models.integration_platform import (
     IntegrationCapabilityBinding,
     IntegrationInstallationState,
 )
-from app.services import control_registry
 from app.services import integration as integration_jobs
 from app.services.integrations import installations
 from app.services.integrations.connectors.dotmac_crm import (
     CRM_TICKET_OBSERVATION_CAPABILITY,
-)
-from app.services.integrations.crm_ticket_readiness import (
-    preview_crm_ticket_cutover,
-    resolve_crm_ticket_pull_readiness,
 )
 from app.services.integrations.runtime import ValidationResult
 from app.services.owner_commands import CommandContext
@@ -97,37 +92,6 @@ def _provision_binding(db_session, monkeypatch, installation_id):
             key="crm-ticket-binding-v1",
         ),
     )
-
-
-def test_cutover_preview_matches_the_production_gap(
-    db_session,
-    monkeypatch,
-) -> None:
-    installation_id, inbound_binding_id, job_id = _legacy_production_state(
-        db_session,
-        monkeypatch,
-    )
-    control_registry.update_canonical_feature_controls(
-        db_session,
-        payload={"crm.ticket_pull": True},
-    )
-
-    preview = preview_crm_ticket_cutover(
-        db_session,
-        installation_id=installation_id,
-        job_id=job_id,
-    )
-
-    assert preview.eligible is True
-    assert preview.already_ready is False
-    assert preview.binding_id is None
-    assert preview.job_binding_id is None
-    assert preview.job_is_active is False
-    assert preview.readiness.issue_codes == (
-        "enabled_ticket_observation_binding_count:0",
-        "active_ticket_observation_job_count:0",
-    )
-    assert len(preview.fingerprint) == 64
 
 
 def test_capability_provisioning_is_atomic_audited_and_replay_safe(
@@ -259,96 +223,6 @@ def test_connection_failure_restores_the_existing_inbound_binding(
         .count()
         == 0
     )
-
-
-def test_job_activation_completes_readiness_and_replays(
-    db_session,
-    monkeypatch,
-) -> None:
-    installation_id, inbound_binding_id, job_id = _legacy_production_state(
-        db_session,
-        monkeypatch,
-    )
-    control_registry.update_canonical_feature_controls(
-        db_session,
-        payload={"crm.ticket_pull": True},
-    )
-    binding = _provision_binding(db_session, monkeypatch, installation_id)
-
-    result = integration_jobs.activate_capability_job(
-        db_session,
-        integration_jobs.ActivateCapabilityJobCommand(
-            job_id=job_id,
-            capability_binding_id=binding.capability_binding_id,
-            capability_id=CRM_TICKET_OBSERVATION_CAPABILITY,
-            expected_target_type=IntegrationTargetType.crm,
-            expected_existing_binding_id=None,
-            expected_is_active=False,
-        ),
-        context=_context(
-            scope=integration_jobs.CAPABILITY_JOB_ACTIVATION_SCOPE,
-            key="crm-ticket-job-v1",
-        ),
-    )
-
-    assert result.replayed is False
-    job = db_session.get(IntegrationJob, job_id)
-    assert job is not None
-    assert job.is_active is True
-    assert job.capability_binding_id == binding.capability_binding_id
-    assert job.schedule_type == IntegrationScheduleType.manual
-    readiness = resolve_crm_ticket_pull_readiness(db_session)
-    assert readiness.ready is True
-    assert readiness.schedule_enabled is True
-    assert readiness.active_job_ids == (job_id,)
-    job.schedule_type = IntegrationScheduleType.interval
-    db_session.flush()
-    drifted = resolve_crm_ticket_pull_readiness(db_session)
-    assert drifted.ready is False
-    assert drifted.issue_codes == ("active_ticket_observation_job_count:0",)
-    job.schedule_type = IntegrationScheduleType.manual
-    db_session.commit()
-
-    replay = integration_jobs.activate_capability_job(
-        db_session,
-        integration_jobs.ActivateCapabilityJobCommand(
-            job_id=job_id,
-            capability_binding_id=binding.capability_binding_id,
-            capability_id=CRM_TICKET_OBSERVATION_CAPABILITY,
-            expected_target_type=IntegrationTargetType.crm,
-            expected_existing_binding_id=None,
-            expected_is_active=False,
-        ),
-        context=_context(
-            scope=integration_jobs.CAPABILITY_JOB_ACTIVATION_SCOPE,
-            key="crm-ticket-job-v1",
-        ),
-    )
-
-    assert replay.replayed is True
-    assert (
-        db_session.query(EventStore)
-        .filter(EventStore.event_type == "integration.job.capability_activated")
-        .count()
-        == 1
-    )
-
-
-def test_readiness_is_not_required_when_ticket_pull_control_is_disabled(
-    db_session,
-    monkeypatch,
-) -> None:
-    _legacy_production_state(db_session, monkeypatch)
-    control_registry.update_canonical_feature_controls(
-        db_session,
-        payload={"crm.ticket_pull": False},
-    )
-
-    readiness = resolve_crm_ticket_pull_readiness(db_session)
-
-    assert readiness.control_enabled is False
-    assert readiness.ready is True
-    assert readiness.schedule_enabled is False
 
 
 def test_job_activation_rejects_changed_reviewed_state(

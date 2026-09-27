@@ -176,13 +176,11 @@ def test_manifest_adoption_has_one_owner_and_a_pre_replacement_gate() -> None:
     assert "require_pinned_connector_definition" in installation_owner
     assert "require_pinned_connector_definition" in runtime
     assert "scripts.integrations.verify_manifest_pins" in deploy
-    assert "scripts.integrations.verify_crm_ticket_readiness" in deploy
     assert deploy.index("scripts.integrations.verify_manifest_pins") < deploy.index(
-        "scripts.integrations.verify_crm_ticket_readiness"
+        "Starting warm candidate"
     )
-    assert deploy.index(
-        "scripts.integrations.verify_crm_ticket_readiness"
-    ) < deploy.index("Starting warm candidate")
+    # The CRM ticket capability is retired; its readiness gate must not return.
+    assert "verify_crm_ticket_readiness" not in deploy
 
 
 def test_alembic_registry_does_not_import_retired_integration_models() -> None:

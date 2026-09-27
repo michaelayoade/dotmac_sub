@@ -18811,13 +18811,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "POST /api/v1/webhooks/crm": {
-   "params": [],
-   "request": null,
-   "responses": {
-    "200": "81656e6decf1"
-   }
-  },
   "POST /api/v1/webhooks/crm/customers": {
    "params": [],
    "request": null,

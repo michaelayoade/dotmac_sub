@@ -33,10 +33,6 @@ from app.tasks.catalog import (
 )
 from app.tasks.channel_health import observe_channel_health
 from app.tasks.collections import prepaid_balance_sweep
-from app.tasks.crm_ticket_pull import (
-    pull_crm_tickets,
-    sync_crm_ticket,
-)
 from app.tasks.cross_app_drift import run_cross_app_drift_detection
 from app.tasks.customer_impact_metrics import export_customer_impact_metrics
 from app.tasks.device_projection import reconcile_device_projections
@@ -284,8 +280,6 @@ __all__ = [
     "audit_cutover_balance_invariant_task",
     "audit_funded_inactive_exposure_task",
     "check_billing_switch_task",
-    "pull_crm_tickets",
-    "sync_crm_ticket",
     "auto_confirm_resolved_tickets",
     "retry_failed_inbox_outbound_messages",
     "promote_inbox_message_media_assets",

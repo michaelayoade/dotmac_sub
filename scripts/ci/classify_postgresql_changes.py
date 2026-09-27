@@ -136,8 +136,7 @@ def _classify_test_path(path: PurePosixPath) -> ClassificationReason:
     if len(parts) == 2:
         # A module directly under `tests/` is shared helper surface: the
         # integration suite imports `tests.staff_identity_fixtures`,
-        # `tests.referral_program_testkit`, `tests.prepaid_funding_helpers`,
-        # `tests.test_crm_ticket_pull` and
+        # `tests.referral_program_testkit`, `tests.prepaid_funding_helpers` and
         # `tests.test_integration_whatsapp_capability` today, and nothing stops
         # the next one being added without touching this file.
         return ClassificationReason.test_shared_module

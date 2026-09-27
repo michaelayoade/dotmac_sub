@@ -574,7 +574,9 @@ delivery/inbox evidence remain intact.
 8. Destructive cutover migration and removal of superseded application paths.
 9. Explicit CRM ticket-observation provisioning, exact job activation, and a
    deployment/scheduler readiness invariant preventing an enabled control from
-   running without its binding and job.
+   running without its binding and job. *Retired 2026-09-27 with the CRM
+   ticket poller (see `docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md`); the
+   generic capability provisioning and job-activation owners remain.*
 10. Meta social inbox transport with distinct Facebook Page and Instagram
     Login account bindings, typed text/private-attachment sends, Meta-owned
     webhook verification, and no WhatsApp or expired-OAuth credential fallback.

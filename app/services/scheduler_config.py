@@ -1294,13 +1294,16 @@ def build_beat_schedule() -> dict:
             logger.info("EMAIL_POLL_EXIT reason=no_jobs")
         for job in integration_jobs:
             binding = getattr(job, "capability_binding", None)
+            # The CRM ticket-observation capability is retired (see
+            # docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md) and has no sync
+            # handler; a job still bound to it must never be scheduled.
             if (
                 binding is not None
                 and getattr(binding, "capability_id", None)
                 == "crm.ticket_observation.v1"
             ):
                 logger.info(
-                    "integration_interval_job_skipped_dedicated_crm_pull job_id=%s",
+                    "integration_interval_job_skipped_retired_crm_capability job_id=%s",
                     getattr(job, "id", ""),
                 )
                 continue
@@ -2161,41 +2164,6 @@ def build_beat_schedule() -> dict:
                     "schedule": timedelta(seconds=radius_sync_interval),
                     "args": [str(sync_job.id)],
                 }
-
-        # CRM ticket pull: inbound CRM tickets/comments into local support tickets.
-        crm_ticket_pull_enabled = control_registry.is_enabled(
-            session, "crm.ticket_pull"
-        )
-        crm_ticket_pull_interval = resolve_integer(
-            session, SettingDomain.scheduler, "crm_ticket_pull_interval_minutes"
-        )
-        crm_ticket_pull_interval = max(crm_ticket_pull_interval, 1)
-        from app.services.integrations.crm_ticket_readiness import (
-            resolve_crm_ticket_pull_readiness,
-        )
-
-        crm_ticket_readiness = resolve_crm_ticket_pull_readiness(
-            session,
-            control_enabled=crm_ticket_pull_enabled,
-        )
-        if crm_ticket_readiness.schedule_enabled:
-            schedule["crm_ticket_pull"] = {
-                "task": "app.tasks.crm_ticket_pull.pull_crm_tickets",
-                "schedule": timedelta(minutes=crm_ticket_pull_interval),
-            }
-            # Daily full reconciliation: heals drift the incremental runs
-            # can't see (CRM comments don't bump ticket updated_at; closed
-            # tickets are excluded from the incremental comment sweep).
-            schedule["crm_ticket_pull_full"] = {
-                "task": "app.tasks.crm_ticket_pull.pull_crm_tickets",
-                "schedule": crontab(hour=3, minute=40),
-                "kwargs": {"full": True},
-            }
-        elif crm_ticket_pull_enabled:
-            logger.error(
-                "crm_ticket_pull_not_ready issue_codes=%s",
-                ",".join(crm_ticket_readiness.issue_codes),
-            )
 
         # ERP schedules derive from validated capability bindings. Per-flow
         # single-writer ownership remains the independent business cutover gate.

@@ -84,7 +84,6 @@ def test_customer_publication_is_owned_and_legacy_visibility_is_reconciled() -> 
         lifecycle.count('"description_is_internal": ticket.description_is_internal')
         >= 3
     )
-    assert "is_internal=True" in _source("app/services/crm_ticket_pull.py")
     assert (
         ROOT / "docs/runbooks/SUPPORT_TICKET_PORTAL_VISIBILITY_RECONCILIATION.md"
     ).exists()

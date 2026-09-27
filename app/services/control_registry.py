@@ -114,7 +114,6 @@ def _truthy(value: object) -> bool:
 
 _NET = SettingDomain.network
 _R = SettingDomain.radius
-_SCH = SettingDomain.scheduler
 _G = SettingDomain.gis
 _U = SettingDomain.usage
 _PRJ = SettingDomain.projects
@@ -430,17 +429,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
             ),
         ),
         description="WireGuard token cleanup.",
-    ),
-    Control(
-        key="crm.ticket_pull",
-        layer=Layer.feature,
-        owner_module="crm",
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(_SCH, "crm_ticket_pull_enabled", "CRM_TICKET_PULL_ENABLED"),
-        ),
-        description="Pull tickets from CRM.",
     ),
     Control(
         key="quotes.native_read",

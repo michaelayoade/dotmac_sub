@@ -131,7 +131,7 @@ def test_postgresql_classifier_is_narrow_and_fails_closed() -> None:
     CONTRACT CHANGE: a root-level `tests/*.py` module used to be exempt. It is
     not, because the integration suite imports helpers from exactly there --
     `tests.staff_identity_fixtures`, `tests.referral_program_testkit`,
-    `tests.prepaid_funding_helpers`, `tests.test_crm_ticket_pull` and
+    `tests.prepaid_funding_helpers` and
     `tests.test_integration_whatsapp_capability` today, with nothing stopping
     the next one. Editing such a module changed what the PostgreSQL lane
     executes while telling CI it could skip that lane.

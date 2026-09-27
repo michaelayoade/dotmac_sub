@@ -20,13 +20,19 @@ Measured on 2026-08-16 against current `origin/dev` with the accepted schema-9
 engine: 2,984 tracked Python sources measured, 1,796 proven test-only sources
 excluded, zero untracked Python, 15 conserved findings, and no syntax errors.
 
+Lowered 2026-09-27 by the CRM ticket-poller retirement: `connector_task`
+18 → 17 (`app/tasks/crm_ticket_pull.py` deleted), `sync_checkpoint` 11 → 10
+(`app/services/integration_sync.py` no longer holds the CRM watermark), and
+the conserved finding for the deleted `tests/test_crm_ticket_pull.py` removed
+(15 → 14).
+
 | Category | Baseline |
 | --- | ---: |
 | `outbound_transport` | 44 |
 | `webhook_surface` | 4 |
 | `provider_credential` | 3 |
-| `connector_task` | 18 |
-| `sync_checkpoint` | 11 |
+| `connector_task` | 17 |
+| `sync_checkpoint` | 10 |
 | `delivery_retry` | 7 |
 
 ### `outbound_transport` — 44 files
@@ -71,10 +77,9 @@ excluded, zero untracked Python, 15 conserved findings, and no syntax errors.
 `app/api/meta_inbox_webhooks.py`, `app/config.py`, and
 `app/services/object_storage.py`.
 
-### `connector_task` — 18 files
+### `connector_task` — 17 files
 
-`app/services/web_integration_syncs.py`, `app/tasks/crm_ticket_pull.py`,
-`app/tasks/dotmac_erp_outbox.py`,
+`app/services/web_integration_syncs.py`, `app/tasks/dotmac_erp_outbox.py`,
 `app/tasks/forwarding_control_observations.py`, `app/tasks/gis.py`,
 `app/tasks/infrastructure_polling.py`, `app/tasks/integration_delivery.py`,
 `app/tasks/integrations.py`, `app/tasks/monitoring_cleanup.py`,
@@ -84,14 +89,13 @@ excluded, zero untracked Python, 15 conserved findings, and no syntax errors.
 `app/tasks/tr069.py`, `app/web/admin/integrations.py`, and
 `app/web/admin/system.py`.
 
-### `sync_checkpoint` — 11 files
+### `sync_checkpoint` — 10 files
 
 `app/models/erp_domain_sync.py`, `app/models/external.py`,
 `app/models/field_material.py`, `app/models/integration_platform.py`,
 `app/models/network_monitoring.py`, `app/models/quote_mirror.py`,
 `app/schemas/external.py`, `app/services/external.py`,
-`app/services/field/material_catalog.py`,
-`app/services/integration_sync.py`, and
+`app/services/field/material_catalog.py`, and
 `app/services/team_inbox_audit_reconstruction.py`.
 
 ### `delivery_retry` — 7 files
@@ -113,7 +117,6 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_ai_gateway.py` | `<module>` | `delivery_retry` | `8592de9de918a715812dd3b241f2f00930b30bc617bdf2674fdfc16abb797399` |
 | `tests/test_ai_gateway.py` | `<module>` | `outbound_transport` | `8592de9de918a715812dd3b241f2f00930b30bc617bdf2674fdfc16abb797399` |
 | `tests/test_crm_client_resilience.py` | `<module>` | `outbound_transport` | `58bc472074bb7bec95639e2575065066c05d8043983fa49bb10f3858d29320b0` |
-| `tests/test_crm_ticket_pull.py` | `test_latest_crm_updated_at_watermark` | `sync_checkpoint` | `03c45fad7c1a26e5c6ade4222d19ad0190ce37795403d89308d1c3fd23143aeb` |
 | `tests/test_email_services.py` | `test_send_email_auth_failure_logs` | `outbound_transport` | `d683e108d08534885850232a8391432cb4ac57e01aa93845a184b09f2c238c2a` |
 | `tests/test_email_services.py` | `test_smtp_connection_auth_failure_logs` | `outbound_transport` | `d683e108d08534885850232a8391432cb4ac57e01aa93845a184b09f2c238c2a` |
 | `tests/test_genieacs_services.py` | `<module>` | `outbound_transport` | `cfc1341f06e824ad2bfc34a59d5adece457c40bea620b65d7badd43779956d99` |

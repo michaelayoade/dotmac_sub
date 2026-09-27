@@ -26,7 +26,6 @@ SIGNATURE_HEADER = "X-Webhook-Signature-256"
 EVENT_HEADER = "X-Webhook-Event"
 DELIVERY_HEADER = "X-Webhook-Delivery-Id"
 
-TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
 # `message.outbound` and the `/webhooks/crm/chat` receiver were REMOVED on
 # 2026-08-30 with ADR 0006. They existed only to wake a mobile device when the
@@ -39,14 +38,6 @@ QUOTE_EVENTS = {
     "quote.accepted",
     "quote.rejected",
 }
-
-
-class CrmTicketObservationNotReady(RuntimeError):
-    """The ticket event is valid but its executable capability is unavailable."""
-
-    def __init__(self, issue_codes: tuple[str, ...]) -> None:
-        super().__init__("CRM ticket observation capability is not ready")
-        self.issue_codes = issue_codes
 
 
 def _verify_signature(raw_body: bytes, presented: str | None, secret: str) -> None:
@@ -197,82 +188,6 @@ async def receive_crm_customer(
     except Exception as exc:
         _failed(db, receipt, exc)
         raise
-
-
-@router.post("")
-async def receive_crm_event(
-    request: Request,
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    event_type, payload, receipt, should_process = await _receive_verified(
-        request, db, default_event="unknown"
-    )
-    prior = _existing(receipt, should_process)
-    if prior is not None:
-        return prior
-    try:
-        if event_type not in TICKET_EVENTS:
-            return _complete(db, receipt, {"status": "ignored", "event": event_type})
-        from app.services import control_registry
-
-        if not control_registry.is_enabled(db, "crm.ticket_pull"):
-            return _complete(
-                db,
-                receipt,
-                {
-                    "status": "ignored",
-                    "reason": "ticket_observation_disabled",
-                    "event": event_type,
-                },
-            )
-        from app.services.integrations.crm_ticket_readiness import (
-            resolve_crm_ticket_pull_readiness,
-        )
-
-        readiness = resolve_crm_ticket_pull_readiness(db, control_enabled=True)
-        if not readiness.ready:
-            raise CrmTicketObservationNotReady(readiness.issue_codes)
-        ticket_id = str(payload.get("ticket_id") or "").strip()
-        if not ticket_id:
-            return _complete(
-                db,
-                receipt,
-                {
-                    "status": "ignored",
-                    "reason": "ticket_id_missing",
-                    "event": event_type,
-                },
-            )
-        from app.services.queue_adapter import enqueue_task
-        from app.tasks.crm_ticket_pull import sync_crm_ticket
-
-        enqueue_task(
-            sync_crm_ticket,
-            args=[ticket_id],
-            correlation_id=f"crm_inbox:{receipt.id}",
-            source="integration_inbox",
-        )
-        return _complete(
-            db,
-            receipt,
-            {"status": "queued", "event": event_type, "ticket_id": ticket_id},
-        )
-    except Exception as exc:
-        if isinstance(exc, CrmTicketObservationNotReady):
-            integration_inbox.fail_claimed_consequence(
-                db,
-                receipt_id=receipt.id,
-                error_code="crm_ticket_observation_not_ready",
-                error_detail=",".join(exc.issue_codes),
-            )
-        else:
-            _failed(db, receipt, exc)
-        if isinstance(exc, HTTPException):
-            raise
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Unable to apply CRM ticket observation.",
-        ) from exc
 
 
 async def _receive_mirror_event(

@@ -144,13 +144,9 @@ celery_app.conf.task_routes = {
     "app.tasks.usage.lift_expired_fup_enforcement": {"queue": "ingestion"},
     # Operator-triggered identity checks should not wait behind bulk jobs.
     "app.tasks.nin_tasks.verify_nin_task": {"queue": "nin"},
-    # CRM ticket pull paginates an external API; the default queue's backlog
-    # would push it far past its 5-minute schedule.
-    "app.tasks.crm_ticket_pull.pull_crm_tickets": {"queue": "crm"},
-    "app.tasks.crm_ticket_pull.sync_crm_ticket": {"queue": "crm"},
-    # ERP outbox delivery paces against an external API (erp.dotmac.io) like the
-    # CRM push tasks; share the externally-paced integration queue so a slow ERP
-    # never blocks the default queue.
+    # ERP outbox delivery paces against an external API (erp.dotmac.io); keep it
+    # on the externally-paced integration queue so a slow ERP never blocks the
+    # default queue.
     "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events": {"queue": "crm"},
     "app.tasks.dotmac_erp_outbox.refresh_expense_claim_statuses": {"queue": "crm"},
     "app.tasks.dotmac_erp_outbox.refresh_material_request_statuses": {"queue": "crm"},
@@ -196,7 +192,7 @@ celery_app.conf.task_queues = (
     Queue("bandwidth"),  # High-volume bandwidth processing
     Queue("monitoring"),  # Reserved device reachability/status processing
     Queue("ingestion"),  # High-volume data ingestion (usage, topology)
-    Queue("crm"),  # CRM ticket/comment pull (external API paced)
+    Queue("crm"),  # ERP outbox delivery (external API paced)
     Queue("billing"),  # Daily business runners (billing/dunning/expiry/FUP)
 )
 

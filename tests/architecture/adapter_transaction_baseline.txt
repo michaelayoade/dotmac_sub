@@ -51,7 +51,6 @@ flush 1 app/tasks/alert_evaluation.py
 flush 1 app/tasks/nin_tasks.py
 flush 1 app/tasks/uisp_control.py
 helper:form_write 10 app/web/admin/catalog_settings.py
-helper:task_session 2 app/tasks/crm_ticket_pull.py
 helper:task_session 1 app/tasks/support_tickets.py
 rollback 1 app/api/crm.py
 rollback 2 app/tasks/_postgres_lock.py

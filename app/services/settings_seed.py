@@ -1418,7 +1418,6 @@ def seed_scheduler_settings(db: Session) -> None:
         value_text=os.getenv("EVENT_DISPATCH_BATCH_SIZE", "100"),
     )
     for key, env_name, default in [
-        ("crm_ticket_pull_interval_minutes", "CRM_TICKET_PULL_INTERVAL_MINUTES", "5"),
         ("crm_cache_list_seconds", "CRM_CACHE_LIST_SECONDS", "60"),
         ("crm_cache_detail_seconds", "CRM_CACHE_DETAIL_SECONDS", "30"),
         ("crm_retry_max_attempts", "CRM_RETRY_MAX_ATTEMPTS", "2"),

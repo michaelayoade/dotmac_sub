@@ -87,20 +87,15 @@ resume modes.
 11. Verify every enabled integration installation pin resolves to a current or
    bounded historical definition in the new image. Unavailable pins block
    replacement; historical pins are reported for explicit adoption.
-12. Verify that an enabled `crm.ticket_pull` control has exactly one enabled
-   `crm.ticket_observation.v1` binding and one active job bound to it. Complete
-   the reviewed
-   [`CRM_TICKET_CAPABILITY_CUTOVER.md`](CRM_TICKET_CAPABILITY_CUTOVER.md)
-   procedure with the candidate image before deployment when this gate fails.
-13. Start and health-check the new application image on `127.0.0.1:18002`.
-14. Recreate the primary application and workers. Nginx uses the healthy
+12. Start and health-check the new application image on `127.0.0.1:18002`.
+13. Recreate the primary application and workers. Nginx uses the healthy
    candidate while the primary port is unavailable.
-15. Verify the primary image has no source-code bind mount and wait for its
+14. Verify the primary image has no source-code bind mount and wait for its
    health endpoint.
-16. Require every declared Celery worker to remain restart-free and answer a
+15. Require every declared Celery worker to remain restart-free and answer a
    node-specific ping, and require Celery Beat to remain running without
    restarts, across a bounded stabilization window.
-17. Gracefully drain the candidate and retain the configured rollback images.
+16. Gracefully drain the candidate and retain the configured rollback images.
 
 The candidate runs the same image, environment, and database schema as the
 primary. It is bound to localhost and exists only for the handoff window.
@@ -353,9 +348,6 @@ docker compose -f docker-compose.yml run --rm --no-deps app \
 
 docker compose -f docker-compose.yml run --rm --no-deps app \
   python -m scripts.integrations.verify_manifest_pins
-
-docker compose -f docker-compose.yml run --rm --no-deps app \
-  python -m scripts.integrations.verify_crm_ticket_readiness
 ```
 
 ## Working-tree drift detection
@@ -403,8 +395,8 @@ tree drifted for days undetected.
   `scripts/deploy_production.sh` before any image pull, backup, or migration.
   Confirmed container absence also stops unless an exact typed bootstrap
   authorization is supplied.
-- Migration, schema verification, unavailable integration-pin, or CRM ticket
-  capability-readiness failure occurs before service replacement.
+- Migration, schema verification, or unavailable integration-pin failure
+  occurs before service replacement.
 - Commercial module prerequisite or dispatcher-role failure occurs before
   database backup and before Alembic. Run the explicit bootstrap repair, then
   rerun the guarded deploy.

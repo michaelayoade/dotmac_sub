@@ -27,7 +27,7 @@ subscriber map, title-regex default, and datetime normalization):
 
 Comment-count shortfalls (sub one short) are usually CRM comments created
 after the ticket's last incremental sync: CRM ``TicketComments.create`` does
-not bump ``tickets.updated_at`` (noted in ``crm_ticket_pull.py`` too), so new
+not bump ``tickets.updated_at``, so new
 CRM comments are invisible to the importer's ``--state-file`` watermark and
 to the incremental pull, whose comment sweep only covers open
 ``sync_source='crm'`` tickets. They stay gating — sub is genuinely missing
