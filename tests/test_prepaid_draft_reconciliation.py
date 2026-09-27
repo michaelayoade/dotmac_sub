@@ -2014,6 +2014,104 @@ def test_reviewed_existing_draft_settles_selected_verified_payment_atomically(
     )
 
 
+def test_access_relevant_reviewed_draft_preview_hides_missing_funding_detail(
+    db_session,
+    subscriber,
+    subscription,
+    monkeypatch,
+):
+    invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("100.00"))
+    line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    invoice.billing_period_start = None
+    invoice.billing_period_end = None
+    line.subscription_id = None
+    reviewed_start = datetime(2026, 8, 31, 23, tzinfo=UTC)
+    reviewed_end = datetime(2026, 9, 30, 23, tzinfo=UTC)
+    subscription.next_billing_at = reviewed_start
+    payment = _payment(
+        db_session,
+        subscriber,
+        amount=Decimal("100.00"),
+        paid_at=datetime(2026, 9, 26, 10, tzinfo=UTC),
+    )
+    proof_reference = "TRF-REVIEWED-CURRENT-TEST"
+    db_session.add(
+        PaymentProof(
+            account_id=subscriber.id,
+            amount=Decimal("100.00"),
+            verified_amount=Decimal("100.00"),
+            currency="NGN",
+            reference=proof_reference,
+            paid_at=payment.paid_at,
+            file_path="pytest/reviewed-current-payment-proof.pdf",
+            status=PaymentProofStatus.verified,
+            verified_by="Finance reviewer",
+            payment_id=payment.id,
+        )
+    )
+    approver = SystemUser(
+        first_name="Finance",
+        last_name="Approver",
+        email=f"finance-current-approver-{uuid4().hex}@example.com",
+    )
+    db_session.add(approver)
+    db_session.commit()
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            value = cls(2026, 9, 27, 12, tzinfo=UTC)
+            return value if tz is None else value.astimezone(tz)
+
+    def missing_funding(*_args, **_kwargs):
+        raise PrepaidFundingBaselineMissingError(
+            "sensitive internal baseline and cutover diagnostics"
+        )
+
+    monkeypatch.setattr(
+        "app.services.prepaid_draft_reconciliation.datetime", FixedDateTime
+    )
+    monkeypatch.setattr(
+        "app.services.prepaid_draft_reconciliation.verified_prepaid_funding_balance",
+        missing_funding,
+    )
+    preview = preview_reviewed_existing_prepaid_draft_settlement(
+        db_session,
+        ReviewedExistingDraftSettlementQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            payment_id=payment.id,
+            service_start_on=date(2026, 9, 1),
+            next_billing_on=date(2026, 10, 1),
+            expected_total=Decimal("100.00"),
+            expected_remaining_credit=Decimal("0.00"),
+            payment_reference=proof_reference,
+            approval=ReviewedExistingDraftSettlementApproval(
+                approver_system_user_id=approver.id,
+                approver_name="Finance Approver",
+                approved_at=datetime(2026, 9, 27, 8, 15, tzinfo=UTC),
+                ticket_reference="TICKET-TEST",
+                evidence_sha256="a" * 64,
+            ),
+        ),
+    )
+
+    assert preview.disposition is (
+        ReviewedExistingDraftSettlementDisposition.manual_review
+    )
+    assert preview.actionable is False
+    assert preview.reason == "verified prepaid funding prerequisite is missing"
+    assert "sensitive internal" not in preview.reason
+    assert db_session.query(PaymentAllocation).count() == 0
+    assert db_session.query(ServiceEntitlement).count() == 0
+
+
 def test_reviewed_existing_draft_refuses_unverified_reference(
     db_session,
     subscriber,

@@ -272,6 +272,7 @@ from app.models.customer_subledger import (  # noqa: F401
     CustomerSubledgerAuthorityCutover,
     CustomerSubledgerOpeningCorrection,
     CustomerSubledgerOpeningPosition,
+    NativePrepaidOpeningRepair,
     PositionEffectKind,
     PostingCommandKind,
 )

@@ -262,6 +262,33 @@ balance after the historical draft.
 The operational procedure and post-settlement checks are in
 `docs/runbooks/REVIEWED_EXISTING_PREPAID_DRAFT_SETTLEMENT.md`.
 
+If the reviewed period contains the current instant, preview also resolves the
+verified prepaid-funding prerequisite before it can return
+`exact_reviewed_draft`. A missing approved opening is reported only as
+`manual_review` with the safe reason `verified prepaid funding prerequisite is
+missing`; internal baseline exceptions are not exposed. Apply retains the same
+check after locks and the existing all-or-nothing rollback remains defense in
+depth.
+
+### Account-scoped Sub-native opening omission repair
+
+`financial.customer_subledger_opening_positions` owns one separate repair for
+an account that was created after the fixed legacy handoff, existed at the
+original prepaid-funding authority cutover, remains in the prepaid cohort, and
+has neither Splynx identity/transactions nor an approved baseline/opening. It
+does not reopen or append to the signed full-cohort reconstruction batch.
+
+Preview calculates the original-cutover amount from canonical Sub-native facts
+and fingerprints every admitted event, the source-identity classification, the
+sealed authority batch/time, and the shadow posting position at that instant.
+Apply accepts no balance, locks and recomputes all evidence, and requires active
+Finance approval plus a permissioned system-user operator. It appends a native
+repair record, an immutable opening linked through its distinct provenance
+column, the residual customer-subledger posting, audit evidence, and a durable
+event in one owner transaction. It never edits ledger entries, invoices,
+payments, subscriptions, access state, or billing anchors. See
+`docs/runbooks/NATIVE_PREPAID_OPENING_REPAIR.md`.
+
 An existing prepaid draft has first claim on the service-period document
 boundary. A funding-change consequence checks it before creating a new funded
 renewal invoice:

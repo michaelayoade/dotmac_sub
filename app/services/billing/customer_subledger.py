@@ -19,6 +19,8 @@ There is no cross-currency total and no generic mutable balance.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -96,6 +98,15 @@ class EffectInput:
     payment_id: UUID | None = None
     credit_note_id: UUID | None = None
     entitlement_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSubledgerPositionEvidence:
+    """Typed position plus exact posting/effect fingerprint at one instant."""
+
+    position: CustomerFinancialPosition
+    fingerprint: str
+    posting_group_count: int
 
 
 @dataclass(frozen=True)
@@ -565,7 +576,7 @@ def resolve_position(
             CustomerPositionEffect.amount,
             CustomerPostingGroup.reverses_group_id,
         )
-        .join(
+        .outerjoin(
             CustomerPostingGroup,
             CustomerPositionEffect.group_id == CustomerPostingGroup.id,
         )
@@ -592,6 +603,118 @@ def resolve_position(
         currency=currency,
         authority=resolved_authority,
         **lanes,
+    )
+
+
+def resolve_position_evidence_at(
+    db: Session,
+    *,
+    account_id: UUID,
+    currency: str,
+    authority: BillingRecordAuthority,
+    as_of: datetime,
+) -> CustomerSubledgerPositionEvidence:
+    """Resolve immutable postings known and effective no later than ``as_of``."""
+
+    boundary = (
+        as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
+    )
+    rows = db.execute(
+        select(CustomerPostingGroup, CustomerPositionEffect)
+        .join(
+            CustomerPositionEffect,
+            CustomerPositionEffect.group_id == CustomerPostingGroup.id,
+        )
+        .where(
+            CustomerPostingGroup.account_id == account_id,
+            CustomerPostingGroup.currency == currency,
+            CustomerPostingGroup.authority == authority,
+            CustomerPostingGroup.occurred_at <= boundary,
+            CustomerPostingGroup.recorded_at <= boundary,
+        )
+        .order_by(CustomerPostingGroup.id, CustomerPositionEffect.id)
+    ).all()
+    lanes = {
+        "collectible_receivable": Decimal("0"),
+        "unapplied_customer_credit": Decimal("0"),
+        "prepaid_funding_reserved": Decimal("0"),
+        "prepaid_funding_consumed": Decimal("0"),
+        "written_off_total": Decimal("0"),
+        "refunded_total": Decimal("0"),
+        "adjustment_total": Decimal("0"),
+    }
+    payload: list[dict[str, object]] = []
+    group_ids: set[UUID] = set()
+    for group, effect in rows:
+        group_ids.add(group.id)
+        if effect is not None:
+            sign = -1 if group.reverses_group_id is not None else 1
+            value = Decimal(effect.amount) * sign
+            move = _LANE_MOVES.get(effect.effect)
+            if move is not None:
+                lane, direction = move
+                lanes[lane] += value * direction
+            evidence_lane = _EVIDENCE_MOVES.get(effect.effect)
+            if evidence_lane is not None:
+                lanes[evidence_lane] += value
+        payload.append(
+            {
+                "group_id": str(group.id),
+                "authority": group.authority.value,
+                "command_kind": group.command_kind.value,
+                "producer_owner": group.producer_owner,
+                "source_kind": group.source_kind,
+                "source_id": str(group.source_id),
+                "idempotency_key": group.idempotency_key,
+                "effect_id": str(effect.id) if effect is not None else None,
+                "effect": effect.effect.value if effect is not None else None,
+                "amount": str(Decimal(effect.amount)) if effect is not None else None,
+                "obligation_id": (
+                    str(effect.obligation_id)
+                    if effect is not None and effect.obligation_id is not None
+                    else None
+                ),
+                "invoice_id": (
+                    str(effect.invoice_id)
+                    if effect is not None and effect.invoice_id is not None
+                    else None
+                ),
+                "payment_id": (
+                    str(effect.payment_id)
+                    if effect is not None and effect.payment_id is not None
+                    else None
+                ),
+                "credit_note_id": (
+                    str(effect.credit_note_id)
+                    if effect is not None and effect.credit_note_id is not None
+                    else None
+                ),
+                "entitlement_id": (
+                    str(effect.entitlement_id)
+                    if effect is not None and effect.entitlement_id is not None
+                    else None
+                ),
+                "occurred_at": group.occurred_at.isoformat(),
+                "recorded_at": group.recorded_at.isoformat(),
+                "reverses_group_id": (
+                    str(group.reverses_group_id)
+                    if group.reverses_group_id is not None
+                    else None
+                ),
+            }
+        )
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return CustomerSubledgerPositionEvidence(
+        position=CustomerFinancialPosition(
+            account_id=account_id,
+            currency=currency,
+            authority=authority,
+            **lanes,
+        ),
+        fingerprint=fingerprint,
+        posting_group_count=len(group_ids),
     )
 
 
@@ -686,6 +809,7 @@ __all__ = [
     "StagePostingGroupCommand",
     "authority_cutover",
     "resolve_position",
+    "resolve_position_evidence_at",
     "resolve_positions",
     "stage_posting_group",
     "stage_reversal",

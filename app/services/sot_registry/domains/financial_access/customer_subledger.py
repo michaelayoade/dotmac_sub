@@ -183,12 +183,14 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "reviewed customer-subledger opening-position capture",
             "reviewed customer-subledger opening-position correction",
+            "account-scoped native prepaid opening repair",
             "customer-subledger authority cutover activation",
         ),
         depends_on=(
             "auth.permission_gate",
             "billing.shadow_verification",
             "customer.accounts",
+            "events.audit",
             "events.dispatcher",
             "financial.customer_subledger",
             "financial.prepaid_funding_reconstruction",
@@ -212,9 +214,24 @@ SERVICES: tuple[SOTService, ...] = (
             "into the same two-approval capture protocol. An incorrect immutable "
             "opening is repaired only by an append-only, fingerprint-bound "
             "correction and matching position effect."
+            " A separate dry-run-first native omission repair binds the original "
+            "prepaid authority batch, content-addressed canonical Sub facts, zero "
+            "Splynx evidence, active Finance approval, and a permissioned operator "
+            "to one append-only repair, opening, posting, audit, and event."
         ),
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="account-scoped native prepaid opening repair",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "reviewed native opening repair command",
+                        "verified prepaid funding position",
+                        "recorded customer postings",
+                        "canonical customer account",
+                    ),
+                    canonical_writer="financial.customer_subledger_opening_positions",
+                ),
                 ConcernContract(
                     name=("reviewed customer-subledger opening-position capture"),
                     role=OwnerRole.COMMAND_WRITER,
@@ -247,6 +264,18 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="reviewed native opening repair command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:prepaid_funding:native_opening_repair permission "
+                        "rechecked for a named active operator plus active Finance "
+                        "approver, aware approval time, ticket, non-secret evidence "
+                        "reference, lowercase evidence digest, exact preview "
+                        "fingerprint, reason, and idempotency key"
+                    ),
+                ),
                 AuthorityInput(
                     name="reviewed opening correction command",
                     owner="auth.permission_gate",
@@ -317,7 +346,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "post-cutover capture uses the same owner transaction and "
                     "never updates the authority record. A correction uses the "
                     "same boundary for its immutable evidence, position effect, "
-                    "and domain event."
+                    "and domain event. Native repair uses that boundary once for "
+                    "repair evidence, opening, posting, audit, and domain event."
                 ),
                 locking=(
                     "The approved verification run is locked before capture; "
@@ -325,14 +355,17 @@ SERVICES: tuple[SOTService, ...] = (
                     "account against the immutable original cutoff; "
                     "unique account/currency and posting idempotency constraints "
                     "arbitrate concurrent attempts; corrections lock the customer "
-                    "account before recomputing the reviewed preview."
+                    "account before recomputing the reviewed preview. Native repair "
+                    "locks the account, authority cutovers, source rows, baseline, "
+                    "opening, and Splynx evidence before exact re-preview."
                 ),
                 idempotency=(
                     "One immutable opening per account/currency. Exact replay of "
                     "the same reviewed run returns the recorded cohort; changed "
                     "rows, selected-account evidence, or fingerprints fail closed. "
                     "Corrections use a unique idempotency key and reject stale "
-                    "preview fingerprints."
+                    "preview fingerprints. Native repair exact replay returns the "
+                    "recorded result and conflicting evidence fails closed."
                 ),
                 retries=(
                     "Retry the complete command with the same approved run and "
@@ -346,7 +379,23 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     (
                         "financial.customer_subledger_opening_positions."
+                        "account_not_in_funding_cohort"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
+                        "account_not_in_original_cutover"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
+                        "account_not_native_after_handoff"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
                         "account_not_found"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
+                        "funding_baseline_already_exists"
                     ),
                     (
                         "financial.customer_subledger_opening_positions."
@@ -354,11 +403,31 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     (
                         "financial.customer_subledger_opening_positions."
+                        "invalid_finance_approval"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
                         "authority_already_activated"
                     ),
                     (
                         "financial.customer_subledger_opening_positions."
+                        "native_repair_incomplete"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
+                        "native_evidence_incomplete"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
                         "authority_not_active"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
+                        "splynx_identity_present"
+                    ),
+                    (
+                        "financial.customer_subledger_opening_positions."
+                        "splynx_transactions_present"
                     ),
                     (
                         "financial.customer_subledger_opening_positions."
@@ -432,12 +501,17 @@ SERVICES: tuple[SOTService, ...] = (
                     "a missing opening, inactive authority, stale correction preview, "
                     "or conflicting correction idempotency key",
                     "a correction requested without its dedicated staff permission",
+                    "a native account outside the original funding cohort or current "
+                    "prepaid cohort, any Splynx identity/transaction, existing or "
+                    "competing baseline/opening, stale native/posting evidence, "
+                    "inactive Finance approval, or missing operator permission",
                 ),
             ),
             events=EventContract(
                 event_types=(
                     "customer_subledger.opening_position_corrected",
                     "customer_subledger.opening_positions_captured",
+                    "customer_subledger.native_opening_repaired",
                     "customer_subledger.authority_activated",
                 ),
                 schema_version=1,
@@ -448,6 +522,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "authority_moved=false. Correction events carry the immutable "
                     "correction and opening identities plus exact before, after, "
                     "delta, currency, account, and review reference."
+                    " Native repair carries repair/opening/posting identities, exact "
+                    "cutover, amount, classification, fingerprint, and ticket."
                 ),
                 replay=(
                     "Rebuild consumers from immutable opening evidence and "
@@ -482,9 +558,11 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/adr/0007-end-to-end-billing-target-architecture.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/runbooks/REVIEWED_MIGRATED_PREPAID_OPENING_REPAIR.md",
+                "docs/runbooks/NATIVE_PREPAID_OPENING_REPAIR.md",
             ),
             test_refs=(
                 "tests/test_subledger_opening_positions.py",
+                "tests/test_native_prepaid_opening_repair.py",
                 "tests/architecture/test_customer_subledger_ownership.py",
                 "tests/architecture/test_billing_target_architecture.py",
             ),

@@ -27,6 +27,10 @@ the superseded entitlement end.
 Do not apply when the preview is not `exact_reviewed_draft`. Resolve changed
 contract/tax terms, financial activity, refund/reversal evidence, payment
 capacity, overlapping coverage, or cutoff-balance differences first.
+When the reviewed service period is current, preview must also resolve verified
+prepaid funding. `manual_review` with `verified prepaid funding prerequisite is
+missing` means the account opening must be repaired through its owning runbook
+before settlement; do not attempt apply to discover the same failure.
 
 ## Preview
 

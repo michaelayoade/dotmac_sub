@@ -137,6 +137,7 @@ class EventType(enum.Enum):
     customer_subledger_opening_position_corrected = (
         "customer_subledger.opening_position_corrected"
     )
+    native_prepaid_opening_repaired = "customer_subledger.native_opening_repaired"
     customer_subledger_authority_activated = "customer_subledger.authority_activated"
 
     # Billing - Bank-transfer evidence lifecycle

@@ -139,6 +139,19 @@ class PrepaidInvoiceConsumptionPreview:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class NativeFinancialPositionEvidence:
+    """Content-addressed native facts for one bounded account position."""
+
+    account_id: UUID
+    currency: str
+    after: datetime
+    before: datetime
+    amount: Decimal
+    event_count: int
+    fingerprint: str
+
+
 def _money(value: object) -> Decimal:
     return round_money(Decimal(str(value or 0)))
 
@@ -1207,6 +1220,76 @@ def native_customer_financial_balances_by_currency(
         account_ids,
         start=_event_date(after),
         end=_event_date(before) if before is not None else None,
+    )
+
+
+def native_customer_financial_position_evidence(
+    db: Session,
+    account_id: str | UUID,
+    *,
+    currency: str,
+    after: datetime,
+    before: datetime,
+) -> NativeFinancialPositionEvidence:
+    """Resolve and fingerprint every native fact admitted to a bounded position.
+
+    The window mirrors the aggregate reader's dual economic/recorded-time
+    boundary.  Persisted previews therefore become stale when a relevant row is
+    inserted, removed, reclassified, retimed, or changes monetary effect even
+    when an offsetting row happens to leave the final sum unchanged.
+    """
+
+    account_uuid = coerce_uuid(account_id)
+    unit = str(currency).strip().upper()
+    start = _event_date(after)
+    end = _event_date(before)
+    events = [
+        event
+        for event in list_customer_financial_events(db, account_uuid, currency=unit)
+        if _crosses_position_boundary(event, position_at=start)
+        and event.occurred_at <= end
+        and _recorded_at(event) <= end
+        and not event.id.startswith("prepaid-opening:")
+    ]
+    payload = [
+        {
+            "id": event.id,
+            "entry_type": event.entry_type.value,
+            "source": event.source.value,
+            "amount": str(round_money(event.amount)),
+            "signed_amount": str(round_money(event.signed_amount)),
+            "currency": event.currency,
+            "occurred_at": _event_date(event.occurred_at).isoformat(),
+            "recorded_at": _recorded_at(event).isoformat(),
+        }
+        for event in events
+    ]
+    amount = round_money(
+        sum((event.signed_amount for event in events), Decimal("0.00"))
+    )
+    aggregate = round_money(
+        native_customer_financial_balances_by_currency(
+            db,
+            [account_uuid],
+            after=start,
+            before=end,
+        )
+        .get(account_uuid, {})
+        .get(unit, Decimal("0.00"))
+    )
+    if amount != aggregate:
+        raise RuntimeError("native financial evidence disagrees with aggregate")
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return NativeFinancialPositionEvidence(
+        account_id=account_uuid,
+        currency=unit,
+        after=start,
+        before=end,
+        amount=amount,
+        event_count=len(events),
+        fingerprint=fingerprint,
     )
 
 

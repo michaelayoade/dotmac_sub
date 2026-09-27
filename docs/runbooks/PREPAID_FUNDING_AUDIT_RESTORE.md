@@ -178,6 +178,14 @@ cohort — and preview blocks on any `missing_reconstruction_account` or
 isolation; every manifest materializes every candidate. A signed manifest with
 any blocker/excluded account is rejected.
 
+The only account-scoped exception is not a reconstruction manifest at all.
+`docs/runbooks/NATIVE_PREPAID_OPENING_REPAIR.md` covers a Sub-native account
+created after the legacy handoff that was accidentally omitted despite
+existing at the original cutover. That owner independently proves zero Splynx
+evidence and fingerprints canonical Sub facts at the sealed cutover. It cannot
+repair a migrated/Splynx-linked account, alter a batch, or supply a cohort
+hash, so the complete-cohort rule above remains unchanged.
+
 **A repair batch is not the cutover.** The authority cutover already exists, so
 a new batch gets `is_authority_cutover = False`, and its `position_at` must be
 strictly newer than the existing baselines or preview blocks with

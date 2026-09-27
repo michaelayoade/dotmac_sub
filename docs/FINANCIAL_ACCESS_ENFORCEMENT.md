@@ -780,3 +780,21 @@ exports, or secret values in these records.
 - `tests/test_account_lifecycle.py`
 - `tests/test_events_enforcement_services.py`
 - `tests/test_radius_shadow_handler_integration.py`
+# Account-scoped native opening omissions
+
+An account created after the legacy financial handoff but before the prepaid
+funding authority cutover can be repaired independently only when canonical
+Sub-native facts completely reconstruct its position at that original cutover,
+it remains in the prepaid cohort, and it has no Splynx identity, Splynx
+transactions, active funding baseline, or customer-subledger opening. The
+dry-run-first owner is `financial.customer_subledger_opening_positions`; it
+does not weaken the signed complete-cohort contract for migrated or
+Splynx-linked accounts.
+
+The repair records an immutable original-cutover opening. Runtime verified
+funding then uses that opening plus canonical facts recorded or effective after
+the cutover, exactly like other approved openings. Changed native facts,
+authority evidence, cohort membership, approval evidence, permissions, or a
+competing opening/baseline fail closed. The repair has no authority to change
+invoices, payments, subscription/access state, ledger entries, or billing
+anchors.

@@ -3429,6 +3429,34 @@ def preview_reviewed_existing_prepaid_draft_settlement(
             successor=successor,
         )
 
+    verified_funding: Decimal | None = None
+    evaluated_at = datetime.now(UTC)
+    if period_start <= evaluated_at < period_end:
+        try:
+            verified_funding = round_money(
+                verified_prepaid_funding_balance(
+                    db,
+                    invoice.account_id,
+                    currency=charge.currency,
+                )
+            )
+        except PrepaidFundingBaselineMissingError:
+            return _build_reviewed_existing_draft_preview(
+                query=query,
+                invoice=invoice,
+                disposition=ReviewedExistingDraftSettlementDisposition.manual_review,
+                reason="verified prepaid funding prerequisite is missing",
+                period_start=period_start,
+                period_end=period_end,
+                line=line,
+                settlement=settlement,
+                account_credit_before=projected_account_credit,
+                selected_payment_available=selected_payment_available,
+                payment_reference=canonical_reference,
+                superseded=superseded,
+                successor=successor,
+            )
+
     return _build_reviewed_existing_draft_preview(
         query=query,
         invoice=invoice,
@@ -3458,6 +3486,7 @@ def preview_reviewed_existing_prepaid_draft_settlement(
             "settlement_unallocated_amount": settlement.unallocated_amount,
             "tax_rate_id": charge.tax_rate_id,
             "tax_application": charge.tax_application,
+            "verified_prepaid_funding": verified_funding,
         },
         superseded=superseded,
         successor=successor,
