@@ -127,6 +127,13 @@ class CapabilityValidationRunner(Protocol):
     ) -> ValidationResult: ...
 
 
+@runtime_checkable
+class CapabilitySupportRunner(Protocol):
+    """Pure, optional availability check before secret materialization."""
+
+    def supports_capability(self, capability_id: str) -> bool: ...
+
+
 class RunnerRegistry:
     """Process-local runner resolver populated explicitly at worker startup."""
 

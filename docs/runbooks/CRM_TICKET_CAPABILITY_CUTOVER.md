@@ -151,10 +151,21 @@ the last step of this procedure is to move that field to RETIRED.
 - both `crm_ticket_pull_*` setting specs;
 - both schedule entries and the readiness gate;
 - the ticket webhook route;
+- the current `dotmac.crm` ticket-observation capability and ticket network actions;
 - the readiness resolver, the cutover reconcile script and the deploy readiness gate;
 - the one-off ticket importer.
 
-`tests/architecture/test_crm_ticket_pull_retired.py` scans `app/` and `scripts/` for the poller's schedule keys, task name, control, setting specs and environment reads, the ticket webhook receiver (`receive_crm_event`, `TICKET_EVENTS`) and the cutover tooling, and pins that the deleted modules stay deleted; `tests/architecture/test_integration_platform_boundary.py` pins that the deploy readiness gate stays out of `scripts/deploy.sh`. Historical CRM identifiers on tickets and subscribers stay as references only.
+The disabled `dotmac.crm` installation may still pin manifest 1.3.0 and carry
+its historical ticket binding. Keep those rows as evidence; do not re-enable
+that installation or its active-but-inert job. If a retained CRM capability is
+ever needed after a separate provider restoration, retire the old installation
+and create a new installation pinned to 1.4.0 with only supported bindings.
+Connection validation and job execution must refuse the retired ticket
+capability before resolving secret material or recording a new run. The
+restored provider must use a new credential after the historical key is
+disabled.
+
+`tests/architecture/test_crm_ticket_pull_retired.py` scans `app/` and `scripts/` for the poller's schedule keys, task name, control, setting specs and environment reads, the ticket webhook receiver (`receive_crm_event`, `TICKET_EVENTS`) and the cutover tooling, and pins that the deleted modules stay deleted. It also refuses a current manifest or runner that can make a ticket request. `tests/architecture/test_integration_platform_boundary.py` pins that the deploy readiness gate stays out of `scripts/deploy.sh`. Historical CRM identifiers on tickets and subscribers stay as references only.
 
 **Credential — corrected disposition.** The live pointer was `env://CRM_SERVICE_TOKEN`, not an OpenBao path. Earlier guidance to "revoke it in OpenBao" did not apply.
 - `CRM_SERVICE_TOKEN` and the inert `CRM_TICKET_PULL_ENABLED=true` were removed from `/root/dotmac_sub/.env` on production. The file is still `600 root:root`, and no value was printed.

@@ -264,20 +264,13 @@ def _dotmac_crm_manifest(
     version: str,
     include_chat_session: bool,
     include_quote_command: bool = True,
+    include_ticket_observation: bool = True,
 ) -> ConnectorManifest:
     """Build the current CRM manifest and its bounded pre-chat predecessor."""
 
     capabilities = [
         CapabilityManifest(
             id="crm.subscriber_observation.v1",
-            modes=(
-                CapabilityMode.scheduled,
-                CapabilityMode.manual,
-                CapabilityMode.reconcile,
-            ),
-        ),
-        CapabilityManifest(
-            id="crm.ticket_observation.v1",
             modes=(
                 CapabilityMode.scheduled,
                 CapabilityMode.manual,
@@ -297,6 +290,18 @@ def _dotmac_crm_manifest(
             modes=(CapabilityMode.interactive,),
         ),
     ]
+    if include_ticket_observation:
+        capabilities.insert(
+            1,
+            CapabilityManifest(
+                id="crm.ticket_observation.v1",
+                modes=(
+                    CapabilityMode.scheduled,
+                    CapabilityMode.manual,
+                    CapabilityMode.reconcile,
+                ),
+            ),
+        )
     if include_chat_session:
         capabilities.append(
             CapabilityManifest(
@@ -789,9 +794,10 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         include_bearer_authorization=True,
     ),
     _dotmac_crm_manifest(
-        version="1.3.0",
+        version="1.4.0",
         include_chat_session=False,
         include_quote_command=False,
+        include_ticket_observation=False,
     ),
     _whatsapp_manifest(
         version="1.1.0",
@@ -948,8 +954,13 @@ _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
     # ERP 1.0.0 remains executable while installations explicitly adopt the
     # workforce attendance capability introduced in 1.1.0.
     _dotmac_erp_manifest(version="1.0.0", include_workforce_attendance=False),
-    # CRM 1.0.0 predates the temporary chat-session capability. It remains
-    # executable because a deployed pin is an immutable compatibility fact.
+    # Historical CRM pins remain identifiable by exact digest. Retired ticket
+    # and chat capabilities cannot execute; retained actions can still run.
+    _dotmac_crm_manifest(
+        version="1.3.0",
+        include_chat_session=False,
+        include_quote_command=False,
+    ),
     _dotmac_crm_manifest(version="1.2.0", include_chat_session=False),
     _dotmac_crm_manifest(version="1.0.0", include_chat_session=False),
     # CRM 1.1.0 is the ONLY manifest that ever declared `crm.chat_session.v1`

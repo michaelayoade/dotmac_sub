@@ -47,8 +47,6 @@ from app.services.integrations import installations
 from app.services.integrations.runtime import ValidationResult
 from app.services.integrations.runtime_execution import (
     RuntimeExecutionError,
-    build_execution_context,
-    validate_connection,
 )
 from app.services.owner_commands import CommandContext
 
@@ -323,42 +321,14 @@ def validate_integration_installation_connection(
     db: Session = Depends(get_db),
     principal: dict[str, Any] = Depends(get_current_user),
 ):
-    actor = _operator_id(principal)
-
-    def command() -> ValidationResult:
-        static_result = installations.validate_static(
+    return _installation_command(
+        db,
+        lambda: installations.validate_installation_connection(
             db,
             installation_id=installation_id,
-            actor=actor,
-        )
-        if not static_result.valid:
-            return static_result
-        installation = installations.get_installation(db, installation_id)
-        results = []
-        for binding in installation.capability_bindings:
-            context = build_execution_context(
-                db,
-                capability_binding_id=binding.id,
-                allow_disabled=True,
-            )
-            results.append(validate_connection(context))
-        failed_codes = tuple(
-            code
-            for result in results
-            if not result.valid
-            for code in result.error_codes
-        )
-        if failed_codes:
-            return ValidationResult(valid=False, error_codes=failed_codes)
-        installations.enable_after_connection_validation(
-            db,
-            installation_id=installation.id,
-            connection_result=ValidationResult(valid=True),
-            actor=actor,
-        )
-        return ValidationResult(valid=True)
-
-    return _installation_command(db, command)
+            actor=_operator_id(principal),
+        ),
+    )
 
 
 @router.post(

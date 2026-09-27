@@ -379,18 +379,18 @@ The target recomputes it; it does not trust it.
 
 ### Legacy parallel writers — the displacement list
 
-Twenty-six files write a cohort fact some other owner is declared to own.
-**Eighteen of them can do it again**, and that eighteen is the set `ctl-isp-009`
+Twenty-five files write a cohort fact some other owner is declared to own.
+**Seventeen of them can do it again**, and that seventeen is the set `ctl-isp-009`
 must ratchet to zero; the remaining eight are listed for completeness and
-marked non-production. Fourteen now carry `ROUTE_THROUGH_OWNER_FIRST` and
-fourteen `RETIRE_AFTER_CUTOVER`, following the 2026-08-21 decisions.
+marked non-production. The CRM ticket pull writer was retired on 2026-09-27
+after the production stop gate; the surviving entries retain their checked-in
+dispositions.
 
 | Path | Bypasses | Entity |
 |---|---|---|
 | `app/services/account_deletion.py` | `customer.accounts` | account `metadata` |
 | `app/services/billing_cleanup_remediation.py` | `customer.accounts` | `billing_mode` |
 | `app/services/crm_portal.py` | `party.registry` | `crm_subscriber_id` |
-| `app/services/crm_ticket_pull.py` | `party.registry` | `crm_subscriber_id` |
 | `app/services/customer_location_requests.py` | `customer.accounts` | account `metadata` |
 | `app/services/customer_portal_contacts.py` | `party.registry` | `subscriber_contacts` |
 | `app/services/customer_portal_notifications.py` | `customer.accounts` | account `metadata` |

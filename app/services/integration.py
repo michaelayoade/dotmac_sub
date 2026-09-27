@@ -37,6 +37,7 @@ from app.services.common import (
 )
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.integrations.registry import connector_definition
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -51,6 +52,18 @@ logger = get_logger(__name__)
 
 class IntegrationJobCommandError(DomainError, ValueError):
     """Stable rejection from the integration-jobs command owner."""
+
+
+def is_retired_capability_job(job: IntegrationJob) -> bool:
+    """Identify jobs whose binding was withdrawn from the current manifest."""
+    binding = getattr(job, "capability_binding", None)
+    if binding is None:
+        return False
+    installation = getattr(binding, "installation", None)
+    if installation is None:
+        return True
+    current = connector_definition(installation.connector_key)
+    return current is None or current.capability(binding.capability_id) is None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +223,15 @@ def _activate_capability_job(
             capability_binding_id=str(binding.id),
             actual_capability_id=binding.capability_id,
         )
+    current = connector_definition(installation.connector_key)
+    if is_retired_capability_job(job) or (
+        current is None or current.capability(capability_id) is None
+    ):
+        raise _job_command_error(
+            "retired_capability",
+            "Capability is retired.",
+            capability_binding_id=str(binding.id),
+        )
     if (
         binding.state != IntegrationBindingState.enabled.value
         or installation.state != IntegrationInstallationState.enabled.value
@@ -300,6 +322,9 @@ def _require_job_binding(
     binding = db.get(IntegrationCapabilityBinding, binding_id)
     if binding is None:
         raise HTTPException(status_code=404, detail="Capability binding not found")
+    current = connector_definition(binding.installation.connector_key)
+    if current is None or current.capability(binding.capability_id) is None:
+        raise HTTPException(status_code=409, detail="Capability is retired")
     if active and (
         binding.state != IntegrationBindingState.enabled.value
         or binding.installation.state != IntegrationInstallationState.enabled.value
@@ -505,6 +530,8 @@ class IntegrationJobs(ListResponseMixin):
         job = db.get(IntegrationJob, coerce_uuid(job_id))
         if not job:
             raise HTTPException(status_code=404, detail="Integration job not found")
+        if is_retired_capability_job(job):
+            raise HTTPException(status_code=409, detail="Capability job is retired")
         data = payload.model_dump(exclude_unset=True)
         if "target_id" in data:
             target = db.get(IntegrationTarget, data["target_id"])
@@ -546,6 +573,8 @@ class IntegrationJobs(ListResponseMixin):
         job = db.get(IntegrationJob, coerce_uuid(job_id))
         if not job:
             raise HTTPException(status_code=404, detail="Integration job not found")
+        if is_retired_capability_job(job):
+            raise HTTPException(status_code=409, detail="Capability job is retired")
         if not job.is_active:
             # A disabled job must not run — previously this only logged (with a
             # copy-pasted EMAIL_POLL message) and fell through to execute.

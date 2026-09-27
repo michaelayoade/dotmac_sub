@@ -1,9 +1,7 @@
 """Customer/reseller portal support service.
 
 Tickets are served by the internal (local) ticket module
-(``app.services.support``) so the portal works standalone. Work orders (and the
-reseller ticket counts) still read from the external CRM via ``crm_client``;
-those can be pointed at dotmac_crm when configured.
+(``app.services.support``) so the portal works standalone.
 """
 
 from __future__ import annotations
@@ -19,7 +17,6 @@ from sqlalchemy.orm import Session
 from app.models.subscriber import Subscriber
 from app.models.support import TicketCommentAuthorType, canonical_ticket_status_value
 from app.services.common import coerce_uuid
-from app.services.crm_client import CRMClientError
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.integrations.crm_capability import capability_client
@@ -584,89 +581,3 @@ def handle_ticket_comment(
             "success": False,
             "error": "Unable to add comment. Please try again later.",
         }
-
-
-# ── Reseller Portal ─────────────────────────────────────────────────────
-
-
-def reseller_account_tickets_context(
-    request: Request,
-    db: Session,
-    account_id: str,
-    current_user: dict,
-    reseller: Any,
-) -> dict[str, Any]:
-    """Build template context for reseller viewing a customer's tickets."""
-    try:
-        crm_sub_id = resolve_crm_subscriber_id(db, account_id)
-        if not crm_sub_id:
-            return {
-                "request": request,
-                "current_user": current_user,
-                "reseller": reseller,
-                "tickets": [],
-                "account_id": account_id,
-                "active_page": "accounts",
-                **_ok_context(),
-            }
-        client = capability_client(db)
-        tickets = client.list_tickets(subscriber_id=crm_sub_id)
-    except CRMClientError:
-        return {
-            "request": request,
-            "current_user": current_user,
-            "reseller": reseller,
-            "tickets": [],
-            "account_id": account_id,
-            "active_page": "accounts",
-            **_error_context(),
-        }
-
-    return {
-        "request": request,
-        "current_user": current_user,
-        "reseller": reseller,
-        "tickets": [
-            {
-                **ticket,
-                "status": canonical_ticket_status_value(
-                    str(ticket.get("status") or "")
-                ),
-                "status_presentation": ticket_status_presentation(
-                    ticket.get("status")
-                ).model_dump(mode="json"),
-            }
-            for ticket in tickets
-        ],
-        "account_id": account_id,
-        "active_page": "accounts",
-        **_ok_context(),
-    }
-
-
-def reseller_open_tickets_count(
-    db: Session,
-    reseller_id: str,
-    account_ids: list[str],
-) -> int | None:
-    """Count open tickets across all reseller accounts.
-
-    Returns None if CRM is unreachable so callers do not show a false zero.
-    """
-    total = 0
-    client = capability_client(db)
-    for account_id in account_ids:
-        try:
-            crm_sub_id = resolve_crm_subscriber_id(db, account_id)
-            if not crm_sub_id:
-                continue
-            tickets = client.list_tickets(subscriber_id=crm_sub_id)
-            total += sum(
-                1
-                for t in tickets
-                if t.get("status") in ("open", "in_progress", "waiting_on_agent")
-            )
-        except CRMClientError:
-            logger.debug("CRM unreachable for open ticket count, skipping")
-            return None
-    return total

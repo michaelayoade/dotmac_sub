@@ -92,7 +92,7 @@ class TestReachabilityCircuit:
         c = _client()
         with patch("app.services.crm_client._pooled_client") as http_client:
             with pytest.raises(CRMClientError, match="circuit open"):
-                c._request("GET", "/api/v1/tickets")
+                c._request("GET", "/api/v1/subscribers")
         http_client.assert_not_called()  # never touched the network
 
     def test_connection_error_trips_breaker(self):
@@ -101,13 +101,13 @@ class TestReachabilityCircuit:
             "app.services.crm_client._pooled_client", side_effect=_raise_connect
         ):
             with pytest.raises(CRMClientError):
-                c.list_tickets(subscriber_id="s1")
+                c.list_subscribers(external_system="s1")
         assert _REACHABILITY_CIRCUIT.is_open() is True
 
     def test_http_status_error_does_not_trip_breaker(self):
         """A 4xx/5xx means CRM is reachable — must not open the breaker."""
         c = _client()
-        request = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        request = httpx.Request("GET", "https://crm.example/api/v1/subscribers")
         response = httpx.Response(500, request=request)
 
         def _raise_status(*_a, **_k):
@@ -119,21 +119,21 @@ class TestReachabilityCircuit:
 
         with patch("app.services.crm_client._pooled_client", side_effect=_raise_status):
             with pytest.raises(CRMClientError):
-                c.list_tickets(subscriber_id="s1")
+                c.list_subscribers(external_system="s1")
         assert _REACHABILITY_CIRCUIT.is_open() is False
 
     def test_breaker_short_circuits_fanout(self):
-        """Once tripped, remaining per-account calls fast-fail (no extra HTTP)."""
+        """Once tripped, later subscriber queries fast-fail (no extra HTTP)."""
         c = _client()
         with patch(
             "app.services.crm_client._pooled_client", side_effect=_raise_connect
         ) as http_client:
             with pytest.raises(CRMClientError):
-                c.list_tickets(subscriber_id="s1")
+                c.list_subscribers(external_system="s1")
             first_call_count = http_client.call_count
-            # Second account: breaker is open → the pooled client is never asked for.
+            # Second query: breaker is open and the pooled client is not used.
             with pytest.raises(CRMClientError):
-                c.list_tickets(subscriber_id="s2")
+                c.list_subscribers(external_system="s2")
         assert http_client.call_count == first_call_count
 
 
@@ -145,7 +145,7 @@ class TestReachabilityCircuit:
 class TestRateLimitRetry:
     def test_429_then_success_is_transparent(self):
         c = _client()
-        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        req = httpx.Request("GET", "https://crm.example/api/v1/subscribers")
         responses = [
             httpx.Response(429, headers={"Retry-After": "0"}, request=req),
             httpx.Response(200, json={"ok": True}, request=req),
@@ -154,13 +154,13 @@ class TestRateLimitRetry:
             patch("app.services.crm_client._pooled_client", _seq_client(responses)),
             patch("app.services.crm_client.time.sleep") as sleep,
         ):
-            out = c._request("GET", "/api/v1/tickets")
+            out = c._request("GET", "/api/v1/subscribers")
         assert out == {"ok": True}
         sleep.assert_called_once()
 
     def test_exhausts_retries_then_raises(self):
         c = _client()
-        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        req = httpx.Request("GET", "https://crm.example/api/v1/subscribers")
         responses = [
             httpx.Response(429, request=req) for _ in range(_RETRY_MAX_ATTEMPTS + 1)
         ]
@@ -169,19 +169,19 @@ class TestRateLimitRetry:
             patch("app.services.crm_client.time.sleep") as sleep,
         ):
             with pytest.raises(CRMClientError, match="429"):
-                c._request("GET", "/api/v1/tickets")
+                c._request("GET", "/api/v1/subscribers")
         assert sleep.call_count == _RETRY_MAX_ATTEMPTS
 
     def test_non_retry_status_is_not_retried(self):
         c = _client()
-        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        req = httpx.Request("GET", "https://crm.example/api/v1/subscribers")
         responses = [httpx.Response(404, request=req)]
         with (
             patch("app.services.crm_client._pooled_client", _seq_client(responses)),
             patch("app.services.crm_client.time.sleep") as sleep,
         ):
             with pytest.raises(CRMClientError, match="404"):
-                c._request("GET", "/api/v1/tickets")
+                c._request("GET", "/api/v1/subscribers")
         sleep.assert_not_called()
 
     def test_scheduler_setting_can_disable_retries(self):
@@ -190,7 +190,7 @@ class TestRateLimitRetry:
         )
         c._token = "tok"
         c._token_expires_at = 10**12
-        req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
+        req = httpx.Request("GET", "https://crm.example/api/v1/subscribers")
         responses = [httpx.Response(429, request=req)]
 
         def fake_resolve_value(db, domain, key):
@@ -206,7 +206,7 @@ class TestRateLimitRetry:
             patch("app.services.crm_client.time.sleep") as sleep,
         ):
             with pytest.raises(CRMClientError, match="429"):
-                c._request("GET", "/api/v1/tickets")
+                c._request("GET", "/api/v1/subscribers")
         sleep.assert_not_called()
 
     def test_retry_delay_prefers_retry_after_header(self):
@@ -240,14 +240,14 @@ class TestResponseCache:
 
         def fake_request(method, path, params=None, json_data=None):
             calls["n"] += 1
-            return [{"id": "wo1", "subscriber_id": "s1"}]
+            return [{"id": "s1", "external_system": "splynx"}]
 
         with (
             patch("app.services.session_store.get_session_redis", return_value=fake),
             patch.object(c, "_request", side_effect=fake_request),
         ):
-            r1 = c.list_tickets(subscriber_id="s1")
-            r2 = c.list_tickets(subscriber_id="s1")
+            r1 = c.list_subscribers(external_system="splynx")
+            r2 = c.list_subscribers(external_system="splynx")
 
         assert r1 == r2
         assert calls["n"] == 1  # upstream hit once; second served from cache
@@ -266,10 +266,10 @@ class TestResponseCache:
             patch("app.services.session_store.get_session_redis", return_value=fake),
             patch.object(c, "_request", side_effect=fake_request),
         ):
-            c.list_tickets(subscriber_id="s1")
-            c.list_tickets(subscriber_id="s2")
+            c.list_subscribers(external_system="splynx")
+            c.list_subscribers(external_system="radius")
 
-        assert calls["n"] == 2  # different subscriber → different cache key
+        assert calls["n"] == 2  # different filter -> different cache key
 
     def test_no_redis_degrades_to_live_request(self):
         c = _client()
@@ -283,7 +283,7 @@ class TestResponseCache:
             patch("app.services.session_store.get_session_redis", return_value=None),
             patch.object(c, "_request", side_effect=fake_request),
         ):
-            c.list_tickets(subscriber_id="s1")
-            c.list_tickets(subscriber_id="s1")
+            c.list_subscribers(external_system="splynx")
+            c.list_subscribers(external_system="splynx")
 
         assert calls["n"] == 2  # no cache → each call goes upstream

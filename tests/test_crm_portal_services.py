@@ -204,27 +204,6 @@ def test_resolve_crm_subscriber_ids_deduplicates_and_skips_blanks(monkeypatch) -
     assert resolved == ["crm-1", "crm-3"]
 
 
-def test_reseller_open_tickets_count_returns_none_when_crm_unavailable(
-    monkeypatch,
-    db_session,
-) -> None:
-    client = Mock()
-    client.list_tickets.side_effect = crm_portal.CRMClientError("down")
-    monkeypatch.setattr(
-        "app.services.crm_portal.resolve_crm_subscriber_id",
-        lambda _db, _account_id: "crm-sub-1",
-    )
-    monkeypatch.setattr("app.services.crm_portal.capability_client", lambda *_: client)
-
-    count = crm_portal.reseller_open_tickets_count(
-        db_session,
-        "reseller-1",
-        ["account-1"],
-    )
-
-    assert count is None
-
-
 # ── Customer Portal: Tickets (sourced from the local support module) ──────
 
 

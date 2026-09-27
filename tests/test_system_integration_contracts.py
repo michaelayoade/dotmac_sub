@@ -149,6 +149,15 @@ def test_run_action_eligibility_mirrors_the_disabled_guard():
     assert blocked.allowed is False
     assert blocked.reason == "Profile is disabled"
 
+    retired = _job(is_active=True)
+    retired.capability_binding = SimpleNamespace(
+        capability_id="crm.ticket_observation.v1",
+        installation=SimpleNamespace(connector_key="dotmac.crm"),
+    )
+    retired_action = syncs._run_action(retired)
+    assert retired_action.allowed is False
+    assert retired_action.reason == "Capability retired"
+
 
 def test_action_invariants_reject_inconsistent_eligibility():
     # An allowed action may not carry a blocked reason; a blocked one must.
@@ -208,3 +217,12 @@ def test_syncs_template_renders_kpi_state_and_action_fields():
     assert "action_permitted(request, run_action)" in source
     assert 'can(request, "system:settings:write")' in source
     assert "{{ stats.total }}" not in source
+
+
+def test_retired_sync_detail_keeps_history_without_action_forms():
+    source = (_ROOT / "templates/admin/integrations/syncs/detail.html").read_text(
+        encoding="utf-8"
+    )
+    assert "{% if not retired_capability %}" in source
+    assert "backfill-crm-history" not in source
+    assert "Run History" in source

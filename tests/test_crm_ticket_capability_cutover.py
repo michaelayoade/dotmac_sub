@@ -1,261 +1,121 @@
-from __future__ import annotations
+"""Retired CRM ticket capability cannot execute through historical pins."""
 
-import pytest
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from uuid import uuid4
 
-from app.models.event_store import EventStore
-from app.models.integration import (
-    IntegrationJob,
-    IntegrationJobType,
-    IntegrationScheduleType,
-    IntegrationTarget,
-    IntegrationTargetType,
-)
-from app.models.integration_platform import (
-    IntegrationBindingState,
-    IntegrationCapabilityBinding,
-    IntegrationInstallationState,
-)
-from app.services import integration as integration_jobs
-from app.services.integrations import installations
 from app.services.integrations.connectors.dotmac_crm import (
     CRM_TICKET_OBSERVATION_CAPABILITY,
+    DotmacCrmRunner,
 )
-from app.services.integrations.runtime import ValidationResult
-from app.services.owner_commands import CommandContext
-from tests.integration_platform_helpers import enable_crm_inbound
+from app.services.integrations.registry import (
+    connector_definition,
+    pinned_connector_definition,
+    supported_connector_definitions,
+)
+from app.services.integrations.runtime import (
+    CapabilityValidationRunner,
+    OperationEnvelope,
+    OperationStatus,
+    OperationTrigger,
+)
+from app.services.integrations.runtime_execution import validate_connection
 
 
-def _context(*, scope: str, key: str) -> CommandContext:
-    return CommandContext.system(
-        actor="operator:crm-cutover-test",
-        scope=scope,
-        reason="Complete reviewed CRM ticket capability cutover",
-        idempotency_key=key,
+class _CrmTransportSpy:
+    def __init__(self) -> None:
+        self.subscriber_reads = 0
+
+    def list_subscribers(self, **_kwargs):
+        self.subscriber_reads += 1
+        return []
+
+
+def _ticket_envelope(manifest):
+    return OperationEnvelope(
+        operation_id=uuid4(),
+        correlation_id="retired-crm-ticket",
+        installation_id=uuid4(),
+        capability_binding_id=uuid4(),
+        capability_id=CRM_TICKET_OBSERVATION_CAPABILITY,
+        connector_key="dotmac.crm",
+        connector_version=manifest.version,
+        manifest_digest=manifest.digest,
+        config_revision_id=uuid4(),
+        trigger=OperationTrigger.manual,
+        idempotency_key="retired-crm-ticket",
+        deadline_at=datetime.now(UTC) + timedelta(minutes=1),
+        payload={"action": "list_tickets", "params": {}},
     )
 
 
-def _legacy_production_state(db_session, monkeypatch):
-    inbound = enable_crm_inbound(
-        db_session,
-        monkeypatch,
-        signing_secret="test-webhook-signing-secret",
-    )
-    installation = inbound.installation
-    installation.environment = "production"
-    target = IntegrationTarget(
-        name="DotMac CRM",
-        target_type=IntegrationTargetType.crm,
-        is_active=True,
-    )
-    db_session.add(target)
-    db_session.flush()
-    job = IntegrationJob(
-        target_id=target.id,
-        name="Pull CRM Tickets",
-        job_type=IntegrationJobType.sync,
-        schedule_type=IntegrationScheduleType.manual,
-        is_active=False,
-        capability_binding_id=None,
-    )
-    db_session.add(job)
-    db_session.commit()
-    return installation.id, inbound.id, job.id
+def test_current_manifest_retires_ticket_capability_and_preserves_old_pin() -> None:
+    current = connector_definition("dotmac.crm")
+    assert current is not None
+    assert current.version == "1.4.0"
+    assert current.capability(CRM_TICKET_OBSERVATION_CAPABILITY) is None
 
-
-def _provision_binding(db_session, monkeypatch, installation_id):
-    from app.services.integrations import runtime_execution
-
-    monkeypatch.setattr(
-        runtime_execution,
-        "validate_connection",
-        lambda _context: ValidationResult(valid=True),
+    prior = next(
+        definition
+        for definition in supported_connector_definitions()
+        if definition.key == "dotmac.crm" and definition.version == "1.3.0"
     )
-    installation = installations.get_installation(db_session, installation_id)
-    pin = installations.ManifestPin(
-        connector_version=installation.connector_version,
-        manifest_digest=installation.manifest_digest,
-    )
-    db_session.commit()
-    return installations.provision_installation_capability(
-        db_session,
-        installations.ProvisionCapabilityCommand(
-            installation_id=installation_id,
-            capability_id=CRM_TICKET_OBSERVATION_CAPABILITY,
-            expected_installed_pin=pin,
-            expected_binding_id=None,
-            expected_binding_state=None,
-            capability_scope={},
-            policy={"default": True},
-        ),
-        context=_context(
-            scope=installations.CAPABILITY_PROVISIONING_SCOPE,
-            key="crm-ticket-binding-v1",
-        ),
-    )
-
-
-def test_capability_provisioning_is_atomic_audited_and_replay_safe(
-    db_session,
-    monkeypatch,
-) -> None:
-    installation_id, inbound_binding_id, _job_id = _legacy_production_state(
-        db_session,
-        monkeypatch,
-    )
-
-    result = _provision_binding(db_session, monkeypatch, installation_id)
-
-    assert result.replayed is False
-    installation = installations.get_installation(db_session, installation_id)
-    assert installation.state == IntegrationInstallationState.enabled.value
-    bindings = {
-        binding.capability_id: binding for binding in installation.capability_bindings
-    }
-    assert set(bindings) == {
-        "crm.events.receive.v1",
-        CRM_TICKET_OBSERVATION_CAPABILITY,
-    }
-    assert bindings["crm.events.receive.v1"].id == inbound_binding_id
-    assert {binding.state for binding in bindings.values()} == {
-        IntegrationBindingState.enabled.value
-    }
-    events = (
-        db_session.query(EventStore)
-        .filter(
-            EventStore.event_type == "integration.installation.capability_provisioned"
-        )
-        .all()
-    )
-    assert len(events) == 1
-    assert "secret" not in events[0].payload
-    expected_pin = installations.ManifestPin(
-        connector_version=installation.connector_version,
-        manifest_digest=installation.manifest_digest,
-    )
-    db_session.commit()
-
-    replay = installations.provision_installation_capability(
-        db_session,
-        installations.ProvisionCapabilityCommand(
-            installation_id=installation_id,
-            capability_id=CRM_TICKET_OBSERVATION_CAPABILITY,
-            expected_installed_pin=expected_pin,
-            expected_binding_id=result.capability_binding_id,
-            expected_binding_state=IntegrationBindingState.enabled,
-            capability_scope={},
-            policy={"default": True},
-        ),
-        context=_context(
-            scope=installations.CAPABILITY_PROVISIONING_SCOPE,
-            key="crm-ticket-binding-v1",
-        ),
-    )
-
-    assert replay.replayed is True
+    assert prior.capability(CRM_TICKET_OBSERVATION_CAPABILITY) is not None
     assert (
-        db_session.query(EventStore)
-        .filter(
-            EventStore.event_type == "integration.installation.capability_provisioned"
+        pinned_connector_definition(
+            "dotmac.crm", version=prior.version, manifest_digest=prior.digest
         )
-        .count()
-        == 1
+        is prior
     )
 
 
-def test_connection_failure_restores_the_existing_inbound_binding(
-    db_session,
-    monkeypatch,
-) -> None:
-    installation_id, inbound_binding_id, _job_id = _legacy_production_state(
-        db_session,
-        monkeypatch,
+def test_historical_ticket_binding_is_rejected_without_transport_call() -> None:
+    historical = next(
+        definition
+        for definition in supported_connector_definitions()
+        if definition.key == "dotmac.crm" and definition.version == "1.3.0"
     )
-    from app.services.integrations import runtime_execution
+    spy = _CrmTransportSpy()
+    runner = DotmacCrmRunner(client_override=spy)
 
-    monkeypatch.setattr(
-        runtime_execution,
-        "validate_connection",
-        lambda _context: ValidationResult(
-            valid=False,
-            error_codes=("crm_unreachable",),
-        ),
-    )
-    installation = installations.get_installation(db_session, installation_id)
-    pin = installations.ManifestPin(
-        connector_version=installation.connector_version,
-        manifest_digest=installation.manifest_digest,
-    )
-    db_session.commit()
-
-    with pytest.raises(
-        installations.CapabilityProvisioningError,
-        match="Connector connection validation failed",
-    ):
-        installations.provision_installation_capability(
-            db_session,
-            installations.ProvisionCapabilityCommand(
-                installation_id=installation_id,
-                capability_id=CRM_TICKET_OBSERVATION_CAPABILITY,
-                expected_installed_pin=pin,
-                expected_binding_id=None,
-                expected_binding_state=None,
-                capability_scope={},
-                policy={"default": True},
-            ),
-            context=_context(
-                scope=installations.CAPABILITY_PROVISIONING_SCOPE,
-                key="crm-ticket-binding-failure",
-            ),
+    assert isinstance(runner, CapabilityValidationRunner)
+    validation = validate_connection(
+        SimpleNamespace(
+            binding=SimpleNamespace(capability_id=CRM_TICKET_OBSERVATION_CAPABILITY),
+            manifest=historical,
+            config={"base_url": "https://crm.example.test"},
+            secret_material={},
+            runner=runner,
         )
-
-    installation = installations.get_installation(db_session, installation_id)
-    assert installation.state == IntegrationInstallationState.enabled.value
-    inbound = db_session.get(IntegrationCapabilityBinding, inbound_binding_id)
-    assert inbound is not None
-    assert inbound.state == IntegrationBindingState.enabled.value
-    assert (
-        db_session.query(IntegrationCapabilityBinding)
-        .filter(
-            IntegrationCapabilityBinding.installation_id == installation_id,
-            IntegrationCapabilityBinding.capability_id
-            == CRM_TICKET_OBSERVATION_CAPABILITY,
-        )
-        .count()
-        == 0
     )
 
-
-def test_job_activation_rejects_changed_reviewed_state(
-    db_session,
-    monkeypatch,
-) -> None:
-    installation_id, inbound_binding_id, job_id = _legacy_production_state(
-        db_session,
-        monkeypatch,
-    )
-    binding = _provision_binding(db_session, monkeypatch, installation_id)
-    job = db_session.get(IntegrationJob, job_id)
-    assert job is not None
-    job.is_active = True
-    job.capability_binding_id = inbound_binding_id
-    db_session.commit()
-
-    with pytest.raises(
-        integration_jobs.IntegrationJobCommandError,
-        match="changed after capability activation review",
-    ):
-        integration_jobs.activate_capability_job(
-            db_session,
-            integration_jobs.ActivateCapabilityJobCommand(
-                job_id=job_id,
-                capability_binding_id=binding.capability_binding_id,
-                capability_id=CRM_TICKET_OBSERVATION_CAPABILITY,
-                expected_target_type=IntegrationTargetType.crm,
-                expected_existing_binding_id=None,
-                expected_is_active=False,
+    assert validation.valid is False
+    assert validation.error_codes == ("retired_capability",)
+    for action in ("list_tickets", "get_ticket", "list_ticket_comments"):
+        operation = runner.execute(
+            _ticket_envelope(historical).model_copy(
+                update={"payload": {"action": action, "params": {}}}
             ),
-            context=_context(
-                scope=integration_jobs.CAPABILITY_JOB_ACTIVATION_SCOPE,
-                key="crm-ticket-job-stale",
-            ),
+            config={"base_url": "https://crm.example.test"},
+            secret_material={},
         )
+        assert operation.status == OperationStatus.rejected
+        assert operation.error_code == "capability_not_supported"
+    assert spy.subscriber_reads == 0
+
+
+def test_retained_crm_capability_validates_through_subscriber_access() -> None:
+    current = connector_definition("dotmac.crm")
+    assert current is not None
+    spy = _CrmTransportSpy()
+    runner = DotmacCrmRunner(client_override=spy)
+
+    result = runner.validate_capability(
+        capability_id="crm.subscriber_observation.v1",
+        manifest=current,
+        config={"base_url": "https://crm.example.test"},
+        secret_material={},
+    )
+
+    assert result.valid is True
+    assert spy.subscriber_reads == 1

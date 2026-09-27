@@ -663,6 +663,14 @@ def enable_after_connection_validation(
             "connector connection validation failed: "
             + ",".join(connection_result.error_codes)
         )
+    # This method also has direct callers. A historical pin can identify a
+    # withdrawn capability, but cannot re-enable that binding.
+    current = require_connector_definition(installation.connector_key)
+    if any(
+        current.capability(binding.capability_id) is None
+        for binding in installation.capability_bindings
+    ):
+        raise InstallationError("retired_capability")
     installation.state = IntegrationInstallationState.enabled.value
     installation.state_reason = None
     installation.validated_at = datetime.now(UTC)
@@ -676,6 +684,46 @@ def enable_after_connection_validation(
         binding.updated_by = actor
     db.flush()
     return installation
+
+
+def validate_installation_connection(
+    db: Session,
+    *,
+    installation_id: UUID | str,
+    actor: str | None = None,
+) -> ValidationResult:
+    """Validate every binding while preserving retired historical rows."""
+    from app.services.integrations.runtime_execution import (
+        CapabilityUnavailableError,
+        build_execution_context,
+        validate_connection,
+    )
+
+    static_result = validate_static(db, installation_id=installation_id, actor=actor)
+    if not static_result.valid:
+        return static_result
+    installation = get_installation(db, installation_id)
+    failed_codes: list[str] = []
+    for binding in installation.capability_bindings:
+        try:
+            context = build_execution_context(
+                db, capability_binding_id=binding.id, allow_disabled=True
+            )
+        except CapabilityUnavailableError:
+            failed_codes.append("retired_capability")
+            continue
+        result = validate_connection(context)
+        if not result.valid:
+            failed_codes.extend(result.error_codes)
+    if failed_codes:
+        return ValidationResult(valid=False, error_codes=tuple(failed_codes))
+    enable_after_connection_validation(
+        db,
+        installation_id=installation.id,
+        connection_result=ValidationResult(valid=True),
+        actor=actor,
+    )
+    return ValidationResult(valid=True)
 
 
 def disable_installation(
@@ -902,15 +950,24 @@ def _provision_installation_capability(
         )
 
     from app.services.integrations.runtime_execution import (
+        CapabilityUnavailableError,
         build_execution_context,
         validate_connection,
     )
 
-    runtime_context = build_execution_context(
-        db,
-        capability_binding_id=binding.id,
-        allow_disabled=True,
-    )
+    try:
+        runtime_context = build_execution_context(
+            db,
+            capability_binding_id=binding.id,
+            allow_disabled=True,
+        )
+    except CapabilityUnavailableError as exc:
+        raise _capability_provisioning_error(
+            "retired_capability",
+            "Connector capability is retired.",
+            installation_id=str(installation.id),
+            capability_id=capability_id,
+        ) from exc
     connection_result = validate_connection(runtime_context)
     if not connection_result.valid:
         raise _capability_provisioning_error(

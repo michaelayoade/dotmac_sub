@@ -26,8 +26,8 @@
     {
         "current": true,
         "key": "dotmac.crm",
-        "manifest_digest": "b70114070615f3ca5f41cd348c8747c405542509a3b1d43f8df372d7e6598dce",
-        "version": "1.3.0"
+        "manifest_digest": "d3de1f51baa8879bd796eb2e278a19267c4534a10a667d0fc9de4aed2d004d87",
+        "version": "1.4.0"
     },
     {
         "current": true,
@@ -124,6 +124,12 @@
         "key": "dotmac.erp",
         "manifest_digest": "5c0b5f58d5b9e10b30e2bbb329b32f0e2b0e1eddb3512ab16af5efac6e126454",
         "version": "1.0.0"
+    },
+    {
+        "current": false,
+        "key": "dotmac.crm",
+        "manifest_digest": "b70114070615f3ca5f41cd348c8747c405542509a3b1d43f8df372d7e6598dce",
+        "version": "1.3.0"
     },
     {
         "current": false,

@@ -617,56 +617,6 @@ class CRMClient:
         )
         return data if isinstance(data, list) else data.get("items", [])
 
-    # ── Tickets ──────────────────────────────────────────────────────────
-
-    def list_tickets(
-        self,
-        subscriber_id: str | None = None,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-        order_by: str = "created_at",
-        order_dir: str = "desc",
-        use_cache: bool = True,
-    ) -> list[dict[str, Any]]:
-        """List tickets, optionally filtered by CRM subscriber."""
-        params: dict[str, Any] = {
-            "limit": min(max(limit, 1), 200),
-            "offset": max(offset, 0),
-            "order_by": order_by,
-            "order_dir": order_dir,
-        }
-        if subscriber_id:
-            params["subscriber_id"] = subscriber_id
-        data = (
-            self._cached_get("/api/v1/tickets", params, self.cache_list_ttl)
-            if use_cache
-            else self._request("GET", "/api/v1/tickets", params=params)
-        )
-        return data if isinstance(data, list) else data.get("items", [])
-
-    def get_ticket(self, ticket_id: str) -> dict[str, Any]:
-        """Get a single ticket by ID."""
-        return self._cached_get(
-            f"/api/v1/tickets/{ticket_id}", None, self.cache_detail_ttl
-        )
-
-    def list_ticket_comments(
-        self, ticket_id: str, *, use_cache: bool = True
-    ) -> list[dict[str, Any]]:
-        """List comments for a ticket."""
-        params = {"ticket_id": ticket_id, "limit": 200}
-        data = (
-            self._cached_get(
-                "/api/v1/ticket-comments",
-                params,
-                self.cache_detail_ttl,
-            )
-            if use_cache
-            else self._request("GET", "/api/v1/ticket-comments", params=params)
-        )
-        return data if isinstance(data, list) else data.get("items", [])
-
     def create_portal_session(
         self,
         *,

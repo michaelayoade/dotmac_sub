@@ -74,6 +74,23 @@ def test_the_poller_modules_stay_deleted() -> None:
         assert not (ROOT / relative).exists(), f"{relative} was retired"
 
 
+def test_current_crm_manifest_and_transport_do_not_expose_ticket_reads() -> None:
+    from app.services.crm_client import CRMClient
+    from app.services.integrations import crm_capability
+    from app.services.integrations.connectors import dotmac_crm
+    from app.services.integrations.registry import connector_definition
+
+    current = connector_definition("dotmac.crm")
+    assert current is not None
+    assert current.capability(dotmac_crm.CRM_TICKET_OBSERVATION_CAPABILITY) is None
+    assert dotmac_crm.CRM_TICKET_OBSERVATION_CAPABILITY not in (
+        dotmac_crm._ACTIONS_BY_CAPABILITY
+    )
+    for transport in (CRMClient, crm_capability.CrmCapabilityClient):
+        for action in ("list_tickets", "get_ticket", "list_ticket_comments"):
+            assert not hasattr(transport, action)
+
+
 def test_the_guard_bites(tmp_path: Path) -> None:
     """Sensitivity proof: each retired handle is detected when planted."""
     planted = tmp_path / "planted.py"

@@ -197,7 +197,7 @@ port within an approved scope. Example identifiers include:
 - `events.sink.v1`
 - `webhooks.ingress.v1`
 - `sync.source.v1`
-- `crm.ticket_observation.v1`
+- `crm.subscriber_observation.v1`
 - `messaging.send.v1`
 - `messaging.receive.v1`
 - `payments.intent.v1`
@@ -249,12 +249,12 @@ A manifest is deterministic and contains no secrets. Conceptually:
 ```yaml
 api_version: dotmac.io/integrations/v1
 key: dotmac.crm
-version: 2.1.0
+version: 1.4.0
 runtime:
   type: builtin-worker
 capabilities:
-  - id: crm.ticket_observation.v1
-    modes: [scheduled, manual]
+  - id: crm.subscriber_observation.v1
+    modes: [scheduled, manual, reconcile]
 config:
   schema: crm-config-v1
 secrets:
@@ -262,7 +262,7 @@ secrets:
     required: true
 data_access:
   reads: [subscriber.external_identity]
-  emits: [crm.ticket_observation.v1]
+  emits: [crm.external_observation]
 egress:
   hosts: [crm.dotmac.io]
 health:
@@ -272,6 +272,15 @@ health:
 Registry validation rejects duplicate keys, incompatible API versions,
 unknown capabilities, invalid schemas, undeclared secret bindings, and runtime
 requirements outside the approved policy.
+
+A historical manifest pin preserves its definition and digest for existing
+rows; it does not grant execution of a capability the connector has retired.
+Runtime checks the runner's pure capability availability before resolving any
+secret reference. Connection validation reports a retired binding separately
+from retained bindings, and installation enablement refuses to reactivate the
+retired binding. Historical installation, binding, job, and run rows remain
+readable evidence. Reuse of retained capabilities requires a new current
+manifest installation rather than reviving a retired binding.
 
 ## Runtime and trust tiers
 
@@ -544,7 +553,7 @@ interactive traffic uses typed service ports.
 | Connector catalogue | File discovery and static catalogue projections | Manifest-based `integration.registry` | Runtime registration and manifest validation are required |
 | Installation configuration | Provider environment settings and provider-specific credential columns | `integration.installations` with immutable config revisions and secret references | Platform-managed callers resolve enabled version-pinned bindings only |
 | Sync dispatch | String `adapter_key/action` selection | Capability-bound `integration.sync` through `integration.runtime` | Active jobs require a capability binding |
-| CRM | Direct `CRMClient` construction and CRM-specific delivery records | `dotmac.crm` capabilities plus `integration.inbox` | All subscriber, ticket, operational, portal, quote, and inbound-event calls use the runtime; enabled ticket pull additionally requires one connection-validated ticket binding and one active bound manual job |
+| CRM | Direct `CRMClient` construction and CRM-specific delivery records | Retained `dotmac.crm` capabilities plus `integration.inbox` | Subscriber, operational, portal, quote, and inbound-event calls use the runtime. The ticket-observation capability and its job were retired after the production stop gate; historical run and ticket references remain as evidence. |
 | Outbound webhooks and hooks | `events.webhook_deliveries`, webhook endpoint tables, and `integration.hooks` | `integration.delivery` using `events.deliver.v1` | Duplicate tables, services, routes, tasks, and CLI execution are removed |
 | WhatsApp messaging | Settings-backed provider client | Direct Meta `messaging.send.v1`, `messaging.receive.v1`, and `messaging.templates.read.v1` bindings | Outbound callers and the verified inbound route use one installation |
 | Nextcloud Talk staff notifications | Direct credentials and legacy `/room/{token}/message` calls | `nextcloud.talk` `collaboration.message.send.v1` capability plus communications-owned staff mapping, room cache, and notification outbox | Assignments and explicit mentions stage locally; the worker creates/reuses a one-to-one room and posts with a deterministic reference ID |
@@ -567,7 +576,7 @@ delivery/inbox evidence remain intact.
 4. Direct Meta WhatsApp send, receive, templates, verification, and replay.
 5. DotMac ERP outbox, status, inventory, operational context, and regulatory
    capabilities.
-6. DotMac CRM subscriber/ticket/operations observations, portal sessions,
+6. DotMac CRM subscriber/operations observations, portal sessions,
    quote commands, and verified inbound events.
 7. Paystack and Flutterwave payment intent, webhook verification,
    reconciliation, and refunds while billing retains financial authority.
@@ -575,8 +584,8 @@ delivery/inbox evidence remain intact.
 9. Explicit CRM ticket-observation provisioning, exact job activation, and a
    deployment/scheduler readiness invariant preventing an enabled control from
    running without its binding and job. *Retired 2026-09-27 with the CRM
-   ticket poller (see `docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md`); the
-   generic capability provisioning and job-activation owners remain.*
+   ticket capability and poller (see `docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md`);
+   the generic capability provisioning and job-activation owners remain.*
 10. Meta social inbox transport with distinct Facebook Page and Instagram
     Login account bindings, typed text/private-attachment sends, Meta-owned
     webhook verification, and no WhatsApp or expired-OAuth credential fallback.

@@ -5613,7 +5613,7 @@ Authority cutover is complete for the platform-managed first-party paths:
 | Connector catalogue | File discovery and static catalogue projections | Manifest-based `integration.registry` | Complete; runtime registration requires a valid manifest |
 | Installation configuration | Provider environment settings and provider-specific credential columns | `integration.installations` with immutable config revisions and secret references | Complete for CRM, ERP, WhatsApp, payments, and outbound HTTP webhooks |
 | Sync dispatch | String adapter/action selection | Capability-bound `integration.sync` through `integration.runtime` | Complete; active jobs require a binding |
-| CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete for platform transport. ADR 0006's temporary portal live-chat assignment is retired (2026-08-30): `crm.chat_session.v1` is gone from the current `dotmac.crm` manifest (1.2.0) and Sub's native Team Inbox is the sole live-chat authority. CRM ticket observation is a separate, still-present integration tracked for its own retirement slice |
+| CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete for retained platform transport. ADR 0006's temporary portal live-chat assignment was retired on 2026-08-30; `crm.chat_session.v1` is absent from the current manifest and Sub's native Team Inbox owns live chat. CRM ticket observation was retired on 2026-09-27 after the production stop gate; the current manifest and runtime expose no ticket-read capability. Historical ticket and subscriber CRM references remain. |
 | Outbound webhooks and hooks | `events.webhook_deliveries`, endpoint tables, and `integration.hooks` | `integration.delivery` consuming `events.store` | Complete; duplicate models, routes, tasks, and CLI hooks are removed |
 | WhatsApp messaging | Settings-backed provider transport | Direct Meta typed messaging capabilities plus `integration.inbox` | Complete; no Twilio or fallback transport |
 | Backoffice/ERP | Direct provider transport clients | Default enabled typed backoffice capability binding (currently `dotmac.erp`) | Complete; the connector remains observation/transport only and is replaceable without changing Sub domain owners |
@@ -5624,13 +5624,15 @@ columns, settings, and enums and has no downgrade path. Disabling or correcting
 the current binding is the recovery mechanism; retired transports are not a
 fallback.
 
-The CRM ticket-observation cutover is explicit and fail-closed. The
-installation owner adds and connection-validates
-`crm.ticket_observation.v1`; the jobs owner binds and activates the reviewed
-manual `Pull CRM Tickets` job; the scheduler owner supplies cadence. An enabled
-`crm.ticket_pull` control is executable only when exactly one enabled binding
-and one active job agree. Deployment, scheduler, and webhook adapters reject
-the incomplete state rather than generating an unbound task loop.
+The CRM ticket-observation cutover is retired. Its control, scheduled and
+manual poller, ticket webhook receiver, and current connector capability were
+removed after the production stop gate. Historical job and run rows remain as
+evidence; they cannot dispatch a ticket operation. The gate and credential
+disposition are recorded in `docs/runbooks/CRM_TICKET_CAPABILITY_CUTOVER.md`.
+Historical manifest pins remain identifiable, but a withdrawn capability is
+refused before secret materialization or run creation. An installation with a
+retired binding cannot be re-enabled; retained CRM capabilities require a new
+current-manifest installation after separate authorization.
 
 Rule: integration routes and webhooks validate and enqueue. Connectors translate
 bounded, typed contracts; they never write Sub domain tables or decide payment,

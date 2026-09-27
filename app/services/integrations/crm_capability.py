@@ -14,7 +14,6 @@ from app.services.integrations.connectors.dotmac_crm import (
     CRM_OPERATIONAL_OBSERVATION_CAPABILITY,
     CRM_PORTAL_SESSION_CAPABILITY,
     CRM_SUBSCRIBER_OBSERVATION_CAPABILITY,
-    CRM_TICKET_OBSERVATION_CAPABILITY,
 )
 from app.services.integrations.runtime import OperationStatus, OperationTrigger
 from app.services.integrations.runtime_execution import (
@@ -99,59 +98,6 @@ class CrmCapabilityClient:
                 },
                 trigger=OperationTrigger.reconcile,
                 correlation_id=f"crm-subscribers:{page}:{per_page}",
-            ).get("items")
-            or []
-        )
-
-    def list_tickets(
-        self,
-        subscriber_id: str | None = None,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-        order_by: str = "created_at",
-        order_dir: str = "desc",
-        use_cache: bool = True,
-    ) -> list[dict[str, Any]]:
-        return list(
-            self._execute(
-                CRM_TICKET_OBSERVATION_CAPABILITY,
-                "list_tickets",
-                {
-                    "subscriber_id": subscriber_id,
-                    "limit": limit,
-                    "offset": offset,
-                    "order_by": order_by,
-                    "order_dir": order_dir,
-                },
-                trigger=OperationTrigger.reconcile,
-                correlation_id=f"crm-tickets:{subscriber_id or 'all'}:{offset}",
-            ).get("items")
-            or []
-        )
-
-    def get_ticket(self, ticket_id: str) -> dict[str, Any]:
-        return dict(
-            self._execute(
-                CRM_TICKET_OBSERVATION_CAPABILITY,
-                "get_ticket",
-                {"ticket_id": ticket_id},
-                trigger=OperationTrigger.reconcile,
-                correlation_id=f"crm-ticket:{ticket_id}",
-            ).get("item")
-            or {}
-        )
-
-    def list_ticket_comments(
-        self, ticket_id: str, *, use_cache: bool = True
-    ) -> list[dict[str, Any]]:
-        return list(
-            self._execute(
-                CRM_TICKET_OBSERVATION_CAPABILITY,
-                "list_ticket_comments",
-                {"ticket_id": ticket_id},
-                trigger=OperationTrigger.reconcile,
-                correlation_id=f"crm-ticket-comments:{ticket_id}",
             ).get("items")
             or []
         )

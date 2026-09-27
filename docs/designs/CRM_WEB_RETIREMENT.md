@@ -173,10 +173,10 @@ removed from the `dotmac.crm` manifests since 1.2.0, the
 authority returning. Retirement record: `docs/adr/0006-temporary-crm-chat-authority.md`.
 
 This closes the exception; it does not by itself advance a ledger route to
-`retired`. Final CRM removal still requires reconciliation, traffic evidence,
-capability cutover, fallback retirement, and source deletion for the remaining
-CRM surfaces — ticket observation, subscriber observation, portal session, and
-the inbound `/api/v1/crm/*` API Sub serves.
+`retired`. At that cutover, ticket observation, subscriber observation, portal
+session, and the inbound `/api/v1/crm/*` API still required their own evidence
+and retirement slices. Ticket observation was retired on 2026-09-27 after the
+production stop gate; the other surfaces retain their separate dispositions.
 
 ### Sales quote transport retirement
 
@@ -205,14 +205,15 @@ the retired deposit path. Previously received payments needing manual
 reconciliation remain the financial owner's responsibility; operators must not
 replay CRM acceptance or alter historical rows.
 
-Quote-specific CRM client, facade, and runner methods are removed. The current
-CRM manifest is 1.3.0 without `quote_command`; all published older pins remain
-immutable compatibility facts. No installation is enabled or automatically
-adopted.
+Quote-specific CRM client, facade, and runner methods are removed. The CRM
+manifest was 1.3.0 without `quote_command` at this cutover. Since the ticket
+observation retirement on 2026-09-27, the current manifest is 1.4.0 without
+either capability; older published pins remain immutable historical facts.
+No installation is enabled or automatically adopted.
 
-The shared connector remains because subscriber and ticket observations,
-portal-session transport, referrals compatibility, and inbound events still
-have callers. Their replacement or retirement is a separate slice. The quote
+The shared connector remains for subscriber observations, portal-session
+transport, referrals compatibility, and inbound events. Ticket observation was
+retired in its own slice after the production stop gate. The quote
 webhook admission and historical upsert helper remain because inbound history
 and native quote deposit synchronization still reference them. This slice sends
 no notifications and enables no inbound binding. ERP work-order mappings retain

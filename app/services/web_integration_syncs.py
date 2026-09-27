@@ -14,15 +14,11 @@ from app.models.integration import (
     IntegrationJobType,
     IntegrationRecord,
     IntegrationRun,
-    IntegrationRunStatus,
     IntegrationScheduleType,
 )
-from app.models.support import Ticket, TicketComment, canonical_ticket_status_value
 from app.schemas.status_presentation import StatusTone
+from app.services import integration as integration_service
 from app.services.common import coerce_uuid
-from app.services.integrations.connectors.dotmac_crm import (
-    CRM_TICKET_OBSERVATION_CAPABILITY,
-)
 from app.services.ui_contracts import Action, Kpi, StateValue
 from app.services.web_integrations import _parse_json
 
@@ -124,12 +120,19 @@ def _run_action(job: IntegrationJob) -> Action:
     """Manual-run eligibility owned here, mirroring the route's disabled guard
     (``sync_run`` refuses inactive jobs) so the button is never offered on a
     profile the backend would reject."""
-    active = bool(job.is_active)
+    retired = integration_service.is_retired_capability_job(job)
+    active = bool(job.is_active) and not retired
     return Action(
         key="run",
         label="Run",
         allowed=active,
-        reason=None if active else "Profile is disabled",
+        reason=(
+            None
+            if active
+            else "Capability retired"
+            if retired
+            else "Profile is disabled"
+        ),
         permission="system:settings:write",
         tone=StatusTone.info if active else StatusTone.neutral,
     )
@@ -240,7 +243,12 @@ def build_sync_detail_data(db: Session, job_id: str) -> dict[str, Any]:
             .limit(100)
             .all()
         )
-    return {"job": job, "runs": runs, "records": records}
+    return {
+        "job": job,
+        "runs": runs,
+        "records": records,
+        "retired_capability": integration_service.is_retired_capability_job(job),
+    }
 
 
 def update_sync_profile(
@@ -264,115 +272,21 @@ def update_sync_profile(
     job = db.get(IntegrationJob, coerce_uuid(job_id))
     if job is None:
         raise ValueError("Sync profile not found")
+    if integration_service.is_retired_capability_job(job):
+        raise ValueError("Capability retired")
     interval_value = int(interval_minutes) if interval_minutes else None
     if schedule_type == "interval" and not interval_value:
         raise ValueError("interval_minutes is required for interval schedules")
     job.schedule_type = IntegrationScheduleType(schedule_type)
     job.interval_minutes = interval_value
     job.trigger_mode = (trigger_mode or "").strip() or None
-    if (
-        job.capability_binding is not None
-        and job.capability_binding.capability_id == CRM_TICKET_OBSERVATION_CAPABILITY
-    ):
-        job.filter_config = {
-            "page_size": int(page_size or 200),
-            "max_pages": int(max_pages or 50),
-            "sync_comments": bool(sync_comments),
-        }
-        job.mapping_config = None
-        job.conflict_policy = None
-    else:
-        job.mapping_config = _parse_json(mapping_config, "mapping_config")
-        job.filter_config = _parse_json(filter_config, "filter_config")
-        job.conflict_policy = (conflict_policy or "").strip() or None
+    job.mapping_config = _parse_json(mapping_config, "mapping_config")
+    job.filter_config = _parse_json(filter_config, "filter_config")
+    job.conflict_policy = (conflict_policy or "").strip() or None
     job.is_active = is_active
     db.commit()
     db.refresh(job)
     return job
-
-
-def backfill_crm_ticket_import_history(db: Session, job_id: str) -> IntegrationRun:
-    job = db.get(IntegrationJob, coerce_uuid(job_id))
-    if job is None:
-        raise ValueError("Sync profile not found")
-
-    existing = (
-        db.query(IntegrationRun)
-        .filter(IntegrationRun.job_id == job.id)
-        .filter(IntegrationRun.trigger == "backfill")
-        .first()
-    )
-    if existing:
-        return existing
-
-    crm_ticket_filter = Ticket.metadata_["sync_source"].as_string() == "crm"
-    crm_comment_filter = TicketComment.metadata_["sync_source"].as_string() == "crm"
-    tickets = (
-        db.query(Ticket)
-        .filter(crm_ticket_filter)
-        .order_by(Ticket.created_at.asc())
-        .all()
-    )
-    comments_count = (
-        db.query(func.count(TicketComment.id)).filter(crm_comment_filter).scalar() or 0
-    )
-
-    started_at = min(
-        (ticket.created_at for ticket in tickets if ticket.created_at),
-        default=datetime.now(UTC),
-    )
-    run = IntegrationRun(
-        job_id=job.id,
-        status=IntegrationRunStatus.success,
-        trigger="backfill",
-        requested_by="system",
-        started_at=started_at,
-        finished_at=datetime.now(UTC),
-        metrics={
-            "fetched": len(tickets),
-            "created": len(tickets),
-            "updated": 0,
-            "skipped_unmapped_subscribers": 0,
-            "comments_created": comments_count,
-            "errors": [],
-            "source": "backfilled_from_existing_crm_ticket_import",
-        },
-    )
-    db.add(run)
-    db.flush()
-
-    for ticket in tickets:
-        metadata = ticket.metadata_ or {}
-        db.add(
-            IntegrationRecord(
-                run_id=run.id,
-                entity_type=job.entity_type or "ticket",
-                direction=job.direction or "pull",
-                local_id=str(ticket.id),
-                remote_id=str(metadata.get("crm_ticket_id") or "") or None,
-                remote_number=ticket.number,
-                action="created",
-                status="success",
-                reason="Backfilled from existing CRM ticket import.",
-                payload_snapshot={
-                    "number": ticket.number,
-                    "title": ticket.title,
-                    "status": canonical_ticket_status_value(ticket.status),
-                    "priority": ticket.priority,
-                    "subscriber_id": (
-                        str(ticket.subscriber_id) if ticket.subscriber_id else None
-                    ),
-                    "crm_ticket_id": metadata.get("crm_ticket_id"),
-                    "crm_ticket_number": metadata.get("crm_ticket_number"),
-                },
-                created_at=ticket.created_at or datetime.now(UTC),
-            )
-        )
-
-    job.last_run_at = run.finished_at
-    db.commit()
-    db.refresh(run)
-    return run
 
 
 def trigger_sync_job(job_id: str) -> None:

@@ -20,6 +20,7 @@
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Integration Job</p>
             </div>
         </div>
+        {% if not retired_capability %}
         <form method="post" action="/admin/integrations/jobs/{{ job.id }}/run" class="flex items-center gap-2">
             {% include "components/forms/csrf_input.html" %}
             <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
@@ -27,11 +28,17 @@
                 Run Now
             </button>
         </form>
+        {% endif %}
     </div>
 
     {% if request.query_params.get('queued') %}
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
         Integration job queued.
+    </div>
+    {% endif %}
+    {% if retired_capability %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+        This capability is retired. Its run history is read-only.
     </div>
     {% endif %}
     {% if request.query_params.get('error') == 'disabled' %}

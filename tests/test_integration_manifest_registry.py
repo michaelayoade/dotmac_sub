@@ -93,10 +93,7 @@ def test_manifest_digest_is_deterministic_and_capabilities_are_queryable() -> No
         definition.key
         for definition in definitions_for_capability("payments.intent.v1")
     } == {"paystack", "flutterwave"}
-    assert {
-        definition.key
-        for definition in definitions_for_capability("crm.ticket_observation.v1")
-    } == {"dotmac.crm"}
+    assert definitions_for_capability("crm.ticket_observation.v1") == ()
     assert {
         definition.key for definition in definitions_for_capability("events.deliver.v1")
     } == {"webhook.http"}

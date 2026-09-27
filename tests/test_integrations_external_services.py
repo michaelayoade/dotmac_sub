@@ -31,7 +31,7 @@ def test_integration_job_run(db_session, monkeypatch):
     binding = installations.bind_capability(
         db_session,
         installation_id=installation.id,
-        capability_id="crm.ticket_observation.v1",
+        capability_id="crm.subscriber_observation.v1",
     )
     installations.validate_static(db_session, installation_id=installation.id)
     installations.enable_after_connection_validation(

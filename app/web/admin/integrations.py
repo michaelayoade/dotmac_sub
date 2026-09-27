@@ -286,6 +286,10 @@ def sync_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
 def sync_run(job_id: str, db: Session = Depends(get_db)):
     """Queue a manual sync run (disabled jobs are refused)."""
     job = integration_service.integration_jobs.get(db, job_id)
+    if integration_service.is_retired_capability_job(job):
+        return RedirectResponse(
+            url=f"/admin/integrations/syncs/{job_id}?error=retired", status_code=303
+        )
     if not job.is_active:
         return RedirectResponse(
             url=f"/admin/integrations/syncs/{job_id}?error=disabled", status_code=303
@@ -317,6 +321,11 @@ def sync_configure(
     is_active: bool = Form(False),
     db: Session = Depends(get_db),
 ):
+    job = integration_service.integration_jobs.get(db, job_id)
+    if integration_service.is_retired_capability_job(job):
+        return RedirectResponse(
+            url=f"/admin/integrations/syncs/{job_id}?error=retired", status_code=303
+        )
     web_integration_syncs_service.update_sync_profile(
         db,
         job_id,
@@ -336,17 +345,6 @@ def sync_configure(
     )
     return RedirectResponse(
         url=f"/admin/integrations/syncs/{job_id}?saved=1", status_code=303
-    )
-
-
-@router.post(
-    "/syncs/{job_id}/backfill-crm-history",
-    dependencies=[Depends(require_permission("system:settings:write"))],
-)
-def sync_backfill_crm_history(job_id: str, db: Session = Depends(get_db)):
-    web_integration_syncs_service.backfill_crm_ticket_import_history(db, job_id)
-    return RedirectResponse(
-        url=f"/admin/integrations/syncs/{job_id}?backfilled=1", status_code=303
     )
 
 
@@ -833,7 +831,13 @@ def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
     )
 
     context = _base_context(request, db, active_page="jobs")
-    context.update({"job": job, "runs": runs})
+    context.update(
+        {
+            "job": job,
+            "runs": runs,
+            "retired_capability": integration_service.is_retired_capability_job(job),
+        }
+    )
     return templates.TemplateResponse("admin/integrations/jobs/detail.html", context)
 
 
@@ -844,6 +848,10 @@ def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
 def job_run(job_id: str, db: Session = Depends(get_db)):
     """Queue a manual integration job run (disabled jobs are refused)."""
     job = integration_service.integration_jobs.get(db, job_id)
+    if integration_service.is_retired_capability_job(job):
+        return RedirectResponse(
+            url=f"/admin/integrations/jobs/{job_id}?error=retired", status_code=303
+        )
     if not job.is_active:
         return RedirectResponse(
             url=f"/admin/integrations/jobs/{job_id}?error=disabled", status_code=303

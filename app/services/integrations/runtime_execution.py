@@ -41,6 +41,7 @@ from app.services.integrations.connectors.whatsapp_runtime import WhatsAppRuntim
 from app.services.integrations.manifest import ConnectorManifest, ConnectorRuntimeType
 from app.services.integrations.registry import require_pinned_connector_definition
 from app.services.integrations.runtime import (
+    CapabilitySupportRunner,
     CapabilityValidationRunner,
     ConnectorRunner,
     OperationEnvelope,
@@ -54,6 +55,10 @@ from app.services.secrets import resolve_secret
 
 class RuntimeExecutionError(RuntimeError):
     """Raised before dispatch when a pinned runtime contract is invalid."""
+
+
+class CapabilityUnavailableError(RuntimeExecutionError):
+    """A pinned capability was withdrawn by its current runner."""
 
 
 class RuntimeTierUnavailableError(RuntimeExecutionError):
@@ -173,6 +178,18 @@ def resolve_runner(
     raise RuntimeExecutionError(f"unsupported connector runtime tier: {tier.value}")
 
 
+def require_runner_capability(
+    manifest: ConnectorManifest, capability_id: str, runner: ConnectorRunner
+) -> None:
+    """Refuse withdrawn runner capabilities before resolving secret material."""
+    if manifest.capability(capability_id) is None:
+        raise RuntimeExecutionError("binding capability is not declared")
+    if isinstance(runner, CapabilitySupportRunner) and not runner.supports_capability(
+        capability_id
+    ):
+        raise CapabilityUnavailableError("connector capability is retired")
+
+
 def build_execution_context(
     db: Session,
     *,
@@ -212,8 +229,12 @@ def build_execution_context(
         raise RuntimeExecutionError(
             "connector manifest pin is not available in this deployment"
         ) from exc
-    if manifest.capability(binding.capability_id) is None:
-        raise RuntimeExecutionError("binding capability is not declared")
+    runner = runner_override or resolve_runner(
+        manifest,
+        registry=runner_registry,
+        external_factory=external_runner_factory,
+    )
+    require_runner_capability(manifest, binding.capability_id, runner)
 
     material: dict[str, str] = {}
     for name, reference in dict(revision.secret_refs or {}).items():
@@ -221,11 +242,6 @@ def build_execution_context(
         if not resolved:
             raise RuntimeExecutionError(f"secret binding could not be resolved: {name}")
         material[str(name)] = str(resolved)
-    runner = runner_override or resolve_runner(
-        manifest,
-        registry=runner_registry,
-        external_factory=external_runner_factory,
-    )
     return RuntimeExecutionContext(
         binding=binding,
         manifest=manifest,

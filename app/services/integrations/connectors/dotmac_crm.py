@@ -17,6 +17,8 @@ from app.services.integrations.runtime import (
 )
 
 CRM_SUBSCRIBER_OBSERVATION_CAPABILITY = "crm.subscriber_observation.v1"
+# Historical manifest pins may still identify this capability, but the runner
+# does not dispatch its retired ticket reads.
 CRM_TICKET_OBSERVATION_CAPABILITY = "crm.ticket_observation.v1"
 CRM_OPERATIONAL_OBSERVATION_CAPABILITY = "crm.operational_observation.v1"
 CRM_PORTAL_SESSION_CAPABILITY = "crm.portal_session.v1"
@@ -39,20 +41,6 @@ class CrmTransport(Protocol):
         per_page: int = 100,
         use_cache: bool = True,
     ) -> list[dict[str, Any]]: ...
-    def list_tickets(
-        self,
-        subscriber_id: str | None = None,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-        order_by: str = "created_at",
-        order_dir: str = "desc",
-        use_cache: bool = True,
-    ) -> list[dict[str, Any]]: ...
-    def get_ticket(self, ticket_id: str) -> dict[str, Any]: ...
-    def list_ticket_comments(
-        self, ticket_id: str, *, use_cache: bool = True
-    ) -> list[dict[str, Any]]: ...
     def create_portal_session(
         self,
         *,
@@ -63,20 +51,11 @@ class CrmTransport(Protocol):
     def get_portal_referrals(self, crm_subscriber_id: str) -> dict[str, Any]: ...
 
 
-# Ticket import legitimately needs subscriber identity observations to map a
-# remote ticket to Sub's authoritative subscriber record.
 _ACTIONS_BY_CAPABILITY = {
     CRM_SUBSCRIBER_OBSERVATION_CAPABILITY: {
         "resolve_subscriber_id",
         "get_subscriber",
         "list_subscribers",
-    },
-    CRM_TICKET_OBSERVATION_CAPABILITY: {
-        "get_subscriber",
-        "list_subscribers",
-        "list_tickets",
-        "get_ticket",
-        "list_ticket_comments",
     },
     CRM_OPERATIONAL_OBSERVATION_CAPABILITY: {
         "get_portal_referrals",
@@ -86,34 +65,6 @@ _ACTIONS_BY_CAPABILITY = {
 }
 
 
-class CrmTicketObservationSource(Protocol):
-    """Narrow source contract consumed by the ticket domain resolver."""
-
-    def list_subscribers(
-        self,
-        *,
-        external_system: str | None = None,
-        page: int = 1,
-        per_page: int = 100,
-        use_cache: bool = True,
-    ) -> list[dict[str, Any]]: ...
-    def get_subscriber(self, subscriber_id: str) -> dict[str, Any]: ...
-    def list_tickets(
-        self,
-        subscriber_id: str | None = None,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-        order_by: str = "created_at",
-        order_dir: str = "desc",
-        use_cache: bool = True,
-    ) -> list[dict[str, Any]]: ...
-    def get_ticket(self, ticket_id: str) -> dict[str, Any]: ...
-    def list_ticket_comments(
-        self, ticket_id: str, *, use_cache: bool = True
-    ) -> list[dict[str, Any]]: ...
-
-
 class DotmacCrmRunner:
     """Execute only declared CRM operations over the DB-free HTTP substrate."""
 
@@ -121,6 +72,10 @@ class DotmacCrmRunner:
         self._client_override = (
             cast(CrmTransport, client_override) if client_override is not None else None
         )
+
+    def supports_capability(self, capability_id: str) -> bool:
+        """Pure availability check for historical pins, before secret resolution."""
+        return capability_id in _ACTIONS_BY_CAPABILITY
 
     def _client(
         self, config: Mapping[str, Any], secret_material: Mapping[str, str]
@@ -149,11 +104,9 @@ class DotmacCrmRunner:
                 valid=False, error_codes=("service_credentials_missing",)
             )
         try:
-            self._client(config, secret_material).list_tickets(
-                limit=1,
-                offset=0,
-                order_by="updated_at",
-                order_dir="desc",
+            self._client(config, secret_material).list_subscribers(
+                page=1,
+                per_page=1,
                 use_cache=False,
             )
         except CRMClientError:
@@ -161,6 +114,20 @@ class DotmacCrmRunner:
         except Exception:
             return ValidationResult(valid=False, error_codes=("validation_failed",))
         return ValidationResult(valid=True)
+
+    def validate_capability(
+        self,
+        *,
+        capability_id: str,
+        manifest: ConnectorManifest,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> ValidationResult:
+        if capability_id == CRM_TICKET_OBSERVATION_CAPABILITY:
+            return ValidationResult(valid=False, error_codes=("retired_capability",))
+        return self.validate(
+            manifest=manifest, config=config, secret_material=secret_material
+        )
 
     def execute(
         self,
@@ -226,25 +193,6 @@ class DotmacCrmRunner:
             }
         if action == "get_subscriber":
             return {"item": client.get_subscriber(str(params["subscriber_id"]))}
-        if action == "list_tickets":
-            return {
-                "items": client.list_tickets(
-                    subscriber_id=params.get("subscriber_id"),
-                    limit=int(params.get("limit") or 100),
-                    offset=int(params.get("offset") or 0),
-                    order_by=str(params.get("order_by") or "created_at"),
-                    order_dir=str(params.get("order_dir") or "desc"),
-                    use_cache=False,
-                )
-            }
-        if action == "get_ticket":
-            return {"item": client.get_ticket(str(params["ticket_id"]))}
-        if action == "list_ticket_comments":
-            return {
-                "items": client.list_ticket_comments(
-                    str(params["ticket_id"]), use_cache=False
-                )
-            }
         if action == "create_portal_session":
             return {
                 "item": client.create_portal_session(
