@@ -64,7 +64,7 @@ def test_runtime_health_card_uses_semantic_status_and_safe_responsive_layout() -
     assert 'class="p-5"' in template
     assert 'class="mt-5 grid w-full grid-cols-3' in template
     assert "xl:flex-row" not in template
-    assert 'dark:bg-slate-800 dark:text-slate-300' in template
+    assert "dark:bg-slate-800 dark:text-slate-300" in template
     assert "bg-primary-600" in template
     assert ".dark .status-panel-positive" in design_system
     assert ".dark .status-panel-negative" in design_system
