@@ -31,16 +31,16 @@
     {% if success %}<div role="status" class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300">{{ success }}</div>{% endif %}
     {% if page_error %}<div role="alert" class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">{{ page_error }}</div>{% endif %}
 
-    <section aria-labelledby="registry-health" class="overflow-hidden rounded-2xl border {% if registry_errors %}border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/25{% else %}border-teal-300 bg-teal-50 dark:border-teal-900 dark:bg-teal-950/25{% endif %}">
-        <div class="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div class="max-w-2xl">
-                <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full {{ 'bg-red-500' if registry_errors else 'bg-teal-500' }}" aria-hidden="true"></span><h2 id="registry-health" class="text-base font-semibold text-slate-950 dark:text-white">{{ 'Registry blocked' if registry_errors else 'Registry ready' }}</h2></div>
-                <p class="mt-2 text-sm leading-6 text-slate-700 dark:text-slate-300">Module eligibility is owned in code. Administrators choose from reviewed targets; they cannot enter a table name, column, or arbitrary entity type.</p>
+    <section aria-labelledby="registry-health" class="status-panel overflow-hidden rounded-2xl border {{ 'status-panel-negative' if registry_errors else 'status-panel-positive' }}">
+        <div class="flex flex-col gap-5 p-5 xl:flex-row xl:items-center xl:justify-between">
+            <div class="min-w-0 max-w-3xl xl:flex-1">
+                <div class="flex items-center gap-2"><span class="status-tone-dot h-2.5 w-2.5 rounded-full" aria-hidden="true"></span><h2 id="registry-health" class="status-foreground text-base font-semibold">{{ 'Registry blocked' if registry_errors else 'Registry ready' }}</h2></div>
+                <p class="status-foreground mt-2 text-sm leading-6">Module eligibility is owned in code. Administrators choose from reviewed targets; they cannot enter a table name, column, or arbitrary entity type.</p>
             </div>
-            <dl class="grid min-w-full grid-cols-3 divide-x divide-slate-300/70 border-t border-slate-300/70 pt-4 text-center dark:divide-slate-700 dark:border-slate-700 sm:min-w-[22rem] sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
-                <div class="px-3"><dt class="text-xs text-slate-600 dark:text-slate-400">Known modules</dt><dd class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">{{ module_count }}</dd></div>
-                <div class="px-3"><dt class="text-xs text-slate-600 dark:text-slate-400">Registered</dt><dd class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">{{ registered_module_count }}</dd></div>
-                <div class="px-3"><dt class="text-xs text-slate-600 dark:text-slate-400">Ready targets</dt><dd class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">{{ ready_target_count }}</dd></div>
+            <dl class="grid min-w-full grid-cols-3 divide-x divide-slate-300/70 border-t border-slate-300/70 pt-4 text-center dark:divide-slate-700 dark:border-slate-700 xl:min-w-0 xl:w-80 xl:flex-none xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+                <div class="px-3"><dt class="status-foreground text-xs">Known modules</dt><dd class="status-foreground mt-1 text-xl font-semibold tabular-nums">{{ module_count }}</dd></div>
+                <div class="px-3"><dt class="status-foreground text-xs">Registered</dt><dd class="status-foreground mt-1 text-xl font-semibold tabular-nums">{{ registered_module_count }}</dd></div>
+                <div class="px-3"><dt class="status-foreground text-xs">Ready targets</dt><dd class="status-foreground mt-1 text-xl font-semibold tabular-nums">{{ ready_target_count }}</dd></div>
             </dl>
         </div>
         {% if registry_errors %}<div class="border-t border-red-300 px-5 py-3 text-sm text-red-800 dark:border-red-900 dark:text-red-300"><p class="font-semibold">Registry validation failed</p><ul class="mt-1 list-disc space-y-1 pl-5">{% for error in registry_errors %}<li>{{ error }}</li>{% endfor %}</ul></div>{% endif %}

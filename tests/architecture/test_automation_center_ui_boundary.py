@@ -53,6 +53,24 @@ def test_hub_presents_governance_and_rule_lifecycle_controls() -> None:
     assert "Activation unavailable" in template
 
 
+def test_runtime_health_card_uses_semantic_status_and_safe_responsive_layout() -> None:
+    template = _source("templates/admin/automation/index.html")
+    design_system = _source("static/css/design-system.css")
+    compiled_css = _source("static/css/main.css")
+    assert "status-panel-positive" in template
+    assert "status-panel-negative" in template
+    assert "status-panel-warning" in template
+    assert "status-foreground" in template
+    assert "xl:flex-row" in template
+    assert "xl:w-80" in template
+    assert "sm:min-w-[22rem]" not in template
+    assert ".dark .status-panel-positive" in design_system
+    assert ".dark .status-panel-negative" in design_system
+    assert ".dark .status-panel-warning" in design_system
+    assert ".xl\\:flex-row" in compiled_css
+    assert ".xl\\:w-80" in compiled_css
+
+
 def test_rule_builder_uses_registered_options_and_supports_multiple_steps() -> None:
     template = _source("templates/admin/automation/rule_builder.html")
     assert "builder_options|tojson" in template

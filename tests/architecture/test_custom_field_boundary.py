@@ -117,6 +117,16 @@ def test_permission_matching_honors_registered_wildcards() -> None:
     assert not permission_granted(frozenset({"legacy:lead:read"}), "legacy:lead:write")
 
 
+def test_registry_health_card_uses_semantic_status_and_safe_responsive_layout() -> None:
+    template = _source("templates/admin/custom_fields/index.html")
+    assert "status-panel-positive" in template
+    assert "status-panel-negative" in template
+    assert "status-foreground" in template
+    assert "xl:flex-row" in template
+    assert "xl:w-80" in template
+    assert "sm:min-w-[22rem]" not in template
+
+
 def test_legacy_subscriber_fields_are_not_migrated_or_dual_written() -> None:
     migration = _source("alembic/versions/623_custom_fields_center.py")
     service = _source("app/services/custom_fields.py")

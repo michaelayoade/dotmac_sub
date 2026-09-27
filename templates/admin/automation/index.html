@@ -34,16 +34,16 @@
     <div role="alert" class="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">{{ page_error }}</div>
     {% endif %}
 
-    <section aria-labelledby="runtime-heading" class="overflow-hidden rounded-2xl border {% if runtime_state == 'blocked' %}border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/25{% elif runtime_state == 'ready' %}border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/25{% else %}border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/25{% endif %}">
-        <div class="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div class="max-w-2xl">
+    <section aria-labelledby="runtime-heading" class="status-panel overflow-hidden rounded-2xl border {% if runtime_state == 'blocked' %}status-panel-negative{% elif runtime_state == 'ready' %}status-panel-positive{% else %}status-panel-warning{% endif %}">
+        <div class="flex flex-col gap-5 p-5 xl:flex-row xl:items-center xl:justify-between">
+            <div class="min-w-0 max-w-3xl xl:flex-1">
                 <div class="flex items-center gap-2">
-                    <span class="h-2.5 w-2.5 rounded-full {% if runtime_state == 'blocked' %}bg-red-500{% elif runtime_state == 'ready' %}bg-emerald-500{% else %}bg-amber-500{% endif %}" aria-hidden="true"></span>
-                    <h2 id="runtime-heading" class="text-base font-semibold text-slate-950 dark:text-white">
+                    <span class="status-tone-dot h-2.5 w-2.5 rounded-full" aria-hidden="true"></span>
+                    <h2 id="runtime-heading" class="status-foreground text-base font-semibold">
                         {% if runtime_state == 'blocked' %}Runtime blocked{% elif runtime_state == 'ready' %}Runtime ready{% else %}Runtime dormant{% endif %}
                     </h2>
                 </div>
-                <p class="mt-2 max-w-[70ch] text-sm leading-6 text-slate-700 dark:text-slate-300">
+                <p class="status-foreground mt-2 max-w-[70ch] text-sm leading-6">
                     {% if runtime_state == 'blocked' %}
                         Capability declarations and executable adapters do not match. Rules cannot execute until the code registry is corrected.
                     {% elif runtime_state == 'ready' %}
@@ -52,12 +52,12 @@
                         The control plane is installed, but no module can execute actions yet. Deployment creates no rules and causes no business side effects.
                     {% endif %}
                 </p>
-                <p id="authoring-note" class="mt-1 text-xs text-slate-600 dark:text-slate-400">New rules start as drafts. Activate a rule when you are ready for it to take effect.</p>
+                <p id="authoring-note" class="status-foreground mt-1 text-xs">New rules start as drafts. Activate a rule when you are ready for it to take effect.</p>
             </div>
-            <dl class="grid min-w-full grid-cols-3 divide-x divide-slate-300/70 border-t border-slate-300/70 pt-4 text-center dark:divide-slate-700 dark:border-slate-700 sm:min-w-[22rem] sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0">
-                <div class="px-3"><dt class="text-xs text-slate-600 dark:text-slate-400">Known</dt><dd class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">{{ module_count }}</dd></div>
-                <div class="px-3"><dt class="text-xs text-slate-600 dark:text-slate-400">Declared</dt><dd class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">{{ declared_module_count }}</dd></div>
-                <div class="px-3"><dt class="text-xs text-slate-600 dark:text-slate-400">Ready</dt><dd class="mt-1 text-xl font-semibold tabular-nums text-slate-950 dark:text-white">{{ ready_module_count }}</dd></div>
+            <dl class="grid min-w-full grid-cols-3 divide-x divide-slate-300/70 border-t border-slate-300/70 pt-4 text-center dark:divide-slate-700 dark:border-slate-700 xl:min-w-0 xl:w-80 xl:flex-none xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+                <div class="px-3"><dt class="status-foreground text-xs">Known</dt><dd class="status-foreground mt-1 text-xl font-semibold tabular-nums">{{ module_count }}</dd></div>
+                <div class="px-3"><dt class="status-foreground text-xs">Declared</dt><dd class="status-foreground mt-1 text-xl font-semibold tabular-nums">{{ declared_module_count }}</dd></div>
+                <div class="px-3"><dt class="status-foreground text-xs">Ready</dt><dd class="status-foreground mt-1 text-xl font-semibold tabular-nums">{{ ready_module_count }}</dd></div>
             </dl>
         </div>
         {% if registry_errors %}
