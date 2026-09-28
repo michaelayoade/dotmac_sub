@@ -108,6 +108,7 @@ from app.services.common import (
 )
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.customer_financial_ledger import calculate_customer_balance
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.locking import lock_for_update
@@ -220,6 +221,22 @@ class PaymentCreationResult:
                 )
             ),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedLegacyAllocationConsumptionEvidence:
+    """Exact inputs for repairing a missing, non-position allocation link."""
+
+    account_id: UUID
+    payment_id: UUID
+    invoice_id: UUID
+    allocation_id: UUID
+    invoice_ledger_entry_id: UUID
+    expected_amount: Decimal
+    preview_fingerprint: str
+    ticket_reference: str
+    approver_name: str
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -2740,6 +2757,25 @@ class Payments(ListResponseMixin):
         }
 
     @staticmethod
+    def reconcile_reviewed_historical_settlement_for_owner(
+        db: Session,
+        payment_id: str,
+        payload: PaymentSettlementReconciliationRequest,
+    ) -> PaymentSettlement:
+        """Translate legacy settlement validation into a domain error for owners."""
+        try:
+            return Payments.reconcile_settlement_evidence(
+                db, payment_id, payload, commit=False
+            )
+        except HTTPException as exc:
+            raise DomainError(
+                code="financial.payments.historical_settlement_evidence_rejected",
+                message="Reviewed historical payment settlement evidence was rejected.",
+                details={"reason": str(exc.detail)},
+                retryable=False,
+            ) from exc
+
+    @staticmethod
     def reconcile_settlement_evidence(
         db: Session,
         payment_id: str,
@@ -4354,6 +4390,154 @@ class PaymentAllocations(ListResponseMixin):
             payment_id,
             funding_position_at=None,
         )
+
+    @staticmethod
+    def stage_reviewed_legacy_consumption_evidence(
+        db: Session,
+        evidence: ReviewedLegacyAllocationConsumptionEvidence,
+    ) -> LedgerEntry:
+        """Attach the missing non-position debit for one reviewed legacy allocation.
+
+        This participant is called only by the historical invoice-tax owner after
+        it has reconciled the exact payment settlement evidence in the same owner
+        transaction. The row is structural pairing evidence and cannot change the
+        customer's position.
+        """
+
+        account = lock_account(db, str(evidence.account_id))
+        payment = lock_for_update(db, Payment, evidence.payment_id)
+        invoice = lock_for_update(db, Invoice, evidence.invoice_id)
+        allocation = lock_for_update(db, PaymentAllocation, evidence.allocation_id)
+        invoice_entry = lock_for_update(
+            db, LedgerEntry, evidence.invoice_ledger_entry_id
+        )
+        amount = round_money(evidence.expected_amount)
+        fingerprint = evidence.preview_fingerprint.strip().lower()
+        if (
+            account is None
+            or payment is None
+            or invoice is None
+            or allocation is None
+            or invoice_entry is None
+            or payment.account_id != evidence.account_id
+            or payment.settlement is None
+            or payment.status is not PaymentStatus.succeeded
+            or not payment.is_active
+            or payment.refunds
+            or payment.reversal is not None
+            or invoice.account_id != evidence.account_id
+            or not invoice.is_active
+            or allocation.payment_id != payment.id
+            or allocation.invoice_id != invoice.id
+            or not allocation.is_active
+            or round_money(allocation.amount) != amount
+            or allocation.ledger_entry_id != invoice_entry.id
+            or not invoice_entry.is_active
+            or invoice_entry.account_id != evidence.account_id
+            or invoice_entry.payment_id != payment.id
+            or invoice_entry.invoice_id != invoice.id
+            or invoice_entry.entry_type is not LedgerEntryType.credit
+            or invoice_entry.source is not LedgerSource.payment
+            or invoice_entry.currency.upper() != payment.currency.upper()
+            or round_money(invoice_entry.amount) != amount
+            or len(fingerprint) != 64
+            or not evidence.ticket_reference.strip()
+            or not evidence.approver_name.strip()
+            or not evidence.reason.strip()
+        ):
+            raise DomainError(
+                code="financial.payments.legacy_consumption_evidence_rejected",
+                message="Reviewed legacy allocation evidence no longer matches.",
+                retryable=False,
+            )
+
+        if allocation.consumption_ledger_entry_id is not None:
+            existing = lock_for_update(
+                db, LedgerEntry, allocation.consumption_ledger_entry_id
+            )
+            if (
+                existing is None
+                or existing.payment_id != payment.id
+                or existing.invoice_id is not None
+                or existing.entry_type is not LedgerEntryType.debit
+                or existing.source is not LedgerSource.other
+                or existing.currency.upper() != payment.currency.upper()
+                or round_money(existing.amount) != amount
+                or existing.affects_customer_position
+            ):
+                raise DomainError(
+                    code="financial.payments.legacy_consumption_evidence_rejected",
+                    message="Existing allocation consumption evidence conflicts.",
+                    retryable=False,
+                )
+            return existing
+
+        candidates = tuple(
+            db.scalars(
+                select(LedgerEntry)
+                .where(
+                    LedgerEntry.payment_id == payment.id,
+                    LedgerEntry.invoice_id.is_(None),
+                    LedgerEntry.entry_type == LedgerEntryType.debit,
+                    LedgerEntry.source == LedgerSource.other,
+                    LedgerEntry.currency == payment.currency,
+                    LedgerEntry.amount == amount,
+                    LedgerEntry.is_active.is_(True),
+                    LedgerEntry.affects_customer_position.is_(False),
+                    LedgerEntry.memo
+                    == f"{_PAYMENT_ALLOCATION_CONSUMPTION_MEMO_PREFIX} {invoice.id}",
+                )
+                .with_for_update()
+            ).all()
+        )
+        if len(candidates) > 1:
+            raise DomainError(
+                code="financial.payments.legacy_consumption_evidence_rejected",
+                message="Multiple historical allocation consumption rows are ambiguous.",
+                retryable=False,
+            )
+        if candidates:
+            consumption = candidates[0]
+        else:
+            consumption = LedgerEntry(
+                account_id=evidence.account_id,
+                invoice_id=None,
+                payment_id=payment.id,
+                entry_type=LedgerEntryType.debit,
+                source=LedgerSource.other,
+                amount=amount,
+                currency=payment.currency,
+                memo=f"{_PAYMENT_ALLOCATION_CONSUMPTION_MEMO_PREFIX} {invoice.id}",
+                affects_customer_position=False,
+            )
+            db.add(consumption)
+            db.flush()
+        allocation.consumption_ledger_entry_id = consumption.id
+        db.flush()
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                actor_type=AuditActorType.system,
+                action="reconcile_legacy_payment_allocation_consumption_evidence",
+                entity_type="payment_allocation",
+                entity_id=str(allocation.id),
+                metadata_={
+                    "payment_id": str(payment.id),
+                    "invoice_id": str(invoice.id),
+                    "invoice_ledger_entry_id": str(invoice_entry.id),
+                    "consumption_ledger_entry_id": str(consumption.id),
+                    "amount": str(amount),
+                    "currency": payment.currency,
+                    "preview_fingerprint": fingerprint,
+                    "ticket_reference": evidence.ticket_reference.strip(),
+                    "approver_name": evidence.approver_name.strip(),
+                    "reason": evidence.reason.strip(),
+                    "money_effect": "none_structural_evidence_only",
+                },
+            ),
+        )
+        db.flush()
+        return consumption
 
     @staticmethod
     def available_amount_at_reviewed_boundary_for_owner(

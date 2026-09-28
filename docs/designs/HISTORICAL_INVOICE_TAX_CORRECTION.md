@@ -11,7 +11,27 @@ The correction is deliberately narrow. One preview must prove all of the
 following for a single customer and currency:
 
 - the source invoice is active, paid, base-only, and funded by one exact native
-  payment allocation with structural ledger evidence;
+  payment allocation with exact invoice-credit evidence;
+- the selected payment is succeeded, unrefunded, unreversed, and has no other
+  active allocations;
+- the customer's current VAT policy and active TaxRate support the correction;
+- the VAT-inclusive replacement is either constructed from a separate voided
+  Finance evidence draft or reuses one named pristine VAT-inclusive draft whose
+  immutable tax snapshot exactly matches the source subtotal;
+- when a historical allocation is missing its settlement or non-position
+  consumption link, the payment owner can reconcile only the uniquely matched
+  source-invoice credit and unallocated-credit rows; the preview binds those
+  exact ledger IDs and the correction command repairs the missing structural
+  consumption link without changing customer position;
+- an existing-draft correction uses the draft's own issue and due dates and
+  does not require a separate unpaid subscription invoice;
+- the expected remaining payment-backed customer credit is exactly
+  `payment amount - replacement total` and is recorded in the preview;
+- the source, replacement, selected payment, Finance ticket, approver, tax rate,
+  issue/due evidence, and exact residual are fingerprinted.
+
+The original construction mode also proves the following additional evidence:
+
 - the subscription invoice is one pristine positive draft;
 - a separate, already-voided and never-funded Finance draft proves the intended
   installation description, taxable base, tax rate, and gross total;
@@ -24,8 +44,10 @@ following for a single customer and currency:
 
 ## Atomic outcome
 
-Confirmation enters `execute_owner_command` once and performs these steps in
-one transaction:
+Both confirmation commands enter `execute_owner_command` once and perform their
+mode-specific steps in one transaction.
+
+The original construction mode performs these steps:
 
 1. `financial.invoices` voids the incorrect source invoice and releases its
    exact payment allocation through append-only reversal evidence.
@@ -46,11 +68,37 @@ The command succeeds only when both invoices are paid and both the selected
 payment availability and the customer's spendable credit are exactly zero.
 Any intermediate failure rolls the entire correction back.
 
+The existing-replacement mode performs these steps:
+
+1. `financial.payments` reconciles the exact source allocation credit and
+   unallocated payment-credit ledger rows when the historical payment lacks a
+   `PaymentSettlement` record.
+2. `financial.payments` attaches or reconstructs the exact non-position
+   consumption debit required to release the old allocation. A reconstructed
+   row is an append-only structural pair with `affects_customer_position=false`;
+   the payment owner audits that it has no money effect.
+3. `financial.invoices` previews and voids the incorrect paid source document,
+   releasing its exact payment allocation.
+4. `financial.invoices` issues the named existing VAT-inclusive draft using its
+   existing issue and due dates.
+5. `financial.account_credit_applications` settles that invoice from the named
+   payment only.
+6. The invoice records typed source, closure, allocation, payment, VAT, ticket,
+   approver, timestamp, residual-credit, and preview-fingerprint lineage. Audit
+   and event evidence are staged in the same transaction.
+
+The existing-replacement mode succeeds only when the replacement is paid, the
+selected payment's available amount equals the fingerprinted residual, and the
+customer's spendable account credit equals that same residual. For the reviewed
+NGN 217,625 payment and NGN 215,000 replacement, the required residual is NGN
+2,625. Any mismatch rolls the complete correction back.
+
 ## Locking, replay, and drift
 
-The owner locks the customer account first, then the three reviewed invoices in
+The owner locks the customer account first, then the reviewed invoice IDs in
 UUID order, their active lines and source allocation, followed by the selected
-payment and tax rate. It recomputes the complete preview under those locks.
+payment, exact ledger evidence, and tax rate. It recomputes the complete preview
+under those locks.
 
 One 16-to-120-character idempotency key reserves the resulting replacement
 invoice. Child invoice-void keys are derived from it. A replay returns the same
@@ -59,11 +107,13 @@ and typed lineage still agree; conflicting or incomplete evidence fails closed.
 
 ## Operator boundary
 
-The CLI is preview-only unless `--apply` is explicitly supplied with the exact
+Each CLI is preview-only unless `--apply` is explicitly supplied with the exact
 preview fingerprint, command UUID, actor, active staff UUID with
 `billing:invoice:update`, idempotency key, reason, and every reviewed document,
-payment, tax, and issuance identifier. The adapter owns only argument parsing,
-permission resolution, serialization, and session lifecycle.
+payment, tax, and approval identifier. The existing-replacement CLI is
+`scripts/billing/correct_historical_invoice_tax_using_existing_replacement.py`;
+the adapter owns only argument parsing, permission resolution, serialization,
+and session lifecycle.
 
 ## Rollout
 
