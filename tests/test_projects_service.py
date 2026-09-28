@@ -56,6 +56,7 @@ from app.services.owner_commands import CommandContext
 from app.services.projects import (
     FIBER_INSTALLATION_STAGE_ORDER,
     FIBER_INSTALLATION_STAGE_TITLES,
+    OPERATOR_TENANT_ID,
     ProjectServiceError,
     _next_template_task_label,
     project_tasks,
@@ -1617,7 +1618,7 @@ class TestProjectLifecycle:
         assert emitted_events == [
             {
                 "name": "project.updated",
-                "tenant_id": str(project.tenant_id),
+                "tenant_id": str(OPERATOR_TENANT_ID),
                 "project_id": str(project.id),
                 "project_name": project.name,
                 "status": project.status,
