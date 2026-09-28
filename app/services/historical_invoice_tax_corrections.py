@@ -1209,6 +1209,7 @@ class ExistingReplacementTaxCorrectionPreview:
     replacement_invoice_id: UUID
     payment_id: UUID
     payment_reference: str | None
+    currency: str
     source_payment_allocation_id: UUID | None
     source_invoice_ledger_entry_id: UUID | None
     unallocated_credit_ledger_entry_id: UUID | None
@@ -1399,6 +1400,7 @@ def _existing_replacement_manual_preview(
         "tax_rate_id": query.tax_rate_id,
         "ticket_reference": query.ticket_reference.strip(),
         "approver_name": query.approver_name.strip(),
+        "currency": _normalized_currency(query.currency),
         "reason": reason,
     }
     zero = Decimal("0.00")
@@ -1411,6 +1413,7 @@ def _existing_replacement_manual_preview(
         replacement_invoice_id=query.replacement_invoice_id,
         payment_id=query.payment_id,
         payment_reference=payment_reference,
+        currency=_normalized_currency(query.currency),
         source_payment_allocation_id=None,
         source_invoice_ledger_entry_id=None,
         unallocated_credit_ledger_entry_id=None,
@@ -1451,6 +1454,7 @@ def _build_existing_replacement_preview(
             replacement_invoice_id=query.replacement_invoice_id,
             payment_id=query.payment_id,
             payment_reference=None,
+            currency=outcome.currency,
             source_payment_allocation_id=outcome.source_payment_allocation_id,
             source_invoice_ledger_entry_id=None,
             unallocated_credit_ledger_entry_id=None,
@@ -1744,6 +1748,7 @@ def _build_existing_replacement_preview(
         replacement_invoice_id=replacement.id,
         payment_id=payment.id,
         payment_reference=payment.external_id,
+        currency=currency,
         source_payment_allocation_id=allocation.id,
         source_invoice_ledger_entry_id=invoice_entry.id,
         unallocated_credit_ledger_entry_id=unallocated_entry.id,

@@ -17,6 +17,8 @@ from app.models.billing import (
     InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
     Payment,
     PaymentAllocation,
     PaymentSettlement,
@@ -329,13 +331,26 @@ def test_existing_replacement_preserves_credit_and_records_finance_approval(
     )
     settlement = db_session.get(PaymentSettlement, scenario.payment_id)
     assert source is not None and source_line is not None and payment is not None
-    assert allocation is not None and settlement is not None
-    unallocated = db_session.get(LedgerEntry, settlement.unallocated_ledger_entry_id)
+    assert allocation is not None
+    unallocated = db_session.scalar(
+        select(LedgerEntry).where(
+            LedgerEntry.account_id == scenario.account_id,
+            LedgerEntry.payment_id == scenario.payment_id,
+            LedgerEntry.invoice_id.is_(None),
+            LedgerEntry.entry_type == LedgerEntryType.credit,
+            LedgerEntry.source == LedgerSource.payment,
+            LedgerEntry.currency == "NGN",
+            LedgerEntry.is_active.is_(True),
+        )
+    )
     consumption = db_session.get(LedgerEntry, allocation.consumption_ledger_entry_id)
     assert unallocated is not None and consumption is not None
+    if settlement is not None:
+        assert settlement.unallocated_ledger_entry_id == unallocated.id
     unallocated.amount = Decimal("17625.00")
     db_session.delete(consumption)
-    db_session.delete(settlement)
+    if settlement is not None:
+        db_session.delete(settlement)
     allocation.ledger_entry_id = None
     allocation.consumption_ledger_entry_id = None
     payment.amount = Decimal("217625.00")

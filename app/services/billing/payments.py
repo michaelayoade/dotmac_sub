@@ -4539,7 +4539,7 @@ class PaymentAllocations(ListResponseMixin):
         customer's position.
         """
 
-        account = lock_account(db, str(evidence.account_id))
+        lock_account(db, str(evidence.account_id))
         payment = lock_for_update(db, Payment, evidence.payment_id)
         invoice = lock_for_update(db, Invoice, evidence.invoice_id)
         allocation = lock_for_update(db, PaymentAllocation, evidence.allocation_id)
@@ -4549,8 +4549,7 @@ class PaymentAllocations(ListResponseMixin):
         amount = round_money(evidence.expected_amount)
         fingerprint = evidence.preview_fingerprint.strip().lower()
         if (
-            account is None
-            or payment is None
+            payment is None
             or invoice is None
             or allocation is None
             or invoice_entry is None

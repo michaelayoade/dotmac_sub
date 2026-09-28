@@ -5,9 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from html import escape
 from io import BytesIO
 from pathlib import Path
-from xml.etree import ElementTree as XML
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from defusedxml.common import DefusedXmlException
@@ -60,7 +60,6 @@ _IMPORT = OwnerCommandDefinition(
 )
 
 _KML_NS = "http://www.opengis.net/kml/2.2"
-XML.register_namespace("", _KML_NS)
 
 
 class NetworkMapTransferError(DomainError):
@@ -131,6 +130,7 @@ def _imported_geometry(value: dict) -> NetworkMapImportedGeometry:
     except ValueError:
         geometry_type = NetworkMapGeometryType.geometry_collection
     raw_coordinates = value.get("coordinates")
+    source: object
     if geometry_type is NetworkMapGeometryType.point:
         source = [raw_coordinates] if isinstance(raw_coordinates, list) else []
     elif geometry_type is NetworkMapGeometryType.polygon:
@@ -427,13 +427,11 @@ def _matches_filters(
     )
 
 
-def _text(parent: XML.Element, name: str, value: object) -> XML.Element:
-    element = XML.SubElement(parent, f"{{{_KML_NS}}}{name}")
-    element.text = str(value)
-    return element
+def _text_element(name: str, value: object) -> str:
+    return f"<{name}>{escape(str(value), quote=False)}</{name}>"
 
 
-def _extended_data(placemark: XML.Element, feature: NetworkMapFeature) -> None:
+def _extended_data(feature: NetworkMapFeature) -> str:
     properties = feature.properties
     values: tuple[tuple[str, object | None], ...] = (
         ("dotmac_asset_type", properties.feature_type.value),
@@ -460,31 +458,47 @@ def _extended_data(placemark: XML.Element, feature: NetworkMapFeature) -> None:
             properties.connectivity.layer.value if properties.connectivity else None,
         ),
     )
-    extended = XML.SubElement(placemark, f"{{{_KML_NS}}}ExtendedData")
+    content: list[str] = ["<ExtendedData>"]
     for key, value in values:
         if value is None:
             continue
-        data = XML.SubElement(extended, f"{{{_KML_NS}}}Data", {"name": key})
-        _text(data, "value", value)
+        content.extend(
+            (
+                f'<Data name="{escape(key, quote=True)}">',
+                _text_element("value", value),
+                "</Data>",
+            )
+        )
+    content.append("</ExtendedData>")
+    return "".join(content)
 
 
-def _geometry_element(placemark: XML.Element, feature: NetworkMapFeature) -> None:
+def _geometry_element(feature: NetworkMapFeature) -> str:
     geometry = feature.geometry
     if isinstance(geometry, NetworkMapPointGeometry):
-        point = XML.SubElement(placemark, f"{{{_KML_NS}}}Point")
-        _text(
-            point, "coordinates", f"{geometry.longitude:.7f},{geometry.latitude:.7f},0"
+        return "".join(
+            (
+                "<Point>",
+                _text_element(
+                    "coordinates",
+                    f"{geometry.longitude:.7f},{geometry.latitude:.7f},0",
+                ),
+                "</Point>",
+            )
         )
-        return
-    line = XML.SubElement(placemark, f"{{{_KML_NS}}}LineString")
-    _text(line, "tessellate", 1)
-    _text(
-        line,
-        "coordinates",
-        " ".join(
-            f"{longitude:.7f},{latitude:.7f},0"
-            for longitude, latitude in geometry.coordinates
-        ),
+    return "".join(
+        (
+            "<LineString>",
+            _text_element("tessellate", 1),
+            _text_element(
+                "coordinates",
+                " ".join(
+                    f"{longitude:.7f},{latitude:.7f},0"
+                    for longitude, latitude in geometry.coordinates
+                ),
+            ),
+            "</LineString>",
+        )
     )
 
 
@@ -517,23 +531,34 @@ def export_network_map_kmz(
             ),
         )
     )
-    root = XML.Element(f"{{{_KML_NS}}}kml")
-    document = XML.SubElement(root, f"{{{_KML_NS}}}Document")
-    _text(document, "name", "Dotmac Network Map")
+    kml_parts = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        f'<kml xmlns="{_KML_NS}">',
+        "<Document>",
+        _text_element("name", "Dotmac Network Map"),
+    ]
     for layer in NetworkMapExportLayer:
         layer_features = tuple(
             feature for feature in features if _layer_for(feature) is layer
         )
         if not layer_features:
             continue
-        folder = XML.SubElement(document, f"{{{_KML_NS}}}Folder")
-        _text(folder, "name", layer.value.replace("_", " ").title())
+        kml_parts.extend(
+            ("<Folder>", _text_element("name", layer.value.replace("_", " ").title()))
+        )
         for feature in layer_features:
-            placemark = XML.SubElement(folder, f"{{{_KML_NS}}}Placemark")
-            _text(placemark, "name", feature.properties.name)
-            _extended_data(placemark, feature)
-            _geometry_element(placemark, feature)
-    kml = XML.tostring(root, encoding="utf-8", xml_declaration=True)
+            kml_parts.extend(
+                (
+                    "<Placemark>",
+                    _text_element("name", feature.properties.name),
+                    _extended_data(feature),
+                    _geometry_element(feature),
+                    "</Placemark>",
+                )
+            )
+        kml_parts.append("</Folder>")
+    kml_parts.extend(("</Document>", "</kml>"))
+    kml = "".join(kml_parts).encode("utf-8")
     output = BytesIO()
     info = ZipInfo("doc.kml", date_time=(1980, 1, 1, 0, 0, 0))
     info.compress_type = ZIP_DEFLATED

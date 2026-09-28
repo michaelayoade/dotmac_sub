@@ -29,21 +29,9 @@ class WebhookHandler:
         )
         from app.services.owner_commands import CommandContext
 
-        if handles_conversion_event(event):
-            with owner_session(db) as owner_db:
-                project_conversion_event(
-                    owner_db,
-                    event=event,
-                    context=CommandContext.system(
-                        actor="events.webhook_handler",
-                        scope="marketing:conversion-projection",
-                        reason=event.event_type.value,
-                        command_id=event.event_id,
-                        correlation_id=event.event_id,
-                        causation_id=event.event_id,
-                        idempotency_key=f"event:{event.event_id}",
-                    ),
-                )
+        # Stage the independently configured Meta delivery first. If the legacy
+        # conversion projection is unavailable, the dispatcher must still retain
+        # this durable, idempotent delivery and retry the failing projection.
         with owner_session(db) as owner_db:
             meta_lead = meta_capi_lead.stage_lead(
                 owner_db,
@@ -66,6 +54,21 @@ class WebhookHandler:
             # The committed IntegrationDelivery plus the periodic redrive task
             # are authoritative. Broker availability cannot roll back a Lead.
             logger.exception("Failed to wake Meta CAPI Lead delivery worker")
+        if handles_conversion_event(event):
+            with owner_session(db) as owner_db:
+                project_conversion_event(
+                    owner_db,
+                    event=event,
+                    context=CommandContext.system(
+                        actor="events.webhook_handler",
+                        scope="marketing:conversion-projection",
+                        reason=event.event_type.value,
+                        command_id=event.event_id,
+                        correlation_id=event.event_id,
+                        causation_id=event.event_id,
+                        idempotency_key=f"event:{event.event_id}",
+                    ),
+                )
         meta_conversion = stage_conversion_for_event(db, event=event)
         queue_conversion(meta_conversion)
         deliveries = create_platform_deliveries_for_event(
