@@ -12,7 +12,7 @@ Configure the deployment's durable object-storage service and provide the
 following runtime variables through the approved secret/configuration source:
 
 ```env
-S3_ENDPOINT_URL=<durable S3-compatible endpoint>
+S3_ENDPOINT_URL=<http://host[:port] or https://host[:port]>
 S3_ACCESS_KEY=<approved secret reference>
 S3_SECRET_KEY=<approved secret reference>
 S3_BUCKET_NAME=<private bucket>
@@ -22,6 +22,15 @@ S3_REGION=<provider region>
 `docker-compose.yml` passes these values to the app; it does not supply a
 local object-storage service. Avatar durability therefore depends on the
 configured external S3-compatible backend and its backup/retention policy.
+
+The MinIO Python client accepts an endpoint URL with `http` or `https`, a host
+and optional port, and at most a trailing `/`. Paths, query strings,
+fragments, and embedded credentials are rejected. Before deploying a client
+change, check the effective `S3_ENDPOINT_URL` against this grammar without
+printing credentials, then verify bucket readiness, upload, authenticated
+download, and deletion through the app. The change does not rename or move the
+configured bucket. If verification fails, restore the previous application
+image and keep the existing object store and its objects in place.
 
 ## Security Decisions
 - Bucket/object access is private-only; no direct object URL exposure.

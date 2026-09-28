@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Protocol
+from urllib.parse import urlsplit
+
+import urllib3
 
 from app.config import settings
 
@@ -18,6 +22,8 @@ DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BASE_DELAY = 1.0  # seconds
 DEFAULT_RETRY_MAX_DELAY = 10.0  # seconds
 DEFAULT_RETRY_EXPONENTIAL_BASE = 2.0
+S3_CONNECT_TIMEOUT_SECONDS = 3.0
+S3_READ_TIMEOUT_SECONDS = 10.0
 
 
 class ObjectStorageError(Exception):
@@ -154,6 +160,69 @@ class StreamResult:
     content_length: int | None
 
 
+class _ObjectResponse(Protocol):
+    def read(self, size: int = -1) -> bytes: ...
+    def close(self) -> None: ...
+    def release_conn(self) -> None: ...
+
+
+def _close_response(response: _ObjectResponse) -> None:
+    """Release a response without replacing the read outcome with cleanup errors."""
+    try:
+        response.close()
+    except Exception as exc:
+        _warn_cleanup_failure("close", exc)
+    try:
+        response.release_conn()
+    except Exception as exc:
+        _warn_cleanup_failure("release", exc)
+
+
+def _warn_cleanup_failure(action: str, exc: Exception) -> None:
+    try:
+        logger.warning("Storage response %s failed: %s", action, type(exc).__name__)
+    except Exception:
+        # Logging may already be unavailable when an abandoned iterator finalizes.
+        pass
+
+
+class _ResponseChunks(Iterator[bytes]):
+    """Own an open object response from construction through abandonment."""
+
+    def __init__(self, response: _ObjectResponse) -> None:
+        self._response: _ObjectResponse | None = response
+
+    def __iter__(self) -> _ResponseChunks:
+        return self
+
+    def __next__(self) -> bytes:
+        response = self._response
+        if response is None:
+            raise StopIteration
+        try:
+            chunk = response.read(1024 * 1024)
+        except Exception:
+            self.close()
+            raise
+        if not chunk:
+            self.close()
+            raise StopIteration
+        return chunk
+
+    def close(self) -> None:
+        response = self._response
+        self._response = None
+        if response is not None:
+            _close_response(response)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            # Interpreter shutdown may already have discarded logging globals.
+            pass
+
+
 class StorageService(Protocol):
     """Storage provider interface."""
 
@@ -183,101 +252,147 @@ class S3StorageService:
             self.client = client
             return
         try:
-            import boto3
+            from minio import Minio
         except ImportError as exc:
-            raise ObjectStorageError("boto3 is required for S3 storage") from exc
-        self.client = boto3.client(
-            "s3",
-            endpoint_url=endpoint_url,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            region_name=region,
+            raise ObjectStorageError("minio is required for S3 storage") from exc
+        try:
+            parsed = urlsplit(endpoint_url)
+            host = parsed.hostname
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not host
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ObjectStorageError("Invalid storage endpoint URL")
+            port = parsed.port
+        except ValueError as exc:
+            raise ObjectStorageError("Invalid storage endpoint URL") from exc
+        endpoint = f"[{host}]" if ":" in host else host
+        if port is not None:
+            endpoint = f"{endpoint}:{port}"
+        http_client = urllib3.PoolManager(
+            maxsize=10,
+            timeout=urllib3.Timeout(
+                connect=S3_CONNECT_TIMEOUT_SECONDS,
+                read=S3_READ_TIMEOUT_SECONDS,
+            ),
+            retries=False,
+        )
+        self.client = Minio(
+            endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
+            secure=parsed.scheme == "https",
+            region=region,
+            http_client=http_client,
         )
 
     @staticmethod
     def _error_code(exc: Exception) -> str:
-        response = getattr(exc, "response", None)
-        if isinstance(response, dict):
-            err = response.get("Error", {})
-            if isinstance(err, dict):
-                return str(err.get("Code", ""))
-        return ""
+        code = getattr(exc, "code", None)
+        return code if isinstance(code, str) else ""
 
     def ensure_bucket(self) -> None:
         """Create bucket if missing (safe to call repeatedly)."""
         if self._bucket_ready:
             return
         try:
-            self.client.head_bucket(Bucket=self.bucket_name)
-            self._bucket_ready = True
-            return
+            exists = self.client.bucket_exists(self.bucket_name)
         except Exception as exc:
-            code = self._error_code(exc)
-            if code not in {"404", "NoSuchBucket"}:
-                raise ObjectStorageError("Unable to check storage bucket") from exc
-
-        kwargs: dict = {"Bucket": self.bucket_name}
-        if self.region and self.region != "us-east-1":
-            kwargs["CreateBucketConfiguration"] = {"LocationConstraint": self.region}
-        self.client.create_bucket(**kwargs)
+            raise ObjectStorageError("Unable to check storage bucket") from exc
+        if not exists:
+            try:
+                self.client.make_bucket(self.bucket_name)
+            except Exception as exc:
+                # Another process may have created it after our existence check.
+                try:
+                    if not self.client.bucket_exists(self.bucket_name):
+                        raise ObjectStorageError(
+                            "Unable to create storage bucket"
+                        ) from exc
+                except ObjectStorageError:
+                    raise
+                except Exception as check_exc:
+                    raise ObjectStorageError(
+                        "Unable to check storage bucket"
+                    ) from check_exc
+            else:
+                logger.info("Created storage bucket: %s", self.bucket_name)
         self._bucket_ready = True
-        logger.info("Created storage bucket: %s", self.bucket_name)
 
     def upload(self, key: str, data: bytes, content_type: str | None) -> None:
         self.ensure_bucket()
-        kwargs: dict = {
-            "Bucket": self.bucket_name,
-            "Key": key,
-            "Body": data,
-        }
-        if content_type:
-            kwargs["ContentType"] = content_type
         try:
-            self.client.put_object(**kwargs)
+            self.client.put_object(
+                self.bucket_name,
+                key,
+                io.BytesIO(data),
+                len(data),
+                content_type=content_type or "application/octet-stream",
+            )
         except Exception as exc:
             raise ObjectStorageError("Failed to upload object") from exc
 
     def download(self, key: str) -> bytes:
         try:
-            obj = self.client.get_object(Bucket=self.bucket_name, Key=key)
+            response = self.client.get_object(self.bucket_name, key)
         except Exception as exc:
             code = self._error_code(exc)
-            if code in {"404", "NoSuchKey"}:
+            if code in {"404", "NoSuchKey", "NoSuchObject", "NotFound"}:
                 raise ObjectNotFoundError(key) from exc
             raise ObjectStorageError("Failed to download object") from exc
-        return obj["Body"].read()
+        try:
+            return response.read()
+        except Exception as exc:
+            raise ObjectStorageError("Failed to download object") from exc
+        finally:
+            _close_response(response)
 
     def stream(self, key: str) -> StreamResult:
         try:
-            obj = self.client.get_object(Bucket=self.bucket_name, Key=key)
+            response = self.client.get_object(self.bucket_name, key)
         except Exception as exc:
             code = self._error_code(exc)
-            if code in {"404", "NoSuchKey"}:
+            if code in {"404", "NoSuchKey", "NoSuchObject", "NotFound"}:
                 raise ObjectNotFoundError(key) from exc
             raise ObjectStorageError("Failed to stream object") from exc
 
-        body = obj["Body"]
-        content_type = obj.get("ContentType")
-        content_length = obj.get("ContentLength")
+        try:
+            content_type = response.headers.get("Content-Type")
+            length_header = response.headers.get("Content-Length")
+            try:
+                content_length = (
+                    int(length_header) if length_header is not None else None
+                )
+            except ValueError:
+                content_length = None
+        except Exception as exc:
+            _close_response(response)
+            raise ObjectStorageError("Failed to stream object") from exc
+
         return StreamResult(
-            chunks=iter(lambda: body.read(1024 * 1024), b""),
+            chunks=_ResponseChunks(response),
             content_type=content_type,
             content_length=content_length,
         )
 
     def exists(self, key: str) -> bool:
         try:
-            self.client.head_object(Bucket=self.bucket_name, Key=key)
+            self.client.stat_object(self.bucket_name, key)
             return True
         except Exception as exc:
             code = self._error_code(exc)
-            if code in {"404", "NoSuchKey"}:
+            if code in {"404", "NoSuchKey", "NoSuchObject", "NotFound"}:
                 return False
             raise ObjectStorageError("Failed to check object") from exc
 
     def delete(self, key: str) -> None:
         try:
-            self.client.delete_object(Bucket=self.bucket_name, Key=key)
+            self.client.remove_object(self.bucket_name, key)
         except Exception as exc:
             raise ObjectStorageError("Failed to delete object") from exc
 
