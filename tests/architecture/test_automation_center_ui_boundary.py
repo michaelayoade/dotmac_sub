@@ -58,9 +58,9 @@ def test_hub_shows_support_communications_readiness_and_next_step() -> None:
     projection = _source("app/services/web_automation_center.py")
     assert "Support and communications automation" in template
     assert "{{ row.state_label }}" in template
+    assert 'AutomationCatalogState.unavailable: "Unavailable"' in projection
     assert 'AutomationCatalogState.managed_elsewhere: "Managed elsewhere"' in projection
-    assert "Unavailable" in template
-    assert "Retired" in template
+    assert 'AutomationCatalogState.retired: "Retired"' in projection
     assert "{{ row.explanation }}" in template
     assert "{{ row.item.management_path }}" in template
     assert "Create rule" in template
