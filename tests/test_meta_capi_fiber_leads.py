@@ -53,6 +53,9 @@ def _delivery(db_session) -> IntegrationDelivery:
 
 
 def _deliver(db_session, delivery: IntegrationDelivery) -> IntegrationDelivery:
+    delivery_id = delivery.id
+    attempt_count = delivery.attempt_count
+    db_session.rollback()
     return meta_capi_lead.deliver_lead(
         db_session,
         meta_capi_lead.DeliverMetaCapiLeadCommand(
@@ -60,9 +63,9 @@ def _deliver(db_session, delivery: IntegrationDelivery) -> IntegrationDelivery:
                 actor="test",
                 scope=meta_capi_lead.META_CAPI_DELIVERY_SCOPE,
                 reason="Test website Lead delivery",
-                idempotency_key=f"test-meta-capi:{delivery.id}:{delivery.attempt_count}",
+                idempotency_key=f"test-meta-capi:{delivery_id}:{attempt_count}",
             ),
-            delivery_id=delivery.id,
+            delivery_id=delivery_id,
         ),
     )
 

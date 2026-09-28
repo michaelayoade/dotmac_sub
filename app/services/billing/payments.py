@@ -4546,6 +4546,11 @@ class PaymentAllocations(ListResponseMixin):
         invoice_entry = lock_for_update(
             db, LedgerEntry, evidence.invoice_ledger_entry_id
         )
+        settlement = db.scalar(
+            select(PaymentSettlement)
+            .where(PaymentSettlement.payment_id == evidence.payment_id)
+            .with_for_update()
+        )
         amount = round_money(evidence.expected_amount)
         fingerprint = evidence.preview_fingerprint.strip().lower()
         if (
@@ -4554,7 +4559,7 @@ class PaymentAllocations(ListResponseMixin):
             or allocation is None
             or invoice_entry is None
             or payment.account_id != evidence.account_id
-            or payment.settlement is None
+            or settlement is None
             or payment.status is not PaymentStatus.succeeded
             or not payment.is_active
             or payment.refunds
