@@ -10,6 +10,7 @@ from app.services.automation_contracts import (
     AutomationConditionField,
     AutomationDomainCapabilities,
     AutomationOperator,
+    AutomationScriptTargetCapability,
     AutomationTriggerCapability,
     AutomationValueType,
     LegacyAutomationSurface,
@@ -1732,6 +1733,19 @@ DOMAIN = DomainSOT(
     "subset but cannot add states or define their semantic presentation.",
     automation=AutomationDomainCapabilities(
         target_types=("support.ticket",),
+        script_targets=(
+            AutomationScriptTargetCapability(
+                key="support.ticket",
+                label="Support ticket",
+                entity_type="support.ticket",
+                client_events=("form.load", "field.change", "form.validate"),
+                server_events=("support.ticket.created",),
+                read_permission="support:ticket:read",
+                write_permission="support:ticket:update",
+                tenant_id_field="tenant_id",
+                entity_id_field="ticket_id",
+            ),
+        ),
         catalog_items=(
             AutomationCatalogItem(
                 key="support.ticket.assignment_rules",

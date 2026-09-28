@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from app.services.automation_contracts import (
+    AutomationActionCapability,
+    AutomationActionInput,
+    AutomationDomainCapabilities,
+    AutomationScriptTargetCapability,
+    AutomationTriggerCapability,
+    AutomationValueType,
+)
 from app.services.custom_field_contracts import (
     CustomFieldDomainCapabilities,
     CustomFieldTargetCapability,
@@ -2987,6 +2995,69 @@ DOMAIN = DomainSOT(
     "policy from subscription status or invoice rows, and consume usage "
     "totals with their server-owned provenance instead of reconstructing "
     "headlines from partial client data.",
+    automation=AutomationDomainCapabilities(
+        target_types=("customer.account",),
+        triggers=(
+            AutomationTriggerCapability(
+                key="customer.account.status_changed",
+                label="Customer account status changed",
+                event_type="customer.account.status_changed",
+                event_schema_version=1,
+                entity_type="customer.account",
+                tenant_id_field="tenant_id",
+                entity_id_field="subscriber_id",
+                fields=(),
+                author_permission="customer:read",
+                runtime_enabled=True,
+            ),
+        ),
+        actions=(
+            AutomationActionCapability(
+                key="customer.account.set_status",
+                label="Apply customer account status action",
+                entity_type="customer.account",
+                command_owner="customer.account_status_actions",
+                command_name="confirm_account_status_change",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="action",
+                        label="Action",
+                        value_type=AutomationValueType.enum,
+                        enum_values=(
+                            "activate",
+                            "unsuspend",
+                            "suspend",
+                            "block",
+                            "disable",
+                        ),
+                    ),
+                ),
+                author_permission="customer:update",
+                runtime_scope="one customer account",
+                idempotency="tenant/customer/status/version",
+                runtime_enabled=True,
+            ),
+        ),
+        script_targets=(
+            AutomationScriptTargetCapability(
+                key="customer.account",
+                label="Customer",
+                entity_type="customer.account",
+                client_events=("form.load", "field.change", "form.validate"),
+                server_events=(
+                    "subscriber.created",
+                    "subscriber.updated",
+                    "subscriber.suspended",
+                    "subscriber.reactivated",
+                ),
+                read_permission="customer:read",
+                write_permission="customer:update",
+                tenant_id_field="tenant_id",
+                entity_id_field="subscriber_id",
+            ),
+        ),
+    ),
     custom_fields=CustomFieldDomainCapabilities(
         targets=(
             CustomFieldTargetCapability(
