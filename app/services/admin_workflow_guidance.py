@@ -212,8 +212,11 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Choose a registered target, create a typed draft, and define its validation and placement.",
         "Review the draft contract before activating it; structural rules lock after activation.",
         "Retire a field instead of deleting it so existing values and audit history remain attributable.",
+        "Enter an active field value in the custom-fields section of an eligible module's creation form when creating its record.",
+        "Review the saved custom-field values on the record detail page and update them only when your role has the module and field permissions.",
         notes=(
             "Registered targets cover subscribers, projects, support tickets, work orders, leads, quotes, and sales orders; both central and module permissions apply.",
+            "Active fields configured for a registered target appear on that target's creation form and detail page; inactive or unauthorized fields remain hidden.",
             "Legacy subscriber custom fields remain separately owned and are not migrated or dual-written.",
             "Sensitive values require separate read and write permissions and never appear in domain events.",
         ),
@@ -1062,6 +1065,8 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("define-custom-field", "Define a typed custom-field draft", 1),
         _action("review-custom-field-contract", "Review the field contract", 2),
         _action("retire-custom-field", "Retire a custom field safely", 3),
+        _action("enter-custom-field-on-create", "Enter a custom field during record creation", 4),
+        _action("review-custom-field-on-detail", "Review a custom field on record detail", 5),
     ),
     "admin-workspace": (
         _action("choose-work-area", "Choose the right work area", 0, 1),
