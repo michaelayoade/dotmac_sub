@@ -19,7 +19,7 @@
     </div>
     {% endif %}
 
-    <form method="post" action="{{ action_url }}" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <form method="post" action="{{ action_url }}" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800" data-automation-target="operations.vendor" data-automation-record-id="{{ vendor.id if vendor else '' }}">
         {% include "components/forms/csrf_input.html" %}
         <div class="space-y-6 p-6">
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">

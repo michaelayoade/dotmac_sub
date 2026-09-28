@@ -18,6 +18,7 @@ from app.models.vendor_routes import (
 )
 from app.services.common import coerce_uuid
 from app.services.events import EventType, emit_event
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.vendor_portal_errors import VendorProjectLifecycleError
 
 VendorProjectAction = Literal["start", "complete"]
@@ -188,6 +189,7 @@ def stage_project_transition(
         event_type,
         {
             "schema_version": 1,
+            "tenant_id": str(OPERATOR_TENANT_ID),
             "project_id": str(project.id),
             "native_project_id": str(project.project_id),
             "vendor_id": str(project.assigned_vendor_id),
