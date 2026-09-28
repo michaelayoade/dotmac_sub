@@ -94,8 +94,8 @@
                 delete form.dataset.automationBypass;
                 return;
             }
+            if (event.defaultPrevented) return;
             event.preventDefault();
-            event.stopImmediatePropagation();
             void run(form, "form.validate", event, null).then((valid) => {
                 const nativeValid = form.noValidate || form.checkValidity();
                 if (valid && nativeValid) {
@@ -105,7 +105,7 @@
                     form.reportValidity();
                 }
             });
-        }, true);
+        });
     };
 
     const scan = () => document.querySelectorAll("form[data-automation-target]").forEach(attach);

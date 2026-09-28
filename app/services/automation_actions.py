@@ -147,6 +147,7 @@ def _set_support_ticket_priority(
 def _set_project_status(
     db: Session, command: ExecuteAutomationActionCommand
 ) -> AutomationActionOutcome:
+    from app.models.project import ProjectStatus
     from app.schemas.project import ProjectUpdate
     from app.services.projects import Projects
 
@@ -159,10 +160,16 @@ def _set_project_status(
         raise AutomationActionExecutorError(
             "Automation action requires exactly one 'status' input."
         )
+    try:
+        status = ProjectStatus(str(values[0]))
+    except ValueError as exc:
+        raise AutomationActionExecutorError(
+            "Automation action project status is no longer supported."
+        ) from exc
     Projects.update(
         db,
         str(command.target.entity_id),
-        ProjectUpdate(status=str(values[0])),
+        ProjectUpdate(status=status),
         context=command.context,
     )
     return AutomationActionOutcome(

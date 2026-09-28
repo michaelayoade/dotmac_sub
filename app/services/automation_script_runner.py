@@ -267,7 +267,7 @@ def _published_version(
             message="The requested server script is not published for this event.",
             details={"script_id": str(command.script_id)},
         )
-    return row
+    return (row[0], row[1])
 
 
 __all__ = [

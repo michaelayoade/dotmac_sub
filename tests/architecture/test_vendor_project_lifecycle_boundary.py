@@ -16,7 +16,10 @@ from app.services.sot_relationships import all_services, service_relationship
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_ROOT = PROJECT_ROOT / "app"
 OWNER = APP_ROOT / "services" / "vendor_project_lifecycle.py"
-ALLOWED_CALLERS = {"app/services/vendor_submission_proposals.py"}
+ALLOWED_CALLERS = {
+    "app/services/vendor_submission_proposals.py",
+    "app/services/vendor_project_automation.py",
+}
 
 
 def _tree(path: Path) -> ast.AST:

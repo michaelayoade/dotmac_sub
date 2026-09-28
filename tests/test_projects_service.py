@@ -1617,6 +1617,7 @@ class TestProjectLifecycle:
         assert emitted_events == [
             {
                 "name": "project.updated",
+                "tenant_id": str(project.tenant_id),
                 "project_id": str(project.id),
                 "project_name": project.name,
                 "status": project.status,

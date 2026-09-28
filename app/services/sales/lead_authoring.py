@@ -1179,6 +1179,7 @@ def _edit_operation(db: Session, command: EditLeadCommand) -> EditLeadOutcome:
         db,
         EventType.lead_updated,
         {
+            "tenant_id": str(OPERATOR_TENANT_ID),
             "lead_id": str(updated.id),
             "party_id": str(party_id),
             "status": updated.status,
