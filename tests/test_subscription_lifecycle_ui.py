@@ -202,6 +202,10 @@ def test_subscription_detail_uses_canonical_preview_and_execute_endpoints():
     assert "billing_impact" in source
     assert "access_impact" in source
     assert "eligibility_reasons" in source
+    assert (
+        "body.set('effective_at', this.billingQuote().preview_effective_at)" in source
+    )
+    assert "body.set('effective_at', this.preview.effective_at)" not in source
     assert "/cancel-view" in source
     assert "new Date(this.effectiveAt).toISOString()" in source
     assert "'Idempotency-Key': this.idempotencyKey" in source
