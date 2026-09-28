@@ -1065,8 +1065,14 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("define-custom-field", "Define a typed custom-field draft", 1),
         _action("review-custom-field-contract", "Review the field contract", 2),
         _action("retire-custom-field", "Retire a custom field safely", 3),
-        _action("enter-custom-field-on-create", "Enter a custom field during record creation", 4),
-        _action("review-custom-field-on-detail", "Review a custom field on record detail", 5),
+        _action(
+            "enter-custom-field-on-create",
+            "Enter a custom field during record creation",
+            4,
+        ),
+        _action(
+            "review-custom-field-on-detail", "Review a custom field on record detail", 5
+        ),
     ),
     "admin-workspace": (
         _action("choose-work-area", "Choose the right work area", 0, 1),

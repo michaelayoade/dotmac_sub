@@ -789,8 +789,7 @@ async def customer_create(
             form=raw_form,
             permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
             actor=(
-                getattr(getattr(request, "state", None), "actor_id", None)
-                or created_id
+                getattr(getattr(request, "state", None), "actor_id", None) or created_id
             ),
         )
 
