@@ -2995,6 +2995,7 @@ DOMAIN = DomainSOT(
                 entity_id_type="uuid",
                 read_permission="customer:read",
                 write_permission="customer:update",
+                create_permission="customer:write",
                 detail_path_template="/admin/customers/person/{target_id}",
                 maximum_active_fields=50,
             ),

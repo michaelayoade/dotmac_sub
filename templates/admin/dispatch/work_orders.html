@@ -69,6 +69,7 @@
                 <label class="lg:col-span-6 text-sm font-semibold">Site<input name="address" value="{{ create_prefill.address if create_prefill and create_prefill.address else '' }}" maxlength="255" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900"></label>
                 <label class="lg:col-span-6 text-sm font-semibold">Description<textarea name="description" rows="3" maxlength="5000" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900">{{ create_prefill.description if create_prefill and create_prefill.description else '' }}</textarea></label>
                 <input type="hidden" name="status" value="scheduled"><input type="hidden" name="requires_as_built_evidence" value="1">
+                {% include 'admin/custom_fields/_creation_fields.html' %}
                 <div class="lg:col-span-12 flex flex-col-reverse items-stretch justify-between gap-3 border-t border-slate-200 pt-4 dark:border-slate-700 sm:flex-row sm:items-center"><p class="text-xs text-slate-500 dark:text-slate-400">Technician assignment follows creation through the dispatch queue.</p><div class="flex justify-end gap-2"><button type="button" @click="createOpen = false" class="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 dark:border-slate-600 dark:text-slate-300">Cancel</button><button class="rounded-xl bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white">Create Work Order</button></div></div>
                 </form>
             </div>

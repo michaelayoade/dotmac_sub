@@ -963,6 +963,8 @@
         </div>
         {% endif %}
 
+        {% include 'admin/custom_fields/_creation_fields.html' %}
+
         <!-- Form Actions -->
         <div class="flex items-center justify-between rounded-2xl border border-slate-200/60 bg-white px-6 py-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <a href="{{ return_url or '/admin/customers' }}" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">

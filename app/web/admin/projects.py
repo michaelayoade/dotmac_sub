@@ -238,6 +238,14 @@ def project_customer_search(
 def project_new(request: Request, db: Session = Depends(get_db)):
     context = _ctx(request, db)
     context.update(projects_web_service.build_project_form_context(db))
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_creation_form_context(
+            db,
+            target_type="project",
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+        )
+    )
     context.update({"page_title": "New Project", "form_mode": "create"})
     return templates.TemplateResponse("admin/projects/project_form.html", context)
 
@@ -248,10 +256,21 @@ def project_new(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("project:create"))],
 )
 async def project_create(request: Request, db: Session = Depends(get_db)):
-    form = dict(await request.form())
+    raw_form = await request.form()
+    form = dict(raw_form)
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    permission_keys = load_permission_keys(auth, db) if auth else frozenset()
     try:
         project = projects_web_service.create_project_from_form(
             db, request=request, actor_id=_actor_id(request), **form
+        )
+        web_custom_fields_service.apply_creation_values(
+            db,
+            target_type="project",
+            target_id=project.id,
+            form=raw_form,
+            permission_keys=permission_keys,
+            actor=_actor_id(request),
         )
     except (HTTPException, DomainError, ValidationError, ValueError) as exc:
         db.rollback()
@@ -259,6 +278,14 @@ async def project_create(request: Request, db: Session = Depends(get_db)):
         context.update(
             projects_web_service.build_project_form_context(
                 db, form=form, error=_form_error(exc)
+            )
+        )
+        context.update(
+            web_custom_fields_service.build_creation_form_context(
+                db,
+                target_type="project",
+                permission_keys=permission_keys,
+                form=raw_form,
             )
         )
         context.update({"page_title": "New Project", "form_mode": "create"})
@@ -908,6 +935,14 @@ def project_edit(request: Request, project_ref: str, db: Session = Depends(get_d
         )
     context = _ctx(request, db)
     context.update(projects_web_service.build_project_form_context(db, project=project))
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_creation_form_context(
+            db,
+            target_type="project",
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+        )
+    )
     context.update({"page_title": "Edit Project", "form_mode": "edit"})
     return templates.TemplateResponse("admin/projects/project_form.html", context)
 
@@ -921,7 +956,10 @@ async def project_update(
     request: Request, project_ref: str, db: Session = Depends(get_db)
 ):
     project, _ = projects_web_service.resolve_project_reference(db, project_ref)
-    form = dict(await request.form())
+    raw_form = await request.form()
+    form = dict(raw_form)
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    permission_keys = load_permission_keys(auth, db) if auth else frozenset()
     try:
         project = projects_web_service.update_project_from_form(
             db,
@@ -936,6 +974,14 @@ async def project_update(
         context.update(
             projects_web_service.build_project_form_context(
                 db, project=project, form=form, error=_form_error(exc)
+            )
+        )
+        context.update(
+            web_custom_fields_service.build_creation_form_context(
+                db,
+                target_type="project",
+                permission_keys=permission_keys,
+                form=raw_form,
             )
         )
         context.update({"page_title": "Edit Project", "form_mode": "edit"})

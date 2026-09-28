@@ -15,6 +15,7 @@ class CustomFieldTargetCapability:
     read_permission: str
     write_permission: str
     detail_path_template: str
+    create_permission: str | None = None
     maximum_active_fields: int = 50
 
 

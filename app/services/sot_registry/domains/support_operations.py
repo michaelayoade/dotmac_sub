@@ -1955,6 +1955,7 @@ DOMAIN = DomainSOT(
                 entity_id_type="uuid",
                 read_permission="support:ticket:read",
                 write_permission="support:ticket:update",
+                create_permission="support:ticket:create",
                 detail_path_template="/admin/support/tickets/{target_id}",
                 maximum_active_fields=50,
             ),

@@ -1,0 +1,39 @@
+{% if custom_field_form_fields %}
+<section class="border-t border-slate-200/70 pt-4 dark:border-slate-700/70 lg:col-span-12" aria-labelledby="custom-fields-heading">
+    <div class="mb-3">
+        <h2 id="custom-fields-heading" class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Additional information</h2>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Values are governed by the active fields configured for this module.</p>
+    </div>
+    <div class="grid gap-4 sm:grid-cols-2">
+        {% for field in custom_field_form_fields %}
+        {% set definition = field.definition %}
+        {% set field_name = 'custom_field__' ~ definition.key %}
+        <div class="{% if definition.field_type in ['textarea'] %}sm:col-span-2{% endif %}">
+            <label for="{{ field_name }}" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                {{ definition.label }}{% if definition.required %} <span class="text-red-500">*</span>{% endif %}
+            </label>
+            {% if definition.field_type == 'textarea' %}
+            <textarea id="{{ field_name }}" name="{{ field_name }}" rows="3" {% if definition.required %}required{% endif %} class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ field.value if field.value is not none else '' }}</textarea>
+            {% elif definition.field_type == 'select' %}
+            <select id="{{ field_name }}" name="{{ field_name }}" {% if definition.required %}required{% endif %} class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">— Select —</option>
+                {% for option in definition.options or [] %}<option value="{{ option }}" {% if field.value == option %}selected{% endif %}>{{ option }}</option>{% endfor %}
+            </select>
+            {% elif definition.field_type == 'multiselect' %}
+            <select id="{{ field_name }}" name="{{ field_name }}" multiple {% if definition.required %}required{% endif %} class="min-h-24 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for option in definition.options or [] %}<option value="{{ option }}" {% if field.value and option in field.value %}selected{% endif %}>{{ option }}</option>{% endfor %}
+            </select>
+            {% elif definition.field_type == 'boolean' %}
+            <label class="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
+                <input id="{{ field_name }}" type="checkbox" name="{{ field_name }}" value="true" {% if field.value %}checked{% endif %} class="rounded border-slate-300 text-emerald-600">
+                Yes
+            </label>
+            {% else %}
+            <input id="{{ field_name }}" type="{{ 'datetime-local' if definition.field_type == 'datetime' else ('number' if definition.field_type in ['integer', 'decimal', 'currency'] else definition.field_type) }}" name="{{ field_name }}" value="{{ field.value if field.value is not none else '' }}" {% if definition.required %}required{% endif %} {% if definition.field_type in ['decimal', 'currency'] %}step="any"{% endif %} class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            {% endif %}
+            {% if definition.description %}<p class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ definition.description }}</p>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}

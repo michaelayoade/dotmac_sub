@@ -320,6 +320,14 @@ def ticket_new(request: Request, db: Session = Depends(get_db)):
             can_assign_ticket=True,
         )
     )
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_creation_form_context(
+            db,
+            target_type="support_ticket",
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+        )
+    )
     context.update({"page_title": "New Ticket", "form_mode": "create", "ticket": None})
     return templates.TemplateResponse("admin/support/tickets/new.html", context)
 
@@ -349,7 +357,7 @@ def ticket_edit_page(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("support:ticket:create"))],
 )
-def ticket_create(
+async def ticket_create(
     request: Request,
     title: str = Form(...),
     description: str = Form(""),
@@ -374,6 +382,7 @@ def ticket_create(
     duplicate_override: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
+    raw_form = await request.form()
     actor_id = _actor_id(request)
     duplicate_confirmed = str(duplicate_override or "").strip().lower() in {
         "1",
@@ -409,6 +418,15 @@ def ticket_create(
             related_outage_ticket_id=related_outage_ticket_id,
             assignee_person_ids=assignee_person_ids,
         )
+        auth = getattr(getattr(request, "state", None), "auth", None) or {}
+        web_custom_fields_service.apply_creation_values(
+            db,
+            target_type="support_ticket",
+            target_id=ticket.id,
+            form=raw_form,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            actor=actor_id,
+        )
     except support_web_service.DuplicateTicketWarningError as exc:
         # Similar open tickets exist and the operator has not confirmed the
         # override — re-render the form with the duplicate warning (409, like
@@ -438,6 +456,16 @@ def ticket_create(
                     "related_outage_ticket_id": related_outage_ticket_id or "",
                 },
                 can_assign_ticket=True,
+            )
+        )
+        context.update(
+            web_custom_fields_service.build_creation_form_context(
+                db,
+                target_type="support_ticket",
+                permission_keys=load_permission_keys(
+                    getattr(getattr(request, "state", None), "auth", None) or {}, db
+                ),
+                form=raw_form,
             )
         )
         context.update(
@@ -488,6 +516,16 @@ def ticket_create(
                     "related_outage_ticket_id": related_outage_ticket_id or "",
                 },
                 can_assign_ticket=True,
+            )
+        )
+        context.update(
+            web_custom_fields_service.build_creation_form_context(
+                db,
+                target_type="support_ticket",
+                permission_keys=load_permission_keys(
+                    getattr(getattr(request, "state", None), "auth", None) or {}, db
+                ),
+                form=raw_form,
             )
         )
         context.update(

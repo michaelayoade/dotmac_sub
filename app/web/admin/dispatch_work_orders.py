@@ -283,6 +283,14 @@ def dispatch_work_orders(
     )
     context = _ctx(request, db)
     context.update(state)
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_creation_form_context(
+            db,
+            target_type="work_order",
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+        )
+    )
     context.update({"notice": notice, "error": error})
     return templates.TemplateResponse("admin/dispatch/work_orders.html", context)
 
@@ -559,7 +567,16 @@ def create_dispatch_work_order(
             auth=getattr(request.state, "auth", None),
             request_id=request.headers.get("X-Request-ID"),
         )
-    except (HTTPException, ValidationError, ValueError) as exc:
+        auth = getattr(getattr(request, "state", None), "auth", None) or {}
+        web_custom_fields_service.apply_creation_values(
+            db,
+            target_type="work_order",
+            target_id=row.id,
+            form=form,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            actor=(auth.get("actor_id") if isinstance(auth, dict) else None),
+        )
+    except (HTTPException, ValidationError, ValueError, DomainError) as exc:
         detail = getattr(exc, "detail", None) or str(exc)
         return _redirect(error=detail)
     return _detail_redirect(row.public_id, notice=f"Work order {row.public_id} created")

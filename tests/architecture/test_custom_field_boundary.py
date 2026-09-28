@@ -44,6 +44,10 @@ def test_registry_is_code_owned_and_registered_targets_are_explicit() -> None:
         custom_field_capabilities.target_capability("subscriber").write_permission
         == "customer:update"
     )
+    assert (
+        custom_field_capabilities.target_capability("project").create_permission
+        == "project:create"
+    )
     source = _source("app/services/custom_field_capabilities.py")
     assert "DOMAIN_SOT_RELATIONSHIPS" in source
     assert "database" not in source.casefold()
@@ -75,7 +79,7 @@ def test_models_and_migration_are_tenant_isolated_and_granular() -> None:
 
 def test_public_writes_use_owner_boundary_and_emit_value_free_evidence() -> None:
     source = _source("app/services/custom_fields.py")
-    assert source.count("execute_owner_command(") == 4
+    assert source.count("execute_owner_command(") == 5
     assert ".commit(" not in source
     assert ".rollback(" not in source
     assert "stage_audit_event(" in source
@@ -122,9 +126,35 @@ def test_registry_health_card_uses_semantic_status_and_safe_responsive_layout() 
     assert "status-panel-positive" in template
     assert "status-panel-negative" in template
     assert "status-foreground" in template
-    assert "xl:flex-row" in template
-    assert "xl:w-80" in template
+    assert "xl:grid-cols-[minmax(0,1fr)_20rem]" in template
+    assert "min-w-0 w-full" in template
     assert "sm:min-w-[22rem]" not in template
+
+
+def test_registered_targets_use_the_shared_creation_form_surface() -> None:
+    templates = (
+        "templates/admin/customers/form.html",
+        "templates/admin/projects/project_form.html",
+        "templates/admin/support/tickets/new.html",
+        "templates/admin/dispatch/work_orders.html",
+        "templates/admin/sales/leads/new_form.html",
+        "templates/admin/sales/quotes/form.html",
+        "templates/admin/sales/sales_orders/form.html",
+    )
+    for path in templates:
+        assert "admin/custom_fields/_creation_fields.html" in _source(path)
+    for path in (
+        "app/web/admin/customers.py",
+        "app/web/admin/projects.py",
+        "app/web/admin/support_tickets.py",
+        "app/web/admin/dispatch_work_orders.py",
+        "app/web/admin/sales.py",
+    ):
+        source = _source(path)
+        assert "build_creation_form_context" in source
+        assert "apply_creation_values" in source
+    service = _source("app/services/web_custom_fields.py")
+    assert "SetCustomFieldValuesCommand" in service
 
 
 def test_legacy_subscriber_fields_are_not_migrated_or_dual_written() -> None:

@@ -185,6 +185,8 @@
             </div>
         </div>
 
+        {% include 'admin/custom_fields/_creation_fields.html' %}
+
         <div class="flex items-center justify-between border-t border-slate-200/70 pt-4 dark:border-slate-700/70">
             <label class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                 <input type="hidden" name="is_active" value="{{ 'true' if prefill.is_active else 'false' }}"

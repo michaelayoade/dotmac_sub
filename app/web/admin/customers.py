@@ -657,6 +657,13 @@ def customer_new(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             **_reseller_form_context(db, None),
+            **web_custom_fields_service.build_creation_form_context(
+                db,
+                target_type="subscriber",
+                permission_keys=load_permission_keys(
+                    getattr(getattr(request, "state", None), "auth", None) or {}, db
+                ),
+            ),
         },
     )
 
@@ -666,7 +673,7 @@ def customer_new(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:write"))],
 )
-def customer_create(
+async def customer_create(
     request: Request,
     customer_type: str = Form(...),
     # Subscriber fields
@@ -718,6 +725,7 @@ def customer_create(
     db: Session = Depends(get_db),
 ):
     """Create a new customer (person or business)."""
+    raw_form = await request.form()
     try:
         contact_columns = {
             "first_name": contact_first_name,
@@ -773,6 +781,18 @@ def customer_create(
                 contact_columns=contact_columns,
             )
         )
+        auth = getattr(getattr(request, "state", None), "auth", None) or {}
+        web_custom_fields_service.apply_creation_values(
+            db,
+            target_type="subscriber",
+            target_id=UUID(created_id),
+            form=raw_form,
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            actor=(
+                getattr(getattr(request, "state", None), "actor_id", None)
+                or created_id
+            ),
+        )
 
         return RedirectResponse(
             url=f"/admin/customers/{created_type}/{created_id}",
@@ -813,6 +833,7 @@ def customer_create(
             )
         except Exception:
             contact_rows = []
+        auth = getattr(getattr(request, "state", None), "auth", None) or {}
         return templates.TemplateResponse(
             "admin/customers/form.html",
             {
@@ -829,6 +850,14 @@ def customer_create(
                 "managed_by_reseller": managed_by_reseller is not None,
                 "selected_reseller_id": reseller_id or "",
                 "selected_reseller_label": reseller_label or "",
+                **web_custom_fields_service.build_creation_form_context(
+                    db,
+                    target_type="subscriber",
+                    permission_keys=load_permission_keys(auth, db)
+                    if auth
+                    else frozenset(),
+                    form=raw_form,
+                ),
             },
             status_code=400,
         )

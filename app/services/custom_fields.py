@@ -64,6 +64,11 @@ _SET_VALUE = OwnerCommandDefinition(
     concern="custom-field definitions and typed entity values",
     name="set_custom_field_value",
 )
+_SET_VALUES = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="custom-field definitions and typed entity values",
+    name="set_custom_field_values",
+)
 
 
 class CustomFieldError(DomainError):
@@ -139,6 +144,24 @@ class SetCustomFieldValueCommand:
     value: object | None
     permission_keys: frozenset[str]
     context: CommandContext
+    allow_create_permission: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CustomFieldValueAssignment:
+    definition_id: UUID
+    value: object | None
+
+
+@dataclass(frozen=True, slots=True)
+class SetCustomFieldValuesCommand:
+    tenant_id: UUID
+    target_type: str
+    target_id: UUID
+    assignments: tuple[CustomFieldValueAssignment, ...]
+    permission_keys: frozenset[str]
+    context: CommandContext
+    allow_create_permission: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -648,91 +671,149 @@ def change_definition_status(
 def set_value(
     db: Session, command: SetCustomFieldValueCommand
 ) -> CustomFieldValueOutcome:
-    def operation() -> CustomFieldValueOutcome:
-        target = _target(command.target_type)
-        _require(
-            command.permission_keys, VALUE_WRITE_PERMISSION, target.write_permission
+    return execute_owner_command(
+        db,
+        definition=_SET_VALUE,
+        context=command.context,
+        operation=lambda: _set_value_operation(db, command),
+    )
+
+
+def _set_value_operation(
+    db: Session, command: SetCustomFieldValueCommand
+) -> CustomFieldValueOutcome:
+    target = _target(command.target_type)
+    _require(command.permission_keys, VALUE_WRITE_PERMISSION)
+    if not permission_granted(command.permission_keys, target.write_permission):
+        if not (
+            command.allow_create_permission
+            and target.create_permission
+            and permission_granted(command.permission_keys, target.create_permission)
+        ):
+            _require(command.permission_keys, target.write_permission)
+    row = _definition(
+        db,
+        tenant_id=command.tenant_id,
+        definition_id=command.definition_id,
+        lock=True,
+    )
+    if row.target_type != target.key:
+        raise _error(
+            "target_mismatch", "The field does not belong to this target type."
         )
-        row = _definition(
-            db,
+    if row.status != CustomFieldDefinitionStatus.active.value:
+        raise _error("status_conflict", "Only active custom fields accept values.")
+    if row.sensitive:
+        _require(command.permission_keys, SENSITIVE_WRITE_PERMISSION)
+    if not custom_field_targets.target_exists(
+        db, target_type=target.key, target_id=command.target_id
+    ):
+        raise _error("target_not_found", "The target record does not exist.")
+    normalized = _normalize_value(row, command.value)
+    stored = db.scalar(
+        select(CustomFieldValue)
+        .where(
+            CustomFieldValue.tenant_id == command.tenant_id,
+            CustomFieldValue.definition_id == row.id,
+            CustomFieldValue.target_id == command.target_id,
+        )
+        .with_for_update()
+    )
+    cleared = normalized is None
+    if cleared:
+        if stored is not None:
+            db.delete(stored)
+    elif stored is None:
+        stored = CustomFieldValue(
             tenant_id=command.tenant_id,
-            definition_id=command.definition_id,
-            lock=True,
+            definition_id=row.id,
+            target_type=target.key,
+            target_id=command.target_id,
+            value=normalized,
+            created_by=command.context.actor,
+            updated_by=command.context.actor,
         )
-        if row.target_type != target.key:
-            raise _error(
-                "target_mismatch", "The field does not belong to this target type."
-            )
-        if row.status != CustomFieldDefinitionStatus.active.value:
-            raise _error("status_conflict", "Only active custom fields accept values.")
-        if row.sensitive:
-            _require(command.permission_keys, SENSITIVE_WRITE_PERMISSION)
+        db.add(stored)
+    else:
+        stored.value = normalized
+        stored.updated_by = command.context.actor
+        stored.updated_at = datetime.now(UTC)
+    db.flush()
+    metadata = {
+        "schema_version": 1,
+        "tenant_id": str(command.tenant_id),
+        "definition_id": str(row.id),
+        "target_type": target.key,
+        "target_id": str(command.target_id),
+        "field_key": row.key,
+        "change": "cleared" if cleared else "set",
+        "sensitive": row.sensitive,
+        "command_id": str(command.context.command_id),
+        "correlation_id": str(command.context.correlation_id),
+    }
+    stage_audit_event(
+        db,
+        action="custom_field.value_changed",
+        entity_type=target.key,
+        entity_id=str(command.target_id),
+        actor_id=command.context.actor,
+        request_id=str(command.context.correlation_id),
+        metadata=metadata,
+    )
+    emit_event(
+        db,
+        EventType.custom_field_value_changed,
+        metadata,
+        actor=command.context.actor,
+        subscriber_id=command.target_id if target.key == "subscriber" else None,
+    )
+    return CustomFieldValueOutcome(row.id, command.target_id, cleared)
+
+
+def set_values(
+    db: Session, command: SetCustomFieldValuesCommand
+) -> tuple[CustomFieldValueOutcome, ...]:
+    """Persist a creation-form's values as one custom-field owner command."""
+
+    def operation() -> tuple[CustomFieldValueOutcome, ...]:
+        target = _target(command.target_type)
+        _require(command.permission_keys, VALUE_WRITE_PERMISSION)
+        if not permission_granted(command.permission_keys, target.write_permission):
+            if not (
+                command.allow_create_permission
+                and target.create_permission
+                and permission_granted(
+                    command.permission_keys, target.create_permission
+                )
+            ):
+                _require(command.permission_keys, target.write_permission)
         if not custom_field_targets.target_exists(
             db, target_type=target.key, target_id=command.target_id
         ):
             raise _error("target_not_found", "The target record does not exist.")
-        normalized = _normalize_value(row, command.value)
-        stored = db.scalar(
-            select(CustomFieldValue)
-            .where(
-                CustomFieldValue.tenant_id == command.tenant_id,
-                CustomFieldValue.definition_id == row.id,
-                CustomFieldValue.target_id == command.target_id,
+        if len({item.definition_id for item in command.assignments}) != len(
+            command.assignments
+        ):
+            raise _error("definition_conflict", "A custom field was submitted twice.")
+        return tuple(
+            _set_value_operation(
+                db,
+                SetCustomFieldValueCommand(
+                    tenant_id=command.tenant_id,
+                    definition_id=assignment.definition_id,
+                    target_type=target.key,
+                    target_id=command.target_id,
+                    value=assignment.value,
+                    permission_keys=command.permission_keys,
+                    context=command.context,
+                    allow_create_permission=command.allow_create_permission,
+                ),
             )
-            .with_for_update()
+            for assignment in command.assignments
         )
-        cleared = normalized is None
-        if cleared:
-            if stored is not None:
-                db.delete(stored)
-        elif stored is None:
-            stored = CustomFieldValue(
-                tenant_id=command.tenant_id,
-                definition_id=row.id,
-                target_type=target.key,
-                target_id=command.target_id,
-                value=normalized,
-                created_by=command.context.actor,
-                updated_by=command.context.actor,
-            )
-            db.add(stored)
-        else:
-            stored.value = normalized
-            stored.updated_by = command.context.actor
-            stored.updated_at = datetime.now(UTC)
-        db.flush()
-        metadata = {
-            "schema_version": 1,
-            "tenant_id": str(command.tenant_id),
-            "definition_id": str(row.id),
-            "target_type": target.key,
-            "target_id": str(command.target_id),
-            "field_key": row.key,
-            "change": "cleared" if cleared else "set",
-            "sensitive": row.sensitive,
-            "command_id": str(command.context.command_id),
-            "correlation_id": str(command.context.correlation_id),
-        }
-        stage_audit_event(
-            db,
-            action="custom_field.value_changed",
-            entity_type=target.key,
-            entity_id=str(command.target_id),
-            actor_id=command.context.actor,
-            request_id=str(command.context.correlation_id),
-            metadata=metadata,
-        )
-        emit_event(
-            db,
-            EventType.custom_field_value_changed,
-            metadata,
-            actor=command.context.actor,
-            subscriber_id=command.target_id if target.key == "subscriber" else None,
-        )
-        return CustomFieldValueOutcome(row.id, command.target_id, cleared)
 
     return execute_owner_command(
-        db, definition=_SET_VALUE, context=command.context, operation=operation
+        db, definition=_SET_VALUES, context=command.context, operation=operation
     )
 
 
@@ -812,12 +893,15 @@ __all__ = [
     "CustomFieldDefinitionOperation",
     "CustomFieldError",
     "CustomFieldValidation",
+    "CustomFieldValueAssignment",
     "SetCustomFieldValueCommand",
+    "SetCustomFieldValuesCommand",
     "UpdateCustomFieldDefinitionCommand",
     "change_definition_status",
     "create_definition",
     "list_definitions",
     "list_target_values",
     "set_value",
+    "set_values",
     "update_definition",
 ]
