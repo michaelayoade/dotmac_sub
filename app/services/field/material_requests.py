@@ -40,6 +40,7 @@ from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import (
     mark_sub_authoritative as _mark_source_authoritative,
 )
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -1240,6 +1241,7 @@ def cancel_material_request(
                 EventType.field_material_request_cancellation_requested,
                 {
                     "material_request_id": str(request.id),
+                    "tenant_id": str(OPERATOR_TENANT_ID),
                     "work_order_mirror_id": (
                         str(request.work_order_mirror_id)
                         if request.work_order_mirror_id

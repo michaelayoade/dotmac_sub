@@ -42,12 +42,14 @@ from app.schemas.dispatch import (
 from app.schemas.network import InfrastructureWorkOrderHeaderCreate
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import coerce_uuid
+from app.services.events import EventType, emit_event
 from app.services.field.source import mark_sub_authoritative
 from app.services.field.work_order_status import (
     TERMINAL_WORK_ORDER_STATUSES,
     WORK_ORDER_STATUSES,
     WorkOrderStatus,
 )
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.work_order_errors import WorkOrderCommandError
 
 _CREATE_ID_NAMESPACE = uuid.UUID("cbf90ef0-a977-49fb-a2ac-a636eb3b2342")
@@ -171,6 +173,57 @@ def _queue_work_order_tag_notifications(
             previous_tags=previous_tags,
             actor_person_id=actor_id,
         ),
+    )
+
+
+def _emit_work_order_created_event(
+    db: Session, work_order: WorkOrder, *, actor: str | None
+) -> None:
+    emit_event(
+        db,
+        EventType.custom,
+        {
+            "name": "work_order.created",
+            "tenant_id": str(OPERATOR_TENANT_ID),
+            "work_order_id": work_order.public_id,
+            "project_id": str(work_order.project_id)
+            if work_order.project_id is not None
+            else None,
+            "project_task_id": str(work_order.project_task_id)
+            if work_order.project_task_id is not None
+            else None,
+            "status": work_order.status,
+        },
+        actor=actor,
+        subscriber_id=work_order.subscriber_id,
+    )
+
+
+def _emit_work_order_updated_event(
+    db: Session,
+    work_order: WorkOrder,
+    *,
+    actor: str | None,
+    changed_fields: tuple[str, ...],
+) -> None:
+    emit_event(
+        db,
+        EventType.custom,
+        {
+            "name": "work_order.updated",
+            "tenant_id": str(OPERATOR_TENANT_ID),
+            "work_order_id": work_order.public_id,
+            "project_id": str(work_order.project_id)
+            if work_order.project_id is not None
+            else None,
+            "project_task_id": str(work_order.project_task_id)
+            if work_order.project_task_id is not None
+            else None,
+            "status": work_order.status,
+            "changed_fields": list(changed_fields),
+        },
+        actor=actor,
+        subscriber_id=work_order.subscriber_id,
     )
 
 
@@ -509,6 +562,11 @@ class WorkOrderCommands:
                     },
                 },
             )
+            _emit_work_order_created_event(
+                db,
+                row,
+                actor=_actor(auth)[1],
+            )
             _queue_work_order_tag_notifications(
                 db,
                 row,
@@ -622,6 +680,11 @@ class WorkOrderCommands:
                 "origin_ticket_id": str(ticket_id),
             },
         )
+        _emit_work_order_created_event(
+            db,
+            row,
+            actor=_actor(auth)[1],
+        )
         _queue_work_order_tag_notifications(db, row, previous_tags=(), auth=auth)
         return row
 
@@ -664,6 +727,7 @@ class WorkOrderCommands:
         *,
         auth: dict[str, Any] | None = None,
         request_id: str | None = None,
+        commit: bool = True,
     ) -> WorkOrder:
         row = _get_work_order(db, public_id, lock=True)
         previous_tags = tuple(str(tag) for tag in (row.tags or ()))
@@ -827,14 +891,23 @@ class WorkOrderCommands:
                 },
             },
         )
+        _emit_work_order_updated_event(
+            db,
+            row,
+            actor=_actor(auth)[1],
+            changed_fields=tuple(sorted(data)),
+        )
         _queue_work_order_tag_notifications(
             db,
             row,
             previous_tags=previous_tags,
             auth=auth,
         )
-        db.commit()
-        db.refresh(row)
+        if commit:
+            db.commit()
+            db.refresh(row)
+        else:
+            db.flush()
         return row
 
     @staticmethod

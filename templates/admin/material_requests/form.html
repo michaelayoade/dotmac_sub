@@ -22,7 +22,7 @@
 
     <div class="rounded-2xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/70 dark:bg-slate-800">
         <div class="p-5">
-            <form method="post" action="/admin/operations/material-requests" class="space-y-5">
+            <form method="post" action="/admin/operations/material-requests" class="space-y-5" data-automation-target="operations.material_request" data-automation-record-id="">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="request_id" value="{{ request_id }}">
                 {% if material_scope.ticket_id %}<input type="hidden" name="ticket_id" value="{{ material_scope.ticket_id }}">{% endif %}
