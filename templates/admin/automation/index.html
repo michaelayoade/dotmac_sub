@@ -17,15 +17,15 @@
         color="indigo"
     ) %}
         {% if rule_builder_available %}
-        <a href="/admin/automation/rules/new" class="inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
+        <a href="#mechanism-heading" class="inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            New rule
+            Automation authoring · New rule, client script, or server script
         </a>
         {% else %}
         <button type="button" disabled aria-describedby="authoring-note"
                 class="inline-flex min-h-10 cursor-not-allowed items-center gap-2 rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            New rule
+            Automation authoring · New rule, client script, or server script
         </button>
         {% endif %}
     {% endcall %}
@@ -52,7 +52,7 @@
                         The control plane is installed, but no module can execute actions yet. Deployment creates no rules and causes no business side effects.
                     {% endif %}
                 </p>
-                <p id="authoring-note" class="status-foreground mt-1 text-xs">New rules start as drafts. Activate a rule when you are ready for it to take effect.</p>
+                <p id="authoring-note" class="status-foreground mt-1 text-xs">Rules, client scripts, and server scripts start as drafts. Publish only after reviewing the module owner, permissions, and runtime boundary.</p>
             </div>
             <dl class="mt-5 grid w-full grid-cols-3 divide-x divide-slate-300/70 border-t border-slate-300/70 pt-4 text-center dark:divide-slate-700 dark:border-slate-700">
                 <div class="px-3"><dt class="status-foreground text-xs">Known</dt><dd class="status-foreground mt-1 text-xl font-semibold tabular-nums">{{ module_count }}</dd></div>
@@ -66,6 +66,21 @@
             <ul class="mt-1 list-disc space-y-1 pl-5">{% for error in registry_errors %}<li>{{ error }}</li>{% endfor %}</ul>
         </div>
         {% endif %}
+    </section>
+
+    <section id="mechanism-heading" class="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+                <h2 class="text-base font-semibold text-slate-950 dark:text-white">Choose an automation mechanism</h2>
+                <p class="mt-1 max-w-[80ch] text-sm leading-6 text-slate-600 dark:text-slate-400">Rules are typed event-to-action workflows. Client scripts run in the browser form lifecycle. Server scripts run only through the isolated script boundary and never inside the application process.</p>
+                <a class="mt-2 inline-flex text-sm font-semibold text-indigo-700 underline underline-offset-4 dark:text-indigo-300" href="/admin/help?article=automation-center">Read the Automation Center workflow guide</a>
+            </div>
+            <div class="flex flex-wrap gap-2 text-sm font-semibold">
+                {% if rule_builder_available %}<a href="/admin/automation/rules/new?mechanism=rule" class="rounded-lg border border-indigo-200 px-3 py-2 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950">Create rule</a>{% endif %}
+                {% if can_create_scripts %}<a href="/admin/automation/scripts/new?kind=client_script" class="rounded-lg border border-indigo-200 px-3 py-2 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950">Create client script</a>
+                <a href="/admin/automation/scripts/new?kind=server_script" class="rounded-lg border border-indigo-200 px-3 py-2 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950">Create server script</a>{% endif %}
+            </div>
+        </div>
     </section>
 
     <section aria-labelledby="catalog-heading" class="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
@@ -104,7 +119,7 @@
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
                 <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-300">
-                    <tr><th scope="col" class="px-5 py-3 font-semibold">Module</th><th scope="col" class="px-4 py-3 font-semibold">State</th><th scope="col" class="px-4 py-3 text-right font-semibold">Targets</th><th scope="col" class="px-4 py-3 text-right font-semibold">Triggers</th><th scope="col" class="px-5 py-3 text-right font-semibold">Actions</th></tr>
+                    <tr><th scope="col" class="px-5 py-3 font-semibold">Module</th><th scope="col" class="px-4 py-3 font-semibold">State</th><th scope="col" class="px-4 py-3 text-right font-semibold">Targets</th><th scope="col" class="px-4 py-3 text-right font-semibold">Triggers</th><th scope="col" class="px-4 py-3 text-right font-semibold">Actions</th><th scope="col" class="px-5 py-3 text-right font-semibold">Script targets</th></tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
                     {% for row in modules %}
@@ -113,12 +128,18 @@
                         <td class="px-4 py-3.5"><span class="inline-flex rounded-full px-2.5 py-1 text-xs font-medium {% if row.state == 'ready' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300{% elif row.state == 'blocked' %}bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300{% elif row.state == 'declared' %}bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300{% else %}bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300{% endif %}">{{ row.state_label }}</span></td>
                         <td class="px-4 py-3.5 text-right tabular-nums text-slate-700 dark:text-slate-300">{{ row.manifest.target_types|length }}</td>
                         <td class="px-4 py-3.5 text-right tabular-nums text-slate-700 dark:text-slate-300">{{ row.manifest.triggers|length }}</td>
-                        <td class="px-5 py-3.5 text-right tabular-nums text-slate-700 dark:text-slate-300">{{ row.manifest.actions|length }}</td>
+                        <td class="px-4 py-3.5 text-right tabular-nums text-slate-700 dark:text-slate-300">{{ row.manifest.actions|length }}</td>
+                        <td class="px-5 py-3.5 text-right tabular-nums text-slate-700 dark:text-slate-300">{{ row.manifest.script_targets|length }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+    </section>
+
+    <section aria-labelledby="target-support-heading" class="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800"><h2 id="target-support-heading" class="text-base font-semibold text-slate-950 dark:text-white">Rule support by target</h2><p class="mt-1 text-sm text-slate-600 dark:text-slate-400">A target is rule-ready only when both its event trigger and typed action are executable. Script targets are shown separately so they are not mistaken for native rules.</p></div>
+        <div class="overflow-x-auto"><table class="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-300"><tr><th scope="col" class="px-5 py-3 font-semibold">Target</th><th scope="col" class="px-4 py-3 font-semibold">Rule triggers</th><th scope="col" class="px-4 py-3 font-semibold">Rule actions</th><th scope="col" class="px-5 py-3 font-semibold">What you can use</th></tr></thead><tbody class="divide-y divide-slate-100 dark:divide-slate-800">{% for row in rule_target_matrix %}<tr><td class="px-5 py-3.5"><p class="font-medium text-slate-900 dark:text-white">{{ row.target_type }}</p><p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ row.module_label }}</p></td><td class="px-4 py-3.5 text-xs text-slate-600 dark:text-slate-300">{% if row.triggers %}{{ row.triggers|join(', ') }}{% else %}None registered{% endif %}</td><td class="px-4 py-3.5 text-xs text-slate-600 dark:text-slate-300">{% if row.actions %}{{ row.actions|join(', ') }}{% else %}None executable{% endif %}</td><td class="px-5 py-3.5">{% if row.triggers and row.actions %}<span class="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">Rules available</span>{% elif row.script_target %}<span class="inline-flex rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-medium text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">Scripts available</span>{% else %}<span class="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">Developer adapter required</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>
     </section>
 
     <div class="grid gap-7 xl:grid-cols-2">
@@ -161,6 +182,13 @@
             {% else %}
                 <div class="px-5 py-8"><p class="font-medium text-slate-900 dark:text-white">No central rules yet</p><p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-400">Create a draft from an approved trigger and action. Activation becomes available when its runtime is ready.</p></div>
             {% endif %}
+        </section>
+
+        <section aria-labelledby="scripts-heading" class="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-800"><div><h2 id="scripts-heading" class="text-base font-semibold text-slate-950 dark:text-white">Client and server scripts</h2><p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Immutable drafts bound to registered targets and events.</p><p class="mt-1 text-xs {% if server_script_runtime_state == 'ready' %}text-emerald-700 dark:text-emerald-300{% else %}text-amber-700 dark:text-amber-300{% endif %}">Server runtime: {{ server_script_runtime_state|capitalize }}{% if server_script_runtime_state != 'ready' %} · publication is unavailable until a digest-pinned OCI image is configured{% endif %}</p></div></div>
+            {% if not can_read_scripts %}<p class="px-5 py-8 text-sm text-slate-600 dark:text-slate-400">You need <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-800">automation:script:read</code> to view scripts.</p>
+            {% elif scripts %}<ul class="divide-y divide-slate-100 dark:divide-slate-800">{% for script in scripts %}<li class="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div class="min-w-0"><p class="truncate font-medium text-slate-900 dark:text-white">{{ script.name }}</p><p class="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{{ script.kind.value|replace('_', ' ')|title }} · {{ script.target_type }} · {{ script.event_name }} · v{{ script.version }}</p></div><div class="flex items-center gap-3"><span class="self-start rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium capitalize text-slate-700 dark:bg-slate-800 dark:text-slate-300">{{ script.status.value }}</span>{% if script.status.value == 'draft' and can_publish_scripts %}<form method="post" action="/admin/automation/scripts/{{ script.script_id }}/publish"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><input type="hidden" name="command_token" value="{{ command_token }}"><button type="submit" class="rounded-lg bg-indigo-700 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">Publish</button></form>{% endif %}</div></li>{% endfor %}</ul>
+            {% else %}<div class="px-5 py-8"><p class="font-medium text-slate-900 dark:text-white">No scripts yet</p><p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-400">Create a client or server script draft from the authoring controls above.</p></div>{% endif %}
         </section>
 
         <section aria-labelledby="runs-heading" class="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">

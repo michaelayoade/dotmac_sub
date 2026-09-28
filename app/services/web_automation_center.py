@@ -11,10 +11,13 @@ from app.services import (
     automation_capabilities,
     automation_rules,
     automation_runtime,
+    automation_script_runtime,
+    automation_scripts,
 )
 from app.services.automation_contracts import (
     AutomationCatalogItem,
     AutomationCatalogState,
+    AutomationMechanism,
     AutomationModuleManifest,
 )
 from app.services.operator_tenant import OPERATOR_TENANT_ID
@@ -105,6 +108,9 @@ def build_automation_center_data(
     can_publish_rules: bool,
     can_operate_rules: bool,
     permission_keys: frozenset[str],
+    can_read_scripts: bool = False,
+    can_create_scripts: bool = False,
+    can_publish_scripts: bool = False,
 ) -> dict[str, object]:
     """Build one permission-aware, tenant-scoped hub projection."""
 
@@ -149,6 +155,39 @@ def build_automation_center_data(
     legacy_surfaces = tuple(
         surface for manifest in manifests for surface in manifest.legacy_surfaces
     )
+    scripts = (
+        automation_scripts.list_scripts(db, tenant_id=OPERATOR_TENANT_ID)
+        if can_read_scripts
+        else ()
+    )
+    script_targets = tuple(
+        target
+        for manifest in manifests
+        if manifest.registered
+        for target in manifest.script_targets
+    )
+    rule_target_matrix = tuple(
+        {
+            "module_label": manifest.label,
+            "target_type": target_type,
+            "triggers": tuple(
+                trigger.key
+                for trigger in manifest.triggers
+                if trigger.entity_type == target_type and trigger.runtime_enabled
+            ),
+            "actions": tuple(
+                action.key
+                for action in manifest.actions
+                if action.entity_type == target_type and action.runtime_enabled
+            ),
+            "script_target": any(
+                target.entity_type == target_type for target in manifest.script_targets
+            ),
+        }
+        for manifest in manifests
+        if manifest.registered
+        for target_type in manifest.target_types
+    )
     authorized = "*" in permission_keys
     rule_builder_available = (
         can_create_rules
@@ -156,6 +195,7 @@ def build_automation_center_data(
             (authorized or trigger.author_permission in permission_keys)
             and any(
                 action.entity_type == trigger.entity_type
+                and action.runtime_enabled
                 and (authorized or action.author_permission in permission_keys)
                 for candidate in manifests
                 for action in candidate.actions
@@ -174,8 +214,27 @@ def build_automation_center_data(
         "runtime_state": runtime_state,
         "registry_errors": registry_errors,
         "rules": rules,
+        "scripts": scripts,
+        "can_read_scripts": can_read_scripts,
+        "can_create_scripts": can_create_scripts,
+        "can_publish_scripts": can_publish_scripts,
         "runs": runs,
         "legacy_surfaces": legacy_surfaces,
+        "script_targets": script_targets,
+        "script_target_count": len(script_targets),
+        "rule_target_matrix": rule_target_matrix,
+        "mechanisms": tuple(item.value for item in AutomationMechanism),
+        "client_script_available": bool(
+            can_create_scripts
+            and any(target.client_events for target in script_targets)
+        ),
+        "server_script_available": bool(
+            can_create_scripts
+            and any(target.server_events for target in script_targets)
+            and automation_script_runtime.runtime_state()
+            is automation_script_runtime.AutomationScriptRuntimeState.ready
+        ),
+        "server_script_runtime_state": automation_script_runtime.runtime_state().value,
         "can_read_rules": can_read_rules,
         "can_read_runs": can_read_runs,
         "can_create_rules": can_create_rules,

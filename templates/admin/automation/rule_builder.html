@@ -5,7 +5,7 @@
 
 {% block content %}
 <div class="mx-auto max-w-4xl space-y-7">
-    {% call page_header(title=("Edit rule draft" if rule_id else "New rule"), subtitle="Combine approved app triggers, conditions, and actions.", color="indigo") %}
+    {% call page_header(title=("Edit rule draft" if rule_id else "Create a rule"), subtitle="Choose a module, then combine its approved event triggers, conditions, and actions.", color="indigo") %}
         <a href="/admin/automation" class="text-sm font-semibold text-indigo-700 underline underline-offset-4 dark:text-indigo-300">Back to Automation Center</a>
     {% endcall %}
     {% if error %}<div role="alert" class="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div>{% endif %}
@@ -23,6 +23,11 @@
 
         <section class="space-y-2" aria-labelledby="trigger-heading">
             <h2 id="trigger-heading" class="text-base font-semibold text-slate-950 dark:text-white">When this happens</h2>
+            <label for="module-key" class="block text-sm font-medium text-slate-800 dark:text-slate-200">Module</label>
+            <select id="module-key" {% if rule_id %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                {% for module in module_options %}<option value="{{ module.key }}" data-trigger-keys="{{ module.trigger_keys|join(',') }}">{{ module.label }}</option>{% endfor %}
+            </select>
+            <p class="text-xs text-slate-500 dark:text-slate-400">The module determines which event triggers and owner actions can be combined.</p>
             <label for="trigger-key" class="sr-only">Trigger</label>
             <select id="trigger-key" {% if rule_id %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
                 {% for trigger in triggers %}<option value="{{ trigger.key }}" {% if trigger.key == trigger_key %}selected{% endif %}>{{ trigger.label }}</option>{% endfor %}
@@ -62,14 +67,25 @@
 (() => {
     const form = document.getElementById("rule-builder");
     const trigger = document.getElementById("trigger-key");
+    const module = document.getElementById("module-key");
     const conditionsBox = document.getElementById("conditions-container");
     const actionsBox = document.getElementById("actions-container");
     if (!form || !trigger || !conditionsBox || !actionsBox) return;
     const capabilities = {{ builder_options|tojson }};
+    const moduleOptions = {{ module_options|tojson }};
     const teams = {{ service_teams|tojson }};
     const initialConditions = {{ initial_conditions|tojson }};
     const initialActions = {{ initial_actions|tojson }};
     const config = () => capabilities[trigger.value] || {fields: [], actions: []};
+    const syncModules = () => {
+        const selected = moduleOptions.find((item) => item.key === module.value);
+        const allowed = new Set(selected?.trigger_keys || []);
+        for (const option of trigger.options) option.hidden = !allowed.has(option.value);
+        if (!allowed.has(trigger.value)) {
+            const first = [...trigger.options].find((option) => allowed.has(option.value));
+            if (first) trigger.value = first.value;
+        }
+    };
     const make = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
     const selectFor = (items, value, label) => { const select = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); select.setAttribute("aria-label", label); for (const item of items) { const option = make("option", "", item.label); option.value = item.key; select.append(option); } if (value) select.value = value; return select; };
     const removeButton = (row) => { const button = make("button", "rounded-lg px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/30", "Remove"); button.type = "button"; button.addEventListener("click", () => row.remove()); return button; };
@@ -94,6 +110,7 @@
     document.getElementById("add-action")?.addEventListener("click", () => renderAction());
     const updateCustomerScope = () => { const section = document.getElementById("customer-scope-section"); const supported = Boolean(config().supports_customer_scope); section?.classList.toggle("hidden", !supported); if (!supported) { const company = document.querySelector('input[name="customer_scope"][value="company"]'); if (company) company.checked = true; document.getElementById("selected-customers")?.replaceChildren(); } };
     trigger.addEventListener("change", () => { const submittedTrigger = document.getElementById("trigger-key-value"); if (submittedTrigger) submittedTrigger.value = trigger.value; renderAll([], []); updateCustomerScope(); });
+    module.addEventListener("change", () => { syncModules(); trigger.dispatchEvent(new Event("change")); });
     form.addEventListener("submit", () => {
         const conditions = [...conditionsBox.children].map((row) => { const selects = row.querySelectorAll("select"); const op = selects[1].value; return {field_key: selects[0].value, operator: op, value: ["is_empty", "is_not_empty"].includes(op) ? null : (row.querySelector("[data-value]")?.value ?? "")}; });
         const actions = [...actionsBox.children].map((row) => ({action_key: row.querySelector("select").value, inputs: Object.fromEntries([...row.querySelectorAll("[data-input-key]")].map((input) => [input.dataset.inputKey, input.value]))}));
@@ -106,7 +123,9 @@
     selected?.addEventListener("click", (event) => { if (event.target instanceof HTMLElement && event.target.closest(".remove-customer")) event.target.closest(".selected-customer")?.remove(); });
     searchButton?.addEventListener("click", async () => { const term = searchInput.value.trim(); results.replaceChildren(); if (term.length < 2) { message.textContent = "Enter at least two characters to search."; return; } message.textContent = "Searching…"; searchButton.disabled = true; try { const response = await fetch(`/admin/automation/customers/search?q=${encodeURIComponent(term)}`, {headers: {"Accept": "application/json"}}); if (!response.ok) throw new Error("Customer search is unavailable. Please try again."); const data = await response.json(); for (const customer of data.items || []) { const item = make("li", "flex items-center justify-between gap-3 px-3 py-2 text-sm"); const label = make("span", "min-w-0 truncate", customer.label); const add = make("button", "rounded-md px-3 py-1 font-semibold text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300", "Add"); add.type = "button"; add.addEventListener("click", () => { if (selected.querySelector(`[data-customer-id="${CSS.escape(customer.id)}"]`)) return; if (selected.querySelectorAll(".selected-customer").length >= 100) { message.textContent = "A rule can include up to 100 customers."; return; } const pill = make("li", "selected-customer inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-sm", ""); pill.dataset.customerId = customer.id; pill.append(label.cloneNode(true)); const hidden = make("input"); hidden.type = "hidden"; hidden.name = "customer_ids"; hidden.value = customer.id; const remove = make("button", "remove-customer px-1", "×"); remove.type = "button"; pill.append(hidden, remove); selected.append(pill); }); item.append(label, add); results.append(item); } message.textContent = data.items?.length ? "Choose a customer to add it." : "No matching active customers found."; } catch (error) { message.textContent = error instanceof Error ? error.message : "Customer search is unavailable."; } finally { searchButton.disabled = false; } });
     searchInput?.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); searchButton.click(); } });
-    renderAll(initialConditions, initialActions); updateScope(); updateCustomerScope();
+    const initialModule = moduleOptions.find((item) => item.trigger_keys.includes(trigger.value));
+    if (initialModule) module.value = initialModule.key;
+    syncModules(); renderAll(initialConditions, initialActions); updateScope(); updateCustomerScope();
 })();
 </script>
 {% endblock %}

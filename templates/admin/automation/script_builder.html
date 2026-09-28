@@ -1,0 +1,43 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header %}
+
+{% block title %}Create {{ script_kind_label }} - Automation Center{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-7">
+    {% call page_header(title="Create " ~ script_kind_label, subtitle="Bind a JavaScript draft to a registered module target and lifecycle event.", color="indigo") %}
+        <a href="/admin/automation" class="text-sm font-semibold text-indigo-700 underline underline-offset-4 dark:text-indigo-300">Back to Automation Center</a>
+    {% endcall %}
+    {% if error %}<div role="alert" class="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">{{ error }}</div>{% endif %}
+
+    <form method="post" action="/admin/automation/scripts" class="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        <input type="hidden" name="command_token" value="{{ command_token }}">
+        <input type="hidden" name="kind" value="{{ script_kind }}">
+        <div class="grid gap-5 sm:grid-cols-2">
+            <label class="space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200">Name<input name="name" value="{{ name }}" required maxlength="160" class="mt-1 block min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white" placeholder="Validate lead before save"></label>
+            <label class="space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200">Key<input name="key" value="{{ key }}" required maxlength="160" pattern="[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*" class="mt-1 block min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white" placeholder="sales.validate_lead"></label>
+        </div>
+        <label class="block space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200">Description<textarea name="description" maxlength="1000" rows="2" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">{{ description }}</textarea></label>
+        <div class="grid gap-5 sm:grid-cols-2">
+            <label class="space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200">Target<select id="script-target" name="target_type" required class="mt-1 block min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">{% for target in script_targets %}<option value="{{ target.entity_type }}" data-events="{{ target.events|join(',') }}" {% if target.entity_type == target_type %}selected{% endif %}>{{ target.label }} ({{ target.entity_type }})</option>{% endfor %}</select></label>
+            <label class="space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200">Event<select id="script-event" name="event_name" required class="mt-1 block min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white"></select></label>
+        </div>
+        <label class="block space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200">JavaScript source<textarea name="source_code" required maxlength="65536" rows="18" spellcheck="false" class="mt-1 block w-full rounded-lg border border-slate-300 bg-slate-950 px-3 py-2 font-mono text-sm leading-6 text-slate-100 shadow-inner">{{ source_code }}</textarea></label>
+        <div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            <p class="font-semibold">Draft and runtime boundary</p>
+            <p class="mt-1">This saves an immutable draft version only. Client scripts are intended for declared browser form events. Server scripts are not evaluated in the application process; publication and execution require the isolated, digest-pinned runtime to be configured. Network, imports, process access, and dynamic code evaluation are unavailable.</p>
+        </div>
+        <div class="flex flex-wrap justify-end gap-3"><a href="/admin/automation" class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</a><button type="submit" class="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800">Save draft</button></div>
+    </form>
+</div>
+<script nonce="{{ csp_nonce }}">
+(() => {
+    const target = document.getElementById("script-target");
+    const event = document.getElementById("script-event");
+    const initial = {{ event_name|tojson }};
+    const sync = () => { event.replaceChildren(); const values = (target.selectedOptions[0]?.dataset.events || "").split(",").filter(Boolean); values.forEach((value) => { const option = new Option(value, value); event.append(option); }); if (values.includes(initial)) event.value = initial; };
+    target?.addEventListener("change", sync); sync();
+})();
+</script>
+{% endblock %}
