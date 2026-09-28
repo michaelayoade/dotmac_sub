@@ -274,6 +274,17 @@ python scripts/network/stage_fiber_topology_kmz.py \
   --all-checked-in --stage --actor "operator identity"
 ```
 
+### Network Map browser admission
+
+Authorized staff can stage the same normalized KMZ evidence from
+`/admin/network/map` through `network.map_kmz_transfer`. The browser adapter
+requires `network:fiber:import`, a typed source profile, reason, actor, and
+idempotency key. It delegates persistence to `network.fiber_source_staging`
+inside the transfer owner's transaction. The returned overlay is preview
+evidence only; it never joins `ui.network_map_projection` and never bypasses
+identity, connectivity, or asset-change review. See
+`docs/designs/NETWORK_MAP_KMZ_IMPORT_EXPORT.md`.
+
 The checked-in six-source preview resolves all expected 4,681 rows with stable
 IDs and zero structural/coordinate blockers. Duplicate names and geometries are
 retained as review candidates rather than silently merged.

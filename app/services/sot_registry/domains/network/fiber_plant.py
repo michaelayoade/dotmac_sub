@@ -136,6 +136,156 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="network.map_kmz_transfer",
+        module="app.services.network_map_transfer",
+        owns=(
+            "administrative KMZ source admission and staging coordination",
+            "permission-scoped Network Map KMZ export",
+        ),
+        depends_on=(
+            "auth.permission_gate",
+            "network.fiber_source_staging",
+            "ui.network_map_projection",
+            "observability.audit_log",
+        ),
+        notes=(
+            "Browser uploads become immutable non-authoritative staging evidence. "
+            "They never write canonical plant or infer connectivity. KMZ export "
+            "serializes an allowlisted, permission-scoped map projection and does "
+            "not expose management addresses, credentials, notes, or raw telemetry."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name=(
+                        "administrative KMZ source admission and staging coordination"
+                    ),
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "authenticated KMZ import intent",
+                        "normalized fiber source staging protocol",
+                    ),
+                ),
+                ConcernContract(
+                    name="permission-scoped Network Map KMZ export",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "authorized Network Map export scope",
+                        "authoritative Network Map projection",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="authenticated KMZ import intent",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "network:fiber:import permission, exact actor, reason, "
+                        "profile, uploaded bytes, and idempotency key"
+                    ),
+                ),
+                AuthorityInput(
+                    name="normalized fiber source staging protocol",
+                    owner="network.fiber_source_staging",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "checksum-bound FiberTopologySourceBatch and normalized "
+                        "FiberTopologyStagedFeature observations"
+                    ),
+                ),
+                AuthorityInput(
+                    name="authorized Network Map export scope",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "network:map:export plus customer:read when the customer "
+                        "layer is requested, with typed layers and viewport bounds"
+                    ),
+                ),
+                AuthorityInput(
+                    name="authoritative Network Map projection",
+                    owner="ui.network_map_projection",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "typed canonical map feature projection rebuilt for each "
+                        "download request"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary=(
+                    "stage_network_map_kmz enters execute_owner_command once on a "
+                    "transaction-free session. Staging rows, audit, and outbox event "
+                    "commit atomically. Export uses a read-only request session."
+                ),
+                locking=(
+                    "Import uniqueness is arbitrated by the manifest and command-key "
+                    "constraints; canonical plant rows are never locked or mutated."
+                ),
+                idempotency=(
+                    "The command key is bound to actor, filename, file digest, profile, "
+                    "and reason. Exact file/profile manifests replay the existing batch."
+                ),
+                retries=(
+                    "Malformed archives and changed command fingerprints fail closed. "
+                    "A transaction or uniqueness failure rolls back all staging evidence."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes("network.map_kmz_transfer"),
+                    "network.map_kmz_transfer.idempotency_key_required",
+                    "network.map_kmz_transfer.idempotency_conflict",
+                    "network.map_kmz_transfer.invalid_scope",
+                    "network.map_kmz_transfer.invalid_actor",
+                    "network.map_kmz_transfer.reason_required",
+                    "network.map_kmz_transfer.empty_file",
+                    "network.map_kmz_transfer.file_too_large",
+                    "network.map_kmz_transfer.invalid_file_type",
+                    "network.map_kmz_transfer.invalid_archive",
+                    "network.map_kmz_transfer.staging_failed",
+                    "network.map_kmz_transfer.empty_export",
+                ),
+                mapping_owner="app.web.admin.network",
+                fail_closed_on=(
+                    "network.map_kmz_transfer.invalid_scope",
+                    "network.map_kmz_transfer.invalid_actor",
+                    "network.map_kmz_transfer.idempotency_conflict",
+                    "network.map_kmz_transfer.invalid_archive",
+                ),
+            ),
+            events=EventContract(
+                event_types=("network_map.kmz_import_staged",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "The event carries batch identity, closed profile/status values, "
+                    "digests, and bounded counts; raw KML and source properties stay "
+                    "inside the staging owner."
+                ),
+                replay=(
+                    "Consumers treat batch_id plus manifest_sha256 as immutable "
+                    "evidence. Replaying the signal never creates canonical assets."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.map_kmz_transfer",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/designs/NETWORK_MAP_KMZ_IMPORT_EXPORT.md",
+                "docs/designs/FIBER_TOPOLOGY_SOT.md",
+            ),
+            test_refs=(
+                "tests/architecture/test_fiber_kmz_import_boundary.py",
+                "tests/architecture/test_network_map_projection_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="network.fiber_cost_items",
         module="app.services.fiber_cost_items",
         owns=(

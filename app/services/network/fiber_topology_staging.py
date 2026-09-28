@@ -37,6 +37,9 @@ KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
 SOURCE_SYSTEM = "dotmac_osp_kmz"
 NORMALIZATION_VERSION = 1
 MAX_KML_BYTES = 100 * 1024 * 1024
+MAX_KMZ_BYTES = 25 * 1024 * 1024
+MAX_KMZ_ENTRIES = 64
+MAX_KMZ_COMPRESSION_RATIO = 200
 NIGERIA_LONGITUDE_RANGE = (2.0, 15.0)
 NIGERIA_LATITUDE_RANGE = (4.0, 14.0)
 
@@ -285,20 +288,25 @@ def _normalized_key(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").casefold())
 
 
-def _read_kml(path: Path) -> tuple[bytes, bytes, str]:
-    raw = path.read_bytes()
-    if path.suffix.casefold() == ".kml":
+def _read_kml_bytes(raw: bytes, source_name: str) -> tuple[bytes, bytes, str]:
+    suffix = Path(source_name).suffix.casefold()
+    if suffix == ".kml":
         if len(raw) > MAX_KML_BYTES:
             raise ValueError("KML source exceeds the staging size limit")
-        return raw, raw, path.name
-    if path.suffix.casefold() != ".kmz":
+        return raw, raw, Path(source_name).name
+    if suffix != ".kmz":
         raise ValueError("Fiber topology sources must be KMZ or KML files")
+    if len(raw) > MAX_KMZ_BYTES:
+        raise ValueError("KMZ source exceeds the staging size limit")
 
     try:
         with zipfile.ZipFile(BytesIO(raw)) as archive:
+            entries_all = archive.infolist()
+            if len(entries_all) > MAX_KMZ_ENTRIES:
+                raise ValueError("KMZ source contains too many archive entries")
             entries = [
                 info
-                for info in archive.infolist()
+                for info in entries_all
                 if not info.is_dir() and info.filename.casefold().endswith(".kml")
             ]
             if len(entries) != 1:
@@ -306,9 +314,20 @@ def _read_kml(path: Path) -> tuple[bytes, bytes, str]:
             entry = entries[0]
             if entry.file_size > MAX_KML_BYTES:
                 raise ValueError("KMZ KML document exceeds the staging size limit")
+            if entry.compress_size == 0 and entry.file_size > 0:
+                raise ValueError("KMZ KML document has an invalid compressed size")
+            if (
+                entry.compress_size > 0
+                and entry.file_size / entry.compress_size > MAX_KMZ_COMPRESSION_RATIO
+            ):
+                raise ValueError("KMZ KML document exceeds the compression ratio limit")
             return raw, archive.read(entry), entry.filename
     except zipfile.BadZipFile as exc:
         raise ValueError("Invalid KMZ archive") from exc
+
+
+def _read_kml(path: Path) -> tuple[bytes, bytes, str]:
+    return _read_kml_bytes(path.read_bytes(), path.name)
 
 
 def _properties(placemark: ET.Element) -> dict[str, str | None]:
@@ -401,6 +420,12 @@ def _parse_features(
         root = ET.fromstring(kml)
     except ET.ParseError as exc:
         raise ValueError("Invalid KML document") from exc
+    if root.find(".//kml:NetworkLink", KML_NS) is not None:
+        raise ValueError("KML NetworkLink elements are not accepted")
+    for href in root.findall(".//kml:href", KML_NS):
+        value = (href.text or "").strip().casefold()
+        if value.startswith(("http://", "https://", "ftp://")):
+            raise ValueError("KML remote resources are not accepted")
 
     parsed: list[ParsedFiberFeature] = []
     for row_number, placemark in enumerate(
@@ -648,6 +673,44 @@ def preview_fiber_source(
     )
 
 
+def preview_uploaded_fiber_source(
+    db: Session,
+    *,
+    content: bytes,
+    source_name: str,
+    profile_name: str,
+) -> FiberSourcePreview:
+    """Parse uploaded source bytes without trusting or materializing archive paths."""
+
+    profile = source_profile(profile_name)
+    raw, kml, kml_entry_name = _read_kml_bytes(content, source_name)
+    parsed = _parse_features(kml, profile)
+    manifest_rows = sorted(
+        [
+            {
+                "external_id": feature.external_id,
+                "content_sha256": feature.content_sha256,
+            }
+            for feature in parsed
+        ],
+        key=lambda row: (
+            _normalized_key(row["external_id"]),
+            row["content_sha256"],
+        ),
+    )
+    plans = _plan_features(db, profile, parsed)
+    return FiberSourcePreview(
+        source_system=profile.source_system,
+        profile=profile,
+        source_name=Path(source_name).name,
+        file_sha256=_sha256_bytes(raw),
+        manifest_sha256=_sha256_json(manifest_rows),
+        features=plans,
+        status_counts=dict(Counter(plan.match_status for plan in plans)),
+        kml_entry_name=kml_entry_name,
+    )
+
+
 def _stage_result(batch: FiberTopologySourceBatch, *, created: bool):
     return FiberSourceStageResult(
         batch_id=batch.id,
@@ -698,7 +761,7 @@ def _manifest_sha256(
     )
 
 
-def _persist_preview(
+def persist_fiber_preview(
     db: Session,
     preview: FiberSourcePreview,
     *,
@@ -706,7 +769,11 @@ def _persist_preview(
     source_name: str,
     created_by: str,
     source_metadata: dict | None = None,
+    command_key_sha256: str | None = None,
+    command_fingerprint_sha256: str | None = None,
 ) -> FiberSourceStageResult:
+    """Persist normalized evidence in the caller-owned transaction and flush only."""
+
     manifest_sha256 = _manifest_sha256(plans, source_metadata=source_metadata)
     existing = db.scalar(
         select(FiberTopologySourceBatch).where(
@@ -738,6 +805,8 @@ def _persist_preview(
         external_id_key=preview.profile.external_id_key,
         file_sha256=preview.file_sha256,
         manifest_sha256=manifest_sha256,
+        command_key_sha256=command_key_sha256,
+        command_fingerprint_sha256=command_fingerprint_sha256,
         status="blocked" if blocker_count else "staged",
         feature_count=len(plans),
         blocker_count=blocker_count,
@@ -772,10 +841,35 @@ def _persist_preview(
                 prior_feature_id=plan.prior_feature_id,
             )
         )
+    db.flush()
+    return _stage_result(batch, created=True)
+
+
+def _persist_preview(
+    db: Session,
+    preview: FiberSourcePreview,
+    *,
+    plans: tuple[FiberFeatureMatchPlan, ...],
+    source_name: str,
+    created_by: str,
+    source_metadata: dict | None = None,
+) -> FiberSourceStageResult:
+    """Compatibility boundary for operator scripts pending typed CLI migration."""
+
     try:
+        result = persist_fiber_preview(
+            db,
+            preview,
+            plans=plans,
+            source_name=source_name,
+            created_by=created_by,
+            source_metadata=source_metadata,
+        )
         db.commit()
+        return result
     except IntegrityError:
         db.rollback()
+        manifest_sha256 = _manifest_sha256(plans, source_metadata=source_metadata)
         existing = db.scalar(
             select(FiberTopologySourceBatch).where(
                 FiberTopologySourceBatch.source_system == preview.source_system,
@@ -786,8 +880,6 @@ def _persist_preview(
         if existing is None:
             raise
         return _stage_result(existing, created=False)
-    db.refresh(batch)
-    return _stage_result(batch, created=True)
 
 
 def stage_fiber_preview_batch(
@@ -854,6 +946,8 @@ __all__ = [
     "FiberSourceStageResult",
     "SOURCE_PROFILES",
     "preview_fiber_source",
+    "preview_uploaded_fiber_source",
+    "persist_fiber_preview",
     "source_profile",
     "stage_fiber_preview_batch",
     "stage_fiber_source",

@@ -1,14 +1,24 @@
 """Admin network management base web routes."""
 
+from io import BytesIO
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.audit import AuditActorType
+from app.models.network import FiberSegmentType
+from app.models.network_monitoring import DeviceType
+from app.models.subscriber import SubscriberStatus
 from app.schemas.network_map_asset_changes import (
     NetworkAssetCoordinates,
     NetworkAssetDraft,
@@ -18,11 +28,29 @@ from app.schemas.network_map_asset_changes import (
     ReviewNetworkAssetProposalCommand,
     SubmitNetworkAssetProposalCommand,
 )
-from app.services import core_device_archive, network_map_asset_changes
+from app.schemas.network_map_transfer import (
+    NetworkMapBounds,
+    NetworkMapExportLayer,
+    NetworkMapExportScope,
+    NetworkMapImportProfile,
+    NetworkMapKmzExportQuery,
+    StageNetworkMapKmzCommand,
+)
+from app.services import (
+    core_device_archive,
+    network_map_asset_changes,
+    network_map_transfer,
+)
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services.auth_dependencies import has_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
+from app.services.device_operational_status import DeviceOperationalState
 from app.services.domain_errors import DomainError
+from app.services.network_map_contracts import (
+    NetworkMapInspectionStatus,
+    NetworkMapSignalQuality,
+    NetworkMapSupportLifecycle,
+)
 from app.services.owner_commands import CommandContext
 
 templates = Jinja2Templates(directory="templates")
@@ -119,6 +147,24 @@ def _network_map_command_context(
         scope=scope,
         reason=reason.strip(),
         idempotency_key=f"network-map-v2:{scope}:{idempotency_key}",
+    )
+
+
+def _network_map_transfer_context(
+    *,
+    actor_id: UUID,
+    actor_type: AuditActorType,
+    reason: str,
+    idempotency_key: UUID,
+) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=f"{actor_type.value}:{actor_id}",
+        scope=network_map_transfer.IMPORT_PERMISSION,
+        reason=reason.strip(),
+        idempotency_key=f"network-map-kmz:{idempotency_key}",
     )
 
 
@@ -403,14 +449,206 @@ def device_reboot_preview(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:map:read"))],
 )
-def comprehensive_network_map(request: Request, db: Session = Depends(get_db)):
+def comprehensive_network_map(
+    request: Request,
+    db: Session = Depends(get_db),
+    auth: dict[str, object] = Depends(require_permission("network:map:read")),
+):
     """Comprehensive network map showing all infrastructure and customers."""
     from app.services import network_map as network_map_service
 
     context = _base_context(request, db, active_page="network-map")
     projection = network_map_service.build_network_map_projection(db=db)
     context.update(projection.to_template_context())
+    context["network_map_transfer"] = {
+        "can_import": has_permission(auth, db, network_map_transfer.IMPORT_PERMISSION),
+        "can_export": has_permission(auth, db, network_map_transfer.EXPORT_PERMISSION),
+        "can_export_customers": has_permission(
+            auth, db, network_map_transfer.CUSTOMER_PERMISSION
+        ),
+        "max_upload_bytes": network_map_transfer.MAX_UPLOAD_BYTES,
+        "profiles": [
+            {"value": profile.value, "label": profile.label}
+            for profile in NetworkMapImportProfile
+        ],
+    }
     return templates.TemplateResponse("admin/network/map.html", context)
+
+
+def _network_map_transfer_error_response(error: DomainError) -> JSONResponse:
+    suffix = error.code.rsplit(".", 1)[-1]
+    if suffix in {"invalid_actor", "invalid_scope"}:
+        status_code = 403
+    elif suffix == "file_too_large":
+        status_code = 413
+    elif suffix == "idempotency_conflict":
+        status_code = 409
+    else:
+        status_code = 422
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": error.code,
+            "message": error.message,
+            "details": error.details,
+        },
+    )
+
+
+@router.post(
+    "/map/imports",
+    response_model=None,
+    dependencies=[Depends(require_permission(network_map_transfer.IMPORT_PERMISSION))],
+)
+async def import_network_map_kmz(
+    file: UploadFile = File(...),
+    profile: NetworkMapImportProfile = Form(...),
+    reason: str = Form(..., min_length=1, max_length=500),
+    idempotency_key: UUID = Form(...),
+    db: Session = Depends(get_db),
+    auth: dict[str, object] = Depends(
+        require_permission(network_map_transfer.IMPORT_PERMISSION)
+    ),
+) -> dict[str, object] | JSONResponse:
+    """Stage an uploaded KMZ as immutable, non-canonical map evidence."""
+
+    actor = _network_map_actor(auth)
+    if actor is None:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "invalid_actor", "message": "A valid actor is required."},
+        )
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(1024 * 1024):
+        total += len(chunk)
+        if total > network_map_transfer.MAX_UPLOAD_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "error": "file_too_large",
+                    "message": "The KMZ file exceeds the 25 MB upload limit.",
+                },
+            )
+        chunks.append(chunk)
+    actor_id, actor_type, actor_label = actor
+    command = StageNetworkMapKmzCommand(
+        context=_network_map_transfer_context(
+            actor_id=actor_id,
+            actor_type=actor_type,
+            reason=reason,
+            idempotency_key=idempotency_key,
+        ),
+        actor_id=actor_id,
+        actor_type=actor_type,
+        actor_label=actor_label,
+        filename=file.filename or "network-map.kmz",
+        content=b"".join(chunks),
+        profile=profile,
+    )
+    try:
+        db_session_adapter.release_read_transaction(db)
+        outcome = network_map_transfer.stage_network_map_kmz(db=db, command=command)
+    except DomainError as error:
+        return _network_map_transfer_error_response(error)
+    return outcome.to_transport()
+
+
+@router.get(
+    "/map/export.kmz",
+    dependencies=[Depends(require_permission(network_map_transfer.EXPORT_PERMISSION))],
+)
+def export_network_map_kmz(
+    layers: str = Query(default="infrastructure,fiber,network_devices,onts,customers"),
+    scope: NetworkMapExportScope = Query(default=NetworkMapExportScope.visible),
+    south: float | None = Query(default=None, ge=-90, le=90),
+    west: float | None = Query(default=None, ge=-180, le=180),
+    north: float | None = Query(default=None, ge=-90, le=90),
+    east: float | None = Query(default=None, ge=-180, le=180),
+    include_customers: bool = Query(default=True),
+    customer_status: SubscriberStatus | None = Query(default=None),
+    device_status: DeviceOperationalState | None = Query(default=None),
+    device_type: DeviceType | None = Query(default=None),
+    ont_status: DeviceOperationalState | None = Query(default=None),
+    signal_quality: NetworkMapSignalQuality | None = Query(default=None),
+    support_lifecycle: NetworkMapSupportLifecycle | None = Query(default=None),
+    inspection_status: NetworkMapInspectionStatus | None = Query(default=None),
+    segment_type: FiberSegmentType | None = Query(default=None),
+    db: Session = Depends(get_db),
+    auth: dict[str, object] = Depends(
+        require_permission(network_map_transfer.EXPORT_PERMISSION)
+    ),
+) -> StreamingResponse | JSONResponse:
+    """Export a fresh, permission-scoped authoritative map projection as KMZ."""
+
+    try:
+        parsed_layers = tuple(
+            dict.fromkeys(
+                NetworkMapExportLayer(value.strip())
+                for value in layers.split(",")
+                if value.strip()
+            )
+        )
+    except ValueError:
+        return JSONResponse(
+            status_code=422,
+            content={"error": "invalid_layers", "message": "Invalid export layer."},
+        )
+    supplied_bounds = (south, west, north, east)
+    bounds: NetworkMapBounds | None = None
+    if any(value is not None for value in supplied_bounds):
+        if not all(value is not None for value in supplied_bounds):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "incomplete_bounds",
+                    "message": "South, west, north, and east bounds are required together.",
+                },
+            )
+        assert (
+            south is not None
+            and west is not None
+            and north is not None
+            and east is not None
+        )
+        if south >= north or west >= east:
+            return JSONResponse(
+                status_code=422,
+                content={"error": "invalid_bounds", "message": "Invalid map bounds."},
+            )
+        bounds = NetworkMapBounds(south=south, west=west, north=north, east=east)
+    customer_allowed = include_customers and has_permission(
+        auth, db, network_map_transfer.CUSTOMER_PERMISSION
+    )
+    try:
+        outcome = network_map_transfer.export_network_map_kmz(
+            db=db,
+            query=NetworkMapKmzExportQuery(
+                layers=parsed_layers,
+                scope=scope,
+                bounds=bounds,
+                include_customers=customer_allowed,
+                customer_status=customer_status,
+                device_status=device_status,
+                device_type=device_type,
+                ont_status=ont_status,
+                signal_quality=signal_quality,
+                support_lifecycle=support_lifecycle,
+                inspection_status=inspection_status,
+                segment_type=segment_type,
+            ),
+        )
+    except DomainError as error:
+        return _network_map_transfer_error_response(error)
+    return StreamingResponse(
+        BytesIO(outcome.content),
+        media_type="application/vnd.google-earth.kmz",
+        headers={
+            "Content-Disposition": f'attachment; filename="{outcome.filename}"',
+            "X-Network-Map-Feature-Count": str(outcome.feature_count),
+            "X-Content-SHA256": outcome.file_sha256,
+        },
+    )
 
 
 @router.get(

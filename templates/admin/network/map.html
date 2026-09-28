@@ -417,6 +417,25 @@
     .compact-filter-grid { display:grid; grid-template-columns:1.1fr 1.4fr 1.4fr 1.7fr auto; gap:.65rem; align-items:end; }
     .compact-filter-select { width:100%; height:2.25rem; border:1px solid var(--border-default); border-radius:.5rem; background:var(--surface-secondary); padding:0 .55rem; font-size:.7rem; color:var(--text-primary); }
     @media(max-width:1100px) { .compact-filter-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    .map-transfer-dialog {
+        width: min(42rem, calc(100vw - 2rem));
+        max-height: calc(100vh - 2rem);
+        margin: auto;
+        border: 1px solid var(--border-default);
+        border-radius: .75rem;
+        background: var(--surface-primary);
+        color: var(--text-primary);
+        padding: 0;
+        box-shadow: 0 24px 48px rgba(15, 23, 42, .24);
+    }
+    .map-transfer-dialog::backdrop { background: rgba(15, 23, 42, .62); }
+    .map-transfer-preview-label {
+        padding: .35rem .55rem;
+        border: 1px dashed var(--color-semantic-warning-600);
+        border-radius: .5rem;
+        color: var(--color-semantic-warning-700);
+        background: var(--surface-secondary);
+    }
 </style>
 {% endblock %}
 
@@ -430,6 +449,16 @@
         color2="cyan",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Network Map"}]
     ) %}
+        {% if network_map_transfer.can_import %}
+        <button id="btn-import-kmz" type="button" class="inline-flex items-center gap-2 rounded-xl bg-accent-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-accent-700 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2">
+            Import KMZ
+        </button>
+        {% endif %}
+        {% if network_map_transfer.can_export %}
+        <button id="btn-export-kmz" type="button" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+            Export KMZ
+        </button>
+        {% endif %}
         <button id="btn-refresh" class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:bg-slate-700">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
             Refresh
@@ -439,6 +468,51 @@
             Fit All
         </button>
     {% endcall %}
+
+    {% if network_map_transfer.can_import %}
+    <dialog id="network-map-import-dialog" class="map-transfer-dialog" aria-labelledby="network-map-import-title">
+        <form id="network-map-import-form" class="flex max-h-[calc(100vh-2rem)] flex-col" enctype="multipart/form-data">
+            <div class="flex items-start justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+                <div>
+                    <h2 id="network-map-import-title" class="text-lg font-semibold">Import KMZ</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Upload geometry as staged evidence for review. This does not change canonical plant.</p>
+                </div>
+                <button type="button" data-close-import class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:hover:bg-slate-700" aria-label="Close import dialog">&times;</button>
+            </div>
+            <div class="space-y-4 overflow-y-auto p-5">
+                <div>
+                    <label for="network-map-kmz-file" class="mb-1 block text-sm font-medium">KMZ file</label>
+                    <input id="network-map-kmz-file" name="file" type="file" accept=".kmz,application/vnd.google-earth.kmz" required class="block w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-600 dark:bg-slate-800">
+                    <p class="mt-1 text-xs text-slate-500">Maximum {{ (network_map_transfer.max_upload_bytes / 1024 / 1024) | int }} MB. One KML document per archive.</p>
+                </div>
+                <div>
+                    <label for="network-map-import-profile" class="mb-1 block text-sm font-medium">Asset profile</label>
+                    <select id="network-map-import-profile" name="profile" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800">
+                        {% for profile in network_map_transfer.profiles %}
+                        <option value="{{ profile.value }}">{{ profile.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="network-map-import-reason" class="mb-1 block text-sm font-medium">Import reason</label>
+                    <textarea id="network-map-import-reason" name="reason" rows="3" maxlength="500" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" placeholder="Describe the source and purpose of this map import"></textarea>
+                </div>
+                <input id="network-map-import-key" name="idempotency_key" type="hidden">
+                <div id="network-map-import-status" class="hidden rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700" role="status" aria-live="polite"></div>
+                <div id="network-map-import-result" class="hidden space-y-3">
+                    <div class="map-transfer-preview-label text-sm font-medium">Imported preview — not canonical topology</div>
+                    <dl id="network-map-import-counts" class="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4"></dl>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 border-t border-slate-200 px-5 py-4 dark:border-slate-700">
+                <button type="button" data-close-import class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold dark:border-slate-600">Close</button>
+                <button id="network-map-import-submit" type="submit" class="rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-700 focus:outline-none focus:ring-2 focus:ring-accent-500">Stage import</button>
+            </div>
+        </form>
+    </dialog>
+    {% endif %}
+
+    <script id="network-map-transfer-data" type="application/json">{{ network_map_transfer | tojson }}</script>
 
     <div class="network-map-layout">
         <!-- Map -->
@@ -1911,6 +1985,8 @@
             console.error('Elevation lookup error:', err);
         }
     });
+    window.networkMapTransferContext = { map, layers, layerToggles, allFeatures };
 })();
 </script>
+<script src="/static/js/admin/network_map_transfer.js"></script>
 {% endblock %}

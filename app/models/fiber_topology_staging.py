@@ -54,6 +54,15 @@ class FiberTopologySourceBatch(Base):
             "length(manifest_sha256) = 64",
             name="ck_fiber_topology_batch_manifest_sha256",
         ),
+        CheckConstraint(
+            "command_key_sha256 IS NULL OR length(command_key_sha256) = 64",
+            name="ck_fiber_topology_batch_command_key_sha256",
+        ),
+        CheckConstraint(
+            "command_fingerprint_sha256 IS NULL OR "
+            "length(command_fingerprint_sha256) = 64",
+            name="ck_fiber_topology_batch_command_fingerprint_sha256",
+        ),
         Index(
             "ix_fiber_topology_batch_profile_created",
             "profile",
@@ -62,6 +71,10 @@ class FiberTopologySourceBatch(Base):
         Index(
             "ix_fiber_topology_batch_file_sha256",
             "file_sha256",
+        ),
+        UniqueConstraint(
+            "command_key_sha256",
+            name="uq_fiber_topology_batch_command_key",
         ),
     )
 
@@ -75,6 +88,8 @@ class FiberTopologySourceBatch(Base):
     external_id_key: Mapped[str] = mapped_column(String(80), nullable=False)
     file_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    command_key_sha256: Mapped[str | None] = mapped_column(String(64))
+    command_fingerprint_sha256: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     feature_count: Mapped[int] = mapped_column(Integer, nullable=False)
     blocker_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
