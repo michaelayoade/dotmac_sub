@@ -68,6 +68,34 @@
         {% endif %}
     </section>
 
+    <section aria-labelledby="catalog-heading" class="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+            <h2 id="catalog-heading" class="text-base font-semibold text-slate-950 dark:text-white">Support and communications automation</h2>
+            <p class="mt-1 max-w-[80ch] text-sm leading-6 text-slate-600 dark:text-slate-400">This list shows what can be built here, what still runs on its current page, and what needs developer support before it can be activated.</p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-300">
+                    <tr><th scope="col" class="px-5 py-3 font-semibold">Area</th><th scope="col" class="px-4 py-3 font-semibold">Automation</th><th scope="col" class="px-4 py-3 font-semibold">Status and explanation</th><th scope="col" class="px-5 py-3 text-right font-semibold">Next step</th></tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% for row in catalog_items %}
+                    <tr>
+                        <td class="whitespace-nowrap px-5 py-3.5 text-slate-600 dark:text-slate-300">{{ row.item.group }}</td>
+                        <td class="min-w-56 px-4 py-3.5"><p class="font-medium text-slate-900 dark:text-white">{{ row.item.label }}</p><p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ row.module_label }}</p></td>
+                        <td class="min-w-80 px-4 py-3.5"><span class="inline-flex rounded-full px-2.5 py-1 text-xs font-medium {% if row.state == 'available' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300{% elif row.state == 'managed_elsewhere' %}bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300{% elif row.state == 'retired' %}bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300{% else %}bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300{% endif %}">{{ row.state_label }}</span><p class="mt-1.5 text-xs leading-5 text-slate-600 dark:text-slate-400">{{ row.explanation }}</p></td>
+                        <td class="whitespace-nowrap px-5 py-3.5 text-right">
+                            {% if row.item.management_path %}<a href="{{ row.item.management_path }}" class="text-sm font-semibold text-indigo-700 underline underline-offset-4 dark:text-indigo-300">Open current page</a>
+                            {% elif row.state == 'available' %}<a href="/admin/automation/rules/new" class="text-sm font-semibold text-indigo-700 underline underline-offset-4 dark:text-indigo-300">Create rule</a>
+                            {% else %}<span class="text-xs text-slate-500 dark:text-slate-400">No action yet</span>{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
     <section aria-labelledby="modules-heading" class="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
         <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
             <h2 id="modules-heading" class="text-base font-semibold text-slate-950 dark:text-white">Module registry</h2>

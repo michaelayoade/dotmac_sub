@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from app.services.automation_contracts import (
+    AutomationCatalogItem,
+    AutomationCatalogState,
+    AutomationDomainCapabilities,
+)
 from app.services.sot_manifest import (
     AuthorityInput,
     AuthorityKind,
@@ -4898,4 +4903,162 @@ DOMAIN = DomainSOT(
     "communication services. Survey adapters delegate lifecycle, invitation "
     "and response writes to communications.surveys. Admin inbox mutation "
     "routes delegate to the committed team-inbox command boundary.",
+    automation=AutomationDomainCapabilities(
+        catalog_items=(
+            AutomationCatalogItem(
+                key="communications.event_notifications",
+                label="Event-based customer notifications",
+                group="Messaging",
+                state=AutomationCatalogState.unavailable,
+                explanation="Notifications are triggered by fixed application events today; configurable rule actions are not connected.",
+            ),
+            AutomationCatalogItem(
+                key="communications.notification_delivery",
+                label="Notification delivery queue",
+                group="Messaging",
+                state=AutomationCatalogState.unavailable,
+                explanation="Delivery is managed by the notification service and cannot yet be configured as a rule.",
+            ),
+            AutomationCatalogItem(
+                key="communications.zeptomail_reconciliation",
+                label="ZeptoMail delivery reconciliation",
+                group="Messaging",
+                state=AutomationCatalogState.unavailable,
+                explanation="This scheduled integration job has no Automation Center trigger or action yet.",
+            ),
+            AutomationCatalogItem(
+                key="communications.campaign_processing",
+                label="Campaign processing",
+                group="Messaging",
+                state=AutomationCatalogState.unavailable,
+                explanation="Campaign processing is currently handled by its existing scheduled service.",
+            ),
+            AutomationCatalogItem(
+                key="communications.operational_escalation_delivery",
+                label="Operational escalation delivery",
+                group="Messaging",
+                state=AutomationCatalogState.unavailable,
+                explanation="Escalation delivery is currently managed by its policy and delivery services.",
+            ),
+            AutomationCatalogItem(
+                key="communications.outgoing_webhooks",
+                label="Outgoing platform webhooks",
+                group="Messaging",
+                state=AutomationCatalogState.unavailable,
+                explanation="Webhook delivery is governed by registered integrations, not configurable rule steps yet.",
+            ),
+            AutomationCatalogItem(
+                key="communications.inbound_message_processing",
+                label="Inbound message processing",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Inbound messages use fixed identity, safety, and routing checks that are not rule steps yet.",
+            ),
+            AutomationCatalogItem(
+                key="communications.inbox_automation_rules",
+                label="Inbox automation rules",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="The existing Inbox rule engine is not connected to the Automation Center's audited run history.",
+            ),
+            AutomationCatalogItem(
+                key="communications.fifo_queue_promotion",
+                label="FIFO queue promotion",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Queue promotion follows the current routing policy and is not configurable as a rule step.",
+            ),
+            AutomationCatalogItem(
+                key="communications.queue_position_notification",
+                label="Queue-position notification",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Queue notices are produced by the queue owner and are not configurable rule actions yet.",
+            ),
+            AutomationCatalogItem(
+                key="communications.scheduled_reply_release",
+                label="Scheduled reply release",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Scheduled replies are handled by the Inbox scheduler; no Center schedule trigger exists yet.",
+            ),
+            AutomationCatalogItem(
+                key="communications.snooze_wakeup",
+                label="Snooze wake-up",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Snooze timing is owned by the Inbox lifecycle and is not a configurable rule step yet.",
+            ),
+            AutomationCatalogItem(
+                key="communications.whatsapp_window_expiry",
+                label="WhatsApp service-window expiry",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="The provider reply window is checked by existing message delivery safeguards.",
+            ),
+            AutomationCatalogItem(
+                key="communications.reply_reminders",
+                label="Reply reminders",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Reminder timing and cancellation are owned by the reply-reminder service, not Center rules yet.",
+            ),
+            AutomationCatalogItem(
+                key="communications.ai_intake_processing",
+                label="AI intake processing",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="AI ownership and hand-off checks are protected by the AI intake owner and are not configurable rule actions.",
+            ),
+            AutomationCatalogItem(
+                key="communications.ai_intake_recovery",
+                label="AI intake recovery",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="AI recovery is handled by its existing recovery worker and has no Center trigger yet.",
+            ),
+            AutomationCatalogItem(
+                key="communications.failed_outbound_retry",
+                label="Failed outbound message retry",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Retry limits and exact-message safeguards are not exposed as configurable rule actions.",
+            ),
+            AutomationCatalogItem(
+                key="communications.media_promotion",
+                label="Media promotion",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Media handling is performed by the existing upload and Inbox delivery services.",
+            ),
+            AutomationCatalogItem(
+                key="communications.participant_backfill",
+                label="Participant backfill",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="Participant repair is a maintenance action and is not available as a business rule step.",
+            ),
+            AutomationCatalogItem(
+                key="communications.stale_conversation_resolution",
+                label="Stale-conversation auto-resolution",
+                group="Team Inbox",
+                state=AutomationCatalogState.unavailable,
+                explanation="The active policy is code-managed and does not yet expose a safe Center rule contract.",
+            ),
+            AutomationCatalogItem(
+                key="communications.durable_timer_dispatcher",
+                label="Durable timer dispatcher",
+                group="Service levels",
+                state=AutomationCatalogState.unavailable,
+                explanation="Timer delivery is protected infrastructure; business timer rules are listed separately.",
+            ),
+            AutomationCatalogItem(
+                key="communications.retired_stale_auto_resolution",
+                label="Retired Team Inbox auto-resolution",
+                group="Team Inbox",
+                state=AutomationCatalogState.retired,
+                explanation="This automation is retired. Developers must restore and review its code before it can become available.",
+            ),
+        ),
+    ),
 )

@@ -22,6 +22,13 @@ class AutomationValueType(StrEnum):
     enum = "enum"
 
 
+class AutomationCatalogState(StrEnum):
+    available = "available"
+    unavailable = "unavailable"
+    managed_elsewhere = "managed_elsewhere"
+    retired = "retired"
+
+
 class AutomationOperator(StrEnum):
     equals = "equals"
     not_equals = "not_equals"
@@ -101,6 +108,20 @@ class LegacyAutomationSurface:
 
 
 @dataclass(frozen=True, slots=True)
+class AutomationCatalogItem:
+    """One owner-declared business automation shown in the central catalogue."""
+
+    key: str
+    label: str
+    group: str
+    state: AutomationCatalogState
+    explanation: str
+    management_path: str | None = None
+    trigger_keys: tuple[str, ...] = ()
+    action_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AutomationDomainCapabilities:
     """Automation contract declared by one canonical SOT domain."""
 
@@ -108,6 +129,7 @@ class AutomationDomainCapabilities:
     triggers: tuple[AutomationTriggerCapability, ...] = ()
     actions: tuple[AutomationActionCapability, ...] = ()
     legacy_surfaces: tuple[LegacyAutomationSurface, ...] = ()
+    catalog_items: tuple[AutomationCatalogItem, ...] = ()
     manifest_version: int = 1
 
 
@@ -123,4 +145,5 @@ class AutomationModuleManifest:
     triggers: tuple[AutomationTriggerCapability, ...]
     actions: tuple[AutomationActionCapability, ...]
     legacy_surfaces: tuple[LegacyAutomationSurface, ...]
+    catalog_items: tuple[AutomationCatalogItem, ...]
     manifest_version: int | None

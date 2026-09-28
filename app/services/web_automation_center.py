@@ -12,7 +12,11 @@ from app.services import (
     automation_rules,
     automation_runtime,
 )
-from app.services.automation_contracts import AutomationModuleManifest
+from app.services.automation_contracts import (
+    AutomationCatalogItem,
+    AutomationCatalogState,
+    AutomationModuleManifest,
+)
 from app.services.operator_tenant import OPERATOR_TENANT_ID
 
 
@@ -21,6 +25,15 @@ class AutomationModuleRow:
     manifest: AutomationModuleManifest
     state: str
     state_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationCatalogRow:
+    item: AutomationCatalogItem
+    module_label: str
+    state: str
+    state_label: str
+    explanation: str
 
 
 def _module_row(manifest: AutomationModuleManifest) -> AutomationModuleRow:
@@ -34,6 +47,52 @@ def _module_row(manifest: AutomationModuleManifest) -> AutomationModuleRow:
     if action_errors:
         return AutomationModuleRow(manifest, "blocked", "Adapter mismatch")
     return AutomationModuleRow(manifest, "ready", "Runtime ready")
+
+
+def _catalog_row(
+    item: AutomationCatalogItem, module_label: str
+) -> AutomationCatalogRow:
+    state = item.state
+    if state is AutomationCatalogState.available:
+        triggers = {
+            trigger.key: trigger
+            for module in automation_capabilities.registered_module_manifests()
+            for trigger in module.triggers
+        }
+        actions = {
+            action.key: action
+            for module in automation_capabilities.registered_module_manifests()
+            for action in module.actions
+        }
+        ready = all(
+            key in triggers and triggers[key].runtime_enabled
+            for key in item.trigger_keys
+        ) and all(
+            key in actions and actions[key].runtime_enabled for key in item.action_keys
+        )
+        if ready:
+            try:
+                for action_key in item.action_keys:
+                    automation_actions.action_executor(action_key)
+            except automation_actions.AutomationActionExecutorError:
+                ready = False
+        if not ready:
+            return AutomationCatalogRow(
+                item,
+                module_label,
+                "unavailable",
+                "Unavailable",
+                "Developer support is incomplete: the approved trigger and action executor must be registered before admins can use this item.",
+            )
+    labels = {
+        AutomationCatalogState.available: "Available in builder",
+        AutomationCatalogState.unavailable: "Unavailable",
+        AutomationCatalogState.managed_elsewhere: "Managed elsewhere",
+        AutomationCatalogState.retired: "Retired",
+    }
+    return AutomationCatalogRow(
+        item, module_label, state.value, labels[state], item.explanation
+    )
 
 
 def build_automation_center_data(
@@ -51,6 +110,11 @@ def build_automation_center_data(
 
     manifests = automation_capabilities.all_module_manifests()
     modules = tuple(_module_row(manifest) for manifest in manifests)
+    catalog_items = tuple(
+        _catalog_row(item, manifest.label)
+        for manifest in manifests
+        for item in manifest.catalog_items
+    )
     rules = (
         automation_rules.list_rules(
             db,
@@ -103,6 +167,7 @@ def build_automation_center_data(
     )
     return {
         "modules": modules,
+        "catalog_items": catalog_items,
         "module_count": len(modules),
         "declared_module_count": declared_count,
         "ready_module_count": ready_count,
@@ -122,4 +187,8 @@ def build_automation_center_data(
     }
 
 
-__all__ = ["AutomationModuleRow", "build_automation_center_data"]
+__all__ = [
+    "AutomationCatalogRow",
+    "AutomationModuleRow",
+    "build_automation_center_data",
+]

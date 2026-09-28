@@ -22,10 +22,20 @@ registry is derived from canonical `DomainSOT` declarations. Every SOT domain
 is visible in the module catalogue, but an undeclared domain has no executable
 automation surface.
 
-An administrator may enable or disable a declared capability but cannot invent
-a module key, event payload field, database field, command owner, permission,
-or action from the UI. Adding a capability is a reviewed code change in its
-owning domain.
+An administrator can create and activate rules from capabilities the code has
+made available, but cannot change capability availability or invent a module
+key, event payload field, database field, command owner, permission, or action
+from the UI. Adding or restoring a capability is a reviewed code change in its
+owning domain. The code change must be deployed before the capability becomes
+available for rule activation.
+
+Owner declarations also publish a typed business-automation catalogue. The
+central page shows whether each listed Support or communications item is
+ready for new rules, still managed on its existing page, unavailable because
+it has no safe Center contract yet, or retired. Unavailable and retired items
+include a plain-language reason. An item is ready only when its declared
+trigger and actions have registered runtime support. The catalogue is
+read-only: it does not activate rules or change existing automation.
 
 Every trigger declares the exact payload fields carrying tenant and target
 identity. Events without both identities cannot be registered for automation;
@@ -128,9 +138,12 @@ behavior, and both legacy and central rule conflicts run with the pull
 request's CI suite before merge.
 
 The current ticket-assignment and ticket-creation automation pages are listed
-as legacy ownership links. Their rules are not moved by this implementation
+as existing ownership links. Their rules are not moved by this implementation
 slice. The live rule-by-rule check supplies current conflict evidence when an
-Automation Center rule is activated.
+Automation Center rule is activated. The first catalogue slice covers Support,
+Team Inbox, Messaging, and service-level automation. Items without a safe
+Center contract remain unavailable with an explanation; retired items require
+a reviewed developer change before becoming available.
 
 ## Legacy coexistence
 

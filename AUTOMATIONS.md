@@ -14,6 +14,12 @@ settings, capability switches, credentials, or active rules.
 - **Status**: whether the code schedules it by default, makes it configurable,
   starts it only after a user action, or has retired it.
 
+The Automation Center also has an owner-declared catalogue for Support, Team
+Inbox, Messaging, and service-level entries. Its page status describes whether
+an item can be used for a new Center rule, remains on its current page, lacks a
+safe Center contract, or has been retired. It does not change whether existing
+automation is enabled in a live environment.
+
 ## 1. Billing, invoices, and collections
 
 ### Recurring invoice cycle

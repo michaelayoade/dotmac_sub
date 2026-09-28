@@ -5,6 +5,8 @@ from __future__ import annotations
 from app.services.automation_contracts import (
     AutomationActionCapability,
     AutomationActionInput,
+    AutomationCatalogItem,
+    AutomationCatalogState,
     AutomationConditionField,
     AutomationDomainCapabilities,
     AutomationOperator,
@@ -1730,6 +1732,79 @@ DOMAIN = DomainSOT(
     "subset but cannot add states or define their semantic presentation.",
     automation=AutomationDomainCapabilities(
         target_types=("support.ticket",),
+        catalog_items=(
+            AutomationCatalogItem(
+                key="support.ticket.assignment_rules",
+                label="Ticket assignment rules",
+                group="Support",
+                state=AutomationCatalogState.managed_elsewhere,
+                explanation="Existing assignment rules remain on their current page until they are separately moved.",
+                management_path="/admin/support/assignment-rules",
+            ),
+            AutomationCatalogItem(
+                key="support.ticket.legacy_automation",
+                label="Legacy ticket automation rules",
+                group="Support",
+                state=AutomationCatalogState.managed_elsewhere,
+                explanation="Existing ticket rules remain on their current page and are checked for conflicts.",
+                management_path="/admin/support/automation",
+            ),
+            AutomationCatalogItem(
+                key="support.ticket.center_rules",
+                label="Automation Center ticket rules",
+                group="Support",
+                state=AutomationCatalogState.available,
+                explanation="Create a draft with the supported ticket trigger and actions, then activate it.",
+                trigger_keys=("support.ticket.created",),
+                action_keys=(
+                    "support.ticket.assign_service_team",
+                    "support.ticket.set_priority",
+                ),
+            ),
+            AutomationCatalogItem(
+                key="support.ticket.identity_review_stop",
+                label="Identity-review safety stop",
+                group="Support",
+                state=AutomationCatalogState.unavailable,
+                explanation="This is a fixed safety check today; it has no configurable Automation Center action.",
+            ),
+            AutomationCatalogItem(
+                key="support.work_order.result_projection",
+                label="Work-order result projection",
+                group="Support",
+                state=AutomationCatalogState.unavailable,
+                explanation="This fixed result update is not yet available as a configurable trigger and action.",
+            ),
+            AutomationCatalogItem(
+                key="support.resolution_confirmation",
+                label="Resolution confirmation",
+                group="Support",
+                state=AutomationCatalogState.unavailable,
+                explanation="The existing timer and confirmation flow are not yet connected to the rule builder.",
+            ),
+            AutomationCatalogItem(
+                key="support.survey_invitation",
+                label="Survey invitation",
+                group="Support",
+                state=AutomationCatalogState.unavailable,
+                explanation="The existing survey trigger is not yet available as a configurable rule action.",
+            ),
+            AutomationCatalogItem(
+                key="support.ticket.sla",
+                label="Ticket SLA warning and breach",
+                group="Service levels",
+                state=AutomationCatalogState.managed_elsewhere,
+                explanation="Existing ticket SLA policies remain in their current settings and policy pages.",
+                management_path="/admin/system/ticket-settings",
+            ),
+            AutomationCatalogItem(
+                key="projects.sla",
+                label="Project and task SLA warning and breach",
+                group="Service levels",
+                state=AutomationCatalogState.unavailable,
+                explanation="Project SLA timers are not yet available as configurable Automation Center rules.",
+            ),
+        ),
         triggers=(
             AutomationTriggerCapability(
                 key="support.ticket.created",
