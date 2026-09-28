@@ -244,7 +244,7 @@ DOMAIN = DomainSOT(
             ),
             AutomationScriptTargetCapability(
                 key="operations.vendor",
-                label="Vendor",
+                label="Vendor project",
                 entity_type="operations.vendor",
                 client_events=("form.load", "field.change", "form.validate"),
                 server_events=(
