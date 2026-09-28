@@ -98,6 +98,35 @@ def test_rule_builder_uses_registered_options_and_supports_multiple_steps() -> N
     assert "Saving creates a draft only" in template
 
 
+def test_hub_exposes_all_mechanisms_and_target_readiness() -> None:
+    template = _source("templates/admin/automation/index.html")
+    script_builder = _source("templates/admin/automation/script_builder.html")
+    route = _source("app/web/admin/automation_center.py")
+    client_runtime = _source("static/js/automation-client-runtime.js")
+    assert "Create client script" in template
+    assert "Create server script" in template
+    assert "Rule support by target" in template
+    assert "server_script_runtime_state" in template
+    assert "JavaScript source" in script_builder
+    assert "published_client_scripts" in route
+    assert "content_sha256" in client_runtime
+    assert "data-automation-target" in client_runtime
+    assert "database/write client" in client_runtime
+    assert '_DEFAULT_TRIGGER = ""' in route
+    assert 'href="#mechanism-heading"' in template
+
+
+def test_server_scripts_dispatch_from_declared_target_events_without_native_rules() -> (
+    None
+):
+    handler = _source("app/services/events/handlers/automation.py")
+    assert "_registered_script_targets" in handler
+    assert "target.server_events" in handler
+    assert "processed_script_targets" in handler
+    assert "target_type=target.entity_type" in handler
+    assert "event_name=event_name" in handler
+
+
 def test_custom_field_surface_is_not_introduced() -> None:
     combined = "\n".join(
         _source(path)

@@ -109,6 +109,16 @@ def test_rule_actions_report_typed_adapter_readiness_by_module() -> None:
     assert actions["operations.vendor.set_status"].runtime_enabled is True
 
 
+def test_work_order_script_update_event_has_a_native_producer() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "app/services/work_order_commands.py").read_text(encoding="utf-8")
+    assert "def _emit_work_order_updated_event" in source
+    assert '"name": "work_order.updated"' in source
+    assert "_emit_work_order_updated_event(" in source
+
+
 def test_support_and_communications_catalogue_shows_readiness_and_existing_owners() -> (
     None
 ):

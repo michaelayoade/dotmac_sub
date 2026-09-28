@@ -98,3 +98,56 @@ def test_runtime_does_not_mutate_legacy_rule_models() -> None:
         "DispatchRule",
     ):
         assert legacy_model not in source
+
+
+def test_server_script_runtime_is_external_and_fail_closed() -> None:
+    runtime = _source("app/services/automation_script_runtime.py")
+    runner = _source("app/services/automation_script_runner.py")
+    migration = _source("alembic/versions/626_automation_script_control_plane.py")
+    assert "ExternalOciRunner" in runner
+    assert "PodmanTransport" in runner
+    assert "sha256:" in runtime
+    assert "AutomationScriptRuntimeState.ready" in runner
+    assert "exec(" not in runtime
+    assert "eval(" not in runtime
+    assert "ENABLE ROW LEVEL SECURITY" in migration
+    assert "FORCE ROW LEVEL SECURITY" in migration
+    assert "app_current_tenant_id()" in migration
+    for permission in (
+        "automation:script:read",
+        "automation:script:create",
+        "automation:script:update",
+        "automation:script:publish",
+    ):
+        assert permission in migration
+
+
+def test_server_script_side_effects_reenter_typed_owner_action_boundary() -> None:
+    runner = _source("app/services/automation_script_runner.py")
+    handler = _source("app/services/events/handlers/automation.py")
+    assert "parse_script_action_requests" in runner
+    assert "AutomationScriptActionRequest" in runner
+    assert "action_capability(request.action_key)" in handler
+    assert "_script_action_inputs(action, request)" in handler
+    assert "ExecuteAutomationActionCommand" in handler
+    assert 'scope="automation:script:runtime"' in handler
+    assert "action_executor(action.key)" in handler
+
+
+def test_script_publication_redirect_and_workflow_guidance_are_complete() -> None:
+    route = _source("app/web/admin/automation_center.py")
+    guidance = _source("docs/ADMIN_WORKFLOW_GUIDANCE.md")
+    assert "notice: str | None = None" in route
+    assert "automation-script-publish:" in route
+    assert "typed `actions`" in guidance
+
+
+def test_script_publication_and_client_delivery_are_governed() -> None:
+    scripts = _source("app/services/automation_scripts.py")
+    client_runtime = _source("static/js/automation-client-runtime.js")
+    web = _source("app/web/admin/automation_center.py")
+    assert "runtime_unavailable" in scripts
+    assert "_validate_source" in scripts
+    assert "content_sha256" in client_runtime
+    assert "published_client_scripts" in web
+    assert "target.read_permission" in web
