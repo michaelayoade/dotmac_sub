@@ -261,7 +261,7 @@ def test_minio_client_receives_parsed_endpoint(monkeypatch):
     assert http_client.connection_pool_kw["maxsize"] == 10
     assert http_client.connection_pool_kw["timeout"].connect_timeout == 3.0
     assert http_client.connection_pool_kw["timeout"].read_timeout == 10.0
-    assert http_client.connection_pool_kw["retries"] is False
+    assert http_client.connection_pool_kw["retries"].total is False
 
 
 @pytest.mark.parametrize(

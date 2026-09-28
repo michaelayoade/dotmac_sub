@@ -362,8 +362,16 @@ class S3StorageService:
             raise ObjectStorageError("Failed to stream object") from exc
 
         try:
-            content_type = response.headers.get("Content-Type")
-            length_header = response.headers.get("Content-Length")
+            content_type = (
+                response.headers["Content-Type"]
+                if "Content-Type" in response.headers
+                else None
+            )
+            length_header = (
+                response.headers["Content-Length"]
+                if "Content-Length" in response.headers
+                else None
+            )
             try:
                 content_length = (
                     int(length_header) if length_header is not None else None
