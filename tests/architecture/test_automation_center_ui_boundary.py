@@ -55,8 +55,10 @@ def test_hub_presents_governance_and_rule_lifecycle_controls() -> None:
 
 def test_hub_shows_support_communications_readiness_and_next_step() -> None:
     template = _source("templates/admin/automation/index.html")
+    projection = _source("app/services/web_automation_center.py")
     assert "Support and communications automation" in template
-    assert "Managed elsewhere" in template
+    assert "{{ row.state_label }}" in template
+    assert 'AutomationCatalogState.managed_elsewhere: "Managed elsewhere"' in projection
     assert "Unavailable" in template
     assert "Retired" in template
     assert "{{ row.explanation }}" in template
