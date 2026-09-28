@@ -184,6 +184,13 @@ unique. Delivery uses the durable event outbox and an `events.deliver.v1`
 binding with `event_payload.v1`; customer names, contact values, and addresses
 never enter the outbound payload.
 
+The separate `integration.meta_capi_lead` projection may report an eligible,
+committed fiber coverage/new-connection origin as a Meta server `Lead`. It does
+not own the Lead, Party, attribution, or lifecycle decision. Its stable UUIDv5
+event ID comes from the immutable origin capture, and its durable payload holds
+only hashed normalized email/phone values. Disabling or failing Meta delivery
+never rolls back the customer inquiry.
+
 Revision 356 activates the referral adapter contract. Referral capture creates
 a quarantined Party and unverified Party contact points, then delegates Lead
 creation and immutable origin to `sales.lead_lifecycle`; it does not create a

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -26,6 +27,13 @@ META_SOCIAL_SEND_CAPABILITY = "messaging.send.v1"
 META_SOCIAL_RECEIVE_CAPABILITY = "messaging.receive.v1"
 META_LEAD_CAPTURE_CAPABILITY = "sales.lead_capture.v1"
 META_LEAD_CONVERSION_CAPABILITY = "sales.lead_conversion.send.v1"
+META_CAPI_CONNECTOR_KEY = "meta.capi"
+META_WEBSITE_LEAD_CAPABILITY = "marketing.website_lead.send.v1"
+META_CAPI_TOKEN_BINDING = "access_token"  # nosec B105 -- binding name only
+DEFAULT_PIXEL_ID = "410389919883152"
+DEFAULT_API_VERSION = "v26.0"
+_CAPI_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_CAPI_VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+$")
 # These public strings identify secret bindings; they are not credential values.
 FACEBOOK_TOKEN_BINDING = "facebook_page_access_token"  # nosec B105
 INSTAGRAM_TOKEN_BINDING = "instagram_login_access_token"  # nosec B105
@@ -830,4 +838,268 @@ class MetaSocialRuntimeRunner:
             operation_id=envelope.operation_id,
             status=status,
             error_code=code,
+        )
+
+
+def _capi_safe_receipt(response: httpx.Response) -> dict[str, Any]:
+    receipt: dict[str, Any] = {"response_status": response.status_code}
+    try:
+        raw = response.json()
+    except (ValueError, json.JSONDecodeError):
+        return receipt
+    if not isinstance(raw, dict):
+        return receipt
+    trace_id = raw.get("fbtrace_id")
+    if trace_id:
+        receipt["trace_id"] = str(trace_id)[:160]
+    try:
+        receipt["events_received"] = int(raw.get("events_received") or 0)
+    except (TypeError, ValueError):
+        receipt["events_received"] = 0
+    error = raw.get("error")
+    if isinstance(error, dict):
+        for source, target in (
+            ("type", "error_type"),
+            ("code", "error_code"),
+            ("error_subcode", "error_subcode"),
+        ):
+            value = error.get(source)
+            if value is not None:
+                receipt[target] = str(value)[:120]
+        error_trace = error.get("fbtrace_id")
+        if error_trace:
+            receipt["trace_id"] = str(error_trace)[:160]
+    return receipt
+
+
+def _capi_retry_after(response: httpx.Response) -> int | None:
+    value = response.headers.get("retry-after")
+    if not value:
+        return None
+    try:
+        return max(1, min(int(value), 86_400))
+    except ValueError:
+        return None
+
+
+class MetaCapiRunner:
+    """Transport-only website Lead runner sharing the approved Meta egress port."""
+
+    def supports_capability(self, capability_id: str) -> bool:
+        return capability_id == META_WEBSITE_LEAD_CAPABILITY
+
+    def validate(
+        self,
+        *,
+        manifest: ConnectorManifest,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> ValidationResult:
+        errors: list[str] = []
+        pixel_id = str(config.get("pixel_id") or DEFAULT_PIXEL_ID).strip()
+        api_version = str(config.get("api_version") or DEFAULT_API_VERSION).strip()
+        if not pixel_id.isdigit():
+            errors.append("pixel_id_invalid")
+        if not _CAPI_VERSION_RE.fullmatch(api_version):
+            errors.append("api_version_invalid")
+        if not str(secret_material.get(META_CAPI_TOKEN_BINDING) or "").strip():
+            errors.append("access_token_required")
+        return ValidationResult(valid=not errors, error_codes=tuple(errors))
+
+    def validate_capability(
+        self,
+        *,
+        capability_id: str,
+        manifest: ConnectorManifest,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> ValidationResult:
+        if not self.supports_capability(capability_id):
+            return ValidationResult(
+                valid=False, error_codes=("capability_unsupported",)
+            )
+        return self.validate(
+            manifest=manifest,
+            config=config,
+            secret_material=secret_material,
+        )
+
+    def execute(
+        self,
+        envelope: OperationEnvelope,
+        *,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> OperationResult:
+        if envelope.capability_id != META_WEBSITE_LEAD_CAPABILITY:
+            return self._result(
+                envelope, OperationStatus.rejected, "capability_unsupported"
+            )
+        if envelope.payload.get("action") != "send_website_lead":
+            return self._result(
+                envelope, OperationStatus.rejected, "action_unsupported"
+            )
+        params = envelope.payload.get("params")
+        if not isinstance(params, dict):
+            return self._result(envelope, OperationStatus.rejected, "params_invalid")
+        event_id = str(params.get("event_id") or "").strip()
+        event_time = params.get("event_time")
+        event_source_url = str(params.get("event_source_url") or "").strip()
+        user_data = params.get("user_data")
+        if not event_id or not isinstance(event_time, int) or event_time <= 0:
+            return self._result(
+                envelope, OperationStatus.rejected, "event_identity_invalid"
+            )
+        try:
+            parsed_source = httpx.URL(event_source_url)
+        except httpx.InvalidURL:
+            return self._result(
+                envelope, OperationStatus.rejected, "event_source_url_invalid"
+            )
+        if parsed_source.scheme != "https" or parsed_source.host != "fiber.dotmac.ng":
+            return self._result(
+                envelope, OperationStatus.rejected, "event_source_url_invalid"
+            )
+        if not isinstance(user_data, dict) or not user_data:
+            return self._result(
+                envelope, OperationStatus.rejected, "user_data_required"
+            )
+        if set(user_data) - {"em", "ph"}:
+            return self._result(
+                envelope, OperationStatus.rejected, "user_data_field_unsupported"
+            )
+        if any(
+            not isinstance(values, list)
+            or not values
+            or any(
+                not isinstance(value, str) or not _CAPI_HASH_RE.fullmatch(value)
+                for value in values
+            )
+            for values in user_data.values()
+        ):
+            return self._result(
+                envelope, OperationStatus.rejected, "user_data_hash_invalid"
+            )
+        token = str(secret_material.get(META_CAPI_TOKEN_BINDING) or "").strip()
+        if not token:
+            return self._result(
+                envelope,
+                OperationStatus.rejected,
+                "configuration_authentication_missing",
+            )
+        pixel_id = str(config.get("pixel_id") or DEFAULT_PIXEL_ID).strip()
+        api_version = str(config.get("api_version") or DEFAULT_API_VERSION).strip()
+        if not pixel_id.isdigit() or not _CAPI_VERSION_RE.fullmatch(api_version):
+            return self._result(
+                envelope, OperationStatus.rejected, "configuration_invalid"
+            )
+        payload: dict[str, Any] = {
+            "data": [
+                {
+                    "event_name": "Lead",
+                    "event_time": event_time,
+                    "event_id": event_id,
+                    "action_source": "website",
+                    "event_source_url": event_source_url,
+                    "user_data": user_data,
+                }
+            ]
+        }
+        test_code = str(config.get("test_event_code") or "").strip()
+        if test_code:
+            payload["test_event_code"] = test_code
+        timeout = min(
+            float(config.get("timeout_seconds") or 10),
+            max(1.0, (envelope.deadline_at - datetime.now(UTC)).total_seconds()),
+        )
+        try:
+            response = httpx.post(
+                f"https://graph.facebook.com/{api_version}/{pixel_id}/events",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=timeout,
+            )
+        except httpx.TimeoutException:
+            return self._result(envelope, OperationStatus.retryable, "network_timeout")
+        except httpx.RequestError:
+            return self._result(
+                envelope, OperationStatus.retryable, "network_unavailable"
+            )
+        receipt = _capi_safe_receipt(response)
+        if response.status_code == 429:
+            return self._result(
+                envelope,
+                OperationStatus.retryable,
+                "rate_limited",
+                receipt=receipt,
+                retry_after_seconds=_capi_retry_after(response),
+            )
+        if response.status_code >= 500:
+            return self._result(
+                envelope,
+                OperationStatus.retryable,
+                "provider_transient",
+                receipt=receipt,
+            )
+        if response.status_code in {401, 403} or receipt.get("error_code") == "190":
+            return self._result(
+                envelope,
+                OperationStatus.rejected,
+                "authentication_failed",
+                receipt=receipt,
+            )
+        if response.status_code >= 400:
+            return self._result(
+                envelope,
+                OperationStatus.rejected,
+                "validation_rejected",
+                receipt=receipt,
+            )
+        if int(receipt.get("events_received") or 0) < 1:
+            return self._result(
+                envelope,
+                OperationStatus.retryable,
+                "acceptance_missing",
+                receipt=receipt,
+            )
+        return OperationResult(
+            operation_id=envelope.operation_id,
+            status=OperationStatus.succeeded,
+            output={"sent": True},
+            external_receipt=receipt,
+        )
+
+    def health(
+        self,
+        *,
+        manifest: ConnectorManifest,
+        config: Mapping[str, Any],
+        secret_material: Mapping[str, str],
+    ) -> HealthResult:
+        result = self.validate(
+            manifest=manifest, config=config, secret_material=secret_material
+        )
+        return HealthResult(
+            status="healthy" if result.valid else "unavailable",
+            details={"error_codes": list(result.error_codes)},
+        )
+
+    def cancel(self, operation_id: UUID) -> bool:
+        return False
+
+    @staticmethod
+    def _result(
+        envelope: OperationEnvelope,
+        status: OperationStatus,
+        code: str,
+        *,
+        receipt: dict[str, Any] | None = None,
+        retry_after_seconds: int | None = None,
+    ) -> OperationResult:
+        return OperationResult(
+            operation_id=envelope.operation_id,
+            status=status,
+            external_receipt=receipt or {},
+            error_code=code,
+            retry_after_seconds=retry_after_seconds,
         )

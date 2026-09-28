@@ -77,6 +77,16 @@ JOB_DURATION = Histogram(
     ["task", "status"],
 )
 
+META_CAPI_LEAD_EVENTS = Counter(
+    "meta_capi_lead_events_total",
+    "Meta CAPI website Lead lifecycle outcomes",
+    ["outcome"],
+)
+META_CAPI_LEAD_LAST_SUCCESS = Gauge(
+    "meta_capi_lead_last_success_timestamp_seconds",
+    "Unix timestamp of the last successful Meta CAPI website Lead delivery",
+)
+
 VICTORIAMETRICS_WRITE_FAILURES = Counter(
     "victoriametrics_write_failures_total",
     "Total VictoriaMetrics write failures",

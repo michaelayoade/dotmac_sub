@@ -74,6 +74,12 @@ from app.tasks.integration_delivery import (
     deliver_integration_event,
     deliver_meta_lead_conversion,
 )
+from app.tasks.integration_delivery import (
+    deliver_meta_capi_lead as deliver_meta_capi_lead,
+)
+from app.tasks.integration_delivery import (
+    redrive_meta_capi_leads as redrive_meta_capi_leads,
+)
 from app.tasks.integration_inbox import (
     reclaim_stale_claims as reclaim_stale_integration_inbox_claims,
 )
@@ -254,7 +260,9 @@ __all__ = [
     "run_import_job",
     "run_integration_job",
     "deliver_integration_event",
+    "deliver_meta_capi_lead",
     "deliver_meta_lead_conversion",
+    "redrive_meta_capi_leads",
     "reclaim_stale_integration_inbox_claims",
     "process_due_campaigns",
     "process_due_campaign_steps",

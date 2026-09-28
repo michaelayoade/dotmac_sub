@@ -156,6 +156,8 @@ celery_app.conf.task_routes = {
     "app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses": {"queue": "crm"},
     "app.tasks.dotmac_erp_outbox.sync_erp_operational_domains": {"queue": "crm"},
     "app.tasks.dotmac_erp_outbox.reconcile_erp_staff_access": {"queue": "crm"},
+    "app.tasks.integration_delivery.deliver_meta_capi_lead": {"queue": "crm"},
+    "app.tasks.integration_delivery.redrive_meta_capi_leads": {"queue": "crm"},
     # Daily business runners must not sit behind the default queue's backlog —
     # a buried invoice cycle is a missed billing day (the 2026-06-10 00:55
     # dispatch sat unexecuted behind ~6.6k queued default-queue tasks).

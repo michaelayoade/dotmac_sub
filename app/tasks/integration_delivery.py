@@ -63,3 +63,49 @@ def deliver_meta_lead_conversion(self, delivery_id: str) -> dict[str, object]:
         delay = max(1, int((next_attempt_at - datetime.now(UTC)).total_seconds()))
         raise self.retry(countdown=delay)
     return {"delivery_id": delivery_id, "state": state}
+
+
+@celery_app.task(
+    name="app.tasks.integration_delivery.deliver_meta_capi_lead",
+    bind=True,
+    max_retries=20,
+)
+def deliver_meta_capi_lead(self, delivery_id: str) -> dict[str, object]:
+    from app.services.integrations import meta_capi_lead
+
+    with db_session_adapter.session() as db:
+        delivery = meta_capi_lead.deliver_lead(
+            db,
+            meta_capi_lead.DeliverMetaCapiLeadCommand(
+                context=CommandContext.system(
+                    actor="integration.meta_capi_lead.worker",
+                    scope=meta_capi_lead.META_CAPI_DELIVERY_SCOPE,
+                    reason="Deliver the exact queued website Lead to Meta CAPI",
+                    idempotency_key=f"meta-capi-lead-attempt:{delivery_id}",
+                ),
+                delivery_id=UUID(delivery_id),
+            ),
+        )
+        state = delivery.state
+        next_attempt_at = delivery.next_attempt_at
+    if state == "retryable" and next_attempt_at is not None:
+        delay = max(1, int((next_attempt_at - datetime.now(UTC)).total_seconds()))
+        raise self.retry(countdown=delay)
+    return {"delivery_id": delivery_id, "state": state}
+
+
+@celery_app.task(name="app.tasks.integration_delivery.redrive_meta_capi_leads")
+def redrive_meta_capi_leads() -> dict[str, int]:
+    from app.services.integrations import meta_capi_lead
+    from app.services.queue_adapter import enqueue_task
+
+    with db_session_adapter.session() as db:
+        delivery_ids = meta_capi_lead.due_delivery_ids(db)
+    for delivery_id in delivery_ids:
+        enqueue_task(
+            deliver_meta_capi_lead,
+            args=[str(delivery_id)],
+            correlation_id=f"meta-capi-redrive:{delivery_id}",
+            source="integration.meta_capi_lead.redrive",
+        )
+    return {"queued": len(delivery_ids)}

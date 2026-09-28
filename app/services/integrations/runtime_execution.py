@@ -31,6 +31,7 @@ from app.services.integrations.connectors.lead_capture_http import (
     LeadCaptureHttpRunner,
 )
 from app.services.integrations.connectors.meta_social_runtime import (
+    MetaCapiRunner,
     MetaSocialRuntimeRunner,
 )
 from app.services.integrations.connectors.nextcloud_talk import (
@@ -94,6 +95,7 @@ def default_runner_registry() -> RunnerRegistry:
     registry.register("whatsapp", WhatsAppRuntimeRunner())
     registry.register("nextcloud.talk", NextcloudTalkRuntimeRunner())
     registry.register("meta.social", MetaSocialRuntimeRunner())
+    registry.register("meta.capi", MetaCapiRunner())
     return registry
 
 

@@ -22,6 +22,7 @@ class WebhookHandler:
     """Request typed delivery for enabled event subscriptions."""
 
     def handle(self, db: Session, event: Event) -> None:
+        from app.services.integrations import meta_capi_lead
         from app.services.marketing_conversion_projection import (
             handles_conversion_event,
             project_conversion_event,
@@ -43,6 +44,28 @@ class WebhookHandler:
                         idempotency_key=f"event:{event.event_id}",
                     ),
                 )
+        with owner_session(db) as owner_db:
+            meta_lead = meta_capi_lead.stage_lead(
+                owner_db,
+                meta_capi_lead.StageMetaCapiLeadCommand(
+                    context=CommandContext.system(
+                        actor="events.webhook_handler",
+                        scope=meta_capi_lead.META_CAPI_STAGE_SCOPE,
+                        reason=event.event_type.value,
+                        command_id=event.event_id,
+                        correlation_id=event.event_id,
+                        causation_id=event.event_id,
+                        idempotency_key=f"meta-capi-event:{event.event_id}",
+                    ),
+                    event=event,
+                ),
+            )
+        try:
+            meta_capi_lead.queue_delivery(meta_lead)
+        except Exception:
+            # The committed IntegrationDelivery plus the periodic redrive task
+            # are authoritative. Broker availability cannot roll back a Lead.
+            logger.exception("Failed to wake Meta CAPI Lead delivery worker")
         meta_conversion = stage_conversion_for_event(db, event=event)
         queue_conversion(meta_conversion)
         deliveries = create_platform_deliveries_for_event(

@@ -440,7 +440,13 @@ def _sync_billing_health_snapshot_schedule(session) -> None:
 
 
 def build_beat_schedule() -> dict:
-    schedule: dict[str, dict] = {}
+    schedule: dict[str, dict] = {
+        "meta_capi_lead_redrive": {
+            "task": "app.tasks.integration_delivery.redrive_meta_capi_leads",
+            "schedule": timedelta(seconds=60),
+            "options": {"queue": "crm", "expires": 55},
+        }
+    }
     session = SessionLocal()
     try:
         _sync_billing_health_snapshot_schedule(session)

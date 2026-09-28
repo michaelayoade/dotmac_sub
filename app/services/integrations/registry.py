@@ -838,6 +838,43 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         egress=EgressManifest(allow_installation_hosts=True),
         health=HealthManifest(operation="connection.validate.v1"),
     ),
+    ConnectorManifest(
+        key="meta.capi",
+        name="Meta Conversions API",
+        version="1.0.0",
+        connector_type="marketing",
+        description="Server-side website Lead delivery to a Meta dataset.",
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.integrations.connectors.meta_social_runtime",
+        ),
+        capabilities=(
+            CapabilityManifest(
+                id="marketing.website_lead.send.v1",
+                modes=(CapabilityMode.event, CapabilityMode.reconcile),
+            ),
+        ),
+        config_schema={
+            "type": "object",
+            "properties": {
+                "pixel_id": {"type": "string", "default": "410389919883152"},
+                "api_version": {"type": "string", "default": "v26.0"},
+                "test_event_code": {"type": "string"},
+                "timeout_seconds": {"type": "integer", "default": 10},
+                "max_attempts": {"type": "integer", "default": 8},
+            },
+            "required": ["pixel_id", "api_version"],
+            "additionalProperties": False,
+        },
+        secrets=(SecretBindingManifest(name="access_token"),),
+        data_access=DataAccessManifest(
+            reads=("sales.website_fiber_lead",),
+            emits=("marketing.meta_lead_delivery_receipt",),
+            classifications=("sales_acquisition", "hashed_customer_contact"),
+        ),
+        egress=EgressManifest(hosts=("graph.facebook.com",)),
+        health=HealthManifest(operation="connection.validate.v1"),
+    ),
     _meta_social_manifest(
         version="1.2.0",
         include_shared_oauth=True,

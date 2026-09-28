@@ -52,6 +52,7 @@ CURRENT_INTEGRATION_SERVICES = (
     "integration.runtime",
     "integration.delivery",
     "integration.meta_lead_conversion",
+    "integration.meta_capi_lead",
     "integration.inbox",
     "integration.jobs",
     "integration.sync",

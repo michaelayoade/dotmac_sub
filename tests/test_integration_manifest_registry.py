@@ -34,6 +34,7 @@ EXPECTED_MARKETPLACE = {
     "lead.capture.http": ("Lead Capture Webhook", "1.0.0", "sales"),
     "whatsapp": ("WhatsApp", "1.1.0", "messaging"),
     "nextcloud.talk": ("Nextcloud Talk", "1.0.0", "messaging"),
+    "meta.capi": ("Meta Conversions API", "1.0.0", "marketing"),
     "meta.social": ("Meta Social Inbox", "1.2.0", "messaging"),
     "paystack": ("Paystack", "1.0.1", "payment"),
     "flutterwave": ("Flutterwave", "1.0.0", "payment"),
@@ -65,6 +66,7 @@ def test_explicit_registry_preserves_marketplace_catalogue_parity() -> None:
         "dotmac.crm",
         "whatsapp",
         "nextcloud.talk",
+        "meta.capi",
         "meta.social",
         "dotmac.erp",
         "paystack",
@@ -77,7 +79,7 @@ def test_explicit_registry_preserves_marketplace_catalogue_parity() -> None:
 def test_marketplace_projection_exposes_all_available_cards(db_session) -> None:
     data = build_marketplace_data(db_session)
 
-    assert data["stats"] == {"available": 9, "installed": 0, "updates": 0}
+    assert data["stats"] == {"available": 10, "installed": 0, "updates": 0}
     assert {card["key"] for card in data["marketplace_cards"]} == set(
         EXPECTED_MARKETPLACE
     )

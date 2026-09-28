@@ -43,6 +43,12 @@
     },
     {
         "current": true,
+        "key": "meta.capi",
+        "manifest_digest": "4ba859b88a33bdca0adbf1711f35f5289e7a67393aaf7fb1fa74d5016b816d98",
+        "version": "1.0.0"
+    },
+    {
+        "current": true,
         "key": "meta.social",
         "manifest_digest": "ebbab59c10536ba381078733e3f23abd10d2234e012ac5e84d0a281214ce9f23",
         "version": "1.2.0"

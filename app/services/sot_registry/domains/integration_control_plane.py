@@ -989,6 +989,166 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="integration.meta_capi_lead",
+            module="app.services.integrations.meta_capi_lead",
+            owns=(
+                "Meta website Lead delivery projection",
+                "Meta website Lead delivery lifecycle",
+            ),
+            depends_on=(
+                "events.store",
+                "integration.installations",
+                "integration.runtime",
+                "sales.capture",
+            ),
+            notes=(
+                "Only committed, new-connection fiber coverage Leads are eligible. "
+                "The owner persists a PII-minimized delivery before any Meta call."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="Meta website Lead delivery projection",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "committed fiber Lead event",
+                            "immutable website Lead origin",
+                            "enabled Meta CAPI binding",
+                            "Meta website Lead protocol",
+                        ),
+                        canonical_writer="integration.meta_capi_lead",
+                    ),
+                    ConcernContract(
+                        name="Meta website Lead delivery lifecycle",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "enabled Meta CAPI binding",
+                            "Meta CAPI transport receipt",
+                            "Meta website Lead protocol",
+                        ),
+                        canonical_writer="integration.meta_capi_lead",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="committed fiber Lead event",
+                        owner="events.store",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Committed lead.created event containing the Lead origin identifier.",
+                    ),
+                    AuthorityInput(
+                        name="immutable website Lead origin",
+                        owner="sales.capture",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "LeadOriginCapture plus its signed IntegrationInbox observation: "
+                            "form, interest, submitted time, landing path, email, and phone."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="enabled Meta CAPI binding",
+                        owner="integration.installations",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="One enabled marketing.website_lead.send.v1 capability binding.",
+                    ),
+                    AuthorityInput(
+                        name="Meta CAPI transport receipt",
+                        owner="integration.runtime",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Sanitized Meta acceptance, rejection, rate-limit, or network result.",
+                    ),
+                    AuthorityInput(
+                        name="Meta website Lead protocol",
+                        owner="integration.meta_capi_lead",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Explicit fiber coverage/new-connection eligibility, deterministic "
+                            "event identity, data minimization, bounded retry, and terminal states."
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Post-commit event handling stages one IntegrationDelivery; each worker "
+                        "attempt locks and records one sanitized result."
+                    ),
+                    locking="Unique origin delivery key plus a delivery row lock serializes attempts.",
+                    idempotency=(
+                        "One LeadOriginCapture maps to one IntegrationDelivery and one UUIDv5 Meta "
+                        "event_id reused by webhook, task, network, worker, and operator replays."
+                    ),
+                    retries=(
+                        "Rate limits, network failures, timeouts, and Meta 5xx use bounded backoff; "
+                        "configuration, authentication, and validation failures dead-letter."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "integration.meta_capi_lead"
+                        ),
+                        "integration.meta_capi_lead.binding_ambiguous",
+                        "integration.meta_capi_lead.capability_mismatch",
+                        "integration.meta_capi_lead.delivery_not_found",
+                        "integration.meta_capi_lead.scope_invalid",
+                    ),
+                    mapping_owner="Meta CAPI event and task adapters",
+                    fail_closed_on=(
+                        "ambiguous enabled destination",
+                        "ineligible origin",
+                        "permanent provider rejection",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("lead.created",),
+                    schema_version=1,
+                    delivery_owner="integration.meta_capi_lead",
+                    compatibility=(
+                        "Consumes the stable origin_capture_id and re-reads authoritative origin evidence."
+                    ),
+                    replay="Event replay returns the same delivery and Meta event_id.",
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="Meta website Lead delivery projection",
+                        input_names=(
+                            "committed fiber Lead event",
+                            "immutable website Lead origin",
+                            "enabled Meta CAPI binding",
+                            "Meta website Lead protocol",
+                        ),
+                        writer="integration.meta_capi_lead",
+                        freshness="Staged when the committed lead.created event is dispatched.",
+                        stale_behavior=(
+                            "Disabled or missing configuration leaves the customer Lead authoritative "
+                            "and successful without creating an external delivery."
+                        ),
+                        drift_signal=(
+                            "An eligible origin under an enabled binding lacks a pending, retrying, "
+                            "delivered, or dead-letter IntegrationDelivery."
+                        ),
+                        rebuild_operation="Replay the committed lead.created event.",
+                        repair_owner="integration.meta_capi_lead",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="integration.meta_capi_lead",
+                    verification=(
+                        "Eligibility, hashing, idempotency, retry classification, privacy, and replay tests."
+                    ),
+                ),
+                steward="sales and platform integrations",
+                design_refs=(
+                    "docs/designs/INTEGRATION_PLATFORM_SOT.md",
+                    "docs/designs/MARKETING_SALES_SOT.md",
+                    "docs/runbooks/META_CAPI_FIBER_LEADS.md",
+                ),
+                test_refs=("tests/test_meta_capi_fiber_leads.py",),
+            ),
+        ),
+        SOTService(
             name="integration.inbox",
             module="app.services.integrations.inbox",
             owns=(

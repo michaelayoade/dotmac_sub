@@ -63,6 +63,15 @@ posts its payload to `${MARKETING_BASE_URL}/api/v1/conversions/events` using the
 secret-managed key as a Bearer credential. Marketing is a retryable projection,
 never a participant in the customer-state transaction.
 
+`integration.meta_capi_lead` is a separate additive measurement projection.
+After committed `lead.created`, it selects only `fiber-coverage-v1`
+`new_connection` origins from `fiber.website_inquiry`, persists a deterministic
+delivery, and lets a background worker send Meta `Lead`. Missing, disabled, or
+failed Meta configuration cannot change the authoritative Lead or webhook
+response. It sends only SHA-256 normalized email/phone matches; first-party UTM
+and click attribution remains on `LeadOriginCapture` and is not reinterpreted as
+Meta `fbc`. See `docs/runbooks/META_CAPI_FIBER_LEADS.md`.
+
 ## Why this map exists
 
 The CRM retirement ledger references this path from nine modules and 107 routes,

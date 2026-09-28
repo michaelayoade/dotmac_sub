@@ -364,6 +364,22 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Durable delivery state, stable Meta event ID, bounded retry, and "
         "dead-letter evidence.",
     ),
+    "app.tasks.integration_delivery.deliver_meta_capi_lead": _c(
+        "integrations",
+        STATE,
+        STATEFUL,
+        DEAD,
+        "Stable inquiry-derived event ID, row lock, bounded backoff, and durable "
+        "success or dead-letter evidence.",
+    ),
+    "app.tasks.integration_delivery.redrive_meta_capi_leads": _c(
+        "integrations",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Beat redrives pending, due retryable, and expired-lease Meta Lead rows; "
+        "the delivery row serializes duplicate worker execution.",
+    ),
     "app.tasks.integration_inbox.reclaim_stale_claims": _c(
         "integrations",
         SWEEP,
