@@ -38,11 +38,34 @@ The local feature branches were created in dependency order:
 13. `feat/automation-center-validation` — architecture, migration, browser,
     and integration validation.
 
-The branches are local sequence refs at this stage, all still based on the
-same trunk revision. The implementation is currently accumulated in the
-foundation worktree as an uncommitted review set; advancing each slice to the
-next branch requires explicit local commit authorization. No pushes, pull
-requests, merges, deployment, or server changes are part of this work session.
+The slices were committed locally in the sequence above. The assembled review
+tip is `feat/automation-center-validation`; the branch tips are intentionally
+kept as separate local review checkpoints so each dependency boundary can be
+inspected independently. No branch has been pushed, merged, deployed, or used
+for server changes in this work session.
+
+The local checkpoint commits are:
+
+| Slice | Commit |
+| --- | --- |
+| Foundation | `78e9cec61` |
+| Capability registry | `eb258ff10` |
+| Project rules | `ccee5a08c` |
+| Sales rules | `6f1d85156` |
+| Customer/support rules | `91ccfb853` |
+| Operations rules | `ae87d6207` |
+| Vendor rules | `20b0156c4` |
+| Script governance | `7a79c3dd3` |
+| Client runtime | `763665ae0` |
+| Server runtime | `bd66fa75c` |
+| Unified builder | `53df3c0ac` |
+| Workflow guidance | `190882020` |
+| Validation | `7879a7e88` |
+
+The validation tip also contains the follow-up typed sales-input correction and
+the vendor-project label clarification. The only intentionally untracked local
+artifact is graphify's analysis output; it is preserved and is not part of the
+implementation.
 
 ## Current readiness matrix
 
