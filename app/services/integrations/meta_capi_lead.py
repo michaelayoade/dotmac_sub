@@ -450,17 +450,15 @@ def due_delivery_ids(db: Session, *, limit: int = 100) -> tuple[UUID, ...]:
 
 
 def health_snapshot(db: Session) -> MetaCapiHealthSnapshot:
-    rows = dict(
-        db.execute(
-            select(IntegrationDelivery.state, func.count(IntegrationDelivery.id))
-            .join(IntegrationDelivery.capability_binding)
-            .where(
-                IntegrationCapabilityBinding.capability_id
-                == META_WEBSITE_LEAD_CAPABILITY
-            )
-            .group_by(IntegrationDelivery.state)
-        ).all()
-    )
+    state_rows = db.execute(
+        select(IntegrationDelivery.state, func.count(IntegrationDelivery.id))
+        .join(IntegrationDelivery.capability_binding)
+        .where(
+            IntegrationCapabilityBinding.capability_id == META_WEBSITE_LEAD_CAPABILITY
+        )
+        .group_by(IntegrationDelivery.state)
+    ).all()
+    rows: dict[str, int] = {str(row[0]): int(row[1]) for row in state_rows}
     deliveries = db.scalars(
         select(IntegrationDelivery)
         .join(IntegrationDelivery.capability_binding)
