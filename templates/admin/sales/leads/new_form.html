@@ -35,7 +35,7 @@
     </div>
     {% endif %}
 
-    <form method="post" action="{{ action_url }}" class="space-y-5" data-lead-create-form>
+    <form method="post" action="{{ action_url }}" class="space-y-5" data-lead-create-form data-automation-target="sales.lead" data-automation-record-id="{{ lead.id if lead else '' }}">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="submission_id" value="{{ lead_form.submission_id }}">
         {% if inbox_conversation_id %}

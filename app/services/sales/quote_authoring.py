@@ -33,6 +33,7 @@ from app.services.audit_adapter import stage_audit_event
 from app.services.common import round_money
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -49,6 +50,11 @@ _CHANGE_QUOTE_DISCOUNT = OwnerCommandDefinition(
     owner="sales.quote_authoring",
     concern="Quote discount lifecycle and append-only history",
     name="change_quote_discount",
+)
+_AUTOMATION_QUOTE_STATUS = OwnerCommandDefinition(
+    owner="sales.quote_authoring",
+    concern="Quote discount lifecycle and append-only history",
+    name="set_quote_status_from_automation",
 )
 
 _ELIGIBLE_LEAD_STATUSES = {
@@ -125,6 +131,13 @@ class ChangeQuoteDiscountCommand:
     actor_system_user_id: UUID
     expected_revision: int
     discount: QuoteDiscountInput | None
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationQuoteStatusCommand:
+    context: CommandContext
+    quote_id: UUID
+    status: QuoteStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -787,6 +800,7 @@ def _operation(db: Session, command: AuthorQuoteCommand) -> AuthorQuoteOutcome:
         db,
         EventType.quote_created,
         {
+            "tenant_id": str(OPERATOR_TENANT_ID),
             "quote_id": str(quote.id),
             "lead_id": str(lead.id) if lead is not None else None,
             "subscriber_id": str(customer.id) if customer is not None else None,
@@ -824,6 +838,53 @@ def author_quote(db: Session, command: AuthorQuoteCommand) -> AuthorQuoteOutcome
         definition=_AUTHOR_QUOTE,
         context=command.context,
         operation=lambda: _operation(db, command),
+    )
+
+
+def set_quote_status_from_automation(
+    db: Session, command: AutomationQuoteStatusCommand
+) -> UUID:
+    """Apply non-conversion Quote states through the Quote authoring owner."""
+
+    def operation() -> UUID:
+        quote = db.scalar(
+            select(Quote).where(Quote.id == command.quote_id).with_for_update()
+        )
+        if quote is None or not quote.is_active:
+            raise _error("quote_not_found", "Quote not found.")
+        if command.status is QuoteStatus.accepted or (
+            quote.status == QuoteStatus.accepted.value
+            and command.status is not QuoteStatus.accepted
+        ):
+            raise _error(
+                "accepted_status_controlled",
+                "Accepted status is owned by the Quote acceptance conversion workflow.",
+            )
+        if command.status is QuoteStatus.sent and not quote.line_items:
+            raise _error(
+                "lines_required",
+                "A Quote must have at least one line before it can be sent.",
+            )
+        quote.status = command.status.value
+        emit_event(
+            db,
+            EventType.custom,
+            {
+                "name": "quote.updated",
+                "tenant_id": str(OPERATOR_TENANT_ID),
+                "quote_id": str(quote.id),
+                "status": quote.status,
+            },
+            actor=command.context.actor,
+        )
+        db.flush()
+        return quote.id
+
+    return execute_owner_command(
+        db,
+        definition=_AUTOMATION_QUOTE_STATUS,
+        context=command.context,
+        operation=operation,
     )
 
 

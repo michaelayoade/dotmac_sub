@@ -71,6 +71,13 @@ _EDIT_LEAD = OwnerCommandDefinition(
     concern="atomic admin Person and Lead maintenance",
     name="edit_lead",
 )
+from app.services.operator_tenant import OPERATOR_TENANT_ID
+
+_AUTOMATION_LEAD_STATUS = OwnerCommandDefinition(
+    owner="sales.lead_authoring",
+    concern="atomic admin Lead maintenance",
+    name="set_lead_status_from_automation",
+)
 _EMAIL = TypeAdapter(EmailStr)
 _NIN = re.compile(r"^[0-9]{11}$")
 _COUNTRY = re.compile(r"^[A-Za-z]{1,2}$")
@@ -160,6 +167,13 @@ class EditLeadCommand:
     notes: str | None
     is_active: bool
     person: LeadPersonDraft
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationLeadStatusCommand:
+    context: CommandContext
+    lead_id: UUID
+    status: LeadStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -933,6 +947,7 @@ def _operation(db: Session, command: AuthorLeadCommand) -> AuthorLeadOutcome:
         db,
         EventType.lead_created,
         {
+            "tenant_id": str(OPERATOR_TENANT_ID),
             "lead_id": str(lead.id),
             "party_id": str(party.id),
             "status": lead.status,
@@ -1213,4 +1228,78 @@ def edit_lead(db: Session, command: EditLeadCommand) -> EditLeadOutcome:
         definition=_EDIT_LEAD,
         context=command.context,
         operation=lambda: _edit_operation(db, command),
+    )
+
+
+def set_lead_status_from_automation(
+    db: Session, command: AutomationLeadStatusCommand
+) -> UUID:
+    """Change a Lead status through the existing Lead authoring owner."""
+
+    def operation() -> UUID:
+        lead = db.scalar(
+            select(Lead).where(Lead.id == command.lead_id).with_for_update()
+        )
+        if lead is None:
+            raise _error("lead_not_found", "Lead not found.")
+        metadata = lead.metadata_ if isinstance(lead.metadata_, dict) else {}
+        region_zone_id = None
+        if metadata.get("region_zone_id"):
+            try:
+                region_zone_id = UUID(str(metadata["region_zone_id"]))
+            except ValueError as exc:
+                raise _error("metadata_invalid", "Lead metadata is invalid.") from exc
+        sales_service.stage_lead_maintenance(
+            db,
+            sales_service.LeadMaintenanceUpdate(
+                lead_id=lead.id,
+                title=lead.title or "Lead",
+                status=command.status,
+                owner_agent_id=lead.owner_agent_id,
+                pipeline_id=lead.pipeline_id,
+                stage_id=lead.stage_id,
+                lead_source=lead.lead_source,
+                region=lead.region,
+                estimated_value=lead.estimated_value,
+                currency=lead.currency,
+                address=lead.address,
+                probability=lead.probability,
+                expected_close_date=lead.expected_close_date,
+                lost_reason=lead.lost_reason,
+                notes=lead.notes,
+                is_active=lead.is_active,
+                reseller_id=lead.reseller_id,
+                organization_id=(
+                    UUID(str(metadata["organization_id"]))
+                    if metadata.get("organization_id")
+                    else None
+                ),
+                region_zone_id=region_zone_id,
+                reseller_routed=bool(
+                    metadata.get("communication_routed_through_reseller", False)
+                ),
+                edit_key=command.context.command_id,
+                edit_fingerprint=hashlib.sha256(
+                    f"automation:{lead.id}:{command.status.value}".encode()
+                ).hexdigest(),
+            ),
+        )
+        emit_event(
+            db,
+            EventType.lead_updated,
+            {
+                "tenant_id": str(OPERATOR_TENANT_ID),
+                "lead_id": str(lead.id),
+                "status": lead.status,
+            },
+            actor=command.context.actor,
+        )
+        db.flush()
+        return lead.id
+
+    return execute_owner_command(
+        db,
+        definition=_AUTOMATION_LEAD_STATUS,
+        context=command.context,
+        operation=operation,
     )

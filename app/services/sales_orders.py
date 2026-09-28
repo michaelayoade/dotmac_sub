@@ -84,6 +84,7 @@ from app.services.common import (
 )
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -103,6 +104,13 @@ class SalesOrderTotals:
     subtotal: Decimal
     tax_total: Decimal
     total: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationSalesOrderStatusCommand:
+    context: CommandContext
+    sales_order_id: UUID
+    status: SalesOrderStatus
 
 
 def fixed_vat_amount(subtotal: Decimal) -> Decimal:
@@ -140,12 +148,64 @@ _PARTIAL = SalesOrderPaymentStatus.partial.value
 _PENDING = SalesOrderPaymentStatus.pending.value
 _WAIVED = SalesOrderPaymentStatus.waived.value
 
+_AUTOMATION_STATUS = OwnerCommandDefinition(
+    owner="sales.orders",
+    concern="sales order lifecycle",
+    name="set_sales_order_status_from_automation",
+)
+
 
 class SalesOrderLifecycleError(ValueError):
     def __init__(self, code: str, message: str, *, kind: str = "conflict") -> None:
         super().__init__(message)
         self.code = code
         self.kind = kind
+
+
+def set_sales_order_status_from_automation(
+    db: Session, command: AutomationSalesOrderStatusCommand
+) -> UUID:
+    """Apply only operator-safe order states through the order owner."""
+
+    def operation() -> UUID:
+        order = db.scalar(
+            select(SalesOrder)
+            .where(SalesOrder.id == command.sales_order_id)
+            .with_for_update()
+        )
+        if order is None or not order.is_active:
+            raise DomainError(
+                code="sales.orders.not_found",
+                message="Sales order not found.",
+                details={"sales_order_id": str(command.sales_order_id)},
+            )
+        if command.status in EVIDENCE_CONTROLLED_STATUSES:
+            raise DomainError(
+                code="sales.orders.evidence_controlled_status",
+                message="Paid and fulfilled statuses are derived from their owning evidence workflows.",
+                details={"status": command.status.value},
+            )
+        order.status = command.status.value
+        emit_event(
+            db,
+            EventType.custom,
+            {
+                "name": "sales_order.updated",
+                "tenant_id": str(OPERATOR_TENANT_ID),
+                "sales_order_id": str(order.id),
+                "status": order.status,
+            },
+            actor=command.context.actor,
+        )
+        db.flush()
+        return order.id
+
+    return execute_owner_command(
+        db,
+        definition=_AUTOMATION_STATUS,
+        context=command.context,
+        operation=operation,
+    )
 
 
 def fulfill_from_customer_experience(
@@ -1550,6 +1610,7 @@ def stage_funding_transition(
         db,
         EventType.sales_order_funding_satisfied,
         {
+            "tenant_id": str(OPERATOR_TENANT_ID),
             "sales_order_id": str(sales_order.id),
             "order_number": sales_order.order_number,
             "total": str(sales_order.total or 0),

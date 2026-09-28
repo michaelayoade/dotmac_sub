@@ -844,6 +844,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "sales.service.lead_won_transition_forbidden",
                     "sales.service.lead_origin_immutable",
                     "sales.service.converted_lead_reseller_immutable",
+                    "sales.lead_authoring.metadata_invalid",
                 ),
                 mapping_owner="admin sales Lead web adapter",
                 fail_closed_on=(
@@ -1069,6 +1070,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "sales.quote_authoring.quote_not_found",
                     "sales.quote_authoring.submission_conflict",
                     "sales.quote_authoring.tax_rate_not_active",
+                    "sales.quote_authoring.accepted_status_controlled",
+                    "sales.quote_authoring.lines_required",
                 ),
                 mapping_owner="admin sales Quote form adapter",
                 fail_closed_on=(
@@ -2324,6 +2327,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "sales.order_waiver.sales_order_not_found",
                     "sales.order_waiver.unregistered_reason_code",
                     "sales.order_waiver.waiver_already_active",
+                    "sales.orders.not_found",
+                    "sales.orders.evidence_controlled_status",
                 ),
                 mapping_owner="sales order adapters",
                 fail_closed_on=(

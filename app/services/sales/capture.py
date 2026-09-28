@@ -23,6 +23,7 @@ from app.services.customer_identity_normalization import (
 )
 from app.services.events import EventType, emit_event
 from app.services.integrations import inbox as integration_inbox
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import owner_command_active
 from app.services.sales import lifecycle
 
@@ -229,6 +230,7 @@ def capture_lead(
             db,
             EventType.lead_created,
             {
+                "tenant_id": str(OPERATOR_TENANT_ID),
                 "lead_id": str(lead.id),
                 "party_id": str(party_id),
                 "origin_capture_id": str(capture.id),

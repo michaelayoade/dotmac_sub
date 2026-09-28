@@ -72,6 +72,7 @@ from app.services.common import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import CommandContext
 from app.services.response import ListResponseMixin
 from app.services.sales import lifecycle as lead_lifecycle
@@ -1332,6 +1333,7 @@ def _emit_lead_created(db: Session, lead: Lead) -> None:
             db,
             EventType.lead_created,
             {
+                "tenant_id": str(OPERATOR_TENANT_ID),
                 "lead_id": str(lead.id),
                 "status": lead.status,
                 "lead_source": lead.lead_source,

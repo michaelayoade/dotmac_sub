@@ -27,6 +27,7 @@ from app.services.audit_adapter import stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -640,6 +641,7 @@ def create_lead_for_party(
                 db,
                 EventType.lead_created,
                 {
+                    "tenant_id": str(OPERATOR_TENANT_ID),
                     "lead_id": str(lead.id),
                     "party_id": str(command.party_id),
                     "origin_conversation_id": str(conversation.id),

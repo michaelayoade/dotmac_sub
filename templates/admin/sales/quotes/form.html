@@ -46,7 +46,9 @@
           @input="clearAcceptanceError()"
           @change="clearAcceptanceError()"
           @submit="handleSubmit($event)"
-          class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+          class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800"
+          data-automation-target="sales.quote"
+          data-automation-record-id="{{ quote.id if quote else '' }}">
         {% include "components/forms/csrf_input.html" %}
         {% if not is_editing %}<input type="hidden" name="submission_id" value="{{ quote_form.submission_id }}">{% endif %}
 
