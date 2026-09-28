@@ -131,6 +131,12 @@ _PAYMENT_ALLOCATION_IDEMPOTENCY_SCOPE = "payment_allocation"
 _PAYMENT_ALLOCATION_CONSUMPTION_MEMO_PREFIX = (
     "Payment allocation account-credit consumption:"
 )
+_REVIEWED_LEGACY_PAYMENT_ENVELOPE_MEMO_PREFIX = (
+    "Reviewed legacy payment account-credit envelope:"
+)
+_REVIEWED_LEGACY_RESIDUAL_RETIREMENT_MEMO_PREFIX = (
+    "Reviewed legacy residual account-credit retirement:"
+)
 
 
 @dataclass(frozen=True)
@@ -4531,12 +4537,17 @@ class PaymentAllocations(ListResponseMixin):
         db: Session,
         evidence: ReviewedLegacyAllocationConsumptionEvidence,
     ) -> LedgerEntry:
-        """Attach the missing non-position debit for one reviewed legacy allocation.
+        """Normalize and attach exact evidence for one legacy allocation.
 
         This participant is called only by the historical invoice-tax owner after
         it has reconciled the exact payment settlement evidence in the same owner
-        transaction. The row is structural pairing evidence and cannot change the
-        customer's position.
+        transaction. Legacy payments can represent their settled value as an
+        invoice credit plus only the residual account credit. The current payment
+        owner instead requires one full account-credit envelope and a consumption
+        debit for each allocation. When that legacy split is present, append an
+        offsetting residual-retirement debit and full envelope credit before
+        attaching the consumption debit. All three rows are non-position evidence,
+        and their net reusable-credit delta is zero while the allocation is active.
         """
 
         lock_account(db, str(evidence.account_id))
@@ -4589,6 +4600,94 @@ class PaymentAllocations(ListResponseMixin):
                 message="Reviewed legacy allocation evidence no longer matches.",
                 retryable=False,
             )
+
+        settlement_amount = round_money(settlement.amount)
+        settlement_unallocated = round_money(settlement.unallocated_amount)
+        if settlement_unallocated < settlement_amount:
+            active_allocations = tuple(
+                db.scalars(
+                    select(PaymentAllocation)
+                    .where(
+                        PaymentAllocation.payment_id == payment.id,
+                        PaymentAllocation.is_active.is_(True),
+                    )
+                    .with_for_update()
+                ).all()
+            )
+            residual_entry = (
+                lock_for_update(
+                    db, LedgerEntry, settlement.unallocated_ledger_entry_id
+                )
+                if settlement.unallocated_ledger_entry_id is not None
+                else None
+            )
+            allocated_total = round_money(
+                sum(
+                    (round_money(item.amount) for item in active_allocations),
+                    Decimal("0.00"),
+                )
+            )
+            if (
+                settlement_amount != round_money(payment.amount)
+                or settlement_unallocated <= Decimal("0.00")
+                or round_money(settlement_unallocated + allocated_total)
+                != settlement_amount
+                or len(active_allocations) != 1
+                or active_allocations[0].id != allocation.id
+                or residual_entry is None
+                or not residual_entry.is_active
+                or residual_entry.account_id != payment.account_id
+                or residual_entry.payment_id != payment.id
+                or residual_entry.invoice_id is not None
+                or residual_entry.entry_type is not LedgerEntryType.credit
+                or residual_entry.source is not LedgerSource.payment
+                or residual_entry.currency.upper() != payment.currency.upper()
+                or round_money(residual_entry.amount) != settlement_unallocated
+            ):
+                raise DomainError(
+                    code="financial.payments.legacy_consumption_evidence_rejected",
+                    message="Legacy payment credit split cannot be normalized exactly.",
+                    retryable=False,
+                )
+
+            envelope = LedgerEntry(
+                account_id=evidence.account_id,
+                invoice_id=None,
+                payment_id=payment.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=settlement_amount,
+                currency=payment.currency,
+                memo=(
+                    f"{_REVIEWED_LEGACY_PAYMENT_ENVELOPE_MEMO_PREFIX} "
+                    f"{payment.id}"
+                ),
+                affects_customer_position=False,
+                effective_date=payment.paid_at,
+            )
+            residual_retirement = LedgerEntry(
+                account_id=evidence.account_id,
+                invoice_id=None,
+                payment_id=payment.id,
+                entry_type=LedgerEntryType.debit,
+                source=LedgerSource.other,
+                amount=settlement_unallocated,
+                currency=payment.currency,
+                memo=(
+                    f"{_REVIEWED_LEGACY_RESIDUAL_RETIREMENT_MEMO_PREFIX} "
+                    f"{residual_entry.id}"
+                ),
+                affects_customer_position=False,
+                effective_date=payment.paid_at,
+            )
+            db.add_all((envelope, residual_retirement))
+            db.flush()
+            settlement.unallocated_ledger_entry_id = envelope.id
+            settlement.unallocated_amount = settlement_amount
+            db.flush()
+        else:
+            envelope = None
+            residual_retirement = None
 
         if allocation.consumption_ledger_entry_id is not None:
             existing = lock_for_update(
@@ -4665,6 +4764,14 @@ class PaymentAllocations(ListResponseMixin):
                     "invoice_id": str(invoice.id),
                     "invoice_ledger_entry_id": str(invoice_entry.id),
                     "consumption_ledger_entry_id": str(consumption.id),
+                    "normalized_envelope_ledger_entry_id": (
+                        str(envelope.id) if envelope is not None else None
+                    ),
+                    "retired_residual_ledger_entry_id": (
+                        str(residual_retirement.id)
+                        if residual_retirement is not None
+                        else None
+                    ),
                     "amount": str(amount),
                     "currency": payment.currency,
                     "preview_fingerprint": fingerprint,

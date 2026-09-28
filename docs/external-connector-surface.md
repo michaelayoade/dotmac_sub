@@ -121,7 +121,7 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_email_services.py` | `test_smtp_connection_auth_failure_logs` | `outbound_transport` | `d683e108d08534885850232a8391432cb4ac57e01aa93845a184b09f2c238c2a` |
 | `tests/test_genieacs_services.py` | `<module>` | `outbound_transport` | `cfc1341f06e824ad2bfc34a59d5adece457c40bea620b65d7badd43779956d99` |
 | `tests/test_integration_meta_social.py` | `test_typed_facade_returns_sanitized_outcome` | `outbound_transport` | `358e9784cd774b9cdd9e693c57365fc3842862f6cf7d8653bf3c4fcf53a13959` |
-| `tests/test_meta_capi_fiber_leads.py` | `<module>` | `outbound_transport` | `7e7aa05f02b0c2606b3bc6bc6acbb56304c5335a60ff2dcb45f82316c465f501` |
+| `tests/test_meta_capi_fiber_leads.py` | `<module>` | `outbound_transport` | `8128bc3956ebaff578adbfe2de1fec12f415e084450036187409e8c86beaf8ed` |
 | `tests/test_meta_oauth.py` | `test_provider_rejection_records_only_sanitized_evidence` | `outbound_transport` | `d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582` |
 | `tests/test_nextcloud_talk_staff_notifications.py` | `<module>` | `delivery_retry` | `e6a540dee1e6ddfb5448aef0a667aef1f3b7bf54e955fbcd9bd7ae86e2dbd315` |
 | `tests/test_router_management_connection.py` | `test_execute_honors_tunable_overrides` | `delivery_retry` | `c887e359adc3583a9c7332c37a3fb951afdad207057a5e96fb02cd136463d31e` |

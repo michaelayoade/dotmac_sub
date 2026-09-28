@@ -440,6 +440,18 @@ def test_existing_replacement_preserves_credit_and_records_finance_approval(
     assert PaymentAllocations.available_amount(db_session, str(payment.id)) == Decimal(
         "2625.00"
     )
+    settlement = db_session.scalar(
+        select(PaymentSettlement).where(PaymentSettlement.payment_id == payment.id)
+    )
+    assert settlement is not None
+    assert settlement.unallocated_amount == payment.amount
+    assert settlement.unallocated_ledger_entry_id is not None
+    normalized_envelope = db_session.get(
+        LedgerEntry, settlement.unallocated_ledger_entry_id
+    )
+    assert normalized_envelope is not None
+    assert normalized_envelope.amount == payment.amount
+    assert normalized_envelope.affects_customer_position is False
     assert get_spendable_account_credit_balance(
         db_session, str(scenario.account_id), currency="NGN"
     ) == Decimal("2625.00")
