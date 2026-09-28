@@ -73,7 +73,7 @@ def deliver_meta_lead_conversion(self, delivery_id: str) -> dict[str, object]:
 def deliver_meta_capi_lead(self, delivery_id: str) -> dict[str, object]:
     from app.services.integrations import meta_capi_lead
 
-    with db_session_adapter.session() as db:
+    with db_session_adapter.owner_command_session() as db:
         delivery = meta_capi_lead.deliver_lead(
             db,
             meta_capi_lead.DeliverMetaCapiLeadCommand(
@@ -99,7 +99,7 @@ def redrive_meta_capi_leads() -> dict[str, int]:
     from app.services.integrations import meta_capi_lead
     from app.services.queue_adapter import enqueue_task
 
-    with db_session_adapter.session() as db:
+    with db_session_adapter.read_session() as db:
         delivery_ids = meta_capi_lead.due_delivery_ids(db)
     for delivery_id in delivery_ids:
         enqueue_task(

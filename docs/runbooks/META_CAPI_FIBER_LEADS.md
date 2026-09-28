@@ -15,7 +15,7 @@ Endpoint receipt, signature success, and form validation are not conversions.
 - `external_form_id == fiber-coverage-v1`;
 - the signed inbox payload's `interest == new_connection`.
 
-This excludes support/contact forms and every non-fiber CRM or Inbox Lead.
+This excludes support/contact forms and every non-fiber sales or Inbox Lead.
 
 ## Delivery and idempotency
 
