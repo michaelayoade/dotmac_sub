@@ -24,7 +24,9 @@
     <form method="post"
           action="{% if form_mode == 'edit' and ticket %}/admin/support/tickets/{{ ticket.id }}/edit{% else %}/admin/support/tickets{% endif %}"
           enctype="multipart/form-data"
-          class="space-y-6">
+          class="space-y-6"
+          data-automation-target="support.ticket"
+          data-automation-record-id="{{ ticket.id if ticket else '' }}">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
         <fieldset class="space-y-6">
 

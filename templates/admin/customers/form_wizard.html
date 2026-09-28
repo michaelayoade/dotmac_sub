@@ -47,7 +47,7 @@
          canProceed/handleSubmit). Native HTML5 validation would try to validate
          required controls in hidden steps and fail with "invalid form control
          is not focusable", silently blocking submit. -->
-    <form @submit.prevent="handleSubmit()" x-data="{ submitting: false }" novalidate>
+    <form @submit.prevent="handleSubmit()" x-data="{ submitting: false }" novalidate data-automation-target="customer.account">
         {% include "components/forms/csrf_input.html" %}
 
         <!-- Step 1: Type Selection -->

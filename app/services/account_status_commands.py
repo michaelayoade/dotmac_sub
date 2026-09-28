@@ -29,6 +29,7 @@ from app.services.audit_adapter import stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -540,6 +541,18 @@ def _stage_evidence(
         actor=command.context.actor,
         subscriber_id=account.id,
         account_id=account.id,
+    )
+    emit_event(
+        db,
+        EventType.custom,
+        {
+            "name": "customer.account.status_changed",
+            "tenant_id": str(OPERATOR_TENANT_ID),
+            "subscriber_id": str(account.id),
+            "status": account.status.value,
+            "action": command.action.value,
+        },
+        actor=command.context.actor,
     )
 
 
