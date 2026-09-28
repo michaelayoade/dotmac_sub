@@ -1817,11 +1817,25 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(olt_profile_sync_interval_seconds, 60),
         )
 
+        # These task names were removed from the codebase. Retire any
+        # persisted rows left by older deployments so beat cannot keep reporting
+        # them as enabled scheduler drift or attempt to enqueue dead tasks.
         for removed_task_name in (
             "app.tasks.olt_capture.capture_olt_samples_task",
             "app.tasks.olt_capture.validate_all_parsers_task",
             "app.tasks.olt_capture.capture_all_olts_task",
             "app.tasks.provisioning_enforcement.run_enforcement",
+            "app.tasks.olt_queue.process_deferred_olt_operations",
+            "app.tasks.olt_queue.retry_failed_operations",
+            "app.tasks.prepaid_billing.run_prepaid_charges",
+            "app.tasks.collections.run_prepaid_enforcement",
+            "app.tasks.projects.reconcile_project_mirror",
+            "app.tasks.splynx_sync.run_refresh_radius_from_subs",
+            "app.tasks.splynx_sync.run_incremental_sync",
+            "app.tasks.splynx_sync.run_new_subscriptions_sync",
+            "app.tasks.splynx_sync.run_password_freshness_sync",
+            "app.tasks.splynx_sync.run_subscription_status_sync",
+            "app.tasks.work_orders.reconcile_work_order_mirror",
         ):
             _retire_scheduled_task(session, removed_task_name)
 

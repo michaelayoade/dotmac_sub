@@ -176,3 +176,26 @@ def test_retired_drainage_controls_cannot_return() -> None:
     assert 'down_revision = "414_permanent_device_projection"' in migration
     assert "status = 'paused'" in migration
     assert "UPDATE scheduled_tasks SET enabled = true" in migration
+
+
+def test_removed_scheduler_aliases_are_drained() -> None:
+    source = SCHEDULER_PATH.read_text(encoding="utf-8")
+
+    # These aliases were present in the production drift export but no longer
+    # resolve to registered Celery tasks. The scheduler must disable their
+    # persisted rows during normal beat schedule construction.
+    retired_aliases = (
+        "app.tasks.olt_queue.process_deferred_olt_operations",
+        "app.tasks.olt_queue.retry_failed_operations",
+        "app.tasks.prepaid_billing.run_prepaid_charges",
+        "app.tasks.collections.run_prepaid_enforcement",
+        "app.tasks.projects.reconcile_project_mirror",
+        "app.tasks.splynx_sync.run_refresh_radius_from_subs",
+        "app.tasks.splynx_sync.run_incremental_sync",
+        "app.tasks.splynx_sync.run_new_subscriptions_sync",
+        "app.tasks.splynx_sync.run_password_freshness_sync",
+        "app.tasks.splynx_sync.run_subscription_status_sync",
+        "app.tasks.work_orders.reconcile_work_order_mirror",
+    )
+
+    assert all(alias in source for alias in retired_aliases)
