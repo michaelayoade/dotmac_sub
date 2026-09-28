@@ -4615,9 +4615,7 @@ class PaymentAllocations(ListResponseMixin):
                 ).all()
             )
             residual_entry = (
-                lock_for_update(
-                    db, LedgerEntry, settlement.unallocated_ledger_entry_id
-                )
+                lock_for_update(db, LedgerEntry, settlement.unallocated_ledger_entry_id)
                 if settlement.unallocated_ledger_entry_id is not None
                 else None
             )
@@ -4658,10 +4656,7 @@ class PaymentAllocations(ListResponseMixin):
                 source=LedgerSource.payment,
                 amount=settlement_amount,
                 currency=payment.currency,
-                memo=(
-                    f"{_REVIEWED_LEGACY_PAYMENT_ENVELOPE_MEMO_PREFIX} "
-                    f"{payment.id}"
-                ),
+                memo=(f"{_REVIEWED_LEGACY_PAYMENT_ENVELOPE_MEMO_PREFIX} {payment.id}"),
                 affects_customer_position=False,
                 effective_date=payment.paid_at,
             )
