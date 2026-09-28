@@ -48,6 +48,15 @@ from app.models.automation import (  # noqa: F401
     AutomationStepRun,
     AutomationStepStatus,
 )
+from app.models.automation_scripts import (  # noqa: F401
+    AutomationScript,
+    AutomationScriptKind,
+    AutomationScriptLanguage,
+    AutomationScriptRun,
+    AutomationScriptRunStatus,
+    AutomationScriptStatus,
+    AutomationScriptVersion,
+)
 from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
 from app.models.billing import (  # noqa: F401
     AccountAdjustment,

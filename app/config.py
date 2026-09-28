@@ -181,6 +181,19 @@ class Settings:
     # host, which is what keeps materialized credentials off durable storage.
     connector_runtime_dir: str = os.getenv("XDG_RUNTIME_DIR", "")
 
+    # Native Automation Center server scripts use the same external OCI
+    # boundary as connectors. Empty values intentionally leave publication
+    # unavailable until a deployment pins and provisions the runtime image.
+    automation_script_runtime_image: str = os.getenv(
+        "AUTOMATION_SCRIPT_RUNTIME_IMAGE", ""
+    ).strip()
+    automation_script_runtime_digest: str = os.getenv(
+        "AUTOMATION_SCRIPT_RUNTIME_DIGEST", ""
+    ).strip()
+    automation_script_runtime_timeout_seconds: int = max(
+        1, min(int(os.getenv("AUTOMATION_SCRIPT_RUNTIME_TIMEOUT_SECONDS", "30")), 600)
+    )
+
     # Meta Graph API settings
     meta_graph_api_version: str = os.getenv("META_GRAPH_API_VERSION", "v21.0")
     meta_graph_base_url: str = os.getenv(

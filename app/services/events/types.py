@@ -33,6 +33,7 @@ class EventType(enum.Enum):
 
     # Automation Center control-plane events
     automation_rule_changed = "automation.rule_changed"
+    automation_script_changed = "automation.script_changed"
     custom_field_definition_changed = "custom_field.definition_changed"
     custom_field_value_changed = "custom_field.value_changed"
 
