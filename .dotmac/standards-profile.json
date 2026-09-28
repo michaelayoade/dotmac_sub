@@ -134,6 +134,12 @@
         "fingerprint": "358e9784cd774b9cdd9e693c57365fc3842862f6cf7d8653bf3c4fcf53a13959"
       },
       {
+        "path": "tests/test_meta_capi_fiber_leads.py",
+        "symbol": "<module>",
+        "category": "outbound_transport",
+        "fingerprint": "a3f61f627e71619f83c78c67dab08f16704fab0826b69b0c6c4057c2953770a7"
+      },
+      {
         "path": "tests/test_meta_oauth.py",
         "symbol": "test_provider_rejection_records_only_sanitized_evidence",
         "category": "outbound_transport",

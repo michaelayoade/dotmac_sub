@@ -121,6 +121,7 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_email_services.py` | `test_smtp_connection_auth_failure_logs` | `outbound_transport` | `d683e108d08534885850232a8391432cb4ac57e01aa93845a184b09f2c238c2a` |
 | `tests/test_genieacs_services.py` | `<module>` | `outbound_transport` | `cfc1341f06e824ad2bfc34a59d5adece457c40bea620b65d7badd43779956d99` |
 | `tests/test_integration_meta_social.py` | `test_typed_facade_returns_sanitized_outcome` | `outbound_transport` | `358e9784cd774b9cdd9e693c57365fc3842862f6cf7d8653bf3c4fcf53a13959` |
+| `tests/test_meta_capi_fiber_leads.py` | `<module>` | `outbound_transport` | `a3f61f627e71619f83c78c67dab08f16704fab0826b69b0c6c4057c2953770a7` |
 | `tests/test_meta_oauth.py` | `test_provider_rejection_records_only_sanitized_evidence` | `outbound_transport` | `d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582` |
 | `tests/test_nextcloud_talk_staff_notifications.py` | `<module>` | `delivery_retry` | `e6a540dee1e6ddfb5448aef0a667aef1f3b7bf54e955fbcd9bd7ae86e2dbd315` |
 | `tests/test_router_management_connection.py` | `test_execute_honors_tunable_overrides` | `delivery_retry` | `c887e359adc3583a9c7332c37a3fb951afdad207057a5e96fb02cd136463d31e` |
@@ -136,6 +137,12 @@ The 2026-09-15 review re-recorded the email-service and SMTP-readiness tests
 after they began preserving and verifying the stable probe identifier alongside
 provider-rewritten Message-IDs. The affected symbols remain test-only and do
 not add a runtime transport.
+
+The 2026-09-28 review records `test_meta_capi_fiber_leads.py` because the
+test-only module imports the existing Meta connector runtime and exercises its
+mocked outbound request path. The runtime transport remains within the already
+measured `meta_social_runtime.py` surface; this entry records the test-only
+reachability subtraction and does not add or conceal a runtime connector.
 
 ## Review rule
 
