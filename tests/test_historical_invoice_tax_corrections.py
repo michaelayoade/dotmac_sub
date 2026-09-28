@@ -463,6 +463,7 @@ def test_existing_replacement_preserves_credit_and_records_finance_approval(
     assert evidence.remaining_credit == Decimal("2625.00")
     assert evidence.recorded_at.tzinfo is not None
 
+    db_session.rollback()
     replay = correct_historical_invoice_tax_using_existing_replacement(
         db_session,
         command,
