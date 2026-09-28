@@ -1845,6 +1845,7 @@ def correct_historical_invoice_tax_using_existing_replacement(
                         ),
                     ),
                 )
+                db.expire(payment, ["settlement"])
             except DomainError as exc:
                 _error(
                     "payment_settlement_evidence_rejected",
