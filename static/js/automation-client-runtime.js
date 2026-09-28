@@ -90,17 +90,12 @@
             if (target instanceof HTMLElement && target.name) void run(form, "field.change", event, target.name);
         });
         form.addEventListener("submit", (event) => {
-            if (form.dataset.automationBypass === "1") {
-                delete form.dataset.automationBypass;
-                return;
-            }
             if (event.defaultPrevented) return;
             event.preventDefault();
             void run(form, "form.validate", event, null).then((valid) => {
                 const nativeValid = form.noValidate || form.checkValidity();
                 if (valid && nativeValid) {
-                    form.dataset.automationBypass = "1";
-                    form.requestSubmit();
+                    HTMLFormElement.prototype.submit.call(form);
                 } else if (!form.noValidate) {
                     form.reportValidity();
                 }
