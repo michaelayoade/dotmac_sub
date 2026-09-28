@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -67,10 +67,17 @@ from app.services.prepaid_draft_reconciliation import (
     PrepaidProformaAdoptionDisposition,
     PrepaidProformaAdoptionQuery,
     ReconcilePrepaidDraftCommand,
+    ReconstructReviewedPrepaidInvoiceSequenceCommand,
     RepairHistoricalPaidPrepaidInvoiceCommand,
     ReviewedExistingDraftSettlementApproval,
     ReviewedExistingDraftSettlementDisposition,
     ReviewedExistingDraftSettlementQuery,
+    ReviewedPrepaidExistingAllocationEvidence,
+    ReviewedPrepaidInvoiceSequenceAllocationSelection,
+    ReviewedPrepaidInvoiceSequenceDisposition,
+    ReviewedPrepaidInvoiceSequenceDocumentSelection,
+    ReviewedPrepaidInvoiceSequenceQuery,
+    ReviewedPrepaidSettlementEvidenceSelection,
     SettleReviewedExistingPrepaidDraftCommand,
     adopt_funded_prepaid_proforma,
     create_reviewed_paid_prepaid_invoice,
@@ -81,7 +88,9 @@ from app.services.prepaid_draft_reconciliation import (
     preview_prepaid_draft_cohort,
     preview_prepaid_draft_reconciliation,
     preview_reviewed_existing_prepaid_draft_settlement,
+    preview_reviewed_prepaid_invoice_sequence_reconstruction,
     reconcile_prepaid_draft_invoice,
+    reconstruct_reviewed_prepaid_invoice_sequence,
     repair_exact_paid_prepaid_invoice_after_settlement_for_owner,
     repair_historical_paid_prepaid_invoice,
     settle_reviewed_existing_prepaid_draft,
@@ -2372,6 +2381,300 @@ def test_reviewed_existing_draft_atomically_supersedes_wrong_future_paid_period(
     assert successor_entitlement.ends_at == wrong_start.replace(tzinfo=None)
     assert subscription.next_billing_at == wrong_start.replace(tzinfo=None)
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("0.00")
+
+
+def test_reviewed_prepaid_invoice_sequence_reconstructs_cutover_evidence_atomically(
+    db_session,
+    subscriber,
+    subscription,
+):
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.suspended
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("100.00"))
+
+    period_dates = (
+        (date(2026, 6, 29), date(2026, 7, 29)),
+        (date(2026, 7, 29), date(2026, 8, 28)),
+        (date(2026, 8, 28), date(2026, 9, 27)),
+    )
+    period_instants = tuple(
+        (
+            datetime.combine(start, time.min, ZoneInfo("Africa/Lagos")).astimezone(UTC),
+            datetime.combine(end, time.min, ZoneInfo("Africa/Lagos")).astimezone(UTC),
+        )
+        for start, end in period_dates
+    )
+    invoices = [
+        _draft(db_session, subscriber, subscription, total=Decimal("100.00"))
+        for _ in range(3)
+    ]
+    subscription.status = SubscriptionStatus.suspended
+    lines = [
+        db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+        for invoice in invoices
+    ]
+    invoices[0].billing_period_start = period_instants[0][0]
+    invoices[0].billing_period_end = period_instants[0][1]
+    invoices[0].balance_due = Decimal("90.00")
+    for invoice, line in zip(invoices[1:], lines[1:], strict=True):
+        invoice.status = InvoiceStatus.overdue
+        invoice.issued_at = datetime(2026, 7, 29, tzinfo=UTC)
+        invoice.due_at = datetime(2026, 8, 28, tzinfo=UTC)
+        invoice.billing_period_start = None
+        invoice.billing_period_end = None
+        line.subscription_id = None
+    subscription.next_billing_at = period_instants[0][1]
+
+    legacy_payment = Payment(
+        account_id=subscriber.id,
+        splynx_payment_id=52315,
+        amount=Decimal("10.00"),
+        refunded_amount=Decimal("0.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=datetime(2026, 6, 1, tzinfo=UTC),
+        created_at=datetime(2026, 6, 1, tzinfo=UTC),
+        is_active=True,
+    )
+    db_session.add(legacy_payment)
+    db_session.flush()
+    legacy_allocation = PaymentAllocation(
+        payment_id=legacy_payment.id,
+        invoice_id=invoices[0].id,
+        amount=Decimal("10.00"),
+        created_at=datetime(2026, 6, 30, tzinfo=UTC),
+        is_active=True,
+    )
+    legacy_invoice_entry = LedgerEntry(
+        account_id=subscriber.id,
+        invoice_id=invoices[0].id,
+        payment_id=legacy_payment.id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.payment,
+        amount=Decimal("10.00"),
+        currency="NGN",
+        created_at=datetime(2026, 6, 30, tzinfo=UTC),
+        is_active=True,
+        affects_customer_position=True,
+    )
+    legacy_balance_entry = LedgerEntry(
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.payment,
+        amount=Decimal("10.00"),
+        currency="NGN",
+        created_at=datetime(2026, 6, 30, 0, 0, 1, tzinfo=UTC),
+        is_active=True,
+        affects_customer_position=True,
+    )
+    db_session.add_all((legacy_allocation, legacy_invoice_entry, legacy_balance_entry))
+
+    def historical_payment(
+        amount: Decimal,
+        paid_at: datetime,
+        *,
+        settled: bool,
+    ) -> tuple[Payment, LedgerEntry]:
+        payment = Payment(
+            account_id=subscriber.id,
+            amount=amount,
+            refunded_amount=Decimal("0.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=paid_at,
+            created_at=paid_at,
+            is_active=True,
+        )
+        db_session.add(payment)
+        db_session.flush()
+        entry = LedgerEntry(
+            account_id=subscriber.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=amount,
+            currency="NGN",
+            effective_date=paid_at,
+            created_at=paid_at,
+            is_active=True,
+            affects_customer_position=True,
+        )
+        db_session.add(entry)
+        db_session.flush()
+        if settled:
+            db_session.add(
+                PaymentSettlement(
+                    payment_id=payment.id,
+                    unallocated_ledger_entry_id=entry.id,
+                    amount=amount,
+                    unallocated_amount=amount,
+                    prepaid_amount=Decimal("0.00"),
+                    currency="NGN",
+                    origin=PaymentSettlementOrigin.system,
+                    created_at=paid_at,
+                )
+            )
+        return payment, entry
+
+    july_first, july_first_entry = historical_payment(
+        Decimal("60.00"), datetime(2026, 7, 4, tzinfo=UTC), settled=False
+    )
+    july_second, july_second_entry = historical_payment(
+        Decimal("50.00"), datetime(2026, 7, 7, tzinfo=UTC), settled=False
+    )
+    september_first, september_first_entry = historical_payment(
+        Decimal("120.00"), datetime(2026, 9, 25, tzinfo=UTC), settled=True
+    )
+    september_second, september_second_entry = historical_payment(
+        Decimal("60.00"), datetime(2026, 9, 28, 12, tzinfo=UTC), settled=True
+    )
+    db_session.commit()
+
+    opening_at = datetime(2026, 8, 2, 19, 51, 7, tzinfo=UTC)
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("20.00"),
+        position_at=opening_at,
+    )
+    approver = SystemUser(
+        first_name="Finance",
+        last_name="Approver",
+        email=f"finance-sequence-{uuid4().hex}@example.com",
+    )
+    db_session.add(approver)
+    db_session.commit()
+
+    query = ReviewedPrepaidInvoiceSequenceQuery(
+        subscription_id=subscription.id,
+        documents=tuple(
+            ReviewedPrepaidInvoiceSequenceDocumentSelection(
+                invoice_id=invoice.id,
+                line_id=line.id,
+                service_start_on=period[0],
+                next_billing_on=period[1],
+                expected_total=Decimal("100.00"),
+            )
+            for invoice, line, period in zip(invoices, lines, period_dates, strict=True)
+        ),
+        allocations=(
+            ReviewedPrepaidInvoiceSequenceAllocationSelection(
+                july_first.id, invoices[0].id, Decimal("60.00")
+            ),
+            ReviewedPrepaidInvoiceSequenceAllocationSelection(
+                july_second.id, invoices[0].id, Decimal("30.00")
+            ),
+            ReviewedPrepaidInvoiceSequenceAllocationSelection(
+                july_second.id, invoices[1].id, Decimal("20.00")
+            ),
+            ReviewedPrepaidInvoiceSequenceAllocationSelection(
+                september_first.id, invoices[1].id, Decimal("80.00")
+            ),
+            ReviewedPrepaidInvoiceSequenceAllocationSelection(
+                september_first.id, invoices[2].id, Decimal("40.00")
+            ),
+            ReviewedPrepaidInvoiceSequenceAllocationSelection(
+                september_second.id, invoices[2].id, Decimal("60.00")
+            ),
+        ),
+        settlement_evidence=(
+            ReviewedPrepaidSettlementEvidenceSelection(
+                july_first.id, july_first_entry.id
+            ),
+            ReviewedPrepaidSettlementEvidenceSelection(
+                july_second.id, july_second_entry.id
+            ),
+            ReviewedPrepaidSettlementEvidenceSelection(
+                september_first.id, september_first_entry.id
+            ),
+            ReviewedPrepaidSettlementEvidenceSelection(
+                september_second.id, september_second_entry.id
+            ),
+        ),
+        existing_allocation_evidence=(
+            ReviewedPrepaidExistingAllocationEvidence(
+                allocation_id=legacy_allocation.id,
+                invoice_ledger_entry_id=legacy_invoice_entry.id,
+                balancing_ledger_entry_id=legacy_balance_entry.id,
+            ),
+        ),
+        expected_opening_credit=Decimal("20.00"),
+        expected_post_repair_credit=Decimal("0.00"),
+        expected_authoritative_prepaid_funding=Decimal("0.00"),
+        approval=ReviewedExistingDraftSettlementApproval(
+            approver_system_user_id=approver.id,
+            approver_name="Finance Approver",
+            approved_at=datetime.now(UTC) - timedelta(minutes=1),
+            ticket_reference="28791",
+            evidence_sha256="d" * 64,
+        ),
+    )
+    preview = preview_reviewed_prepaid_invoice_sequence_reconstruction(
+        db_session, query
+    )
+
+    assert (
+        preview.disposition is ReviewedPrepaidInvoiceSequenceDisposition.exact_sequence
+    ), (
+        preview.opening_credit,
+        preview.post_boundary_credit,
+        preview.authoritative_prepaid_funding,
+    )
+    assert preview.opening_credit == Decimal("20.00")
+    assert preview.post_boundary_credit == Decimal("180.00")
+    assert preview.selected_payment_total == Decimal("290.00")
+    assert preview.existing_allocation_total == Decimal("10.00")
+    db_session.commit()
+    before = calculate_customer_balance(db_session, subscriber.id)
+    db_session.rollback()
+
+    command = ReconstructReviewedPrepaidInvoiceSequenceCommand(
+        context=CommandContext.system(
+            actor="pytest:confidence-okaka",
+            scope=REPAIR_SCOPE,
+            reason="Finance-approved ticket 28791 sequence repair",
+            idempotency_key=f"pytest-reviewed-sequence-{invoices[0].id}",
+        ),
+        query=query,
+        preview_fingerprint=preview.fingerprint,
+        permission_granted=True,
+        actor_system_user_id=approver.id,
+    )
+    db_session.rollback()
+    result = reconstruct_reviewed_prepaid_invoice_sequence(db_session, command)
+    replay = reconstruct_reviewed_prepaid_invoice_sequence(db_session, command)
+
+    assert result.replayed is False
+    assert replay.replayed is True
+    assert result.next_billing_at == period_instants[-1][1]
+    assert result.remaining_credit == Decimal("0.00")
+    assert result.access_restored is False
+    assert result.customer_position_delta == Decimal("0.00")
+    assert calculate_customer_balance(db_session, subscriber.id) == before
+    assert len(result.allocation_ids) == 7
+    assert len(result.entitlement_ids) == 3
+    for invoice in invoices:
+        db_session.refresh(invoice)
+        assert invoice.status is InvoiceStatus.paid
+        assert invoice.balance_due == Decimal("0.00")
+        assert (
+            invoice.metadata_["reviewed_prepaid_invoice_sequence_reconstruction"][
+                "ticket_reference"
+            ]
+            == "28791"
+        )
+    db_session.refresh(subscription)
+    assert subscription.status is SubscriptionStatus.suspended
+    assert subscription.next_billing_at == period_instants[-1][1].replace(tzinfo=None)
+    assert (
+        db_session.query(EventStore)
+        .filter(
+            EventStore.event_type
+            == EventType.prepaid_invoice_sequence_reconstructed.value
+        )
+        .count()
+        == 1
+    )
 
 
 def test_fifty_kobo_shortfall_stays_draft(

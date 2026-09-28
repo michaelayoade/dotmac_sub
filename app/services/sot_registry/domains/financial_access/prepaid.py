@@ -2211,6 +2211,7 @@ SERVICES: tuple[SOTService, ...] = (
             "reviewed paid prepaid invoice coverage correction",
             "reviewed missing prepaid paid-invoice repair",
             "reviewed existing prepaid draft settlement",
+            "reviewed prepaid invoice sequence reconstruction",
             "reviewed pre-opening invoice settlement correction",
             "stranded prepaid draft classification",
             "stranded prepaid draft invoice reconciliation",
@@ -2306,6 +2307,13 @@ SERVICES: tuple[SOTService, ...] = (
             "document identity, issues and fully allocates the selected "
             "payment, creates canonical entitlement, projects the reviewed "
             "billing anchor, and records approval evidence atomically."
+            " A separate Finance-approved invoice-sequence command accepts an "
+            "explicit chronological set of invoices, lines, periods, payment "
+            "splits, settlement ledger selections, and legacy allocation "
+            "pairs. It proves the complete pre/post-opening conservation "
+            "equation, records only zero-position allocation structure, "
+            "settles every document atomically, projects the final expired "
+            "coverage anchor, and never restores access."
             " When the reviewed command explicitly selects continuous-period "
             "funding, the same owner retires the wrong paid invoice, settles "
             "the historical draft from its selected Payment, and invokes the "
@@ -2383,6 +2391,20 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical funded service entitlement",
                         "invoice and payment participant protocols",
                         "financial access restoration protocol",
+                    ),
+                    canonical_writer="financial.prepaid_draft_reconciliation",
+                ),
+                ConcernContract(
+                    name="reviewed prepaid invoice sequence reconstruction",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "reviewed invoice-sequence reconstruction command",
+                        "canonical prepaid draft invoice",
+                        "canonical prepaid subscription contract",
+                        "canonical payment-backed account credit",
+                        "reviewed opening funding",
+                        "canonical paid invoice allocation evidence",
+                        "invoice and payment participant protocols",
                     ),
                     canonical_writer="financial.prepaid_draft_reconciliation",
                 ),
@@ -2484,6 +2506,19 @@ SERVICES: tuple[SOTService, ...] = (
                         "explicit continuous-period funding decision, "
                         "approval timestamp, ticket, evidence digest, preview "
                         "fingerprint, actor, reason, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="reviewed invoice-sequence reconstruction command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:prepaid_reconciliation:repair permission checked "
+                        "against a named staff principal plus chronological "
+                        "invoice, line, period, payment split, settlement ledger, "
+                        "legacy allocation, opening-credit, post-repair-credit, "
+                        "authoritative-funding, Finance approval, ticket, digest, "
+                        "preview, actor, reason, and idempotency evidence"
                     ),
                 ),
                 AuthorityInput(
@@ -2702,6 +2737,12 @@ SERVICES: tuple[SOTService, ...] = (
                     "issue, selected-payment allocation, entitlement, reviewed "
                     "anchor projection, conditional access restoration, Finance "
                     "approval metadata, audit, event, and idempotency evidence. The "
+                    "invoice-sequence command locks every named invoice, payment, "
+                    "settlement ledger row, legacy allocation pair, subscription, "
+                    "opening source, and approver; it then commits settlement "
+                    "structure, zero-position allocation links, document identity, "
+                    "paid finalization, entitlement, reviewed anchor projection, "
+                    "audit, event, metadata, and idempotency evidence together. The "
                     "pre-opening correction locks the account, invoice, allocation, "
                     "opening baseline and posting group, then atomically appends "
                     "ledger reversals, opening-consumption evidence and a linked "
@@ -2775,6 +2816,12 @@ SERVICES: tuple[SOTService, ...] = (
                     "selected payment capacity, expected cutoff balance, "
                     "contract charge, explicit cadence, or preview fingerprint "
                     "is absent, stale, or ambiguous",
+                    "a reviewed invoice sequence whose periods are current, "
+                    "non-contiguous, contract-mismatched, overlapping, partially "
+                    "funded, whose selected payments are not fully conserved "
+                    "across the reviewed opening boundary, or whose expected "
+                    "post-repair credit, authoritative funding, or customer-position "
+                    "delta changes",
                     "any funding shortfall including NGN 0.50",
                     "unbacked account credit crossing the active reviewed "
                     "opening-position boundary, or any unbacked account "
@@ -2808,6 +2855,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "prepaid_paid_invoice.repaired",
                     "prepaid_paid_invoice.coverage_corrected",
                     "prepaid_reviewed_draft.settled",
+                    "prepaid_invoice_sequence.reconstructed",
                     "prepaid_draft.reconciled",
                 ),
                 schema_version=1,
@@ -2820,7 +2868,11 @@ SERVICES: tuple[SOTService, ...] = (
                     "currency, and preview fingerprint meaning. Reviewed draft "
                     "settlement retains invoice, subscription, selected payment, "
                     "allocation, entitlement, payment reference, ticket, "
-                    "evidence digest, period, anchor, and preview identity."
+                    "evidence digest, period, anchor, and preview identity. "
+                    "Sequence reconstruction retains ordered invoice and payment "
+                    "identities, period bounds, cutover boundary, allocations, "
+                    "entitlements, final anchor, zero position delta, Finance "
+                    "approval, ticket, digest, and preview identity."
                 ),
                 replay=(
                     "The event records the committed reconciliation outcome. "
@@ -2923,6 +2975,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                 "docs/designs/PREPAID_DRAFT_RECONCILIATION.md",
+                "docs/runbooks/REVIEWED_PREPAID_INVOICE_SEQUENCE_RECONSTRUCTION.md",
             ),
             test_refs=(
                 "tests/test_prepaid_draft_reconciliation.py",

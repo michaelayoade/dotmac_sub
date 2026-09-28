@@ -32,7 +32,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, NoReturn, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -103,6 +103,9 @@ from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
     InvoiceCreate,
     LedgerEntryCreate,
+    PaymentAllocationConfirm,
+    PaymentAllocationPreviewRequest,
+    PaymentSettlementReconciliationRequest,
     SystemInvoiceLineCreate,
 )
 from app.services.audit import AuditEvents
@@ -129,16 +132,19 @@ from app.services.billing.invoices import (
     PaidPrepaidInvoiceDocumentRepair,
     PrepaidProformaDocumentAdoption,
     ReviewedPrepaidDraftDocumentAdoption,
+    ReviewedPrepaidInvoiceSequenceDocument,
     build_transient_classification_invoice_shell,
 )
 from app.services.billing.ledger import LedgerEntries
 from app.services.billing.payments import (
     PaymentAllocations,
+    Payments,
     finalize_invoice_application_for_owner,
     finalize_reviewed_document_settlement_for_owner,
 )
 from app.services.common import round_money, to_decimal
 from app.services.customer_financial_ledger import (
+    calculate_customer_balance,
     native_customer_financial_balances_by_currency,
 )
 from app.services.domain_errors import DomainError
@@ -202,6 +208,11 @@ _REVIEWED_EXISTING_DRAFT_SETTLEMENT_COMMAND = OwnerCommandDefinition(
     concern="reviewed existing prepaid draft settlement",
     name="settle_reviewed_existing_prepaid_draft",
 )
+_REVIEWED_PREPAID_INVOICE_SEQUENCE_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern="reviewed prepaid invoice sequence reconstruction",
+    name="reconstruct_reviewed_prepaid_invoice_sequence",
+)
 _OPENING_SETTLEMENT_CORRECTION_COMMAND = OwnerCommandDefinition(
     owner=_OWNER,
     concern="reviewed pre-opening invoice settlement correction",
@@ -215,6 +226,9 @@ _MISSING_PAID_INVOICE_REPAIR_IDEMPOTENCY_SCOPE = "missing_paid_prepaid_invoice_r
 _REVIEWED_EXISTING_DRAFT_SETTLEMENT_IDEMPOTENCY_SCOPE = (
     "reviewed_existing_prepaid_draft"
 )
+_REVIEWED_PREPAID_INVOICE_SEQUENCE_IDEMPOTENCY_SCOPE = (
+    "reviewed_prepaid_invoice_sequence"
+)
 _OPENING_SETTLEMENT_IDEMPOTENCY_SCOPE = "preopening_invoice_settlement_correction"
 _METADATA_KEY = "prepaid_draft_reconciliation"
 _PROFORMA_ADOPTION_METADATA_KEY = "prepaid_proforma_adoption"
@@ -222,6 +236,9 @@ _PAID_INVOICE_REPAIR_METADATA_KEY = "paid_prepaid_invoice_repair"
 _MISSING_PAID_INVOICE_REPAIR_METADATA_KEY = "missing_paid_prepaid_invoice_repair"
 _REVIEWED_EXISTING_DRAFT_SETTLEMENT_METADATA_KEY = (
     "reviewed_existing_prepaid_draft_settlement"
+)
+_REVIEWED_PREPAID_INVOICE_SEQUENCE_METADATA_KEY = (
+    "reviewed_prepaid_invoice_sequence_reconstruction"
 )
 _RENEWAL_ORIGIN = AccountAdjustmentOrigin.prepaid_service_renewal
 
@@ -834,6 +851,105 @@ class ReviewedExistingDraftSettlementResult:
     successor_entitlement_id: UUID | None = None
     successor_period_start: datetime | None = None
     successor_period_end: datetime | None = None
+
+
+class ReviewedPrepaidInvoiceSequenceDisposition(StrEnum):
+    exact_sequence = "exact_sequence"
+    manual_review = "manual_review"
+    already_reconstructed = "already_reconstructed"
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedPrepaidInvoiceSequenceDocumentSelection:
+    invoice_id: UUID
+    line_id: UUID
+    service_start_on: date
+    next_billing_on: date
+    expected_total: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedPrepaidInvoiceSequenceAllocationSelection:
+    payment_id: UUID
+    invoice_id: UUID
+    amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedPrepaidSettlementEvidenceSelection:
+    payment_id: UUID
+    unallocated_ledger_entry_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedPrepaidExistingAllocationEvidence:
+    allocation_id: UUID
+    invoice_ledger_entry_id: UUID
+    balancing_ledger_entry_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedPrepaidInvoiceSequenceQuery:
+    subscription_id: UUID
+    documents: tuple[ReviewedPrepaidInvoiceSequenceDocumentSelection, ...]
+    allocations: tuple[ReviewedPrepaidInvoiceSequenceAllocationSelection, ...]
+    settlement_evidence: tuple[ReviewedPrepaidSettlementEvidenceSelection, ...]
+    existing_allocation_evidence: tuple[ReviewedPrepaidExistingAllocationEvidence, ...]
+    expected_opening_credit: Decimal
+    expected_post_repair_credit: Decimal
+    expected_authoritative_prepaid_funding: Decimal
+    approval: ReviewedExistingDraftSettlementApproval
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedPrepaidInvoiceSequencePreview:
+    account_id: UUID
+    subscription_id: UUID
+    invoice_ids: tuple[UUID, ...]
+    payment_ids: tuple[UUID, ...]
+    service_period_start: datetime
+    service_period_end: datetime
+    funding_position_at: datetime | None
+    invoice_total: Decimal
+    existing_allocation_total: Decimal
+    selected_payment_total: Decimal
+    opening_credit: Decimal
+    post_boundary_credit: Decimal
+    authoritative_prepaid_funding: Decimal
+    disposition: ReviewedPrepaidInvoiceSequenceDisposition
+    reason: str
+    fingerprint: str
+
+    @property
+    def actionable(self) -> bool:
+        return (
+            self.disposition is ReviewedPrepaidInvoiceSequenceDisposition.exact_sequence
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReconstructReviewedPrepaidInvoiceSequenceCommand:
+    context: CommandContext
+    query: ReviewedPrepaidInvoiceSequenceQuery
+    preview_fingerprint: str
+    permission_granted: bool
+    actor_system_user_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedPrepaidInvoiceSequenceResult:
+    account_id: UUID
+    subscription_id: UUID
+    invoice_ids: tuple[UUID, ...]
+    allocation_ids: tuple[UUID, ...]
+    entitlement_ids: tuple[UUID, ...]
+    next_billing_at: datetime
+    remaining_credit: Decimal
+    authoritative_prepaid_funding: Decimal
+    access_restored: bool
+    customer_position_delta: Decimal
+    preview_fingerprint: str
+    replayed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -6897,6 +7013,1105 @@ def settle_reviewed_existing_prepaid_draft(
     )
 
 
+def _build_reviewed_sequence_preview(
+    *,
+    query: ReviewedPrepaidInvoiceSequenceQuery,
+    account_id: UUID,
+    invoice_ids: tuple[UUID, ...],
+    payment_ids: tuple[UUID, ...],
+    period_start: datetime,
+    period_end: datetime,
+    disposition: ReviewedPrepaidInvoiceSequenceDisposition,
+    reason: str,
+    funding_position_at: datetime | None = None,
+    invoice_total: Decimal = Decimal("0.00"),
+    existing_allocation_total: Decimal = Decimal("0.00"),
+    selected_payment_total: Decimal = Decimal("0.00"),
+    opening_credit: Decimal = Decimal("0.00"),
+    post_boundary_credit: Decimal = Decimal("0.00"),
+    authoritative_prepaid_funding: Decimal = Decimal("0.00"),
+    evidence: dict[str, object] | None = None,
+    fingerprint_override: str | None = None,
+) -> ReviewedPrepaidInvoiceSequencePreview:
+    payload: dict[str, object] = {
+        "kind": "reviewed_prepaid_invoice_sequence_reconstruction",
+        "account_id": account_id,
+        "subscription_id": query.subscription_id,
+        "invoice_ids": invoice_ids,
+        "payment_ids": payment_ids,
+        "documents": query.documents,
+        "allocations": query.allocations,
+        "settlement_evidence": query.settlement_evidence,
+        "existing_allocation_evidence": query.existing_allocation_evidence,
+        "period_start": period_start,
+        "period_end": period_end,
+        "funding_position_at": funding_position_at,
+        "invoice_total": round_money(invoice_total),
+        "existing_allocation_total": round_money(existing_allocation_total),
+        "selected_payment_total": round_money(selected_payment_total),
+        "opening_credit": round_money(opening_credit),
+        "post_boundary_credit": round_money(post_boundary_credit),
+        "authoritative_prepaid_funding": round_money(authoritative_prepaid_funding),
+        "expected_opening_credit": round_money(query.expected_opening_credit),
+        "expected_post_repair_credit": round_money(query.expected_post_repair_credit),
+        "expected_authoritative_prepaid_funding": round_money(
+            query.expected_authoritative_prepaid_funding
+        ),
+        "approval": query.approval,
+        "disposition": disposition,
+        "reason": reason,
+        "evidence": evidence or {},
+    }
+    return ReviewedPrepaidInvoiceSequencePreview(
+        account_id=account_id,
+        subscription_id=query.subscription_id,
+        invoice_ids=invoice_ids,
+        payment_ids=payment_ids,
+        service_period_start=period_start,
+        service_period_end=period_end,
+        funding_position_at=funding_position_at,
+        invoice_total=round_money(invoice_total),
+        existing_allocation_total=round_money(existing_allocation_total),
+        selected_payment_total=round_money(selected_payment_total),
+        opening_credit=round_money(opening_credit),
+        post_boundary_credit=round_money(post_boundary_credit),
+        authoritative_prepaid_funding=round_money(authoritative_prepaid_funding),
+        disposition=disposition,
+        reason=reason,
+        fingerprint=fingerprint_override or _hash(payload),
+    )
+
+
+def preview_reviewed_prepaid_invoice_sequence_reconstruction(
+    db: Session,
+    query: ReviewedPrepaidInvoiceSequenceQuery,
+) -> ReviewedPrepaidInvoiceSequencePreview:
+    """Preview one Finance-approved, cutover-conserving invoice sequence."""
+
+    if len(query.documents) < 2:
+        _error("not_actionable", "A reviewed sequence requires at least two invoices.")
+    invoice_ids = tuple(item.invoice_id for item in query.documents)
+    if len(invoice_ids) != len(set(invoice_ids)):
+        _error("not_actionable", "Reviewed sequence invoice ids must be unique.")
+    first_invoice = db.get(Invoice, invoice_ids[0])
+    if first_invoice is None:
+        _error("invoice_not_found", "The first reviewed invoice was not found.")
+    account_id = first_invoice.account_id
+    payment_ids = tuple(dict.fromkeys(item.payment_id for item in query.allocations))
+    periods = tuple(
+        (
+            _business_midnight(item.service_start_on),
+            _business_midnight(item.next_billing_on),
+        )
+        for item in query.documents
+    )
+    period_start = periods[0][0]
+    period_end = periods[-1][1]
+    stored = dict(first_invoice.metadata_ or {}).get(
+        _REVIEWED_PREPAID_INVOICE_SEQUENCE_METADATA_KEY
+    )
+    if isinstance(stored, dict) and stored.get("preview_fingerprint"):
+        return _build_reviewed_sequence_preview(
+            query=query,
+            account_id=account_id,
+            invoice_ids=invoice_ids,
+            payment_ids=payment_ids,
+            period_start=period_start,
+            period_end=period_end,
+            disposition=(
+                ReviewedPrepaidInvoiceSequenceDisposition.already_reconstructed
+            ),
+            reason="invoice sequence carries reviewed reconstruction evidence",
+            fingerprint_override=str(stored["preview_fingerprint"]),
+        )
+
+    def manual(
+        reason: str, **evidence: object
+    ) -> ReviewedPrepaidInvoiceSequencePreview:
+        return _build_reviewed_sequence_preview(
+            query=query,
+            account_id=account_id,
+            invoice_ids=invoice_ids,
+            payment_ids=payment_ids,
+            period_start=period_start,
+            period_end=period_end,
+            disposition=ReviewedPrepaidInvoiceSequenceDisposition.manual_review,
+            reason=reason,
+            evidence=evidence,
+        )
+
+    approval = query.approval
+    approver = db.get(SystemUser, approval.approver_system_user_id)
+    canonical_approver_name = (
+        (approver.display_name or f"{approver.first_name} {approver.last_name}").strip()
+        if approver is not None
+        else ""
+    )
+    digest = approval.evidence_sha256.strip().lower()
+    if (
+        approval.approved_at.tzinfo is None
+        or _utc(approval.approved_at) > datetime.now(UTC)
+        or not approval.ticket_reference.strip()
+        or len(approval.ticket_reference.strip()) > 120
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+        or approver is None
+        or not approver.is_active
+        or canonical_approver_name.casefold()
+        != approval.approver_name.strip().casefold()
+    ):
+        return manual("Finance approval evidence is incomplete or inactive")
+    if (
+        any(end <= start for start, end in periods)
+        or any(
+            periods[index][1] != periods[index + 1][0]
+            for index in range(len(periods) - 1)
+        )
+        or any(
+            end - start != periods[0][1] - periods[0][0] for start, end in periods[1:]
+        )
+        or period_end > datetime.now(UTC)
+    ):
+        return manual("reviewed periods are not contiguous, positive, and expired")
+
+    subscription = db.get(Subscription, query.subscription_id)
+    if (
+        subscription is None
+        or subscription.subscriber_id != account_id
+        or subscription.billing_mode is not BillingMode.prepaid
+        or subscription.status
+        not in {
+            SubscriptionStatus.active,
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.blocked,
+            SubscriptionStatus.expired,
+        }
+        or subscription.next_billing_at is None
+        or _utc(subscription.next_billing_at) != periods[0][1]
+    ):
+        return manual("subscription identity or reviewed opening anchor is not exact")
+
+    boundary = _reviewed_funding_position_at(
+        db,
+        account_id=account_id,
+        currency=(first_invoice.currency or "NGN").upper(),
+    )
+    if boundary is None:
+        return manual("reviewed opening boundary is unavailable")
+    boundary = _utc(boundary)
+    opening = db.scalar(
+        select(CustomerSubledgerOpeningPosition).where(
+            CustomerSubledgerOpeningPosition.account_id == account_id,
+            CustomerSubledgerOpeningPosition.currency
+            == (first_invoice.currency or "NGN").upper(),
+        )
+    )
+    baseline = db.scalar(
+        select(PrepaidFundingBaseline).where(
+            PrepaidFundingBaseline.account_id == account_id,
+            PrepaidFundingBaseline.currency
+            == (first_invoice.currency or "NGN").upper(),
+            PrepaidFundingBaseline.is_active.is_(True),
+        )
+    )
+    if opening is not None:
+        opening_amount = _reviewed_opening_source(db, opening).amount
+        consumed = round_money(
+            to_decimal(
+                db.scalar(
+                    select(
+                        func.coalesce(
+                            func.sum(PrepaidOpeningFundingConsumption.amount),
+                            Decimal("0.00"),
+                        )
+                    ).where(
+                        PrepaidOpeningFundingConsumption.opening_position_id
+                        == opening.id
+                    )
+                )
+            )
+        )
+    elif baseline is not None:
+        opening_amount = round_money(to_decimal(baseline.amount))
+        consumed = round_money(
+            to_decimal(
+                db.scalar(
+                    select(
+                        func.coalesce(
+                            func.sum(PrepaidOpeningFundingConsumption.amount),
+                            Decimal("0.00"),
+                        )
+                    ).where(PrepaidOpeningFundingConsumption.baseline_id == baseline.id)
+                )
+            )
+        )
+    else:
+        return manual("reviewed opening source is unavailable")
+    opening_credit = round_money(opening_amount - consumed)
+    if opening_credit != round_money(query.expected_opening_credit):
+        return manual(
+            "reviewed opening credit changed",
+            opening_credit=str(opening_credit),
+        )
+
+    from app.services.prepaid_service_renewals import (
+        resolve_prepaid_monthly_charge_detail,
+    )
+
+    documents: dict[UUID, tuple[Invoice, InvoiceLine, datetime, datetime]] = {}
+    invoice_total = Decimal("0.00")
+    allowed_statuses = {
+        InvoiceStatus.draft,
+        InvoiceStatus.issued,
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.overdue,
+    }
+    for selection, (starts_at, ends_at) in zip(query.documents, periods, strict=True):
+        invoice = db.get(Invoice, selection.invoice_id)
+        lines = _active_positive_lines(db, selection.invoice_id)
+        line = next((item for item in lines if item.id == selection.line_id), None)
+        charge = resolve_prepaid_monthly_charge_detail(db, subscription, starts_at)
+        exact_identity = bool(
+            invoice is not None
+            and invoice.billing_period_start is not None
+            and invoice.billing_period_end is not None
+            and _utc(invoice.billing_period_start) == starts_at
+            and _utc(invoice.billing_period_end) == ends_at
+            and line is not None
+            and subscription.id == line.subscription_id
+        )
+        missing_identity = bool(
+            invoice is not None
+            and invoice.billing_period_start is None
+            and invoice.billing_period_end is None
+            and line is not None
+            and line.subscription_id is None
+        )
+        expected_total = round_money(selection.expected_total)
+        if (
+            invoice is None
+            or invoice.account_id != account_id
+            or not invoice.is_active
+            or invoice.is_proforma
+            or invoice.status not in allowed_statuses
+            or len(lines) != 1
+            or line is None
+            or (not exact_identity and not missing_identity)
+            or charge is None
+            or charge.total != expected_total
+            or round_money(to_decimal(invoice.total)) != expected_total
+            or round_money(to_decimal(invoice.subtotal)) != charge.subtotal
+            or round_money(to_decimal(invoice.tax_total)) != charge.tax_total
+            or (invoice.currency or "NGN").upper() != charge.currency
+            or round_money(to_decimal(line.quantity)) != Decimal("1.00")
+            or round_money(to_decimal(line.unit_price)) != charge.unit_price
+            or round_money(to_decimal(line.amount)) != charge.unit_price
+        ):
+            return manual(
+                "invoice document, line, period, or contract value is not exact",
+                invoice_id=str(selection.invoice_id),
+            )
+        if (
+            db.scalar(
+                select(CreditNoteApplication.id)
+                .where(CreditNoteApplication.invoice_id == invoice.id)
+                .limit(1)
+            )
+            is not None
+        ):
+            return manual("target invoice has unsupported credit-note activity")
+        documents[invoice.id] = (invoice, line, starts_at, ends_at)
+        invoice_total = round_money(invoice_total + expected_total)
+
+    overlap = db.scalar(
+        select(ServiceEntitlement.id)
+        .where(
+            ServiceEntitlement.subscription_id == subscription.id,
+            ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            ServiceEntitlement.starts_at < period_end,
+            ServiceEntitlement.ends_at > period_start,
+        )
+        .limit(1)
+    )
+    competing = db.scalar(
+        select(Invoice.id)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .where(
+            Invoice.id.notin_(invoice_ids),
+            Invoice.account_id == account_id,
+            Invoice.is_active.is_(True),
+            Invoice.status.notin_({InvoiceStatus.void, InvoiceStatus.written_off}),
+            InvoiceLine.subscription_id == subscription.id,
+            InvoiceLine.is_active.is_(True),
+            Invoice.billing_period_start < period_end,
+            Invoice.billing_period_end > period_start,
+        )
+        .limit(1)
+    )
+    if overlap is not None or competing is not None:
+        return manual("reviewed sequence overlaps existing coverage or a document")
+
+    existing_evidence = {
+        item.allocation_id: item for item in query.existing_allocation_evidence
+    }
+    target_allocations = tuple(
+        db.scalars(
+            select(PaymentAllocation)
+            .where(
+                PaymentAllocation.invoice_id.in_(invoice_ids),
+                PaymentAllocation.is_active.is_(True),
+            )
+            .order_by(PaymentAllocation.id)
+        ).all()
+    )
+    if set(existing_evidence) != {item.id for item in target_allocations}:
+        return manual("existing target allocations do not match reviewed evidence")
+    existing_allocation_total = Decimal("0.00")
+    existing_by_invoice: dict[UUID, Decimal] = {}
+    for allocation in target_allocations:
+        evidence = existing_evidence[allocation.id]
+        invoice_entry = db.get(LedgerEntry, evidence.invoice_ledger_entry_id)
+        balancing_entry = db.get(LedgerEntry, evidence.balancing_ledger_entry_id)
+        payment = db.get(Payment, allocation.payment_id)
+        amount = round_money(to_decimal(allocation.amount))
+        if (
+            payment is None
+            or not payment.is_active
+            or payment.status is not PaymentStatus.succeeded
+            or payment.account_id != account_id
+            or payment.paid_at is None
+            or _utc(payment.paid_at) > boundary
+            or allocation.created_at is None
+            or _utc(allocation.created_at) > boundary
+            or allocation.ledger_entry_id
+            not in {None, invoice_entry.id if invoice_entry else None}
+            or allocation.consumption_ledger_entry_id
+            not in {None, balancing_entry.id if balancing_entry else None}
+            or invoice_entry is None
+            or not invoice_entry.is_active
+            or invoice_entry.account_id != account_id
+            or invoice_entry.invoice_id != allocation.invoice_id
+            or invoice_entry.payment_id != payment.id
+            or invoice_entry.entry_type is not LedgerEntryType.credit
+            or invoice_entry.source is not LedgerSource.payment
+            or round_money(to_decimal(invoice_entry.amount)) != amount
+            or not invoice_entry.affects_customer_position
+            or _utc(invoice_entry.created_at) > boundary
+            or balancing_entry is None
+            or not balancing_entry.is_active
+            or balancing_entry.account_id != account_id
+            or balancing_entry.invoice_id is not None
+            or balancing_entry.payment_id is not None
+            or balancing_entry.entry_type is not LedgerEntryType.debit
+            or balancing_entry.source is not LedgerSource.payment
+            or round_money(to_decimal(balancing_entry.amount)) != amount
+            or not balancing_entry.affects_customer_position
+            or _utc(balancing_entry.created_at) > boundary
+        ):
+            return manual("legacy allocation evidence is not exact")
+        existing_allocation_total = round_money(existing_allocation_total + amount)
+        existing_by_invoice[allocation.invoice_id] = round_money(
+            existing_by_invoice.get(allocation.invoice_id, Decimal("0.00")) + amount
+        )
+
+    allocation_pairs = tuple(
+        (item.payment_id, item.invoice_id) for item in query.allocations
+    )
+    if (
+        not query.allocations
+        or len(allocation_pairs) != len(set(allocation_pairs))
+        or any(item.invoice_id not in documents for item in query.allocations)
+        or any(
+            round_money(item.amount) <= Decimal("0.00") for item in query.allocations
+        )
+    ):
+        return manual("reviewed payment allocation plan is incomplete or duplicated")
+    planned_by_invoice: dict[UUID, Decimal] = {}
+    planned_by_payment: dict[UUID, Decimal] = {}
+    for item in query.allocations:
+        planned_by_invoice[item.invoice_id] = round_money(
+            planned_by_invoice.get(item.invoice_id, Decimal("0.00")) + item.amount
+        )
+        planned_by_payment[item.payment_id] = round_money(
+            planned_by_payment.get(item.payment_id, Decimal("0.00")) + item.amount
+        )
+    for invoice_id, (invoice, _line, _start, _end) in documents.items():
+        if round_money(to_decimal(invoice.balance_due)) != planned_by_invoice.get(
+            invoice_id, Decimal("0.00")
+        ) or round_money(to_decimal(invoice.total)) != round_money(
+            existing_by_invoice.get(invoice_id, Decimal("0.00"))
+            + planned_by_invoice.get(invoice_id, Decimal("0.00"))
+        ):
+            return manual("allocation plan does not exactly settle every invoice")
+
+    settlement_evidence = {
+        item.payment_id: item.unallocated_ledger_entry_id
+        for item in query.settlement_evidence
+    }
+    if set(settlement_evidence) != set(payment_ids):
+        return manual("every selected payment requires one settlement ledger selection")
+    payments: dict[UUID, Payment] = {}
+    selected_payment_total = Decimal("0.00")
+    for payment_id in payment_ids:
+        payment = db.get(Payment, payment_id)
+        entry = db.get(LedgerEntry, settlement_evidence[payment_id])
+        if (
+            payment is None
+            or not payment.is_active
+            or payment.account_id != account_id
+            or payment.status is not PaymentStatus.succeeded
+            or payment.paid_at is None
+            or payment.refunds
+            or payment.reversal is not None
+            or payment.allocations
+            or planned_by_payment.get(payment_id, Decimal("0.00"))
+            != round_money(to_decimal(payment.amount))
+            or entry is None
+            or not entry.is_active
+            or entry.account_id != account_id
+            or entry.invoice_id is not None
+            or entry.payment_id != payment.id
+            or entry.entry_type is not LedgerEntryType.credit
+            or entry.source is not LedgerSource.payment
+            or entry.currency != payment.currency
+            or round_money(to_decimal(entry.amount))
+            != round_money(to_decimal(payment.amount))
+            or (
+                payment.settlement is not None
+                and (
+                    payment.settlement.unallocated_ledger_entry_id != entry.id
+                    or round_money(to_decimal(payment.settlement.unallocated_amount))
+                    != round_money(to_decimal(payment.amount))
+                )
+            )
+        ):
+            return manual(
+                "selected payment or settlement ledger evidence is not exact",
+                payment_id=str(payment_id),
+            )
+        payments[payment.id] = payment
+        selected_payment_total = round_money(
+            selected_payment_total + to_decimal(payment.amount)
+        )
+    if round_money(selected_payment_total + existing_allocation_total) != invoice_total:
+        return manual("selected payments do not conserve the invoice sequence total")
+
+    pre_boundary_ids = {
+        payment.id
+        for payment in payments.values()
+        if _utc(cast(datetime, payment.paid_at)) <= boundary
+    }
+    post_boundary_ids = set(payments) - pre_boundary_ids
+    pre_boundary_payment_total = round_money(
+        sum(
+            (to_decimal(payments[item].amount) for item in pre_boundary_ids),
+            Decimal("0.00"),
+        )
+    )
+    pre_boundary_closed_allocation = round_money(
+        sum(
+            (
+                to_decimal(item.amount)
+                for item in query.allocations
+                if item.payment_id in pre_boundary_ids
+                and documents[item.invoice_id][3] <= boundary
+            ),
+            Decimal("0.00"),
+        )
+    )
+    pre_boundary_open_allocation = round_money(
+        sum(
+            (
+                to_decimal(item.amount)
+                for item in query.allocations
+                if item.payment_id in pre_boundary_ids
+                and documents[item.invoice_id][3] > boundary
+            ),
+            Decimal("0.00"),
+        )
+    )
+    post_boundary_payment_total = round_money(
+        sum(
+            (to_decimal(payments[item].amount) for item in post_boundary_ids),
+            Decimal("0.00"),
+        )
+    )
+    post_boundary_allocation_total = round_money(
+        sum(
+            (
+                to_decimal(item.amount)
+                for item in query.allocations
+                if item.payment_id in post_boundary_ids
+            ),
+            Decimal("0.00"),
+        )
+    )
+    post_boundary_credit = round_money(
+        get_account_credit_balance(
+            db,
+            str(account_id),
+            currency=(first_invoice.currency or "NGN").upper(),
+            after=boundary,
+        )
+    )
+    try:
+        authoritative_funding = round_money(
+            verified_prepaid_funding_balance(
+                db,
+                account_id,
+                currency=(first_invoice.currency or "NGN").upper(),
+            )
+        )
+    except PrepaidFundingBaselineMissingError:
+        return manual("authoritative prepaid funding is unavailable")
+    if (
+        round_money(pre_boundary_payment_total - pre_boundary_closed_allocation)
+        != opening_credit
+        or pre_boundary_open_allocation != opening_credit
+        or post_boundary_payment_total != post_boundary_allocation_total
+        or post_boundary_credit
+        != round_money(post_boundary_payment_total + query.expected_post_repair_credit)
+        or authoritative_funding
+        != round_money(query.expected_authoritative_prepaid_funding)
+    ):
+        return _build_reviewed_sequence_preview(
+            query=query,
+            account_id=account_id,
+            invoice_ids=invoice_ids,
+            payment_ids=payment_ids,
+            period_start=period_start,
+            period_end=period_end,
+            funding_position_at=boundary,
+            invoice_total=invoice_total,
+            existing_allocation_total=existing_allocation_total,
+            selected_payment_total=selected_payment_total,
+            opening_credit=opening_credit,
+            post_boundary_credit=post_boundary_credit,
+            authoritative_prepaid_funding=authoritative_funding,
+            disposition=ReviewedPrepaidInvoiceSequenceDisposition.manual_review,
+            reason="pre/post-opening funding conservation changed",
+            evidence={
+                "pre_boundary_payment_total": pre_boundary_payment_total,
+                "pre_boundary_closed_allocation": pre_boundary_closed_allocation,
+                "pre_boundary_open_allocation": pre_boundary_open_allocation,
+                "post_boundary_payment_total": post_boundary_payment_total,
+            },
+        )
+
+    fingerprint_evidence: dict[str, object] = {
+        "invoice_states": tuple(
+            (
+                invoice.id,
+                invoice.status.value,
+                round_money(to_decimal(invoice.balance_due)),
+                line.id,
+                starts_at,
+                ends_at,
+            )
+            for invoice, line, starts_at, ends_at in documents.values()
+        ),
+        "payment_states": tuple(
+            (
+                payment.id,
+                round_money(to_decimal(payment.amount)),
+                payment.paid_at,
+                payment.settlement.id if payment.settlement else None,
+                settlement_evidence[payment.id],
+            )
+            for payment in payments.values()
+        ),
+        "existing_allocation_ids": tuple(item.id for item in target_allocations),
+        "pre_boundary_closed_allocation": pre_boundary_closed_allocation,
+        "pre_boundary_open_allocation": pre_boundary_open_allocation,
+        "post_boundary_payment_total": post_boundary_payment_total,
+    }
+    return _build_reviewed_sequence_preview(
+        query=query,
+        account_id=account_id,
+        invoice_ids=invoice_ids,
+        payment_ids=payment_ids,
+        period_start=period_start,
+        period_end=period_end,
+        funding_position_at=boundary,
+        invoice_total=invoice_total,
+        existing_allocation_total=existing_allocation_total,
+        selected_payment_total=selected_payment_total,
+        opening_credit=opening_credit,
+        post_boundary_credit=post_boundary_credit,
+        authoritative_prepaid_funding=authoritative_funding,
+        disposition=ReviewedPrepaidInvoiceSequenceDisposition.exact_sequence,
+        reason="reviewed invoice sequence exactly conserves cutover funding",
+        evidence=fingerprint_evidence,
+    )
+
+
+def _reviewed_prepaid_invoice_sequence_result(
+    db: Session,
+    *,
+    query: ReviewedPrepaidInvoiceSequenceQuery,
+    preview_fingerprint: str,
+    replayed: bool,
+) -> ReviewedPrepaidInvoiceSequenceResult:
+    invoice_ids = tuple(item.invoice_id for item in query.documents)
+    allocations = tuple(
+        db.scalars(
+            select(PaymentAllocation)
+            .where(
+                PaymentAllocation.invoice_id.in_(invoice_ids),
+                PaymentAllocation.is_active.is_(True),
+            )
+            .order_by(PaymentAllocation.created_at, PaymentAllocation.id)
+        ).all()
+    )
+    entitlements = tuple(
+        db.scalars(
+            select(ServiceEntitlement)
+            .where(
+                ServiceEntitlement.source_invoice_id.in_(invoice_ids),
+                ServiceEntitlement.subscription_id == query.subscription_id,
+                ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            )
+            .order_by(ServiceEntitlement.starts_at, ServiceEntitlement.id)
+        ).all()
+    )
+    subscription = db.get(Subscription, query.subscription_id)
+    first_invoice = db.get(Invoice, invoice_ids[0])
+    metadata = (
+        dict(first_invoice.metadata_ or {}).get(
+            _REVIEWED_PREPAID_INVOICE_SEQUENCE_METADATA_KEY
+        )
+        if first_invoice is not None
+        else None
+    )
+    if (
+        subscription is None
+        or subscription.next_billing_at is None
+        or first_invoice is None
+        or not isinstance(metadata, dict)
+    ):
+        _error("incomplete_repair", "Sequence reconstruction evidence is incomplete.")
+    return ReviewedPrepaidInvoiceSequenceResult(
+        account_id=first_invoice.account_id,
+        subscription_id=query.subscription_id,
+        invoice_ids=invoice_ids,
+        allocation_ids=tuple(item.id for item in allocations),
+        entitlement_ids=tuple(item.id for item in entitlements),
+        next_billing_at=_utc(subscription.next_billing_at),
+        remaining_credit=Decimal(str(metadata["remaining_credit"])),
+        authoritative_prepaid_funding=Decimal(
+            str(metadata["authoritative_prepaid_funding"])
+        ),
+        access_restored=False,
+        customer_position_delta=Decimal(str(metadata["customer_position_delta"])),
+        preview_fingerprint=preview_fingerprint,
+        replayed=replayed,
+    )
+
+
+def reconstruct_reviewed_prepaid_invoice_sequence(
+    db: Session,
+    command: ReconstructReviewedPrepaidInvoiceSequenceCommand,
+) -> ReviewedPrepaidInvoiceSequenceResult:
+    """Atomically reclassify exact historical payments onto an expired sequence."""
+
+    def operation() -> ReviewedPrepaidInvoiceSequenceResult:
+        if command.context.scope != REPAIR_SCOPE or not command.permission_granted:
+            _error(
+                "permission_denied",
+                f"Reviewed invoice-sequence reconstruction requires {REPAIR_SCOPE}.",
+            )
+        key = (command.context.idempotency_key or "").strip()
+        if not key or len(key) > 120:
+            _error("missing_idempotency_key", "A bounded idempotency key is required.")
+        first = db.get(Invoice, command.query.documents[0].invoice_id)
+        if first is None:
+            _error("invoice_not_found", "The first reviewed invoice was not found.")
+        lock_account(db, str(first.account_id))
+        reservation = db.scalar(
+            select(IdempotencyKey)
+            .where(
+                IdempotencyKey.scope
+                == _REVIEWED_PREPAID_INVOICE_SEQUENCE_IDEMPOTENCY_SCOPE,
+                IdempotencyKey.key == key,
+            )
+            .with_for_update()
+        )
+        if reservation is not None:
+            if reservation.account_id != first.account_id or reservation.ref_id != str(
+                first.id
+            ):
+                _error("idempotency_conflict", "Key belongs to another sequence.")
+            return _reviewed_prepaid_invoice_sequence_result(
+                db,
+                query=command.query,
+                preview_fingerprint=command.preview_fingerprint,
+                replayed=True,
+            )
+        for invoice_id in sorted(
+            (item.invoice_id for item in command.query.documents), key=str
+        ):
+            if lock_for_update(db, Invoice, invoice_id) is None:
+                _error("not_actionable", "A reviewed invoice disappeared.")
+        if lock_for_update(db, Subscription, command.query.subscription_id) is None:
+            _error("not_actionable", "The reviewed subscription disappeared.")
+        if (
+            lock_for_update(
+                db,
+                SystemUser,
+                command.query.approval.approver_system_user_id,
+            )
+            is None
+        ):
+            _error("not_actionable", "The Finance approver disappeared.")
+        for payment_id in sorted(
+            {item.payment_id for item in command.query.allocations}, key=str
+        ):
+            if lock_for_update(db, Payment, payment_id) is None:
+                _error("not_actionable", "A selected payment disappeared.")
+        for evidence in command.query.existing_allocation_evidence:
+            if (
+                lock_for_update(db, PaymentAllocation, evidence.allocation_id) is None
+                or lock_for_update(db, LedgerEntry, evidence.invoice_ledger_entry_id)
+                is None
+                or lock_for_update(db, LedgerEntry, evidence.balancing_ledger_entry_id)
+                is None
+            ):
+                _error("not_actionable", "Legacy allocation evidence disappeared.")
+        current = preview_reviewed_prepaid_invoice_sequence_reconstruction(
+            db, command.query
+        )
+        if current.fingerprint != command.preview_fingerprint:
+            _error(
+                "stale_preview",
+                "Reviewed sequence evidence changed after preview; preview again.",
+            )
+        if not current.actionable or current.funding_position_at is None:
+            _error(
+                "not_actionable",
+                "Invoice sequence requires additional evidence review.",
+                disposition=current.disposition.value,
+                reason=current.reason,
+            )
+        reservation = IdempotencyKey(
+            scope=_REVIEWED_PREPAID_INVOICE_SEQUENCE_IDEMPOTENCY_SCOPE,
+            key=key,
+            account_id=current.account_id,
+            ref_id=str(current.invoice_ids[0]),
+        )
+        db.add(reservation)
+        try:
+            db.flush()
+        except IntegrityError:
+            _error("idempotency_conflict", "Sequence key was concurrently reserved.")
+
+        customer_position_before = calculate_customer_balance(
+            db,
+            current.account_id,
+            currency=(first.currency or "NGN").upper(),
+        )
+        settlement_evidence = {
+            item.payment_id: item.unallocated_ledger_entry_id
+            for item in command.query.settlement_evidence
+        }
+        for payment_id in current.payment_ids:
+            payment = db.get(Payment, payment_id)
+            if payment is None:
+                _error("incomplete_repair", "Selected payment is missing.")
+            if payment.settlement is None:
+                try:
+                    Payments.reconcile_settlement_evidence(
+                        db,
+                        str(payment.id),
+                        PaymentSettlementReconciliationRequest(
+                            allocation_ledger_entry_ids={},
+                            unallocated_ledger_entry_id=settlement_evidence[payment.id],
+                            reason=(
+                                "Finance-reviewed prepaid invoice sequence repair "
+                                f"{command.query.approval.ticket_reference.strip()}"
+                            ),
+                        ),
+                        commit=False,
+                    )
+                    db.expire(payment, ["settlement"])
+                except Exception as exc:
+                    _error(
+                        "participant_rejected",
+                        "Payment owner rejected historical settlement evidence.",
+                        participant_error=type(exc).__name__,
+                    )
+
+        for evidence in command.query.existing_allocation_evidence:
+            allocation = db.get(PaymentAllocation, evidence.allocation_id)
+            if allocation is None:
+                _error("incomplete_repair", "Legacy allocation is missing.")
+            allocation.ledger_entry_id = evidence.invoice_ledger_entry_id
+            allocation.consumption_ledger_entry_id = evidence.balancing_ledger_entry_id
+        db.flush()
+
+        document_index = {
+            item.invoice_id: index for index, item in enumerate(command.query.documents)
+        }
+        documents: dict[UUID, Invoice] = {}
+        for selection in command.query.documents:
+            invoice = db.get(Invoice, selection.invoice_id)
+            line = db.get(InvoiceLine, selection.line_id)
+            if invoice is None or line is None:
+                _error("incomplete_repair", "Reviewed invoice document is missing.")
+            starts_at = _business_midnight(selection.service_start_on)
+            ends_at = _business_midnight(selection.next_billing_on)
+            try:
+                changed = Invoices.adopt_reviewed_prepaid_sequence_document_for_owner(
+                    db,
+                    ReviewedPrepaidInvoiceSequenceDocument(
+                        invoice_id=invoice.id,
+                        line_id=line.id,
+                        subscription_id=current.subscription_id,
+                        billing_period_start=starts_at,
+                        billing_period_end=ends_at,
+                        expected_status=invoice.status,
+                        expected_line_quantity=to_decimal(line.quantity),
+                        expected_line_unit_price=to_decimal(line.unit_price),
+                        expected_line_amount=to_decimal(line.amount),
+                        line_description=f"{line.description}",
+                        evidence_ref=(
+                            f"{_OWNER}:{current.fingerprint}:"
+                            f"{command.query.approval.ticket_reference.strip()}"
+                        ),
+                    ),
+                )
+                if changed.status is InvoiceStatus.draft:
+                    Invoices.issue_draft_for_owner(
+                        db,
+                        str(changed.id),
+                        issuance=InvoiceIssuanceInput(
+                            issued_at=min(
+                                _utc(changed.created_at or starts_at), starts_at
+                            ),
+                            due_at=ends_at,
+                            due_date_basis=InvoiceDueDateBasis.prepaid_service_period,
+                            due_date_basis_ref=(
+                                f"reviewed-sequence:{current.fingerprint}"
+                            ),
+                            due_date_policy_version=(
+                                "prepaid-invoice-sequence-reconstruction-v1"
+                            ),
+                            reason="reconstruct_reviewed_prepaid_invoice_sequence",
+                        ),
+                        announce=False,
+                        apply_available_credit=False,
+                    )
+            except InvoiceOwnerError as exc:
+                _error(
+                    "participant_rejected",
+                    "Invoice owner rejected reviewed sequence adoption.",
+                    participant_error=exc.code,
+                )
+            documents[changed.id] = changed
+
+        selected_payments = {
+            payment.id: payment
+            for payment in (
+                db.get(Payment, payment_id) for payment_id in current.payment_ids
+            )
+            if payment is not None
+        }
+        ordered_allocations = sorted(
+            command.query.allocations,
+            key=lambda item: (
+                document_index[item.invoice_id],
+                _utc(cast(datetime, selected_payments[item.payment_id].paid_at)),
+                str(item.payment_id),
+            ),
+        )
+        new_allocation_ids: list[UUID] = []
+        for allocation_selection in ordered_allocations:
+            request = PaymentAllocationPreviewRequest(
+                payment_id=allocation_selection.payment_id,
+                invoice_id=allocation_selection.invoice_id,
+                amount=round_money(allocation_selection.amount),
+            )
+            try:
+                allocation_preview = PaymentAllocations.preview_reviewed_historical_reclassification_for_owner(
+                    db,
+                    request,
+                    funding_position_at=current.funding_position_at,
+                )
+                result = PaymentAllocations.stage_confirm_reviewed_historical_reclassification_for_owner(
+                    db,
+                    PaymentAllocationConfirm(
+                        **request.model_dump(),
+                        preview_fingerprint=allocation_preview.fingerprint,
+                        idempotency_key=(
+                            "reviewed-sequence-"
+                            f"{allocation_selection.payment_id}-"
+                            f"{allocation_selection.invoice_id}"
+                        ),
+                    ),
+                    funding_position_at=current.funding_position_at,
+                )
+            except Exception as exc:
+                _error(
+                    "participant_rejected",
+                    "Payment owner rejected reviewed historical allocation.",
+                    participant_error=type(exc).__name__,
+                )
+            new_allocation_ids.append(result.allocation.id)
+
+        entitlements: list[ServiceEntitlement] = []
+        for selection in command.query.documents:
+            invoice = db.get(Invoice, selection.invoice_id)
+            if (
+                invoice is None
+                or invoice.status is not InvoiceStatus.paid
+                or round_money(to_decimal(invoice.balance_due)) != Decimal("0.00")
+            ):
+                _error("incomplete_repair", "A reviewed invoice was not fully paid.")
+            entitlement = db.scalar(
+                select(ServiceEntitlement).where(
+                    ServiceEntitlement.source_invoice_id == invoice.id,
+                    ServiceEntitlement.subscription_id == current.subscription_id,
+                    ServiceEntitlement.status == ServiceEntitlementStatus.active,
+                )
+            )
+            if entitlement is None:
+                _error("incomplete_repair", "Paid invoice entitlement is missing.")
+            entitlements.append(entitlement)
+
+        from app.services.prepaid_service_renewals import (
+            BillingAnchorAuthority,
+            project_prepaid_billing_anchor_for_invoice,
+        )
+
+        final_invoice = documents[current.invoice_ids[-1]]
+        projections = project_prepaid_billing_anchor_for_invoice(
+            db,
+            final_invoice,
+            evidence_ref=f"reviewed-sequence:{current.fingerprint}",
+            authority=BillingAnchorAuthority.reviewed_reconciliation,
+        )
+        subscription = db.get(Subscription, current.subscription_id)
+        if (
+            len(projections) != 1
+            or subscription is None
+            or subscription.next_billing_at is None
+            or _utc(subscription.next_billing_at) != current.service_period_end
+        ):
+            _error("incomplete_repair", "Billing anchor did not match final coverage.")
+
+        remaining_credit = round_money(
+            get_account_credit_balance(
+                db,
+                str(current.account_id),
+                currency=(first.currency or "NGN").upper(),
+                after=current.funding_position_at,
+            )
+        )
+        authoritative_funding = round_money(
+            verified_prepaid_funding_balance(
+                db,
+                current.account_id,
+                currency=(first.currency or "NGN").upper(),
+            )
+        )
+        customer_position_after = calculate_customer_balance(
+            db,
+            current.account_id,
+            currency=(first.currency or "NGN").upper(),
+        )
+        customer_position_delta = round_money(
+            customer_position_after - customer_position_before
+        )
+        if (
+            remaining_credit != round_money(command.query.expected_post_repair_credit)
+            or authoritative_funding
+            != round_money(command.query.expected_authoritative_prepaid_funding)
+            or customer_position_delta != Decimal("0.00")
+            or current.service_period_end > datetime.now(UTC)
+        ):
+            _error(
+                "incomplete_repair",
+                "Sequence did not preserve the reviewed financial and access outcome.",
+                remaining_credit=str(remaining_credit),
+                expected_remaining_credit=str(
+                    round_money(command.query.expected_post_repair_credit)
+                ),
+                authoritative_prepaid_funding=str(authoritative_funding),
+                expected_authoritative_prepaid_funding=str(
+                    round_money(command.query.expected_authoritative_prepaid_funding)
+                ),
+                customer_position_delta=str(customer_position_delta),
+                service_period_end=current.service_period_end.isoformat(),
+            )
+
+        metadata: dict[str, object] = {
+            "subscription_id": str(current.subscription_id),
+            "invoice_ids": [str(item) for item in current.invoice_ids],
+            "payment_ids": [str(item) for item in current.payment_ids],
+            "new_allocation_ids": [str(item) for item in new_allocation_ids],
+            "entitlement_ids": [str(item.id) for item in entitlements],
+            "service_period_start": current.service_period_start.isoformat(),
+            "service_period_end": current.service_period_end.isoformat(),
+            "funding_position_at": current.funding_position_at.isoformat(),
+            "opening_credit": str(current.opening_credit),
+            "remaining_credit": str(remaining_credit),
+            "authoritative_prepaid_funding": str(authoritative_funding),
+            "customer_position_delta": str(customer_position_delta),
+            "access_consequence": "expired_period_no_restoration",
+            "approver_system_user_id": str(
+                command.query.approval.approver_system_user_id
+            ),
+            "approver_name": command.query.approval.approver_name.strip(),
+            "approved_at": _utc(command.query.approval.approved_at).isoformat(),
+            "ticket_reference": command.query.approval.ticket_reference.strip(),
+            "evidence_sha256": (command.query.approval.evidence_sha256.strip().lower()),
+            "preview_fingerprint": current.fingerprint,
+            "idempotency_key": key,
+            "command_id": str(command.context.command_id),
+            "actor": command.context.actor,
+            "actor_system_user_id": (
+                str(command.actor_system_user_id)
+                if command.actor_system_user_id is not None
+                else None
+            ),
+            "recorded_at": datetime.now(UTC).isoformat(),
+        }
+        for invoice in documents.values():
+            invoice_metadata = dict(invoice.metadata_ or {})
+            invoice_metadata[_REVIEWED_PREPAID_INVOICE_SEQUENCE_METADATA_KEY] = metadata
+            invoice.metadata_ = invoice_metadata
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                action="reconstruct_reviewed_prepaid_invoice_sequence",
+                entity_type="invoice_sequence",
+                entity_id=str(current.invoice_ids[0]),
+                metadata_=metadata,
+            ),
+        )
+        emit_event(
+            db,
+            EventType.prepaid_invoice_sequence_reconstructed,
+            metadata,
+            actor=command.context.actor,
+            account_id=current.account_id,
+            invoice_id=current.invoice_ids[-1],
+        )
+        db.flush()
+        return _reviewed_prepaid_invoice_sequence_result(
+            db,
+            query=command.query,
+            preview_fingerprint=current.fingerprint,
+            replayed=False,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_REVIEWED_PREPAID_INVOICE_SEQUENCE_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
 def _replay_proforma_adoption_result(
     db: Session,
     *,
@@ -9147,6 +10362,14 @@ __all__ = [
     "ReviewedExistingDraftSettlementPreview",
     "ReviewedExistingDraftSettlementQuery",
     "ReviewedExistingDraftSettlementResult",
+    "ReviewedPrepaidExistingAllocationEvidence",
+    "ReviewedPrepaidInvoiceSequenceAllocationSelection",
+    "ReviewedPrepaidInvoiceSequenceDisposition",
+    "ReviewedPrepaidInvoiceSequenceDocumentSelection",
+    "ReviewedPrepaidInvoiceSequencePreview",
+    "ReviewedPrepaidInvoiceSequenceQuery",
+    "ReviewedPrepaidInvoiceSequenceResult",
+    "ReviewedPrepaidSettlementEvidenceSelection",
     "PrepaidDraftAction",
     "PrepaidDraftDisposition",
     "PrepaidDraftReconciliationError",
@@ -9167,6 +10390,7 @@ __all__ = [
     "REPAIR_SCOPE",
     "ReconcilePrepaidDraftCommand",
     "ReconcileOpeningSettlementCorrectionCommand",
+    "ReconstructReviewedPrepaidInvoiceSequenceCommand",
     "RepairHistoricalPaidPrepaidInvoiceCommand",
     "SettleReviewedExistingPrepaidDraftCommand",
     "PaidPrepaidCoverageCorrectionQuery",
@@ -9185,8 +10409,10 @@ __all__ = [
     "preview_opening_settlement_correction",
     "preview_reviewed_opening_funding_for_owner",
     "preview_reviewed_existing_prepaid_draft_settlement",
+    "preview_reviewed_prepaid_invoice_sequence_reconstruction",
     "reconcile_prepaid_draft_invoice",
     "reconcile_opening_settlement_correction",
+    "reconstruct_reviewed_prepaid_invoice_sequence",
     "record_prepaid_draft_reconciliation_exception",
     "resolve_prepaid_draft_reconciliation_exception_for_owner",
     "repair_exact_paid_prepaid_invoice_after_settlement_for_owner",

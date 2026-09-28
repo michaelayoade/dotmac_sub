@@ -567,6 +567,57 @@ draft creation remains owned by `financial.prepaid_recovery_billing`, while
 every resulting prepaid draft is classified and reconciled here regardless of
 which approved path created it.
 
+## Reviewed multi-invoice sequence reconstruction
+
+Some cutover defects span several consecutive invoices and payments. Repairing
+those documents one at a time is unsafe when a pre-opening payment is partly
+represented by the approved opening position and later payments cross the same
+sequence. The owner therefore exposes one separate, Finance-approved sequence
+command. It is not an extension of automatic draft discovery.
+
+The typed query names every invoice and line, half-open service interval,
+expected contract total, payment-to-invoice split, settlement ledger row, and
+legacy allocation ledger pair. Preview requires all of these invariants:
+
+- periods are positive, contiguous, and already expired;
+- each invoice has one exact recurring line and matches canonical contract and
+  tax terms;
+- the allocation plan plus reviewed legacy allocations settles every invoice
+  and consumes every selected payment exactly;
+- selected pre-opening payment value minus allocations to invoices ending at
+  the opening boundary equals the unconsumed approved opening position;
+- the remainder of those pre-opening payments allocated to later invoices is
+  the same opening value;
+- selected post-opening payments equal both their planned allocations and the
+  native post-boundary account credit;
+- settlement, refund/reversal, overlap, approver, ticket, evidence digest,
+  operator permission, and billing-anchor evidence remain exact.
+
+Confirmation reconciles missing settlement structure without posting money,
+adopts missing invoice identity through the invoice participant, and records
+payment allocations through a historical reclassification participant. Its
+invoice-credit and account-credit-consumption ledger rows are explicitly
+non-position structural evidence: the cash and receivable already crossed the
+reviewed cutover, so a new customer-position entry would count them twice.
+For an invoice whose coverage ended on or before the opening boundary, the
+customer-financial projection recognizes a later-recorded reclassification as
+already absorbed only when both exact paired ledger rows are active,
+non-position, amount-matched, and carry an effective time at or before that
+boundary. The allocation's actual record timestamp remains unchanged. An
+allocation to coverage ending after the boundary still consumes the signed
+opening value after cutover.
+Invoice finalization creates one entitlement per paid document, and the renewal
+owner projects the anchor onto the final coverage end. Because the command only
+accepts an expired final interval, it never requests access restoration.
+
+The whole sequence runs once inside `execute_owner_command`. Account, invoices,
+subscription, payments, settlement evidence, legacy allocations, ledger rows,
+and Finance approver are locked before the preview is recomputed. One
+idempotency reservation, invoice metadata on every target, audit event, and
+`prepaid_invoice_sequence.reconstructed` event record the result. Any changed
+cent, missing row, extra allocation, overlap, non-zero customer-position delta,
+or unexpected remaining credit rolls back the complete command.
+
 ## Rollout
 
 1. Deploy the funding-change draft-first guard and funded-renewal invoice path.
@@ -595,6 +646,9 @@ which approved path created it.
 13. After every canary, verify invoice and ledger facts, opening consumption,
    entitlement and billing anchor, enforcement locks, billing events, and
    RADIUS access. Stop on any mismatch.
+14. Use the sequence-reconstruction runbook only when one preview proves the
+    entire pre/post-opening conservation equation; never decompose that shape
+    into independent invoice writes.
 
 This change does not mutate historical customer records during deployment.
 Backlog state changes occur only through an explicit reviewed apply command.

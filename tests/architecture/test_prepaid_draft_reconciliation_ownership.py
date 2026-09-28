@@ -62,6 +62,14 @@ def test_prepaid_draft_reconciliation_has_one_contracted_owner():
     assert reviewed_draft.role is OwnerRole.RECONCILER
     assert reviewed_draft.canonical_writer == service.name
     assert "canonical funded service entitlement" in reviewed_draft.input_names
+    sequence = next(
+        item
+        for item in service.contract.concerns
+        if item.name == "reviewed prepaid invoice sequence reconstruction"
+    )
+    assert sequence.role is OwnerRole.RECONCILER
+    assert sequence.canonical_writer == service.name
+    assert "reviewed invoice-sequence reconstruction command" in sequence.input_names
     opening_settlement = next(
         item
         for item in service.contract.concerns
@@ -216,6 +224,21 @@ def test_reconciliation_cli_is_dry_run_first():
     assert "create_reviewed_paid_prepaid_invoice(" in source
     assert "preview_opening_settlement_correction(" in source
     assert "reconcile_opening_settlement_correction(" in source
+
+
+def test_sequence_reconstruction_cli_is_dry_run_first_and_permission_gated():
+    source = (
+        ROOT / "scripts/billing/reconstruct_reviewed_prepaid_invoice_sequence.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'parser.add_argument("--apply", action="store_true")' in source
+    assert "if not args.apply:" in source
+    assert "read_session()" in source
+    assert "owner_command_session()" in source
+    assert "preview_reviewed_prepaid_invoice_sequence_reconstruction(" in source
+    assert "reconstruct_reviewed_prepaid_invoice_sequence(" in source
+    assert "system_user_role_names(" in source
+    assert "has_permission(auth, db, REPAIR_SCOPE)" in source
 
 
 def test_admin_invoice_adapter_calls_only_the_authoritative_reconciler():

@@ -403,6 +403,23 @@ class ReviewedPrepaidDraftDocumentAdoption:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewedPrepaidInvoiceSequenceDocument:
+    """Exact identity for one document in a reviewed historical sequence."""
+
+    invoice_id: UUID
+    line_id: UUID
+    subscription_id: UUID
+    billing_period_start: datetime
+    billing_period_end: datetime
+    expected_status: InvoiceStatus
+    expected_line_quantity: Decimal
+    expected_line_unit_price: Decimal
+    expected_line_amount: Decimal
+    line_description: str
+    evidence_ref: str
+
+
+@dataclass(frozen=True, slots=True)
 class PaidPrepaidInvoiceDocumentRepair:
     """Exact missing identity approved for one historical paid invoice."""
 
@@ -2336,6 +2353,98 @@ class Invoices(ListResponseMixin):
                 "billing_period_start": adoption.billing_period_start.isoformat(),
                 "billing_period_end": adoption.billing_period_end.isoformat(),
                 "reviewed_prepaid_draft_adoption_ref": (adoption.adoption_evidence_ref),
+            }
+        )
+        line.metadata_ = line_metadata
+        db.flush()
+        return invoice
+
+    @staticmethod
+    def adopt_reviewed_prepaid_sequence_document_for_owner(
+        db: Session,
+        document: ReviewedPrepaidInvoiceSequenceDocument,
+    ) -> Invoice:
+        """Adopt or verify one open document selected by a sequence owner.
+
+        This is documentary only and flush-only. It accepts an already-correct
+        first document as well as a periodless draft/issued/overdue document,
+        but never changes money, lifecycle state, or a conflicting identity.
+        """
+
+        invoice = lock_for_update(db, Invoice, str(document.invoice_id))
+        eligible_statuses = {
+            InvoiceStatus.draft,
+            InvoiceStatus.issued,
+            InvoiceStatus.partially_paid,
+            InvoiceStatus.overdue,
+        }
+        if (
+            invoice is None
+            or not invoice.is_active
+            or invoice.is_proforma
+            or invoice.status is not document.expected_status
+            or invoice.status not in eligible_statuses
+            or document.billing_period_end <= document.billing_period_start
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.reviewed_sequence_adoption_rejected",
+                message="Invoice is not an eligible reviewed sequence document.",
+                details={"invoice_id": str(document.invoice_id)},
+            )
+        line = db.scalar(
+            select(InvoiceLine)
+            .where(
+                InvoiceLine.id == document.line_id,
+                InvoiceLine.invoice_id == invoice.id,
+                InvoiceLine.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        exact_existing_identity = (
+            _evidence_utc(invoice.billing_period_start)
+            == _evidence_utc(document.billing_period_start)
+            and _evidence_utc(invoice.billing_period_end)
+            == _evidence_utc(document.billing_period_end)
+            and line is not None
+            and line.subscription_id == document.subscription_id
+        )
+        missing_identity = (
+            invoice.billing_period_start is None
+            and invoice.billing_period_end is None
+            and line is not None
+            and line.subscription_id is None
+        )
+        if (
+            line is None
+            or (not exact_existing_identity and not missing_identity)
+            or round_money(to_decimal(line.quantity))
+            != round_money(document.expected_line_quantity)
+            or round_money(to_decimal(line.unit_price))
+            != round_money(document.expected_line_unit_price)
+            or round_money(to_decimal(line.amount))
+            != round_money(document.expected_line_amount)
+            or not document.evidence_ref.strip()
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.reviewed_sequence_adoption_rejected",
+                message="Reviewed sequence document identity changed after preview.",
+                details={
+                    "invoice_id": str(document.invoice_id),
+                    "line_id": str(document.line_id),
+                },
+            )
+        if missing_identity:
+            invoice.billing_period_start = document.billing_period_start
+            invoice.billing_period_end = document.billing_period_end
+            line.subscription_id = document.subscription_id
+        line.description = document.line_description
+        line_metadata = dict(line.metadata_ or {})
+        line_metadata.update(
+            {
+                "kind": "base_subscription",
+                "billing_period_start": document.billing_period_start.isoformat(),
+                "billing_period_end": document.billing_period_end.isoformat(),
+                "reviewed_prepaid_sequence_ref": document.evidence_ref,
             }
         )
         line.metadata_ = line_metadata

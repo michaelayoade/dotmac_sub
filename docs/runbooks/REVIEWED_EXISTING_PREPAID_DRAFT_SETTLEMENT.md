@@ -118,6 +118,7 @@ Confirm all of the following before proceeding to the next invoice:
 10. Financial restoration never clears an unrelated administrative lock;
     resolve that lock separately through its own owner and evidence.
 
-For a sequence of historical invoices, apply them chronologically and rerun a
-fresh preview before each write. At the final cutoff, verify the subscription
-expiry and next billing date against the last entitlement boundary.
+Use `REVIEWED_PREPAID_INVOICE_SEQUENCE_RECONSTRUCTION.md` when two or more
+contiguous historical invoices must share selected payments or cross a reviewed
+opening-position boundary. That owner proves and applies the entire sequence
+atomically; do not run this single-document command repeatedly for that case.

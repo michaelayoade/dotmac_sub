@@ -21,7 +21,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, case, func, or_, select, union_all
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.billing import (
@@ -305,6 +305,44 @@ def _settlement_amount_recorded_through(
     debit when the invoice is finally marked paid.
     """
     recorded_through = _event_date(boundary)
+
+    def allocation_crossed_opening(allocation: PaymentAllocation) -> bool:
+        """Recognize exact reviewed reclassification without falsifying record time."""
+
+        if _event_date(allocation.created_at) <= recorded_through:
+            return True
+        invoice_entry = allocation.ledger_entry
+        consumption_entry = allocation.consumption_ledger_entry
+        payment = allocation.payment
+        amount = _money(allocation.amount)
+        return bool(
+            invoice.billing_period_end is not None
+            and _event_date(invoice.billing_period_end) <= recorded_through
+            and payment is not None
+            and invoice_entry is not None
+            and consumption_entry is not None
+            and invoice_entry.is_active
+            and consumption_entry.is_active
+            and not invoice_entry.affects_customer_position
+            and not consumption_entry.affects_customer_position
+            and invoice_entry.invoice_id == invoice.id
+            and consumption_entry.invoice_id is None
+            and invoice_entry.payment_id == payment.id
+            and consumption_entry.payment_id == payment.id
+            and invoice_entry.entry_type is LedgerEntryType.credit
+            and consumption_entry.entry_type is LedgerEntryType.debit
+            and invoice_entry.source is LedgerSource.payment
+            and consumption_entry.source is LedgerSource.other
+            and _money(invoice_entry.amount) == amount
+            and _money(consumption_entry.amount) == amount
+            and _event_date(invoice_entry.effective_date or invoice_entry.created_at)
+            <= recorded_through
+            and _event_date(
+                consumption_entry.effective_date or consumption_entry.created_at
+            )
+            <= recorded_through
+        )
+
     payment_amount = sum(
         (
             _money(allocation.amount)
@@ -318,7 +356,7 @@ def _settlement_amount_recorded_through(
                 PaymentStatus.partially_refunded,
                 PaymentStatus.refunded,
             }
-            and _event_date(allocation.created_at) <= recorded_through
+            and allocation_crossed_opening(allocation)
         ),
         Decimal("0.00"),
     )
@@ -1011,10 +1049,21 @@ def customer_financial_balances_by_currency(
         ColumnElement[Any], Invoice.total
     )
     if start is not None:
+        reviewed_invoice_entry = aliased(LedgerEntry)
+        reviewed_consumption_entry = aliased(LedgerEntry)
         pre_boundary_payment_amount = (
             select(func.coalesce(func.sum(PaymentAllocation.amount), 0))
             .select_from(PaymentAllocation)
             .join(Payment, Payment.id == PaymentAllocation.payment_id)
+            .outerjoin(
+                reviewed_invoice_entry,
+                reviewed_invoice_entry.id == PaymentAllocation.ledger_entry_id,
+            )
+            .outerjoin(
+                reviewed_consumption_entry,
+                reviewed_consumption_entry.id
+                == PaymentAllocation.consumption_ledger_entry_id,
+            )
             .where(
                 PaymentAllocation.invoice_id == Invoice.id,
                 PaymentAllocation.is_active.is_(True),
@@ -1026,7 +1075,37 @@ def customer_financial_balances_by_currency(
                         PaymentStatus.refunded,
                     )
                 ),
-                PaymentAllocation.created_at <= start,
+                or_(
+                    PaymentAllocation.created_at <= start,
+                    and_(
+                        reviewed_invoice_entry.is_active.is_(True),
+                        reviewed_consumption_entry.is_active.is_(True),
+                        Invoice.billing_period_end.is_not(None),
+                        Invoice.billing_period_end <= start,
+                        reviewed_invoice_entry.affects_customer_position.is_(False),
+                        reviewed_consumption_entry.affects_customer_position.is_(False),
+                        reviewed_invoice_entry.invoice_id == Invoice.id,
+                        reviewed_consumption_entry.invoice_id.is_(None),
+                        reviewed_invoice_entry.payment_id == Payment.id,
+                        reviewed_consumption_entry.payment_id == Payment.id,
+                        reviewed_invoice_entry.entry_type == LedgerEntryType.credit,
+                        reviewed_consumption_entry.entry_type == LedgerEntryType.debit,
+                        reviewed_invoice_entry.source == LedgerSource.payment,
+                        reviewed_consumption_entry.source == LedgerSource.other,
+                        reviewed_invoice_entry.amount == PaymentAllocation.amount,
+                        reviewed_consumption_entry.amount == PaymentAllocation.amount,
+                        func.coalesce(
+                            reviewed_invoice_entry.effective_date,
+                            reviewed_invoice_entry.created_at,
+                        )
+                        <= start,
+                        func.coalesce(
+                            reviewed_consumption_entry.effective_date,
+                            reviewed_consumption_entry.created_at,
+                        )
+                        <= start,
+                    ),
+                ),
             )
             .correlate(Invoice)
             .scalar_subquery()
