@@ -24,6 +24,64 @@ DOMAIN = DomainSOT(
     domain="automation_control_plane",
     services=(
         SOTService(
+            name="automation.script_runtime",
+            module="app.services.automation_script_runtime",
+            owns=("server-script runtime readiness policy",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="server-script runtime readiness policy",
+                        role=OwnerRole.POLICY,
+                        input_names=("deployment runtime image and digest",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="deployment runtime image and digest",
+                        owner="automation.script_runtime",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="deployment-owned settings pinning the external OCI image and sha256 digest",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="pure readiness query; no database writes",
+                    locking="not applicable",
+                    idempotency="the same deployment settings produce the same readiness state",
+                    retries="recheck after deployment configuration changes",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("automation.script_runtime.invalid_digest",),
+                    mapping_owner="automation authoring adapters",
+                    fail_closed_on=(
+                        "missing image",
+                        "missing digest",
+                        "non-sha256 digest",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("automation.script_runtime_checked",),
+                    schema_version=1,
+                    delivery_owner="automation.capability_registry",
+                    compatibility="Read-only deployment policy has no durable event.",
+                    replay="Deployment settings are the current source of truth.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="automation.script_runtime",
+                    verification="runtime readiness and external-runner boundary tests",
+                    cutover_gate="server-script publication refuses an unavailable or invalid runtime",
+                    fallback_retirement="in-process script evaluation is not permitted",
+                ),
+                steward="platform automation",
+                design_refs=(
+                    "docs/adr/0005-external-connector-runtime.md",
+                    "docs/designs/AUTOMATION_CENTER_SOT.md",
+                ),
+                test_refs=("tests/architecture/test_automation_runtime_boundary.py",),
+            ),
+        ),
+        SOTService(
             name="automation.capability_registry",
             module="app.services.automation_capabilities",
             owns=("automation capability declarations and compatibility validation",),
@@ -430,11 +488,132 @@ DOMAIN = DomainSOT(
                 ),
             ),
         ),
+        SOTService(
+            name="automation.script_definitions",
+            module="app.services.automation_scripts",
+            owns=(
+                "automation script definitions and immutable versions",
+                "automation script execution evidence",
+            ),
+            depends_on=("automation.capability_registry",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="automation script definitions and immutable versions",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "typed script lifecycle command",
+                            "declared script targets",
+                            "tenant-scoped script identity and immutable source versions",
+                        ),
+                        canonical_writer="automation.script_definitions",
+                    ),
+                    ConcernContract(
+                        name="automation script execution evidence",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "published script version",
+                            "durable source-free execution outcome",
+                        ),
+                        canonical_writer="automation.script_definitions",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed script lifecycle command",
+                        owner="automation.script_definitions",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="typed create-draft and publish commands with actor, permission, target, event, runtime, and source-hash evidence",
+                    ),
+                    AuthorityInput(
+                        name="declared script targets",
+                        owner="automation.capability_registry",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="closed client/server target and event declarations in canonical domain SOT modules",
+                    ),
+                    AuthorityInput(
+                        name="tenant-scoped script identity and immutable source versions",
+                        owner="automation.script_definitions",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="AutomationScript and AutomationScriptVersion rows",
+                    ),
+                    AuthorityInput(
+                        name="published script version",
+                        owner="automation.script_definitions",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="the tenant-scoped published script and active immutable version",
+                    ),
+                    AuthorityInput(
+                        name="durable source-free execution outcome",
+                        owner="automation.script_definitions",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="AutomationScriptRun status, result code, and error code without source or payload",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="each script lifecycle command enters execute_owner_command once; ORM writes are flush-only inside the command",
+                    locking="tenant/key identity and the selected script version are locked before mutation",
+                    idempotency="tenant and script key uniqueness rejects ambiguous creation; publish selects one immutable version and retains its source hash",
+                    retries="retry the complete lifecycle command after rollback",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "automation.script_definitions.permission_denied",
+                        "automation.script_definitions.identity_invalid",
+                        "automation.script_definitions.target_undeclared",
+                        "automation.script_definitions.event_undeclared",
+                        "automation.script_definitions.source_empty",
+                        "automation.script_definitions.source_too_large",
+                        "automation.script_definitions.source_uses_forbidden_api",
+                        "automation.script_definitions.key_conflict",
+                        "automation.script_definitions.not_found",
+                        "automation.script_definitions.retired",
+                        "automation.script_definitions.version_missing",
+                        "automation.script_definitions.runtime_unavailable",
+                        "automation.script_definitions.run_not_found",
+                        *owner_command_boundary_error_codes(
+                            "automation.script_definitions"
+                        ),
+                    ),
+                    mapping_owner="automation web authoring adapters",
+                    fail_closed_on=(
+                        "unknown target or event",
+                        "forbidden runtime API",
+                        "duplicate script identity",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("automation.script_changed",),
+                    schema_version=1,
+                    delivery_owner="automation.execution",
+                    compatibility="Version 1 records script identity, version, target, event, and lifecycle change without source code.",
+                    replay="AutomationScript and AutomationScriptVersion rows reconstruct the authoring state.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="automation.script_definitions",
+                    verification="script control-plane migration, target validation, hash, and RLS tests",
+                    cutover_gate="all script definitions are created and published through typed owner commands",
+                    fallback_retirement="no editable source-code column exists outside immutable script versions",
+                ),
+                steward="platform automation",
+                design_refs=(
+                    "docs/designs/AUTOMATION_CENTER_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/architecture/test_automation_capability_registry.py",
+                ),
+            ),
+        ),
     ),
     entrypoints=(
         "app.services.automation_capabilities",
         "app.services.automation_rules",
         "app.services.automation_runtime",
+        "app.services.automation_script_runtime",
+        "app.services.automation_scripts",
         "app.services.events.handlers.automation",
         "app.services.web_automation_center",
         "app.web.admin.automation_center",
