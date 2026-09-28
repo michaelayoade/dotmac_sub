@@ -56,8 +56,7 @@ def test_kmz_export_escapes_feature_text_and_remains_parseable(monkeypatch) -> N
     placemark = document.find(".//kml:Placemark", namespace)
     assert placemark is not None
     assert (
-        placemark.findtext("kml:name", namespaces=namespace)
-        == feature.properties.name
+        placemark.findtext("kml:name", namespaces=namespace) == feature.properties.name
     )
     assert placemark.find(".//kml:script", namespace) is None
     assert outcome.feature_count == 1
