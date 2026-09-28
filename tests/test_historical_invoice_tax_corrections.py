@@ -329,7 +329,11 @@ def test_existing_replacement_preserves_credit_and_records_finance_approval(
             PaymentAllocation.is_active.is_(True),
         )
     )
-    settlement = db_session.get(PaymentSettlement, scenario.payment_id)
+    settlement = db_session.scalar(
+        select(PaymentSettlement).where(
+            PaymentSettlement.payment_id == scenario.payment_id
+        )
+    )
     assert source is not None and source_line is not None and payment is not None
     assert allocation is not None
     unallocated = db_session.scalar(
@@ -345,12 +349,11 @@ def test_existing_replacement_preserves_credit_and_records_finance_approval(
     )
     consumption = db_session.get(LedgerEntry, allocation.consumption_ledger_entry_id)
     assert unallocated is not None and consumption is not None
-    if settlement is not None:
-        assert settlement.unallocated_ledger_entry_id == unallocated.id
+    assert settlement is not None
+    assert settlement.unallocated_ledger_entry_id == unallocated.id
     unallocated.amount = Decimal("17625.00")
     db_session.delete(consumption)
-    if settlement is not None:
-        db_session.delete(settlement)
+    db_session.delete(settlement)
     allocation.ledger_entry_id = None
     allocation.consumption_ledger_entry_id = None
     payment.amount = Decimal("217625.00")

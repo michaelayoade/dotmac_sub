@@ -98,6 +98,7 @@ _WRITE_TIER_VERBS = frozenset(
         "distribute",
         "edit",
         "impersonate",
+        "import",
         "manage",
         "membership",
         "mirror",
