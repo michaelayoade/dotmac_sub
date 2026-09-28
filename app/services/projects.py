@@ -126,6 +126,7 @@ from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.numbering import generate_number
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -3095,7 +3096,7 @@ def _emit_project_event(
     emit_event(
         db,
         EventType.custom,
-        {"name": event_name, **payload},
+        {"name": event_name, "tenant_id": str(OPERATOR_TENANT_ID), **payload},
         subscriber_id=project.subscriber_id,
     )
 
