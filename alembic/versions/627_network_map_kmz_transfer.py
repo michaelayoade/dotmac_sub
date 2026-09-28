@@ -1,7 +1,7 @@
 """Add idempotent Network Map KMZ admission and transfer permissions.
 
-Revision ID: 626_network_map_kmz_transfer
-Revises: 625_automation_run_retry_audit
+Revision ID: 627_network_map_kmz_transfer
+Revises: 626_automation_script_control_plane
 Create Date: 2026-09-28
 """
 
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "626_network_map_kmz_transfer"
-down_revision: str | None = "625_automation_run_retry_audit"
+revision: str = "627_network_map_kmz_transfer"
+down_revision: str | None = "626_automation_script_control_plane"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
