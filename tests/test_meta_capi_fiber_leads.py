@@ -81,7 +81,7 @@ def test_successful_coverage_inquiry_queues_exactly_one_minimized_lead(
     fiber_binding = _binding(db_session, monkeypatch)
     _enable_capi(db_session, monkeypatch)
     monkeypatch.setattr(meta_capi_lead, "queue_delivery", lambda _result: None)
-    payload = _coverage_payload()
+    payload = _coverage_payload(coordinates=False)
 
     response = _post(db_session, fiber_binding.id, payload, "fiber-meta-capi-1")
     replay = _post(db_session, fiber_binding.id, payload, "fiber-meta-capi-1")
@@ -125,7 +125,10 @@ def test_disabled_capi_does_not_break_or_queue_customer_inquiry(
     fiber_binding = _binding(db_session, monkeypatch)
 
     response = _post(
-        db_session, fiber_binding.id, _coverage_payload(), "fiber-meta-disabled"
+        db_session,
+        fiber_binding.id,
+        _coverage_payload(coordinates=False),
+        "fiber-meta-disabled",
     )
 
     assert response.replayed is False
@@ -191,7 +194,7 @@ def test_invalid_inquiry_and_persistence_failure_do_not_queue(
         _post(
             db_session,
             fiber_binding.id,
-            _coverage_payload(),
+            _coverage_payload(coordinates=False),
             "fiber-meta-persistence-failed",
         )
     assert persistence_exc.value.status_code == 503
@@ -218,7 +221,12 @@ def test_success_records_safe_receipt_and_duplicate_worker_is_idempotent(
     fiber_binding = _binding(db_session, monkeypatch)
     _enable_capi(db_session, monkeypatch)
     monkeypatch.setattr(meta_capi_lead, "queue_delivery", lambda _result: None)
-    _post(db_session, fiber_binding.id, _coverage_payload(), "fiber-meta-success")
+    _post(
+        db_session,
+        fiber_binding.id,
+        _coverage_payload(coordinates=False),
+        "fiber-meta-success",
+    )
     delivery = _delivery(db_session)
     event_id = delivery.payload_json["event_id"]
     requests: list[dict] = []
@@ -250,7 +258,12 @@ def test_event_replay_deduplicates_and_preserves_event_id(
     fiber_binding = _binding(db_session, monkeypatch)
     _enable_capi(db_session, monkeypatch)
     monkeypatch.setattr(meta_capi_lead, "queue_delivery", lambda _result: None)
-    _post(db_session, fiber_binding.id, _coverage_payload(), "fiber-meta-event-replay")
+    _post(
+        db_session,
+        fiber_binding.id,
+        _coverage_payload(coordinates=False),
+        "fiber-meta-event-replay",
+    )
     delivery = _delivery(db_session)
     origin_id = delivery.payload_json["origin_capture_id"]
     event_id = delivery.payload_json["event_id"]
@@ -398,7 +411,12 @@ def test_missing_token_does_not_break_inquiry_and_dead_letters_delivery(
     fiber_binding = _binding(db_session, monkeypatch)
     _enable_capi(db_session, monkeypatch)
     monkeypatch.setattr(meta_capi_lead, "queue_delivery", lambda _result: None)
-    _post(db_session, fiber_binding.id, _coverage_payload(), "fiber-meta-no-token")
+    _post(
+        db_session,
+        fiber_binding.id,
+        _coverage_payload(coordinates=False),
+        "fiber-meta-no-token",
+    )
     delivery = _delivery(db_session)
     monkeypatch.delenv("META_CAPI_TEST_ACCESS_TOKEN")
 
@@ -422,7 +440,7 @@ def test_logs_and_delivery_evidence_contain_no_raw_pii_or_token(
     _post(
         db_session,
         fiber_binding.id,
-        _coverage_payload(email=raw_email, phone=raw_phone),
+        _coverage_payload(email=raw_email, phone=raw_phone, coordinates=False),
         "fiber-meta-private",
     )
     delivery = _delivery(db_session)
