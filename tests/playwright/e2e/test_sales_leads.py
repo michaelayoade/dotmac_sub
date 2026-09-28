@@ -30,7 +30,7 @@ class TestSalesLeads:
         admin_page.get_by_label("Email 1").fill(f"search-{suffix}@example.com")
         admin_page.get_by_label("Phone 1").fill("08031234567")
         admin_page.get_by_role("button", name="Create Lead").click()
-        admin_page.wait_for_url("**/admin/sales/leads/**")
+        admin_page.wait_for_url("**/admin/sales/leads/*?result=created")
 
         admin_page.goto(f"{settings.base_url}/admin/sales/leads")
         admin_page.get_by_label("Search leads").fill(customer_name)
