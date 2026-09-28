@@ -107,6 +107,18 @@ def test_rule_actions_report_typed_adapter_readiness_by_module() -> None:
         assert actions[key].runtime_enabled is True
     assert actions["operations.work_order.set_status"].runtime_enabled is True
     assert actions["operations.vendor.set_status"].runtime_enabled is True
+    assert actions["sales.lead.set_status"].inputs[0].enum_values
+    assert actions["sales.quote.set_status"].inputs[0].enum_values == (
+        "draft",
+        "sent",
+        "rejected",
+        "expired",
+    )
+    assert actions["sales.sales_order.set_status"].inputs[0].enum_values == (
+        "draft",
+        "confirmed",
+        "cancelled",
+    )
 
 
 def test_work_order_script_update_event_has_a_native_producer() -> None:

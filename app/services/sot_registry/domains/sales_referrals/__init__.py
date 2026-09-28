@@ -122,7 +122,16 @@ DOMAIN = DomainSOT(
                     AutomationActionInput(
                         key="status",
                         label="Status",
-                        value_type=AutomationValueType.string,
+                        value_type=AutomationValueType.enum,
+                        enum_values=(
+                            "new",
+                            "contacted",
+                            "qualified",
+                            "proposal",
+                            "negotiation",
+                            "won",
+                            "lost",
+                        ),
                     ),
                 ),
                 author_permission="crm:lead:write",
@@ -141,7 +150,8 @@ DOMAIN = DomainSOT(
                     AutomationActionInput(
                         key="status",
                         label="Status",
-                        value_type=AutomationValueType.string,
+                        value_type=AutomationValueType.enum,
+                        enum_values=("draft", "sent", "rejected", "expired"),
                     ),
                 ),
                 author_permission="crm:quote:write",
@@ -160,7 +170,8 @@ DOMAIN = DomainSOT(
                     AutomationActionInput(
                         key="status",
                         label="Status",
-                        value_type=AutomationValueType.string,
+                        value_type=AutomationValueType.enum,
+                        enum_values=("draft", "confirmed", "cancelled"),
                     ),
                 ),
                 author_permission="crm:sales_order:write",

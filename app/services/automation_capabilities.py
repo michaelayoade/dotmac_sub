@@ -237,6 +237,27 @@ def capability_registry_errors() -> tuple[str, ...]:
                 f"action {action.key!r} repeats input {key!r}"
                 for key in _duplicates(tuple(item.key for item in action.inputs))
             )
+            for action_input in action.inputs:
+                if not action_input.key.strip() or not action_input.label.strip():
+                    errors.append(
+                        f"action {action.key!r} has a blank input key or label"
+                    )
+                if (
+                    action_input.value_type is AutomationValueType.enum
+                    and not action_input.enum_values
+                ):
+                    errors.append(
+                        f"action {action.key!r} enum input "
+                        f"{action_input.key!r} has no values"
+                    )
+                if (
+                    action_input.value_type is not AutomationValueType.enum
+                    and action_input.enum_values
+                ):
+                    errors.append(
+                        f"action {action.key!r} non-enum input "
+                        f"{action_input.key!r} declares enum values"
+                    )
         for item in manifest.catalog_items:
             if not all(
                 (
