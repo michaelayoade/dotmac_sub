@@ -137,7 +137,7 @@
         "path": "tests/test_meta_capi_fiber_leads.py",
         "symbol": "<module>",
         "category": "outbound_transport",
-        "fingerprint": "a3f61f627e71619f83c78c67dab08f16704fab0826b69b0c6c4057c2953770a7"
+        "fingerprint": "7e7aa05f02b0c2606b3bc6bc6acbb56304c5335a60ff2dcb45f82316c465f501"
       },
       {
         "path": "tests/test_meta_oauth.py",
