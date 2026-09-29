@@ -28,7 +28,6 @@ cli_script|scripts/migration/backfill_crm_subscriber_links.py
 cli_script|scripts/migration/backfill_party_status.py
 cli_script|scripts/migration/import_crm_phase3.py
 cli_script|scripts/migration/kernel_lineage_rehearsal_canaries.py
-cli_script|scripts/one_off/backfill_crm_subscriber_ids.py
 cli_script|scripts/seed/seed_test_fixtures.py
 migration|alembic/versions/045_contact_channels_without_name.py
 migration|alembic/versions/116_add_billing_accounts.py

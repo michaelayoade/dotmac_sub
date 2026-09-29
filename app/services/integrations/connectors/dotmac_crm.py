@@ -17,9 +17,10 @@ from app.services.integrations.runtime import (
 )
 
 CRM_SUBSCRIBER_OBSERVATION_CAPABILITY = "crm.subscriber_observation.v1"
-# Historical manifest pins may still identify this capability, but the runner
-# does not dispatch its retired ticket reads.
+# Tombstone for immutable historical manifest pins. Current manifest 1.4.0
+# excludes it; validation and dispatch refuse it before transport access.
 CRM_TICKET_OBSERVATION_CAPABILITY = "crm.ticket_observation.v1"
+RETIRED_CRM_CAPABILITIES = frozenset({CRM_TICKET_OBSERVATION_CAPABILITY})
 CRM_OPERATIONAL_OBSERVATION_CAPABILITY = "crm.operational_observation.v1"
 CRM_PORTAL_SESSION_CAPABILITY = "crm.portal_session.v1"
 # `crm.chat_session.v1` was REMOVED here on 2026-08-30 with ADR 0006. It was
@@ -75,7 +76,10 @@ class DotmacCrmRunner:
 
     def supports_capability(self, capability_id: str) -> bool:
         """Pure availability check for historical pins, before secret resolution."""
-        return capability_id in _ACTIONS_BY_CAPABILITY
+        return (
+            capability_id not in RETIRED_CRM_CAPABILITIES
+            and capability_id in _ACTIONS_BY_CAPABILITY
+        )
 
     def _client(
         self, config: Mapping[str, Any], secret_material: Mapping[str, str]
@@ -123,7 +127,7 @@ class DotmacCrmRunner:
         config: Mapping[str, Any],
         secret_material: Mapping[str, str],
     ) -> ValidationResult:
-        if capability_id == CRM_TICKET_OBSERVATION_CAPABILITY:
+        if capability_id in RETIRED_CRM_CAPABILITIES:
             return ValidationResult(valid=False, error_codes=("retired_capability",))
         return self.validate(
             manifest=manifest, config=config, secret_material=secret_material
@@ -136,6 +140,10 @@ class DotmacCrmRunner:
         config: Mapping[str, Any],
         secret_material: Mapping[str, str],
     ) -> OperationResult:
+        if envelope.capability_id in RETIRED_CRM_CAPABILITIES:
+            return self._result(
+                envelope, OperationStatus.rejected, "capability_not_supported"
+            )
         allowed = _ACTIONS_BY_CAPABILITY.get(envelope.capability_id)
         if allowed is None:
             return self._result(

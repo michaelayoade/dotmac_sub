@@ -69,7 +69,9 @@ def test_current_manifest_retires_ticket_capability_and_preserves_old_pin() -> N
     )
 
 
-def test_historical_ticket_binding_is_rejected_without_transport_call() -> None:
+def test_historical_ticket_binding_is_rejected_without_transport_call(
+    monkeypatch,
+) -> None:
     historical = next(
         definition
         for definition in supported_connector_definitions()
@@ -77,6 +79,17 @@ def test_historical_ticket_binding_is_rejected_without_transport_call() -> None:
     )
     spy = _CrmTransportSpy()
     runner = DotmacCrmRunner(client_override=spy)
+    assert runner.supports_capability(CRM_TICKET_OBSERVATION_CAPABILITY) is False
+    # The tombstone must win even if a future action-map edit adds a ticket
+    # action. Historical manifest pins can identify the ID but cannot run it.
+    from app.services.integrations.connectors import dotmac_crm
+
+    monkeypatch.setitem(
+        dotmac_crm._ACTIONS_BY_CAPABILITY,
+        CRM_TICKET_OBSERVATION_CAPABILITY,
+        {"list_tickets"},
+    )
+    assert runner.supports_capability(CRM_TICKET_OBSERVATION_CAPABILITY) is False
 
     assert isinstance(runner, CapabilityValidationRunner)
     validation = validate_connection(

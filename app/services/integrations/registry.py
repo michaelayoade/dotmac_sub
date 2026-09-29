@@ -264,9 +264,9 @@ def _dotmac_crm_manifest(
     version: str,
     include_chat_session: bool,
     include_quote_command: bool = True,
-    include_ticket_observation: bool = True,
+    include_ticket_observation: bool,
 ) -> ConnectorManifest:
-    """Build the current CRM manifest and its bounded pre-chat predecessor."""
+    """Build current CRM and exact historical manifest versions."""
 
     capabilities = [
         CapabilityManifest(
@@ -290,6 +290,8 @@ def _dotmac_crm_manifest(
             modes=(CapabilityMode.interactive,),
         ),
     ]
+    # Historical versions declare the immutable ticket pin. Version 1.4.0
+    # passes False: this branch is not a current capability declaration.
     if include_ticket_observation:
         capabilities.insert(
             1,
@@ -793,6 +795,8 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         version="1.1.0",
         include_bearer_authorization=True,
     ),
+    # The current manifest excludes retired ticket observation; historical
+    # manifest digests below remain available for pin identification only.
     _dotmac_crm_manifest(
         version="1.4.0",
         include_chat_session=False,
@@ -997,9 +1001,14 @@ _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
         version="1.3.0",
         include_chat_session=False,
         include_quote_command=False,
+        include_ticket_observation=True,
     ),
-    _dotmac_crm_manifest(version="1.2.0", include_chat_session=False),
-    _dotmac_crm_manifest(version="1.0.0", include_chat_session=False),
+    _dotmac_crm_manifest(
+        version="1.2.0", include_chat_session=False, include_ticket_observation=True
+    ),
+    _dotmac_crm_manifest(
+        version="1.0.0", include_chat_session=False, include_ticket_observation=True
+    ),
     # CRM 1.1.0 is the ONLY manifest that ever declared `crm.chat_session.v1`
     # (ADR 0006, retired 2026-08-30 with the CRM itself). 1.2.0 drops the
     # capability. This exact 1.1.0 digest is retained UNCHANGED rather than
@@ -1010,7 +1019,9 @@ _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
     # reachability -- Sub has no caller for `crm.chat_session.v1` any more, and
     # the runner no longer maps it to an action, so a 1.1.0-pinned binding for
     # it now fails closed with `capability_not_supported`.
-    _dotmac_crm_manifest(version="1.1.0", include_chat_session=True),
+    _dotmac_crm_manifest(
+        version="1.1.0", include_chat_session=True, include_ticket_observation=True
+    ),
     _meta_social_manifest(
         version="1.1.0",
         include_shared_oauth=True,

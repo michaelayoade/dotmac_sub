@@ -132,6 +132,12 @@ explicit about this, so nothing in this repository may describe the CRM as
 decommissioned while field 7 carries that entry — the live-chat authority is
 retired, the *system* is not.
 
+The 2026-09-29 source follow-up removed the stale one-off CRM subscriber-ID
+backfill and made the ticket capability an explicit fail-closed tombstone for
+historical pins. It did not observe a deploy or container recreation. Field 7
+therefore remains **STILL LIVE** pending the runtime evidence named in the
+ticket cutover runbook.
+
 ### Product-tier notes that are not rule 1 fields
 
 Recorded because they are true and useful, and kept below the table because

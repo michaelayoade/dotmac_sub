@@ -30,7 +30,6 @@
 2 cli_script|scripts/migration/backfill_party_status.py
 1 cli_script|scripts/migration/import_crm_phase3.py
 3 cli_script|scripts/migration/kernel_lineage_rehearsal_canaries.py
-2 cli_script|scripts/one_off/backfill_crm_subscriber_ids.py
 4 cli_script|scripts/seed/seed_test_fixtures.py
 1 migration|alembic/versions/045_contact_channels_without_name.py
 1 migration|alembic/versions/116_add_billing_accounts.py
@@ -61,4 +60,4 @@
 1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 120
+TOTAL 118

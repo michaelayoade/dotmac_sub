@@ -358,8 +358,9 @@ alembic/versions_archive/k2l3m4n5o6p7_add_crm_social_comment_replies.py
 alembic/versions_archive/l1m2n3o4p5q6_add_inbound_message_dedupe_index.py
 alembic/versions_archive/p0q1r2s3t4u5_add_integration_connector_model.py
 #
-# --- docs: 106 files ---
+# --- docs: 107 files ---
 docs/ACCOUNT_CREDIT_DEPOSITS.md
+docs/ARCHITECTURE.md
 docs/CHAT_LIVE_SETUP.md
 docs/CODING_STANDARD.md
 docs/CONTROL_RELATIONSHIPS_AND_BRANDING_SOT.md
@@ -466,7 +467,7 @@ docs/runbooks/TEMPORARY_CRM_CHAT_AUTHORITY.md
 docs/runbooks/TICKET_WORK_ORDER_PROVENANCE_CUTOVER.md
 docs/testing/EDGE_CASE_MATRIX.md
 #
-# --- scripts: 24 files ---
+# --- scripts: 23 files ---
 scripts/architecture/crm_web_retirement.py
 scripts/architecture/subscriber_metadata_census.py
 scripts/migration/backfill_crm_subscriber_links.py
@@ -486,7 +487,6 @@ scripts/migration/provision_staff_from_map.py
 scripts/migration/run_crm_tickets_phase1_incremental.sh
 scripts/network/crm_network_map_point_migration.py
 scripts/network/stage_crm_network_map.py
-scripts/one_off/backfill_crm_subscriber_ids.py
 scripts/one_off/crm_customer_name_repair.py
 scripts/one_off/restore_crm_placeholder_identity.py
 scripts/one_off/review_carried_source_identity.py

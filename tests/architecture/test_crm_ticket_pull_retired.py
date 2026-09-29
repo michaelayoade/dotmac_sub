@@ -62,7 +62,7 @@ def test_the_retired_crm_ticket_poller_has_no_handle_left() -> None:
     )
 
 
-def test_the_poller_modules_stay_deleted() -> None:
+def test_retired_crm_writer_modules_stay_deleted() -> None:
     for relative in (
         "app/services/crm_ticket_pull.py",
         "app/tasks/crm_ticket_pull.py",
@@ -70,6 +70,7 @@ def test_the_poller_modules_stay_deleted() -> None:
         "scripts/integrations/verify_crm_ticket_readiness.py",
         "scripts/integrations/reconcile_crm_ticket_capability.py",
         "scripts/one_off/import_crm_tickets.py",
+        "scripts/one_off/backfill_crm_subscriber_ids.py",
     ):
         assert not (ROOT / relative).exists(), f"{relative} was retired"
 
@@ -85,6 +86,9 @@ def test_current_crm_manifest_and_transport_do_not_expose_ticket_reads() -> None
     assert current.capability(dotmac_crm.CRM_TICKET_OBSERVATION_CAPABILITY) is None
     assert dotmac_crm.CRM_TICKET_OBSERVATION_CAPABILITY not in (
         dotmac_crm._ACTIONS_BY_CAPABILITY
+    )
+    assert dotmac_crm.RETIRED_CRM_CAPABILITIES == frozenset(
+        {dotmac_crm.CRM_TICKET_OBSERVATION_CAPABILITY}
     )
     for transport in (CRMClient, crm_capability.CrmCapabilityClient):
         for action in ("list_tickets", "get_ticket", "list_ticket_comments"):

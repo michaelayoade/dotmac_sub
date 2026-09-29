@@ -175,6 +175,19 @@ disabled.
 
 **Receipt.** `old_writer_retirement` in `TEMPORARY_CRM_CHAT_AUTHORITY.md` can move to RETIRED once this change is deployed and the containers are recreated. The deploy clears the last in-process copy of the credential.
 
+**Source residue retired in the 2026-09-29 follow-up.** The broken
+`scripts/one_off/backfill_crm_subscriber_ids.py` command was deleted. It
+imported a transport type that no longer existed and still contained a direct
+`subscribers.crm_subscriber_id` writer. Its declared source surface and both
+cohort writer baselines were lowered in the same change. The current CRM
+manifest 1.4.0 already excludes `crm.ticket_observation.v1`; its ID remains
+only as a runner tombstone and in immutable historical manifest pins. The
+runner refuses the ID at availability, validation, and execution before any
+transport call, including if an action-map entry is accidentally added.
+This source cleanup does not prove deployment or container recreation; the
+receipt's `old_writer_retirement` field remains **STILL LIVE** until that
+separate evidence exists.
+
 ## The sequence, and why the gate comes before the deletion
 
 1. Turn the `crm.ticket_pull` control **off through the canonical settings
