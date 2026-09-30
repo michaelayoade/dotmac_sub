@@ -30,6 +30,10 @@ from app.services.customer_notification_policy import (
 from app.services.events.types import Event, EventType
 from app.services.notification import notifications as notification_service
 from app.services.notification_channel_policy import resolve_notification_channels
+from app.services.notification_consolidation import (
+    CONSOLIDATED_EVENT_TYPES,
+    record_restoration_fact,
+)
 from app.services.notification_template_conditions import (
     NotificationTemplateConditionError,
     conditions_match,
@@ -697,6 +701,17 @@ class NotificationHandler:
                 "Suppressed notification for event %s (back-office scope)",
                 event.event_type.value,
             )
+            return
+
+        if event.event_type in CONSOLIDATED_EVENT_TYPES:
+            # payment_received / invoice_paid / subscription_resumed /
+            # ont_online independently and correctly fire from one
+            # restoration episode. Route through the debounce/coalescing
+            # layer instead of sending a direct, per-event email — see
+            # app.services.notification_consolidation for why and how these
+            # four collapse into at most one customer touch.
+            subscriber_id = self._resolve_subscriber_id(db, event, recipient=None)
+            record_restoration_fact(db, subscriber_id, event)
             return
 
         templates = self._load_templates(db, spec.template_code)

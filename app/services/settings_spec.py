@@ -173,6 +173,10 @@ SCHEDULER_ENV_BOOTSTRAP_SETTING_KEYS = frozenset(
         (SettingDomain.notification, "notification_queue_interval_seconds"),
         (
             SettingDomain.notification,
+            "notification_window_sweep_interval_seconds",
+        ),
+        (
+            SettingDomain.notification,
             "operational_escalation_delivery_interval_seconds",
         ),
         (SettingDomain.provisioning, "compensation_retry_interval_seconds"),
@@ -979,6 +983,24 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=50,
         min_value=1,
         max_value=1000,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="notification_restoration_debounce_minutes",
+        env_var="NOTIFICATION_RESTORATION_DEBOUNCE_MINUTES",
+        value_type=SettingValueType.integer,
+        default=15,
+        min_value=1,
+        max_value=120,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="notification_window_sweep_interval_seconds",
+        env_var="NOTIFICATION_WINDOW_SWEEP_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=30,
+        max_value=3600,
     ),
     SettingSpec(
         domain=SettingDomain.notification,
