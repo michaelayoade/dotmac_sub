@@ -1,4 +1,9 @@
-"""Add subscriber notification windows for restoration-event consolidation.
+"""Add subscriber notification windows: a generic, declared consolidation facility.
+
+One table, scoped by ``group``, backs every registered entry in
+``app.services.notification_consolidation.CONSOLIDATION_GROUPS`` -- today
+only ``service_restoration``. A future unrelated correlated-event set
+registers its own group and reuses this table; it never needs a new one.
 
 Revision ID: 634_subscriber_notification_windows
 Revises: 633_retire_system_admin_main_reseller_membership
@@ -37,6 +42,7 @@ def upgrade() -> None:
             sa.ForeignKey("subscribers.id", ondelete="CASCADE"),
             nullable=False,
         ),
+        sa.Column("group", sa.String(length=80), nullable=False),
         sa.Column("opened_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("window_closes_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
@@ -55,14 +61,17 @@ def upgrade() -> None:
             name="ck_subscriber_notification_windows_close_reason",
         ),
     )
-    # Access pattern 1: find the open window for a given subscriber. A
-    # partial unique index also gives the DB itself a second, independent
-    # guarantee (beyond application logic) that a subscriber never has two
-    # concurrently open windows.
+    # Access pattern 1: find the open window for a given subscriber in a given
+    # consolidation group. A partial unique index also gives the DB itself a
+    # second, independent guarantee (beyond application logic) that a
+    # subscriber never has two concurrently open windows IN THE SAME GROUP --
+    # scoped by group, not just subscriber_id, so independent groups (a future
+    # one alongside today's sole "service_restoration") never block each
+    # other for the same subscriber.
     op.create_index(
-        "uq_subscriber_notification_windows_open_subscriber",
+        "uq_subscriber_notification_windows_open_subscriber_group",
         "subscriber_notification_windows",
-        ["subscriber_id"],
+        ["subscriber_id", "group"],
         unique=True,
         postgresql_where=sa.text("closed_at IS NULL"),
     )
@@ -83,7 +92,7 @@ def downgrade() -> None:
         table_name="subscriber_notification_windows",
     )
     op.drop_index(
-        "uq_subscriber_notification_windows_open_subscriber",
+        "uq_subscriber_notification_windows_open_subscriber_group",
         table_name="subscriber_notification_windows",
     )
     op.drop_table("subscriber_notification_windows")

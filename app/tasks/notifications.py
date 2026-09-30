@@ -1695,11 +1695,16 @@ def _sweep_notification_windows_stats(
     """Close every subscriber notification window whose debounce timer has
     expired and send its one consolidated email.
 
+    Group-agnostic: every registered consolidation group
+    (``notification_consolidation.CONSOLIDATION_GROUPS``) shares this one
+    sweep, since ``window_closes_at``/``closed_at`` mean the same thing
+    regardless of which group a window belongs to.
+
     Mirrors ``_deliver_notification_queue_stats``'s atomic-claim discipline
     exactly: discover candidates lock-free, then re-select and claim each
     exact row with ``with_for_update(skip_locked=True)`` immediately before
-    acting on it, so two overlapping sweep runs — or a sweep racing an
-    ``ont_online`` arrival closing the same window via
+    acting on it, so two overlapping sweep runs — or a sweep racing a
+    closing-event arrival closing the same window via
     ``notification_consolidation.close_and_send`` — cannot both send.
     """
 
@@ -1748,13 +1753,14 @@ def _sweep_notification_windows_stats(
 
 @celery_app.task(name="app.tasks.notifications.sweep_notification_windows")
 def sweep_notification_windows() -> dict[str, int]:
-    """Periodic fallback for the restoration-episode debounce window.
+    """Periodic fallback for every registered consolidation-group window.
 
-    A restoration episode normally closes and sends on ``ont_online`` (see
-    ``notification_consolidation.record_restoration_fact``). This sweep is
-    the safety net for the episodes that never see that signal (e.g. a
-    manual admin resume with no ONT confirmation) — the customer must not be
-    left with silence just because the "nice" close signal never arrived.
+    An episode normally closes and sends on one of its group's declared
+    closing event types (see
+    ``notification_consolidation.record_consolidated_fact``). This sweep is
+    the safety net for episodes that never see one (e.g. a manual admin
+    resume with no ONT confirmation) — the customer must not be left with
+    silence just because the "nice" close signal never arrived.
     """
 
     started = time.monotonic()

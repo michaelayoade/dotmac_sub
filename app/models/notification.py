@@ -532,24 +532,31 @@ class NotificationWindowCloseReason(enum.Enum):
 
 
 class SubscriberNotificationWindow(Base):
-    """A short-lived, per-subscriber debounce window that coalesces the
-    several restoration-adjacent events (``payment_received``,
-    ``invoice_paid``, ``subscription_resumed``, ``ont_online``) a single
-    "service is back" episode can independently and correctly emit into one
-    customer-facing email.
+    """A short-lived, per-subscriber, per-group debounce window that coalesces
+    the several related events a single customer-perceived episode can
+    independently and correctly emit into one customer-facing email.
+
+    ``group`` names a registered entry in
+    ``app.services.notification_consolidation.CONSOLIDATION_GROUPS`` — a
+    build-once facility, not a table dedicated to one episode type. Today the
+    only registered group is ``service_restoration`` (``payment_received``,
+    ``invoice_paid``, ``subscription_resumed``, ``ont_online``); a future,
+    unrelated correlated-event set registers its OWN group and reuses this
+    same table, scoped by ``group``, rather than growing a second table.
 
     Owned by ``app.services.notification_consolidation``. Never written to
     directly by an event handler or by the delivery/sweep machinery in
     ``app.tasks.notifications`` — both go through that module's functions so
-    the "at most one open window per subscriber" and "closed windows never
-    reopen" invariants have a single enforcement point.
+    the "at most one open window per subscriber per group" and "closed
+    windows never reopen" invariants have a single enforcement point.
     """
 
     __tablename__ = "subscriber_notification_windows"
     __table_args__ = (
         Index(
-            "uq_subscriber_notification_windows_open_subscriber",
+            "uq_subscriber_notification_windows_open_subscriber_group",
             "subscriber_id",
+            "group",
             unique=True,
             postgresql_where=text("closed_at IS NULL"),
         ),
@@ -568,6 +575,11 @@ class SubscriberNotificationWindow(Base):
         ForeignKey("subscribers.id", ondelete="CASCADE"),
         nullable=False,
     )
+    #: The registered consolidation-group id (a plain declared string, not an
+    #: enum — ADR-0008: a new vocabulary is a declaration registry). Validated
+    #: against ``CONSOLIDATION_GROUPS`` by the owning module, not by a DB
+    #: constraint, so registering a new group never requires a migration.
+    group: Mapped[str] = mapped_column(String(80), nullable=False)
     opened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

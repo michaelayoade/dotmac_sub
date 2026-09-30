@@ -31,8 +31,8 @@ from app.services.events.types import Event, EventType
 from app.services.notification import notifications as notification_service
 from app.services.notification_channel_policy import resolve_notification_channels
 from app.services.notification_consolidation import (
-    CONSOLIDATED_EVENT_TYPES,
-    record_restoration_fact,
+    consolidation_group_for,
+    record_consolidated_fact,
 )
 from app.services.notification_template_conditions import (
     NotificationTemplateConditionError,
@@ -703,15 +703,16 @@ class NotificationHandler:
             )
             return
 
-        if event.event_type in CONSOLIDATED_EVENT_TYPES:
+        if consolidation_group_for(event.event_type) is not None:
+            # A member of a registered consolidation group (today:
             # payment_received / invoice_paid / subscription_resumed /
-            # ont_online independently and correctly fire from one
-            # restoration episode. Route through the debounce/coalescing
-            # layer instead of sending a direct, per-event email — see
-            # app.services.notification_consolidation for why and how these
-            # four collapse into at most one customer touch.
+            # ont_online, the service_restoration group). Route through the
+            # debounce/coalescing facility instead of sending a direct,
+            # per-event email — see app.services.notification_consolidation
+            # for the registry and why these collapse into at most one
+            # customer touch per episode.
             subscriber_id = self._resolve_subscriber_id(db, event, recipient=None)
-            record_restoration_fact(db, subscriber_id, event)
+            record_consolidated_fact(db, subscriber_id, event)
             return
 
         templates = self._load_templates(db, spec.template_code)

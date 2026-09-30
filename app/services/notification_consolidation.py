@@ -1,4 +1,4 @@
-"""One customer email per restoration episode, not up to four.
+"""A generic per-subscriber debounce/coalescing facility for related events.
 
 A single payment-resumption event today correctly and independently triggers
 up to FOUR customer emails: ``payment_received``, ``invoice_paid``,
@@ -8,24 +8,35 @@ the bug is that nothing correlates them, because
 (``event-notification:{event_id}:{template_code}:{channel}``) is unique per
 EVENT, and these are four different event types.
 
-This module is the single owner of that correlation. It sits between "one of
-the four events fired" and "an email actually goes out": ``NotificationHandler``
-routes those four event types here instead of calling ``submit`` directly, and
-this module opens/extends a short per-subscriber debounce window
-(:class:`app.models.notification.SubscriberNotificationWindow`), then closes
-it — either immediately on ``ont_online`` (the natural "episode complete"
-signal) or, on timeout, from the sweep in ``app.tasks.notifications`` — and
-sends exactly one consolidated email via the existing, unmodified
-``communication_intents.submit``.
+This module is the single owner of that correlation, and it is a FACILITY,
+not a point fix for the restoration case alone: a **consolidation group** is a
+declared registry entry (:data:`CONSOLIDATION_GROUPS`, keyed by a plain string
+id — a new vocabulary is a declaration registry, never a bare enum/frozenset,
+per ADR-0008) naming which event types are its members, which of those are
+"closing" signals, and how to render the one consolidated message. Today
+exactly one group exists (``service_restoration``); a future unrelated set of
+correlated events (e.g. an installation flow) registers its OWN group here
+rather than either overloading this one or duplicating this module.
 
-Nothing about *emission* of the four underlying events changes; this is a
-purely additive consolidation layer over how those emissions currently reach
-a customer's inbox.
+``NotificationHandler`` routes any event whose type belongs to a registered
+group here instead of calling ``submit`` directly. This module opens/extends a
+short per-subscriber, per-group debounce window
+(:class:`app.models.notification.SubscriberNotificationWindow`), then closes
+it — either immediately on one of the group's closing event types (the
+natural "episode complete" signal) or, on timeout, from the sweep in
+``app.tasks.notifications`` — and sends exactly one consolidated email via the
+existing, unmodified ``communication_intents.submit``.
+
+Nothing about *emission* of the underlying events changes; this is a purely
+additive consolidation layer over how those emissions currently reach a
+customer's inbox.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -48,40 +59,131 @@ from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
-#: The four event types a restoration episode can independently emit. Owned
-#: here so ``NotificationHandler`` has one place to ask "does this event go
-#: through consolidation instead of a direct send?".
-CONSOLIDATED_EVENT_TYPES: frozenset[EventType] = frozenset(
-    {
-        EventType.payment_received,
-        EventType.invoice_paid,
-        EventType.subscription_resumed,
-        EventType.ont_online,
-    }
-)
 
-#: Default debounce window length, overridable via the
-#: ``notification_restoration_debounce_minutes`` setting (see
+@dataclass(frozen=True)
+class ConsolidationGroupSpec:
+    """One registered consolidation group.
+
+    ``member_event_types`` are the events this group collects facts from.
+    ``closing_event_types`` (a subset of members) are the signals that close
+    the window and send immediately, rather than waiting for the sweep's
+    timeout fallback — the group's "this episode is definitely over" facts.
+    """
+
+    member_event_types: frozenset[EventType]
+    closing_event_types: frozenset[EventType]
+    template_code: str
+    category: str
+    debounce_setting_key: str
+    default_debounce_minutes: int
+    build_message: Callable[[SubscriberNotificationWindow, str], tuple[str, str]]
+
+
+def _build_restoration_message(
+    window: SubscriberNotificationWindow, subscriber_name: str
+) -> tuple[str, str]:
+    facts_by_type = {fact.get("event_type"): fact for fact in window.collected_events}
+    payment_fact = facts_by_type.get(EventType.payment_received.value) or (
+        facts_by_type.get(EventType.invoice_paid.value)
+    )
+    resumed = EventType.subscription_resumed.value in facts_by_type
+    online = EventType.ont_online.value in facts_by_type
+
+    lines: list[str] = []
+    if payment_fact is not None:
+        amount = payment_fact.get("amount")
+        if amount:
+            lines.append(f"We received your payment of {amount}. Thank you.")
+        else:
+            lines.append("We received your payment. Thank you.")
+    if resumed:
+        lines.append("Your service has been resumed.")
+    if online:
+        lines.append("Your connection is back online.")
+    if not lines:
+        # A window can close on timeout having collected nothing recognizable
+        # (defensive only — record_consolidated_fact always appends a fact
+        # before a window can exist). Never leave the customer with silence.
+        lines.append("Your service has been restored.")
+
+    subject = "Your service has been restored"
+    body = (
+        f"Dear {subscriber_name},\n\n"
+        + "\n\n".join(lines)
+        + "\n\nIf you continue to experience any issues, please contact our "
+        "support team."
+    )
+    return subject, body
+
+
+#: The template/notification-category constants for the one group registered
+#: today. Kept as named constants (not just inline strings in the registry
+#: entry below) because ``communication_intents`` callers and tests reference
+#: them directly.
+RESTORATION_SUMMARY_TEMPLATE_CODE = "service_restored_summary"
+RESTORATION_SUMMARY_CATEGORY = "service"
+
+#: Default debounce window length for the restoration group, overridable via
+#: the ``notification_restoration_debounce_minutes`` setting (see
 #: ``app.tasks.notifications``'s ``_sending_timeout_minutes`` etc. for the
 #: identical small-settings-lookup-helper pattern this follows).
 DEFAULT_DEBOUNCE_MINUTES = 15
 
-#: The one new template/notification type a window close sends. Content
-#: adapts to whichever facts were actually collected (see
-#: ``_build_consolidated_message``) — it never claims a payment happened if
-#: no payment fact was collected.
-RESTORATION_SUMMARY_TEMPLATE_CODE = "service_restored_summary"
-RESTORATION_SUMMARY_CATEGORY = "service"
+#: The declared registry of consolidation groups. Adding a future, unrelated
+#: correlated-event set means adding a new entry here (with its own event
+#: types, template and message builder) — never widening this one group's
+#: member set or copy-pasting this module.
+CONSOLIDATION_GROUPS: dict[str, ConsolidationGroupSpec] = {
+    "service_restoration": ConsolidationGroupSpec(
+        member_event_types=frozenset(
+            {
+                EventType.payment_received,
+                EventType.invoice_paid,
+                EventType.subscription_resumed,
+                EventType.ont_online,
+            }
+        ),
+        closing_event_types=frozenset({EventType.ont_online}),
+        template_code=RESTORATION_SUMMARY_TEMPLATE_CODE,
+        category=RESTORATION_SUMMARY_CATEGORY,
+        debounce_setting_key="notification_restoration_debounce_minutes",
+        default_debounce_minutes=DEFAULT_DEBOUNCE_MINUTES,
+        build_message=_build_restoration_message,
+    ),
+}
+
+#: Reverse index built once at import time: which group (if any) owns a given
+#: event type. Asserted disjoint below — no event type may belong to two
+#: groups, which would make "which window does this fact go in" ambiguous.
+_EVENT_TYPE_TO_GROUP: dict[EventType, str] = {}
+for _group_id, _spec in CONSOLIDATION_GROUPS.items():
+    for _event_type in _spec.member_event_types:
+        if _event_type in _EVENT_TYPE_TO_GROUP:
+            raise AssertionError(
+                f"{_event_type} claimed by both {_EVENT_TYPE_TO_GROUP[_event_type]!r} "
+                f"and {_group_id!r} consolidation groups"
+            )
+        _EVENT_TYPE_TO_GROUP[_event_type] = _group_id
+del _group_id, _spec, _event_type
 
 
-def _debounce_minutes(db: Session) -> int:
-    value = resolve_value(
-        db, SettingDomain.notification, "notification_restoration_debounce_minutes"
-    )
+def consolidation_group_for(event_type: EventType) -> str | None:
+    """The registered group id this event type belongs to, or ``None``.
+
+    ``NotificationHandler`` calls this to decide whether an event routes
+    through consolidation at all; a ``None`` result means "send directly, as
+    before" for every event type not declared into a group.
+    """
+
+    return _EVENT_TYPE_TO_GROUP.get(event_type)
+
+
+def _debounce_minutes(db: Session, spec: ConsolidationGroupSpec) -> int:
+    value = resolve_value(db, SettingDomain.notification, spec.debounce_setting_key)
     try:
         return max(1, int(str(value)))
     except (TypeError, ValueError):
-        return DEFAULT_DEBOUNCE_MINUTES
+        return spec.default_debounce_minutes
 
 
 def _event_fact(event: Event) -> dict[str, str]:
@@ -111,11 +213,12 @@ def _event_fact(event: Event) -> dict[str, str]:
 
 
 def _get_open_window(
-    db: Session, subscriber_id: UUID
+    db: Session, subscriber_id: UUID, group: str
 ) -> SubscriberNotificationWindow | None:
     return (
         db.query(SubscriberNotificationWindow)
         .filter(SubscriberNotificationWindow.subscriber_id == subscriber_id)
+        .filter(SubscriberNotificationWindow.group == group)
         .filter(SubscriberNotificationWindow.closed_at.is_(None))
         .with_for_update()
         .one_or_none()
@@ -123,21 +226,26 @@ def _get_open_window(
 
 
 def _open_window(
-    db: Session, subscriber_id: UUID, now: datetime
+    db: Session, subscriber_id: UUID, group: str, now: datetime
 ) -> SubscriberNotificationWindow:
     """Open a new window, tolerating a concurrent opener.
 
-    The partial unique index (``subscriber_id`` WHERE ``closed_at IS NULL``)
-    is the actual guarantee; a savepoint keeps a lost race from poisoning the
-    caller's outer transaction (feature code never calls ``db.rollback()`` —
-    see ``account_lifecycle.cancel_subscription``'s credit-note savepoint for
-    the identical shape).
+    The partial unique index (``subscriber_id, group`` WHERE ``closed_at IS
+    NULL``) is the actual guarantee; a savepoint keeps a lost race from
+    poisoning the caller's outer transaction (feature code never calls
+    ``db.rollback()`` — see ``account_lifecycle.cancel_subscription``'s
+    credit-note savepoint for the identical shape). Scoping the uniqueness to
+    ``(subscriber_id, group)`` rather than just ``subscriber_id`` is what lets
+    a subscriber have independent open windows in two different groups at
+    once without one group's episode blocking another's.
     """
 
+    spec = CONSOLIDATION_GROUPS[group]
     window = SubscriberNotificationWindow(
         subscriber_id=subscriber_id,
+        group=group,
         opened_at=now,
-        window_closes_at=now + timedelta(minutes=_debounce_minutes(db)),
+        window_closes_at=now + timedelta(minutes=_debounce_minutes(db, spec)),
         collected_events=[],
     )
     try:
@@ -145,122 +253,101 @@ def _open_window(
             db.add(window)
             db.flush()
     except IntegrityError:
-        existing = _get_open_window(db, subscriber_id)
+        existing = _get_open_window(db, subscriber_id, group)
         if existing is None:
             raise
         return existing
     return window
 
 
-def record_restoration_fact(
+def record_consolidated_fact(
     db: Session, subscriber_id: UUID | None, event: Event
 ) -> None:
-    """Coalesce one of the four restoration-adjacent events into a window.
+    """Coalesce one member event of a registered group into its window.
 
     Called from ``NotificationHandler`` INSTEAD OF a direct
-    ``communication_intents.submit`` for exactly the four
-    ``CONSOLIDATED_EVENT_TYPES``. No-ops when there is no subscriber to
-    notify. ``ont_online`` closes and sends immediately; every other event
-    type only appends its fact and lets the window run (or a later
-    ``ont_online``, or the sweep on timeout) decide when to send.
+    ``communication_intents.submit`` for any event type
+    :func:`consolidation_group_for` resolves to a group. No-ops when there is
+    no subscriber to notify. A closing event type (the group's declared
+    ``closing_event_types``) closes and sends immediately; every other member
+    event only appends its fact and lets the window run (or a later closing
+    event, or the sweep on timeout) decide when to send.
 
-    A late ``ont_online`` arriving after its window already closed is a
+    A late closing event arriving after its window already closed is a
     deliberate no-op: the timeout fallback already told the customer, and
     reopening a closed window would recreate the exact multi-email problem
     this module exists to remove.
     """
 
-    if subscriber_id is None:
-        logger.debug(
-            "Skipped restoration-window fact for event %s: no subscriber",
+    group = consolidation_group_for(event.event_type)
+    if group is None:
+        logger.warning(
+            "record_consolidated_fact called for %s, which is not a member of "
+            "any registered consolidation group; ignoring",
             event.event_type.value,
         )
         return
 
-    window = _get_open_window(db, subscriber_id)
+    if subscriber_id is None:
+        logger.debug(
+            "Skipped consolidation-window fact for event %s: no subscriber",
+            event.event_type.value,
+        )
+        return
+
+    spec = CONSOLIDATION_GROUPS[group]
+    is_closing = event.event_type in spec.closing_event_types
+
+    window = _get_open_window(db, subscriber_id, group)
     if window is None:
-        if event.event_type == EventType.ont_online:
+        if is_closing:
             # A late completion signal with no open window — either this
             # subscriber's episode already timed out and was sent (the
-            # window is closed, not missing), or there was never a
-            # restoration episode in progress. Either way, do not create a
-            # fresh window just to immediately close it: that would recreate
-            # the exact multi-email problem this module exists to remove.
+            # window is closed, not missing), or there was never an episode
+            # in progress. Either way, do not create a fresh window just to
+            # immediately close it: that would recreate the exact
+            # multi-email problem this module exists to remove.
             logger.info(
-                "Ignored ont_online for subscriber %s: no open restoration "
+                "Ignored closing event %s for subscriber %s: no open %r "
                 "window (already closed or never opened)",
+                event.event_type.value,
                 subscriber_id,
+                group,
             )
             return
-        window = _open_window(db, subscriber_id, datetime.now(UTC))
+        window = _open_window(db, subscriber_id, group, datetime.now(UTC))
 
     window.collected_events = [*window.collected_events, _event_fact(event)]
     db.flush()
 
-    if event.event_type == EventType.ont_online:
+    if is_closing:
         close_and_send(db, window, close_reason=NotificationWindowCloseReason.completed)
-
-
-def _build_consolidated_message(
-    window: SubscriberNotificationWindow, subscriber_name: str
-) -> tuple[str, str]:
-    facts_by_type = {fact.get("event_type"): fact for fact in window.collected_events}
-    payment_fact = facts_by_type.get(EventType.payment_received.value) or (
-        facts_by_type.get(EventType.invoice_paid.value)
-    )
-    resumed = EventType.subscription_resumed.value in facts_by_type
-    online = EventType.ont_online.value in facts_by_type
-
-    lines: list[str] = []
-    if payment_fact is not None:
-        amount = payment_fact.get("amount")
-        if amount:
-            lines.append(f"We received your payment of {amount}. Thank you.")
-        else:
-            lines.append("We received your payment. Thank you.")
-    if resumed:
-        lines.append("Your service has been resumed.")
-    if online:
-        lines.append("Your connection is back online.")
-    if not lines:
-        # A window can close on timeout having collected nothing recognizable
-        # (defensive only — record_restoration_fact always appends a fact
-        # before a window can exist). Never leave the customer with silence.
-        lines.append("Your service has been restored.")
-
-    subject = "Your service has been restored"
-    body = (
-        f"Dear {subscriber_name},\n\n"
-        + "\n\n".join(lines)
-        + "\n\nIf you continue to experience any issues, please contact our "
-        "support team."
-    )
-    return subject, body
 
 
 def _send_consolidated_email(
     db: Session, window: SubscriberNotificationWindow
 ) -> CommunicationIntentResult:
+    spec = CONSOLIDATION_GROUPS[window.group]
     subscriber = db.get(Subscriber, window.subscriber_id)
     subscriber_name = (subscriber.name if subscriber and subscriber.name else None) or (
         "Valued Customer"
     )
-    subject, body = _build_consolidated_message(window, subscriber_name)
+    subject, body = spec.build_message(window, subscriber_name)
     return submit(
         db,
         CommunicationIntent(
             subscriber_id=window.subscriber_id,
-            event_type=RESTORATION_SUMMARY_TEMPLATE_CODE,
-            category=RESTORATION_SUMMARY_CATEGORY,
-            template_code=RESTORATION_SUMMARY_TEMPLATE_CODE,
+            event_type=spec.template_code,
+            category=spec.category,
+            template_code=spec.template_code,
             subject=subject,
             body=body,
             persist_policy_suppressions=False,
             # Dedupe on the WINDOW's own id, not any one event's — this is
             # what makes closing an already-closed window (a retried sweep, a
-            # sweep racing an ont_online arrival) safe to call twice. See
+            # sweep racing a closing-event arrival) safe to call twice. See
             # ``communication_intents.submit``'s dedupe-key check.
-            dedupe_key=f"restoration-window:{window.id}",
+            dedupe_key=f"consolidation-window:{window.id}",
         ),
     )
 
@@ -275,7 +362,7 @@ def close_and_send(
     """Close a window and send its one consolidated email.
 
     A no-op if the window is already closed — the caller (either
-    ``record_restoration_fact``'s ``ont_online`` path, holding the window's
+    ``record_consolidated_fact``'s closing-event path, holding the window's
     row lock from ``_get_open_window``, or the sweep task, holding it via its
     own ``with_for_update(skip_locked=True)`` claim) is expected to have
     already established that it alone may act on this row within the current
