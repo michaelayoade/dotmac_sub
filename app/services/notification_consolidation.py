@@ -152,7 +152,9 @@ def _open_window(
     return window
 
 
-def record_restoration_fact(db: Session, subscriber_id: UUID | None, event: Event) -> None:
+def record_restoration_fact(
+    db: Session, subscriber_id: UUID | None, event: Event
+) -> None:
     """Coalesce one of the four restoration-adjacent events into a window.
 
     Called from ``NotificationHandler`` INSTEAD OF a direct
@@ -196,17 +198,13 @@ def record_restoration_fact(db: Session, subscriber_id: UUID | None, event: Even
     db.flush()
 
     if event.event_type == EventType.ont_online:
-        close_and_send(
-            db, window, close_reason=NotificationWindowCloseReason.completed
-        )
+        close_and_send(db, window, close_reason=NotificationWindowCloseReason.completed)
 
 
 def _build_consolidated_message(
     window: SubscriberNotificationWindow, subscriber_name: str
 ) -> tuple[str, str]:
-    facts_by_type = {
-        fact.get("event_type"): fact for fact in window.collected_events
-    }
+    facts_by_type = {fact.get("event_type"): fact for fact in window.collected_events}
     payment_fact = facts_by_type.get(EventType.payment_received.value) or (
         facts_by_type.get(EventType.invoice_paid.value)
     )

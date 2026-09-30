@@ -1,8 +1,15 @@
 """Add subscriber notification windows for restoration-event consolidation.
 
-Revision ID: 633_subscriber_notification_windows
-Revises: 632_reviewed_payment_allocation_reversal
+Revision ID: 634_subscriber_notification_windows
+Revises: 633_retire_system_admin_main_reseller_membership
 Create Date: 2026-09-30
+
+Renumbered from 633 to 634 during integration: two independent worktrees
+(this one and the main-reseller-customer-mail-copy-leak fix) both branched
+from 632 and independently picked "633". This migration is unrelated to that
+one's content, so the two are chained sequentially rather than merged as
+alembic branches. This means the reseller-membership fix
+(633_retire_system_admin_main_reseller_membership) must land first.
 """
 
 from __future__ import annotations
@@ -12,8 +19,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "633_subscriber_notification_windows"
-down_revision = "632_reviewed_payment_allocation_reversal"
+revision = "634_subscriber_notification_windows"
+down_revision = "633_retire_system_admin_main_reseller_membership"
 branch_labels = None
 depends_on = None
 
@@ -30,12 +37,8 @@ def upgrade() -> None:
             sa.ForeignKey("subscribers.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column(
-            "opened_at", sa.DateTime(timezone=True), nullable=False
-        ),
-        sa.Column(
-            "window_closes_at", sa.DateTime(timezone=True), nullable=False
-        ),
+        sa.Column("opened_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("window_closes_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("close_reason", sa.String(length=20), nullable=True),
         sa.Column(

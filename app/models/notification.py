@@ -580,7 +580,7 @@ class SubscriberNotificationWindow(Base):
     )
     #: Each entry: ``{event_type, event_id, occurred_at, ...fact fields}``.
     collected_events: Mapped[list] = mapped_column(
-        MutableList.as_mutable(JSONB), default=list, nullable=False
+        MutableList.as_mutable(JSONB()), default=list, nullable=False
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
