@@ -674,8 +674,10 @@ from app.models.notification import (  # noqa: F401
     NotificationDelivery,
     NotificationStatus,
     NotificationTemplate,
+    NotificationWindowCloseReason,
     OnCallRotation,
     OnCallRotationMember,
+    SubscriberNotificationWindow,
 )
 from app.models.oauth_token import OAuthToken  # noqa: F401
 from app.models.offer_availability import (  # noqa: F401

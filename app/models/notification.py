@@ -15,8 +15,8 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -522,3 +522,73 @@ class CommunicationSuppression(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
     created_by: Mapped[str | None] = mapped_column(String(120))
+
+
+class NotificationWindowCloseReason(enum.Enum):
+    """Why a :class:`SubscriberNotificationWindow` stopped collecting facts."""
+
+    completed = "completed"
+    timeout = "timeout"
+
+
+class SubscriberNotificationWindow(Base):
+    """A short-lived, per-subscriber debounce window that coalesces the
+    several restoration-adjacent events (``payment_received``,
+    ``invoice_paid``, ``subscription_resumed``, ``ont_online``) a single
+    "service is back" episode can independently and correctly emit into one
+    customer-facing email.
+
+    Owned by ``app.services.notification_consolidation``. Never written to
+    directly by an event handler or by the delivery/sweep machinery in
+    ``app.tasks.notifications`` — both go through that module's functions so
+    the "at most one open window per subscriber" and "closed windows never
+    reopen" invariants have a single enforcement point.
+    """
+
+    __tablename__ = "subscriber_notification_windows"
+    __table_args__ = (
+        Index(
+            "uq_subscriber_notification_windows_open_subscriber",
+            "subscriber_id",
+            unique=True,
+            postgresql_where=text("closed_at IS NULL"),
+        ),
+        Index(
+            "ix_subscriber_notification_windows_sweep",
+            "window_closes_at",
+            postgresql_where=text("closed_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    window_closes_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    close_reason: Mapped[NotificationWindowCloseReason | None] = mapped_column(
+        Enum(NotificationWindowCloseReason, native_enum=False, length=20)
+    )
+    #: Each entry: ``{event_type, event_id, occurred_at, ...fact fields}``.
+    collected_events: Mapped[list] = mapped_column(
+        MutableList.as_mutable(JSONB), default=list, nullable=False
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
