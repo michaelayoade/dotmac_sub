@@ -177,6 +177,19 @@ def record_restoration_fact(db: Session, subscriber_id: UUID | None, event: Even
 
     window = _get_open_window(db, subscriber_id)
     if window is None:
+        if event.event_type == EventType.ont_online:
+            # A late completion signal with no open window — either this
+            # subscriber's episode already timed out and was sent (the
+            # window is closed, not missing), or there was never a
+            # restoration episode in progress. Either way, do not create a
+            # fresh window just to immediately close it: that would recreate
+            # the exact multi-email problem this module exists to remove.
+            logger.info(
+                "Ignored ont_online for subscriber %s: no open restoration "
+                "window (already closed or never opened)",
+                subscriber_id,
+            )
+            return
         window = _open_window(db, subscriber_id, datetime.now(UTC))
 
     window.collected_events = [*window.collected_events, _event_fact(event)]
