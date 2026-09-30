@@ -452,6 +452,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.notifications.deliver_notification_queue": _c(
         "notifications", STATE, GUARDED, STATUS
     ),
+    "app.tasks.notifications.sweep_notification_windows": _c(
+        "notifications",
+        SWEEP,
+        IDEMP,
+        STATUS,
+        "Row-locked claim (with_for_update(skip_locked=True)) identical to "
+        "the notification queue sweep; a window's own closed_at makes a "
+        "repeat run over an already-closed row a no-op.",
+    ),
     "app.tasks.zeptomail_delivery.reconcile_submitted_email": _c(
         "notifications",
         SWEEP,
