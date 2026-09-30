@@ -113,7 +113,11 @@ from app.tasks.network_operations import (
     cleanup_old_operations,
     publish_operation_metrics,
 )
-from app.tasks.notifications import deliver_notification, deliver_notification_queue
+from app.tasks.notifications import (
+    deliver_notification,
+    deliver_notification_queue,
+    sweep_notification_windows,
+)
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
 from app.tasks.olt_firmware import rollback_firmware_task, upgrade_firmware_task
@@ -346,6 +350,7 @@ __all__ = [
     "run_vpn_health_scan",
     "deliver_notification_queue",
     "deliver_notification",
+    "sweep_notification_windows",
     "reconcile_submitted_email",
     "observe_channel_health",
     "snapshot_mrr",

@@ -1687,3 +1687,83 @@ def deliver_notification(notification_id: str) -> dict[str, int]:
             started=started,
         )
         return result
+
+
+def _sweep_notification_windows_stats(
+    db: Session, batch_size: int = 200
+) -> dict[str, int]:
+    """Close every subscriber notification window whose debounce timer has
+    expired and send its one consolidated email.
+
+    Mirrors ``_deliver_notification_queue_stats``'s atomic-claim discipline
+    exactly: discover candidates lock-free, then re-select and claim each
+    exact row with ``with_for_update(skip_locked=True)`` immediately before
+    acting on it, so two overlapping sweep runs — or a sweep racing an
+    ``ont_online`` arrival closing the same window via
+    ``notification_consolidation.close_and_send`` — cannot both send.
+    """
+
+    from app.models.notification import (
+        NotificationWindowCloseReason,
+        SubscriberNotificationWindow,
+    )
+    from app.services.notification_consolidation import close_and_send
+
+    now = datetime.now(UTC)
+    stats = {"closed": 0, "sent": 0, "already_closed": 0}
+
+    candidate_ids = (
+        db.query(SubscriberNotificationWindow.id)
+        .filter(SubscriberNotificationWindow.window_closes_at <= now)
+        .filter(SubscriberNotificationWindow.closed_at.is_(None))
+        .order_by(SubscriberNotificationWindow.window_closes_at.asc())
+        .limit(batch_size)
+        .all()
+    )
+    for (window_id,) in candidate_ids:
+        window = (
+            db.query(SubscriberNotificationWindow)
+            .filter(SubscriberNotificationWindow.id == window_id)
+            .filter(SubscriberNotificationWindow.closed_at.is_(None))
+            .with_for_update(skip_locked=True)
+            .one_or_none()
+        )
+        if window is None:
+            # Already closed (raced by an ont_online arrival or a concurrent
+            # sweep), or currently locked by one — either way, not ours.
+            stats["already_closed"] += 1
+            continue
+        result = close_and_send(
+            db,
+            window,
+            close_reason=NotificationWindowCloseReason.timeout,
+            now=now,
+        )
+        stats["closed"] += 1
+        if result is not None:
+            stats["sent"] += 1
+        db.commit()
+    return stats
+
+
+@celery_app.task(name="app.tasks.notifications.sweep_notification_windows")
+def sweep_notification_windows() -> dict[str, int]:
+    """Periodic fallback for the restoration-episode debounce window.
+
+    A restoration episode normally closes and sends on ``ont_online`` (see
+    ``notification_consolidation.record_restoration_fact``). This sweep is
+    the safety net for the episodes that never see that signal (e.g. a
+    manual admin resume with no ONT confirmation) — the customer must not be
+    left with silence just because the "nice" close signal never arrived.
+    """
+
+    started = time.monotonic()
+    with db_session_adapter.session() as session:
+        result = _sweep_notification_windows_stats(session)
+        _record_notification_task_result(
+            session,
+            task_name="app.tasks.notifications.sweep_notification_windows",
+            result=result,
+            started=started,
+        )
+        return result

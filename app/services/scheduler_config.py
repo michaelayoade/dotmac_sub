@@ -1082,6 +1082,21 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=notification_queue_interval_seconds,
         )
+        notification_window_sweep_interval_seconds = resolve_integer(
+            session,
+            SettingDomain.notification,
+            "notification_window_sweep_interval_seconds",
+        )
+        notification_window_sweep_interval_seconds = max(
+            notification_window_sweep_interval_seconds, 30
+        )
+        _sync_scheduled_task(
+            session,
+            name="notification_window_sweep",
+            task_name="app.tasks.notifications.sweep_notification_windows",
+            enabled=True,
+            interval_seconds=notification_window_sweep_interval_seconds,
+        )
         zeptomail_tracking_enabled = _scheduler_setting_enabled(
             session,
             SettingDomain.notification,
