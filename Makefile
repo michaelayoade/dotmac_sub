@@ -1,4 +1,4 @@
-.PHONY: help schema-contract schema-contract-check assert-full-test-host test test-v test-cov test-ci test-ci-shard test-fast bootstrap-test-database-roles test-integration test-architecture test-architecture-serial test-e2e lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
+.PHONY: help schema-contract schema-contract-check assert-full-test-host test test-v test-cov test-ci test-ci-shard test-fast bootstrap-test-database-roles test-integration test-architecture test-architecture-serial test-e2e lint type-check format security check lint-file type-check-file check-file migrate migrate-env-check dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
@@ -141,16 +141,20 @@ test-e2e: assert-full-test-host ## Run end-to-end browser tests
 
 # ─── Database ─────────────────────────────────────────────
 
-migrate: ## Apply all pending migrations
+migrate-env-check:
+	@test -n "$${MIGRATION_DATABASE_URL:-}" || { echo "MIGRATION_DATABASE_URL is required" >&2; exit 2; }
+	@! grep -Eq '^[[:space:]]*(export[[:space:]]+)?MIGRATION_DATABASE_URL[[:space:]]*=' .env 2>/dev/null || { echo "MIGRATION_DATABASE_URL must not be in .env" >&2; exit 2; }
+
+migrate: migrate-env-check ## Apply all pending migrations
 	poetry run alembic upgrade heads
 
 new-migration: ## Allocate a migration from the current head (usage: make new-migration slug=add_users_table)
 	poetry run python scripts/new_migration.py "$(slug)"
 
-migrate-new: ## Autogenerate a migration (hex id; prefer new-migration for the NNN_slug convention)
+migrate-new: migrate-env-check ## Autogenerate a migration (hex id; prefer new-migration for the NNN_slug convention)
 	poetry run alembic revision --autogenerate -m "$(msg)"
 
-migrate-down: ## Rollback last migration
+migrate-down: migrate-env-check ## Rollback last migration
 	poetry run alembic downgrade -1
 
 migrate-history: ## Show migration history
@@ -184,8 +188,8 @@ docker-rebuild: ## Rebuild and restart app container (dev)
 docker-shell: ## Open shell in app container
 	docker exec -it dotmac_sub_app bash
 
-docker-migrate: ## Run migrations inside Docker
-	docker exec dotmac_sub_app alembic upgrade heads
+docker-migrate: migrate-env-check ## Run migrations inside Docker
+	$(DEV_COMPOSE) run --rm --no-deps -e MIGRATION_DATABASE_URL app alembic upgrade heads
 
 # ─── Host-build fallback guard ─────────────────────────────────────────────
 #
@@ -256,9 +260,9 @@ prod-smtp-inbound-up: ## Start/recreate the opt-in, single-instance SMTP intake
 prod-smtp-inbound-probe: ## Prove SMTP intake creates a marked team-inbox message
 	$(PROD_COMPOSE) --profile smtp-inbound exec -T team-inbox-smtp python -m app.team_inbox_smtp e2e-probe
 
-prod-migrate: ## Apply migrations, retry lock timeouts, then verify schema contracts
+prod-migrate: migrate-env-check ## Apply migrations, retry lock timeouts, then verify schema contracts
 	@n=0; until [ $$n -ge 4 ]; do \
-	  out=$$($(PROD_COMPOSE) run --rm --no-deps app alembic upgrade heads 2>&1); rc=$$?; \
+	  out=$$($(PROD_COMPOSE) run --rm --no-deps -e MIGRATION_DATABASE_URL app alembic upgrade heads 2>&1); rc=$$?; \
 	  echo "$$out"; \
 	  [ $$rc -eq 0 ] && break; \
 	  if echo "$$out" | grep -qiE "lock timeout|canceling statement due to lock"; then \

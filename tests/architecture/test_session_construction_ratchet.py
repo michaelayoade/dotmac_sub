@@ -90,7 +90,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +2 from tests/test_enforcement_evidence_shadow_report.py: a private,
 #: per-test SQLite engine/sessionmaker for the ADR 0017 shadow-report query,
 #: isolated like the writer tests (EnforcementApplication carries no FKs).
-TEST_FIXTURE_BASELINE_TOTAL = 146
+#: +1 from tests/integration/test_module_lineage_rehearsal.py: the disposable
+#: database fixture creates its stand-in schema before Alembic and disposes
+#: that bootstrap engine in a finally block.
+TEST_FIXTURE_BASELINE_TOTAL = 147
 
 
 def _baseline() -> dict[str, int]:

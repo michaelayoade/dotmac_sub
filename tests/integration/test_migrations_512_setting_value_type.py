@@ -47,6 +47,7 @@ from sqlalchemy.engine import URL, make_url
 
 from alembic import command
 from app import config as app_config
+from tests.integration.migration_authority import migration_database
 
 REVISION_511 = "511_sales_order_invoice_links"
 REVISION_512 = "512_open_setting_value_type_vocabulary"
@@ -93,7 +94,9 @@ def fresh_migration_database() -> Iterator[URL]:
         )
 
     try:
-        yield base_url.set(database=database_name)
+        target = base_url.set(database=database_name)
+        with migration_database(target):
+            yield target
     finally:
         with psycopg.connect(_psycopg_url(maintenance_url), autocommit=True) as admin:
             admin.execute(

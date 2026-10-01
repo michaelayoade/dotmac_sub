@@ -18,6 +18,7 @@ from sqlalchemy.engine import URL
 from alembic import command
 from app import config as app_config
 from scripts.ci.migrated_test_database import require_migrated_schema
+from tests.integration.migration_authority import migration_database
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "583_staff_expense_requesters"
@@ -56,7 +57,8 @@ def fresh_migration_database(
         ),
     )
     try:
-        yield target
+        with migration_database(target):
+            yield target
     finally:
         with psycopg.connect(_render(maintenance), autocommit=True) as admin:
             admin.execute(

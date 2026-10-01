@@ -436,7 +436,12 @@ def test_adding_a_worker_beat_or_router_service_is_refused(
 
 def test_the_migration_service_is_one_shot(compose: ShadowComposeFile) -> None:
     assert compose.services["migrate"].restart == "no"
-    assert compose.services["migrate"].command == ("alembic", "upgrade", "heads")
+    command = compose.services["migrate"].command
+    assert command is not None
+    assert "REFUSED: shadow migration" in " ".join(command)
+    assert "alembic" not in " ".join(command)
+    assert compose.services["migrate"].environment["MIGRATION_DATABASE_URL"] == ""
+    assert compose.services["app"].environment["MIGRATION_DATABASE_URL"] == ""
 
 
 def test_a_restarting_migration_service_is_refused(

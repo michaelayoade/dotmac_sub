@@ -1242,6 +1242,20 @@ the separate production retirement gate.
 
 ### Security Measures
 
+Database migration execution and runtime traffic use separate authorities.
+`alembic/env.py` requires a one-shot `MIGRATION_DATABASE_URL` authenticated as
+`app_admin` with BYPASSRLS and NOSUPERUSER, and proves both session and current
+identity before version-table access. `DATABASE_URL` supplies application
+traffic; the intended online role is non-superuser NOBYPASSRLS `app_user`
+after reviewed ownership/grant provisioning. Long-running Compose services
+mask the migration URL. Module schemas are owned by `app_admin`, derived in
+`docs/generated/MODULE_SCHEMA_CONTRACT.md`; prerequisite repair refuses
+existing owner drift. Historical revision 557's `dotmac_app` membership
+prerequisite is retained and does not identify the current Alembic login.
+The 2026-10-01 Seabone runtime observation still used superuser `postgres`;
+source alignment does not establish deployed separation. See the
+[existing-estate cutover gate](runbooks/PRODUCTION_DEPLOYMENT.md#existing-estate-cutover-gate).
+
 - CSRF: Double-submit cookie
 - Brute Force: Failed login tracking with lockout
 - Passwords: PBKDF2/bcrypt hashing

@@ -46,6 +46,7 @@ from sqlalchemy.engine import URL, make_url
 
 from alembic import command
 from app import config as app_config
+from tests.integration.migration_authority import migration_database
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "466_team_inbox_channel_ai_routes"
@@ -94,11 +95,8 @@ def freshly_migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
     BEHAVIOUR on a migrated schema and takes `cloned_database` instead, which
     copies a template the chain already built.
 
-    `alembic/env.py` resolves its target from `app_config.settings`, NOT from
-    the Config's `sqlalchemy.url`, so pointing the Config at the scratch
-    database silently does nothing and the upgrade runs against whatever
-    `DATABASE_URL` the job exports (sqlite, in CI). Patch settings instead —
-    the same seam `test_migrations_423_to_head.py` uses.
+    The fixture installs an explicit app_admin migration URL for this scratch
+    database. Application settings remain pointed here for test data writes.
     """
     configured = os.getenv("TEST_DATABASE_URL")
     if not configured:
@@ -121,7 +119,8 @@ def freshly_migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
         ),
     )
     try:
-        yield target
+        with migration_database(target):
+            yield target
     finally:
         with psycopg.connect(_render(maintenance), autocommit=True) as admin:
             admin.execute(
@@ -135,19 +134,16 @@ def freshly_migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
 
 
 def _alembic(url: URL, revision: str) -> None:
-    """Upgrade the scratch database. The target comes from the patched
-    `app_config.settings` (see `freshly_migrated_database` and the
-    `cloned_database` fixture), which is what
-    `alembic/env.py` actually reads."""
+    """Upgrade the exact scratch database selected by the fixture."""
 
-    del url  # documented: env.py resolves the URL from settings, not Config
+    assert make_url(os.environ["MIGRATION_DATABASE_URL"]).database == url.database
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     command.upgrade(config, revision)
 
 
 def _alembic_downgrade(url: URL, revision: str) -> None:
-    del url  # documented: env.py resolves the URL from settings, not Config
+    assert make_url(os.environ["MIGRATION_DATABASE_URL"]).database == url.database
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     command.downgrade(config, revision)

@@ -16,8 +16,10 @@ import os
 import sys
 
 import psycopg
+from psycopg import sql
 from sqlalchemy.engine import URL
 
+from app.commercial_module_prereqs import SCHEMA_BOOTSTRAP_ROLE
 from scripts.bootstrap_commercial_module_prereqs import (
     bootstrap as bootstrap_commercial_module_prereqs,
 )
@@ -49,8 +51,58 @@ def _bootstrap_outbox_url(url: URL, *, label: str) -> int:
     return 0
 
 
-def _bootstrap_test_target(url: URL, *, label: str) -> int:
+def _bootstrap_test_schema_login(conn: psycopg.Connection, url: URL) -> int:
+    """Provision only a missing synthetic login; refuse existing role drift."""
+    identity = conn.execute(
+        "SELECT rolcanlogin, rolinherit, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole "
+        "FROM pg_roles WHERE rolname = %s",
+        (SCHEMA_BOOTSTRAP_ROLE,),
+    ).fetchone()
+    if identity is None:
+        conn.execute(
+            sql.SQL(
+                "CREATE ROLE {} LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE"
+            ).format(sql.Identifier(SCHEMA_BOOTSTRAP_ROLE))
+        )
+        if url.password is not None:
+            conn.execute(
+                sql.SQL("ALTER ROLE {} PASSWORD {}").format(
+                    sql.Identifier(SCHEMA_BOOTSTRAP_ROLE), sql.Literal(url.password)
+                )
+            )
+        conn.execute(
+            sql.SQL("GRANT app_admin TO {}").format(
+                sql.Identifier(SCHEMA_BOOTSTRAP_ROLE)
+            )
+        )
+    elif identity != (True, False, False, False, False, False):
+        print(
+            "schema-bootstrap test role has unexpected authority; provisioning refused",
+            file=sys.stderr,
+        )
+        return 2
+    elif not conn.execute(
+        "SELECT pg_has_role(%s, 'app_admin', 'MEMBER')", (SCHEMA_BOOTSTRAP_ROLE,)
+    ).fetchone()[0]:
+        print(
+            "schema-bootstrap test role lacks owner membership; provisioning refused",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
+def bootstrap_disposable_database(url: URL, *, label: str) -> int:
     with psycopg.connect(_psycopg_url(url), autocommit=False) as conn:
+        # Historical revision 001 creates these extensions. PostGIS extension
+        # installation belongs to this disposable superuser bootstrap so the
+        # actual migration connection can remain app_admin throughout.
+        for extension in ("postgis", "postgis_topology", "pg_trgm", "btree_gist"):
+            conn.execute(
+                sql.SQL("CREATE EXTENSION IF NOT EXISTS {}").format(
+                    sql.Identifier(extension)
+                )
+            )
         commercial_result = bootstrap_commercial_module_prereqs(
             conn, dry_run=False, repair=True
         )
@@ -60,6 +112,15 @@ def _bootstrap_test_target(url: URL, *, label: str) -> int:
                 file=sys.stderr,
             )
             return commercial_result
+        if _bootstrap_test_schema_login(conn, url):
+            return 2
+        # Disposable CI role login uses the disposable server's test password.
+        if url.password is not None:
+            conn.execute(
+                sql.SQL("ALTER ROLE app_admin PASSWORD {}").format(
+                    sql.Literal(url.password)
+                )
+            )
     return _bootstrap_outbox_url(url, label=label)
 
 
@@ -70,7 +131,7 @@ def main() -> int:
         print(f"REFUSED [{exc.code.value}] {exc}", file=sys.stderr)
         return 2
 
-    test_target = _bootstrap_test_target(target.url, label=target.database_name)
+    test_target = bootstrap_disposable_database(target.url, label=target.database_name)
     if test_target != 0:
         return test_target
 

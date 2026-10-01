@@ -170,7 +170,10 @@ def test_upgrade_from_sub_provider_predecessor_preserves_provider_storage(
                 ),
                 {"id": record_id, "tenant_id": str(OPERATOR_TENANT_ID)},
             )
-        assert SCHEMA not in sa.inspect(engine).get_schema_names()
+        # The deployment prerequisite owns the empty schema before this
+        # lineage runs; its tables must still be absent at the predecessor.
+        assert SCHEMA in sa.inspect(engine).get_schema_names()
+        assert not sa.inspect(engine).get_table_names(schema=SCHEMA)
 
         command.upgrade(config, "heads")
 

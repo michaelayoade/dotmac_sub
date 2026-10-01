@@ -28,6 +28,7 @@ from sqlalchemy.engine import URL, make_url
 
 from alembic import command
 from app import config as app_config
+from tests.integration.migration_authority import migration_database
 
 REVISION_501 = "501_retire_allowance_throttle_rate"
 REVISION_502 = "502_open_setting_domain_vocabulary"
@@ -61,7 +62,9 @@ def isolated_migration_database() -> Iterator[URL]:
         )
 
     try:
-        yield base_url.set(database=database_name)
+        target = base_url.set(database=database_name)
+        with migration_database(target):
+            yield target
     finally:
         with psycopg.connect(_psycopg_url(maintenance_url), autocommit=True) as admin:
             admin.execute(

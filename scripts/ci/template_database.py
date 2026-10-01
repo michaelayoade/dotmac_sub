@@ -51,7 +51,6 @@ import os
 import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -61,9 +60,7 @@ from psycopg import sql
 from sqlalchemy.engine import URL
 
 from alembic import command
-from scripts.bootstrap_outbox_dispatcher_roles import (
-    bootstrap as bootstrap_outbox_dispatcher_roles,
-)
+from scripts.ci.bootstrap_test_database_prereqs import bootstrap_disposable_database
 from scripts.ci.migrated_test_database import (
     ALEMBIC_CONFIG_PATH,
     REPOSITORY_ROOT,
@@ -220,41 +217,35 @@ def drop_database(base: URL, name: str) -> None:
 def _alembic_target(url: URL) -> Iterator[None]:
     """Point `alembic/env.py` at `url` for the duration of the block.
 
-    `env.py` resolves its target from `app_config.settings`, NOT from the
-    Config's `sqlalchemy.url`, so setting the latter silently does nothing and
-    the upgrade runs against whatever `DATABASE_URL` the job exported.
+    Alembic uses the one-shot app_admin login, even for a template database.
     """
 
-    from app import config as app_config
-
-    previous = app_config.settings
-    app_config.settings = replace(
-        previous, database_url=url.render_as_string(hide_password=False)
-    )
     previous_env = os.environ.get("DATABASE_URL")
+    previous_migration_url = os.environ.get("MIGRATION_DATABASE_URL")
     os.environ["DATABASE_URL"] = url.render_as_string(hide_password=False)
+    os.environ["MIGRATION_DATABASE_URL"] = url.set(
+        username="app_admin"
+    ).render_as_string(hide_password=False)
     try:
         yield
     finally:
-        app_config.settings = previous
         if previous_env is None:
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous_env
-
-
-def _psycopg_url(url: URL) -> str:
-    return url.set(drivername="postgresql").render_as_string(hide_password=False)
+        if previous_migration_url is None:
+            os.environ.pop("MIGRATION_DATABASE_URL", None)
+        else:
+            os.environ["MIGRATION_DATABASE_URL"] = previous_migration_url
 
 
 def bootstrap_database_local_prerequisites(url: URL) -> None:
     """Apply database-local migration prerequisites to a fresh test database."""
 
-    with psycopg.connect(_psycopg_url(url), autocommit=False) as conn:
-        result = bootstrap_outbox_dispatcher_roles(conn, dry_run=False, repair=True)
+    result = bootstrap_disposable_database(url, label=url.database or "template")
     if result != 0:
         raise RuntimeError(
-            "failed to bootstrap outbox dispatcher prerequisites for template database"
+            "failed to bootstrap migration prerequisites for template database"
         )
 
 

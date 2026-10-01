@@ -29,6 +29,7 @@ from app import config as app_config
 from app.models.audit import AuditActorType, AuditEvent
 from app.schemas.audit import AuditEventCreate
 from app.services.audit import audit_events
+from tests.integration.migration_authority import migration_database
 
 PREDECESSOR = "524_network_map_v2_asset_proposals"
 REVISION = "526_audit_events_kernel_r1"
@@ -56,7 +57,9 @@ def isolated_database() -> Iterator[URL]:
     with psycopg.connect(_psycopg_url(maintenance), autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     try:
-        yield base_url.set(database=name)
+        target = base_url.set(database=name)
+        with migration_database(target):
+            yield target
     finally:
         with psycopg.connect(_psycopg_url(maintenance), autocommit=True) as admin:
             admin.execute(
@@ -73,6 +76,30 @@ def _config() -> Config:
     config = Config("alembic.ini")
     config.set_main_option("script_location", "alembic")
     return config
+
+
+def test_superuser_migration_login_is_refused_before_version_table(
+    isolated_database: URL,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A privileged bootstrap login cannot substitute for actual app_admin."""
+
+    # The fixture prepared this exact disposable database and set its app_admin
+    # migration URL. Override that URL last so this invocation uses the wrong
+    # authenticated principal rather than the fixture's valid one.
+    monkeypatch.setenv("MIGRATION_DATABASE_URL", _render(isolated_database))
+    with psycopg.connect(_psycopg_url(isolated_database)) as connection:
+        assert connection.execute(
+            "SELECT to_regclass('public.alembic_version') IS NULL"
+        ).fetchone() == (True,)
+
+    with pytest.raises(RuntimeError, match="actual app_admin login"):
+        command.upgrade(_config(), "heads")
+
+    with psycopg.connect(_psycopg_url(isolated_database)) as connection:
+        assert connection.execute(
+            "SELECT to_regclass('public.alembic_version') IS NULL"
+        ).fetchone() == (True,)
 
 
 def test_524_preserves_unknown_history_and_defaults_only_future_rows(

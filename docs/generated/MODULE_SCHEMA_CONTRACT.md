@@ -16,17 +16,17 @@ the build on drift.
 
 | schema | module | distribution | import name | owner |
 | --- | --- | --- | --- | --- |
-| `mod_billing` | billing | `dotmac-billing` | `dotmac_billing` | `dotmac_app` |
-| `mod_coll` | collections | `dotmac-collections` | `dotmac_collections` | `dotmac_app` |
-| `mod_inbox` | inbox | `dotmac-inbox` | `dotmac_inbox` | `dotmac_app` |
-| `mod_payments` | payments | `dotmac-payments` | `dotmac_payments` | `dotmac_app` |
-| `mod_serviceorders` | service_orders | `dotmac-service-orders` | `dotmac_service_orders` | `dotmac_app` |
-| `mod_subscriptions` | subscriptions | `dotmac-subscriptions` | `dotmac_subscriptions` | `dotmac_app` |
-| `mod_tstudio` | template_studio | `dotmac-template-studio` | `dotmac_template_studio` | `dotmac_app` |
+| `mod_billing` | billing | `dotmac-billing` | `dotmac_billing` | `app_admin` |
+| `mod_coll` | collections | `dotmac-collections` | `dotmac_collections` | `app_admin` |
+| `mod_inbox` | inbox | `dotmac-inbox` | `dotmac_inbox` | `app_admin` |
+| `mod_payments` | payments | `dotmac-payments` | `dotmac_payments` | `app_admin` |
+| `mod_serviceorders` | service_orders | `dotmac-service-orders` | `dotmac_service_orders` | `app_admin` |
+| `mod_subscriptions` | subscriptions | `dotmac-subscriptions` | `dotmac_subscriptions` | `app_admin` |
+| `mod_tstudio` | template_studio | `dotmac-template-studio` | `dotmac_template_studio` | `app_admin` |
 
 ## Contract for every schema above
 
-- Owner: `dotmac_app`.
+- Owner: `app_admin`.
 - `USAGE` granted to: `app_admin`, `app_user`, `platform_api`.
 - No privileges for `PUBLIC`. This is asserted as denial, not as an
   absent grant row: the no-privilege probe role `dotmac_public_probe`

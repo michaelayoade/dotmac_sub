@@ -10,6 +10,7 @@ from app.commercial_module_prereqs import (
     PUBLIC_PROBE_ROLE,
     ModuleSchemaObservation,
     commercial_bootstrap_role_violations,
+    commercial_role_authority_violations,
     commercial_schema_violations,
     composed_lineage_import_names,
     module_database_role_violations,
@@ -50,7 +51,7 @@ def test_the_schema_set_is_derived_from_the_composed_lineages() -> None:
         "dotmac_template_studio": "mod_tstudio",
     }
     assert module_schemas() == set(derived.values())
-    assert all(item.owner_role == "dotmac_app" for item in module_schema_contract())
+    assert all(item.owner_role == "app_admin" for item in module_schema_contract())
     assert all(
         item.usage_roles == ("app_admin", "app_user", "platform_api")
         for item in module_schema_contract()
@@ -82,6 +83,20 @@ def test_bootstrap_roles_include_the_schema_owner_without_broad_privilege() -> N
     missing = commercial_bootstrap_role_violations({})
     assert any("dotmac_app" in violation for violation in missing)
     assert any("app_user" in violation for violation in missing)
+
+
+def test_current_bootstrap_role_contract_denies_cluster_creation_powers() -> None:
+    observed = {
+        role: item.authority_posture
+        for role, item in COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT.items()
+    }
+    assert commercial_role_authority_violations(observed) == ()
+    assert all(not posture[3] and not posture[4] for posture in observed.values())
+    observed["app_admin"] = (True, True, False, True, False)
+    assert any(
+        "rolcreatedb" in violation
+        for violation in commercial_role_authority_violations(observed)
+    )
 
 
 def test_the_public_probe_role_cannot_log_in() -> None:

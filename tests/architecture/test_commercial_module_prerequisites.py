@@ -71,7 +71,7 @@ def test_the_schema_set_is_derived_rather_than_restated() -> None:
 
     for item in derived:
         assert item.schema.startswith("mod_"), item.schema
-        assert item.owner_role == "dotmac_app"
+        assert item.owner_role == "app_admin"
         assert item.usage_roles == ("app_admin", "app_user", "platform_api")
 
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))

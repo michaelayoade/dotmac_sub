@@ -54,6 +54,37 @@ SCHEMA_BOOTSTRAP_ROLE: Final[str] = "dotmac_schema_bootstrap"
 PROBED_SCHEMA_PRIVILEGES: Final[tuple[str, ...]] = ("USAGE", "CREATE")
 
 RolePosture = tuple[bool, bool, bool]
+AuthorityRolePosture = tuple[bool, bool, bool, bool, bool]
+
+
+@dataclass(frozen=True)
+class MigrationPrincipalObservation:
+    """The eight catalog facts that authorize one migration session."""
+
+    session_user: str
+    current_user: str
+    can_login: bool
+    bypass_rls: bool
+    superuser: bool
+    can_create_database: bool
+    can_create_role: bool
+    database_create: bool
+
+    def __post_init__(self) -> None:
+        if type(self.session_user) is not str or type(self.current_user) is not str:
+            raise ValueError("migration principal names must be strings")
+        if any(
+            type(value) is not bool
+            for value in (
+                self.can_login,
+                self.bypass_rls,
+                self.superuser,
+                self.can_create_database,
+                self.can_create_role,
+                self.database_create,
+            )
+        ):
+            raise ValueError("migration principal flags must be booleans")
 
 
 @dataclass(frozen=True)
@@ -64,10 +95,20 @@ class DatabaseRoleContract:
     can_login: bool
     bypass_rls: bool
     superuser: bool
+    can_create_database: bool = False
+    can_create_role: bool = False
 
     @property
     def posture(self) -> RolePosture:
         return (self.can_login, self.bypass_rls, self.superuser)
+
+    @property
+    def authority_posture(self) -> AuthorityRolePosture:
+        return (
+            *self.posture,
+            self.can_create_database,
+            self.can_create_role,
+        )
 
 
 @dataclass(frozen=True)
@@ -78,7 +119,7 @@ class ModuleSchemaContract:
     distribution: str
     import_name: str
     schema: str
-    owner_role: str = "dotmac_app"
+    owner_role: str = "app_admin"
     usage_roles: tuple[str, ...] = ("app_admin", "app_user", "platform_api")
 
 
@@ -244,6 +285,46 @@ def commercial_bootstrap_role_violations(
     return role_posture_violations(COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT, observed)
 
 
+def commercial_role_authority_violations(
+    observed: Mapping[str, AuthorityRolePosture],
+) -> tuple[str, ...]:
+    """Current role contract, including the two cluster creation powers.
+
+    The three-field ``RolePosture`` remains the immutable 546 migration
+    contract; all current bootstrap observations use this stronger boundary.
+    """
+
+    violations: list[str] = []
+    for role, expected in COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT.items():
+        actual = observed.get(role)
+        if actual is None:
+            violations.append(f"database role {role!r} is missing")
+        elif actual != expected.authority_posture:
+            violations.append(
+                f"{role} has (rolcanlogin, rolbypassrls, rolsuper, "
+                f"rolcreatedb, rolcreaterole)={actual!r}; "
+                f"expected {expected.authority_posture!r}"
+            )
+    return tuple(violations)
+
+
+def migration_principal_is_valid(
+    identity: MigrationPrincipalObservation | None,
+) -> bool:
+    """Require the actual restricted login and deny effective database CREATE."""
+
+    return identity == MigrationPrincipalObservation(
+        session_user="app_admin",
+        current_user="app_admin",
+        can_login=True,
+        bypass_rls=True,
+        superuser=False,
+        can_create_database=False,
+        can_create_role=False,
+        database_create=False,
+    )
+
+
 def commercial_schema_violations(
     observed: Mapping[str, ModuleSchemaObservation],
 ) -> tuple[str, ...]:
@@ -293,7 +374,9 @@ def commercial_schema_violations(
 __all__ = [
     "ALEMBIC_INI",
     "COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT",
+    "AuthorityRolePosture",
     "MODULE_DATABASE_ROLE_CONTRACT",
+    "MigrationPrincipalObservation",
     "PROBED_SCHEMA_PRIVILEGES",
     "PUBLIC_PROBE_ROLE",
     "SCHEMA_BOOTSTRAP_ROLE",
@@ -302,10 +385,12 @@ __all__ = [
     "ModuleSchemaObservation",
     "RolePosture",
     "commercial_bootstrap_role_violations",
+    "commercial_role_authority_violations",
     "commercial_schema_violations",
     "composed_lineage_import_names",
     "module_database_role_violations",
     "module_schema_contract",
     "module_schemas",
+    "migration_principal_is_valid",
     "role_posture_violations",
 ]

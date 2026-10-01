@@ -194,6 +194,16 @@ def composed(isolated_database: URL, standin_lineage: Path):
     sub_only = Config("alembic.ini")
     sub_only.set_main_option("script_location", "alembic")
     sub_only.set_main_option("sqlalchemy.url", _render(isolated_database))
+    # The deployment bootstrap owns schema creation; this stand-in is outside
+    # the real manifest-derived set, so provision its schema explicitly.
+    bootstrap_engine = create_engine(isolated_database)
+    try:
+        with bootstrap_engine.begin() as bootstrap_connection:
+            bootstrap_connection.execute(
+                sa.text("CREATE SCHEMA mod_rehearsal AUTHORIZATION app_admin")
+            )
+    finally:
+        bootstrap_engine.dispose()
     command.upgrade(sub_only, "heads")
 
     engine = create_engine(isolated_database)

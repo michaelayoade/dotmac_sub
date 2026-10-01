@@ -16,6 +16,7 @@ from sqlalchemy.engine import URL, make_url
 
 from alembic import command
 from app import config as app_config
+from tests.integration.migration_authority import migration_database
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "534_session_party_projection"
@@ -48,7 +49,8 @@ def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
         ),
     )
     try:
-        yield target
+        with migration_database(target):
+            yield target
     finally:
         with psycopg.connect(_render(maintenance), autocommit=True) as admin:
             admin.execute(

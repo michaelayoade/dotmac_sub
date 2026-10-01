@@ -11,9 +11,9 @@
 # socket was reachable at /proc/<pid>/root/var/run/postgresql, but /var/run is a
 # symlink to /run inside the alpine image and the host kernel resolves that
 # absolute target against the HOST root, so the path can never exist. Measured
-# on the production host 2026-08-31. This uses TCP with the dedicated
-# schema-bootstrap role instead, matching the managed path exactly so the two
-# cannot drift.
+# on the production host 2026-08-31. The former staging leg used TCP with a
+# dedicated schema-bootstrap role, but its pinned image still verified through
+# the runtime URL. Both hand-dispatched targets are now refused.
 name: Temporary commercial module prerequisite repair
 
 on:
@@ -40,81 +40,16 @@ env:
 
 jobs:
   staging:
-    name: Repair staging prerequisites
+    name: Refuse legacy staging prerequisite repair
     if: inputs.target == 'staging'
-    runs-on: [self-hosted, linux, x64, dotmac-sub-staging]
-    environment: staging
-    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Repair and verify exact staging database
-        env:
-          DEPLOY_DIR: ${{ vars.STAGING_DEPLOY_DIR }}
-          SCHEMA_BOOTSTRAP_PGPASS: /etc/dotmac/sub/schema-bootstrap.pgpass
-          SCHEMA_BOOTSTRAP_MOUNT: /run/secrets/schema-bootstrap.pgpass
+      - name: Refuse legacy image and runtime migration URL
         run: |
-          set -euo pipefail
-          set +x
-          expected_dir=/home/dotmac/deploy-worktrees/dotmac-sub-staging
-          test "$DEPLOY_DIR" = "$expected_dir"
-          test -f "$DEPLOY_DIR/.env"
-          grep -Fqx 'APP_ENV=staging' "$DEPLOY_DIR/.env"
-          grep -Fqx 'SERVER_NAME=dotmac-sub-staging' "$DEPLOY_DIR/.env"
-          cd "$DEPLOY_DIR"
-
-          exec 9>/var/lock/dotmac_sub_deploy.lock
-          flock -n 9 || {
-            echo 'A staging deployment or database repair is already running.' >&2
-            exit 1
-          }
-
-          docker pull "$REPAIR_IMAGE"
-          # Every preflight says what failed. A bare `test` exiting 1 with no
-          # output is how the 2026-08-31 production attempt became
-          # undiagnosable from its own log.
-          actual_revision="$(docker image inspect "$REPAIR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
-          if [[ "$actual_revision" != "$REPAIR_REVISION" ]]; then
-            echo "PREFLIGHT: repair image revision is '$actual_revision'; expected '$REPAIR_REVISION'." >&2
-            exit 1
-          fi
-
-          if [[ -z "${SCHEMA_BOOTSTRAP_URL:-}" ]]; then
-            SCHEMA_BOOTSTRAP_URL="$(grep -E '^SCHEMA_BOOTSTRAP_URL=' .env | tail -n 1 | cut -d= -f2- || true)"
-          fi
-          if [[ -z "${SCHEMA_BOOTSTRAP_URL:-}" ]]; then
-            echo "PREFLIGHT: SCHEMA_BOOTSTRAP_URL is not configured for staging." >&2
-            exit 1
-          fi
-          if [[ "$SCHEMA_BOOTSTRAP_URL" == *:*@* ]]; then
-            echo "PREFLIGHT: SCHEMA_BOOTSTRAP_URL carries an inline password; the credential must come from the pgpass file." >&2
-            exit 1
-          fi
-          if [[ ! -f "$SCHEMA_BOOTSTRAP_PGPASS" ]]; then
-            echo "PREFLIGHT: credential file $SCHEMA_BOOTSTRAP_PGPASS is missing." >&2
-            exit 1
-          fi
-          mode="$(stat -c '%a' "$SCHEMA_BOOTSTRAP_PGPASS")"
-          owner="$(stat -c '%U' "$SCHEMA_BOOTSTRAP_PGPASS")"
-          if [[ "$mode" != "400" || "$owner" != "root" ]]; then
-            echo "PREFLIGHT: $SCHEMA_BOOTSTRAP_PGPASS is mode $mode owned by $owner; expected 400 root." >&2
-            exit 1
-          fi
-
-          compose=(docker compose -f docker-compose.yml)
-          test -f docker-compose.override.yml
-          compose+=(-f docker-compose.override.yml)
-
-          # No password in the URL, argv, environment or log: libpq reads it
-          # from the mounted pgpass file.
-          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
-            "${compose[@]}" run --rm --no-deps --user 0:0 \
-            -v "$SCHEMA_BOOTSTRAP_PGPASS:$SCHEMA_BOOTSTRAP_MOUNT:ro" \
-            -e PGPASSFILE="$SCHEMA_BOOTSTRAP_MOUNT" \
-            -e BOOTSTRAP_DATABASE_URL="$SCHEMA_BOOTSTRAP_URL" \
-            app python scripts/bootstrap_commercial_module_prereqs.py --repair-schemas
-
-          APP_IMAGE="$REPAIR_IMAGE" GIT_SHA="$REPAIR_REVISION" \
-            "${compose[@]}" run --rm --no-deps app sh -c \
-            'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only'
+          echo 'REFUSED: this temporary workflow pins a pre-split image and used the runtime database URL for migration verification.' >&2
+          echo 'Use a reviewed managed deployment with an actual app_admin migration connection and separately reviewed schema ownership cutover.' >&2
+          exit 1
 
   production:
     name: Repair production prerequisites

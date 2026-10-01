@@ -77,9 +77,11 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot: runs to completion, then the app starts. `restart: no` is load
-  # bearing — a migration container that restarts on failure hides a broken
-  # migration behind a crash loop instead of failing the deploy.
+  # The pinned baseline predates the separate app_admin migration connection.
+  # It cannot prove the new owner contract, and this stack has no reviewed
+  # bootstrap path for app_admin. Refuse before Alembic so Compose cannot start
+  # the app after a migration under shadow_app. A later reviewed image and
+  # shadow-specific prerequisite bootstrap must replace this refusal together.
   migrate:
     image: ghcr.io/michaelayoade/dotmac_sub@sha256:342a9b805d6ac9d56a116b9ac833c594b0ccd5f2f79a9b6c75b3f85ba36885d4
     container_name: dotmac_sub_thin_shadow_migrate
@@ -90,7 +92,8 @@ services:
     environment:
       APP_ENV: shadow
       SERVER_NAME: dotmac-sub-thin-shadow
-      DATABASE_URL: postgresql+psycopg://${SHADOW_DB_USER:-shadow_app}:${SHADOW_DB_PASSWORD}@postgres:5432/${SHADOW_DB_NAME:-dotmac_sub_shadow}
+      DATABASE_URL: ""
+      MIGRATION_DATABASE_URL: ""
       REDIS_URL: redis://:${SHADOW_REDIS_PASSWORD}@redis:6379/0
     # No external name resolution. Docker's embedded resolver (127.0.0.11)
     # answers container/service names itself and only FORWARDS names it does
@@ -101,7 +104,7 @@ services:
     # willing to encode data in a query.
     dns:
       - 127.0.0.1
-    command: ["alembic", "upgrade", "heads"]
+    command: ["sh", "-c", "echo 'REFUSED: shadow migration needs a reviewed app_admin bootstrap and image' >&2; exit 1"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -126,6 +129,7 @@ services:
       APP_ENV: shadow
       SERVER_NAME: dotmac-sub-thin-shadow
       DATABASE_URL: postgresql+psycopg://${SHADOW_DB_USER:-shadow_app}:${SHADOW_DB_PASSWORD}@postgres:5432/${SHADOW_DB_NAME:-dotmac_sub_shadow}
+      MIGRATION_DATABASE_URL: ""
       REDIS_URL: redis://:${SHADOW_REDIS_PASSWORD}@redis:6379/0
       SESSION_REDIS_URL: redis://:${SHADOW_REDIS_PASSWORD}@redis:6379/1
       # Outbound consequence delivery is disabled by configuration as well as by

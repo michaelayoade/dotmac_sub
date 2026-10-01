@@ -30,6 +30,9 @@ class Settings:
         "DATABASE_URL",
         "postgresql+psycopg://postgres:postgres@localhost:5434/dotmac_sub",
     )
+    # DATABASE_URL is the application runtime connection. Alembic reads its
+    # separate, one-shot MIGRATION_DATABASE_URL directly from the environment.
+    # Do not load migration credentials into Settings or long-running services.
     # Legacy/developer fallback for stable, non-reversible marketing subject
     # identifiers. Deployed environments hold this value from OpenBao at boot.
     # The raw key and customer identity must never enter an event payload or log.

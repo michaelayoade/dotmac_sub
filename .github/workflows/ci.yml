@@ -841,10 +841,9 @@ jobs:
             -e SECRET_KEY=ci-test-secret-key-not-for-production \
             -e REDIS_URL=redis://ci-redis:6379/0"
           docker run --rm $common_args dotmac-sub:ci sh -c \
-            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'
+            'TEST_DATABASE_URL="$DATABASE_URL" python -m scripts.ci.bootstrap_test_database_prereqs'
           docker run --rm $common_args dotmac-sub:ci sh -c \
-            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --repair'
-          docker run --rm $common_args dotmac-sub:ci alembic upgrade heads
+            'TEST_DATABASE_URL="$DATABASE_URL" python -m scripts.ci.migrated_test_database'
           docker run -d --name ci-app $common_args \
             -e CELERY_BROKER_URL=redis://ci-redis:6379/0 dotmac-sub:ci
           for i in $(seq 1 60); do

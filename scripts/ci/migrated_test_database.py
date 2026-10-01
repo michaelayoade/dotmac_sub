@@ -194,7 +194,11 @@ def migrate_test_database(target: DatabaseTarget) -> MigratedSchemaState:
     """Apply the real chain once, then verify its exact resulting head."""
 
     previous_database_url = os.environ.get("DATABASE_URL")
+    previous_migration_url = os.environ.get("MIGRATION_DATABASE_URL")
     os.environ["DATABASE_URL"] = target.url.render_as_string(hide_password=False)
+    os.environ["MIGRATION_DATABASE_URL"] = target.url.set(
+        username="app_admin"
+    ).render_as_string(hide_password=False)
     try:
         config = Config(str(ALEMBIC_CONFIG_PATH))
         config.set_main_option("script_location", str(REPOSITORY_ROOT / "alembic"))
@@ -204,6 +208,10 @@ def migrate_test_database(target: DatabaseTarget) -> MigratedSchemaState:
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous_database_url
+        if previous_migration_url is None:
+            os.environ.pop("MIGRATION_DATABASE_URL", None)
+        else:
+            os.environ["MIGRATION_DATABASE_URL"] = previous_migration_url
 
     engine = create_engine(target.url)
     try:
