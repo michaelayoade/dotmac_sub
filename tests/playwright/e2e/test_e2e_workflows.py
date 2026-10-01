@@ -366,6 +366,7 @@ class TestSubscriptionActivation:
         self,
         admin_page: Page,
         browser,
+        request: pytest.FixtureRequest,
         settings,
         api_context,
         admin_token,
@@ -381,6 +382,9 @@ class TestSubscriptionActivation:
         offer, radius_profile = _create_phase1_offer(api_context, suffix, admin_token)
 
         fresh_context = browser.new_context()
+        # Finalize after pytest records the call outcome, so a failed wizard
+        # keeps its own trace instead of only the unrelated admin fixture.
+        request.addfinalizer(fresh_context.close)
         fresh_context.add_init_script(
             "window.localStorage.setItem('dotmac_admin_tour_seen_v1', '1')"
         )
@@ -449,7 +453,26 @@ class TestSubscriptionActivation:
 
         page.get_by_role("button", name="Continue").click()
         page.locator("input[name='send_welcome_email']").uncheck()
-        page.get_by_role("button", name="Add Subscription").click(no_wait_after=True)
+        subscription_form = page.locator("form[action='/admin/catalog/subscriptions']")
+        invalid_controls: list[str] = subscription_form.evaluate(
+            """form => Array.from(form.elements)
+                .filter(control => control.willValidate && !control.checkValidity())
+                .map(control => control.name || control.id || control.tagName)"""
+        )
+        # Report control names only; form values may include credentials.
+        assert invalid_controls == [], (
+            f"Invalid subscription controls: {invalid_controls}"
+        )
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "POST"
+                and urlsplit(response.url).path == "/admin/catalog/subscriptions"
+            )
+        ) as submitted:
+            page.get_by_role("button", name="Add Subscription").click(
+                no_wait_after=True
+            )
+        assert submitted.value.status == 303
 
         page.wait_for_url("**/admin/customers/person/**")
         subscription_items = []
