@@ -59,11 +59,20 @@ an episode.
    subject when present. No generic payment sentence replaces a template.
 3. The Sub communications owner records a durable payment-scoped window,
    deduplicated by source event ID and protected by a database uniqueness and
-   locking rule. Closure holds the window row lock through one intent submit
-   with a window-derived dedupe key in the same transaction. Two sweeps or an
-   event racing a sweep cannot queue twice; a PostgreSQL race test must prove
-   this because the intent submitter's unique-conflict path is not itself a
-   replay. An uncorrelated event cannot be absorbed into the window.
+   locking rule. Its canonical execution boundary must retain a separate
+   durable intent and dedupe identity for each source event while creating one
+   physical notification per compatible recipient. An explicit association
+   with foreign keys and uniqueness records which intents that delivery covers;
+   the delivery-outcome owner projects its result to both. The existing single
+   `Notification.communication_intent_id` and its outcome projector cannot
+   represent this relationship, and an unchecked metadata list is insufficient.
+   Closure holds the window row lock through intent, coverage and notification
+   creation in one transaction, using a stable composed-delivery dedupe key.
+   Two sweeps or an event racing a sweep cannot queue twice; a PostgreSQL race
+   test must prove this. A losing unique claim reloads the committed coverage
+   rather than submitting a fallback. An uncorrelated event cannot be absorbed
+   into the window. This execution seam is required future work, not part of
+   the dormant template expansion.
 4. The added wait for a payment receipt email is at most **one minute** from
    its eligible rendered event. A sweep closes a window even if no second
    event arrives. A late event is not silently discarded: it is suppressed
@@ -168,9 +177,15 @@ conflict to resolve before cutover.
    shared renderer is authoritative and the billing event carries exact
    payment provenance. Before activation, add event-specific non-sending
    communication-intent planning/eligibility for each candidate event and
-   persist its accepted or suppressed outcome. Compose only two compatible
-   accepted email parts; an ineligible or differently suppressed part uses its
-   direct route. Rendered content alone is insufficient evidence: closing a
+   persist its accepted or suppressed outcome. Planning must use the existing
+   communications and notification policy owners without queuing a delivery,
+   and must cover billing-contact expansion, reseller copies, intent replay,
+   suppression, recent duplicates and delivery timing. Replan at closure.
+   Compose only two accepted parts with compatible recipient, audience,
+   category, timing and attachment semantics. Keep a suppressed part suppressed;
+   an eligible uncovered part uses its direct route once. A delivery already
+   linked to an intent forbids a fallback send for that covered recipient.
+   Rendered content alone is insufficient evidence: closing a
    pair under the receipt event identity can otherwise change the
    `invoice_paid` policy outcome. Keep the direct email path as a bounded
    rollback route
