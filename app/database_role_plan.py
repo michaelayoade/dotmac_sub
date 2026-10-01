@@ -61,12 +61,14 @@ class EvidenceCompleteness:
     membership_complete: bool
     default_acl_complete: bool
     database_privileges_complete: bool
+    database_acl_complete: bool
 
 
 @dataclass(frozen=True)
 class RolePosture:
     name: str
     can_login: bool
+    inherits: bool
     bypass_rls: bool
     superuser: bool
     can_create_database: bool
@@ -79,6 +81,8 @@ class Membership:
     member: str
     role: str
     inherits: bool
+    set_option: bool
+    admin_option: bool
 
 
 @dataclass(frozen=True)
@@ -131,6 +135,7 @@ class CatalogSnapshot:
     schema_version: int
     database: str
     database_owner: str
+    database_acl_grants: tuple[Grant, ...]
     scope_schemas: tuple[str, ...]
     evidence: EvidenceCompleteness
     roles: tuple[RolePosture, ...]
@@ -163,6 +168,19 @@ class ObjectPolicy:
 
 
 @dataclass(frozen=True)
+class SourceAdminPrincipal:
+    name: str
+    justification: str
+
+
+@dataclass(frozen=True)
+class OperationalBootstrapMembership:
+    member: str
+    role: str
+    justification: str
+
+
+@dataclass(frozen=True)
 class AuthorityPolicy:
     schema_version: int
     database: str
@@ -171,6 +189,8 @@ class AuthorityPolicy:
     expected_database_owner: str
     scope_schemas: tuple[str, ...]
     approved_source_owners: tuple[str, ...]
+    source_admin_principals: tuple[SourceAdminPrincipal, ...]
+    operational_bootstrap_memberships: tuple[OperationalBootstrapMembership, ...]
     objects: tuple[ObjectPolicy, ...]
 
 
@@ -347,6 +367,7 @@ def decode_catalog(value: object) -> CatalogSnapshot:
                 "schema_version",
                 "database",
                 "database_owner",
+                "database_acl_grants",
                 "scope_schemas",
                 "evidence",
                 "roles",
@@ -377,6 +398,7 @@ def decode_catalog(value: object) -> CatalogSnapshot:
             RolePosture(
                 _name(role["name"], "role name"),
                 _bool(role["can_login"], "can_login"),
+                _bool(role["inherits"], "inherits"),
                 _bool(role["bypass_rls"], "bypass_rls"),
                 _bool(role["superuser"], "superuser"),
                 _bool(role["can_create_database"], "can_create_database"),
@@ -392,6 +414,8 @@ def decode_catalog(value: object) -> CatalogSnapshot:
                 _name(member["member"], "membership member"),
                 _name(member["role"], "membership role"),
                 _bool(member["inherits"], "membership inherits"),
+                _bool(member["set_option"], "membership set_option"),
+                _bool(member["admin_option"], "membership admin_option"),
             )
         )
     defaults = []
@@ -417,6 +441,14 @@ def decode_catalog(value: object) -> CatalogSnapshot:
         PLAN_VERSION,
         _name(row["database"], "database"),
         _name(row["database_owner"], "database owner"),
+        tuple(
+            _grant(item, "database ACL grant")
+            for item in _list(
+                row["database_acl_grants"],
+                "database_acl_grants",
+                MAX_GRANTS_PER_OBJECT,
+            )
+        ),
         _strings(row["scope_schemas"], "scope_schemas", MAX_OBJECTS),
         evidence,
         tuple(roles),
@@ -434,6 +466,37 @@ def decode_policy(value: object) -> AuthorityPolicy:
     )
     if type(row["schema_version"]) is not int or row["schema_version"] != PLAN_VERSION:
         raise PlanInputError("unsupported policy schema_version")
+    source_admins = []
+    for item in _list(
+        row["source_admin_principals"], "source_admin_principals", MAX_ROLES
+    ):
+        entry = _record(
+            item, frozenset(SourceAdminPrincipal.__dataclass_fields__), "source admin"
+        )
+        source_admins.append(
+            SourceAdminPrincipal(
+                _name(entry["name"], "source admin name"),
+                _text(entry["justification"], "source admin justification"),
+            )
+        )
+    bootstraps = []
+    for item in _list(
+        row["operational_bootstrap_memberships"],
+        "operational_bootstrap_memberships",
+        MAX_ROLES,
+    ):
+        entry = _record(
+            item,
+            frozenset(OperationalBootstrapMembership.__dataclass_fields__),
+            "operational bootstrap membership",
+        )
+        bootstraps.append(
+            OperationalBootstrapMembership(
+                _name(entry["member"], "bootstrap member"),
+                _name(entry["role"], "bootstrap role"),
+                _text(entry["justification"], "bootstrap justification"),
+            )
+        )
     objects = []
     for item in _list(row["objects"], "policy objects", MAX_OBJECTS):
         entry = _record(
@@ -499,6 +562,8 @@ def decode_policy(value: object) -> AuthorityPolicy:
         _name(row["expected_database_owner"], "expected database owner"),
         _strings(row["scope_schemas"], "policy scope_schemas", MAX_OBJECTS),
         _strings(row["approved_source_owners"], "approved_source_owners", MAX_ROLES),
+        tuple(source_admins),
+        tuple(bootstraps),
         tuple(objects),
     )
 
@@ -559,6 +624,12 @@ def _digest(value: object) -> str:
 
 def _normalized_catalog(catalog: CatalogSnapshot) -> dict[str, object]:
     document = asdict(catalog)
+    document["database_acl_grants"] = sorted(
+        document["database_acl_grants"], key=lambda grant: grant["grantee"]
+    )
+    for grant in document["database_acl_grants"]:
+        grant["privileges"] = sorted(grant["privileges"])
+        grant["grant_options"] = sorted(grant["grant_options"])
     document["roles"] = sorted(document["roles"], key=lambda row: row["name"])
     document["memberships"] = sorted(
         document["memberships"], key=lambda row: (row["member"], row["role"])
@@ -602,6 +673,13 @@ def _normalized_catalog(catalog: CatalogSnapshot) -> dict[str, object]:
 
 def _normalized_policy(policy: AuthorityPolicy) -> dict[str, object]:
     document = asdict(policy)
+    document["source_admin_principals"] = sorted(
+        document["source_admin_principals"], key=lambda row: row["name"]
+    )
+    document["operational_bootstrap_memberships"] = sorted(
+        document["operational_bootstrap_memberships"],
+        key=lambda row: (row["member"], row["role"]),
+    )
     document["objects"] = sorted(document["objects"], key=lambda row: row["identity"])
     for row in document["objects"]:
         row["grants"] = sorted(row["grants"], key=lambda grant: grant["role"])
@@ -650,6 +728,27 @@ def compile_plan(catalog: CatalogSnapshot, policy: AuthorityPolicy) -> Authority
     roles = {role.name: role for role in catalog.roles}
     if len(roles) != len(catalog.roles):
         reasons.append("duplicate role posture")
+    source_admins = {item.name: item for item in policy.source_admin_principals}
+    if len(source_admins) != len(policy.source_admin_principals):
+        reasons.append("duplicate source admin declaration")
+    posture_valid_source_admins: set[str] = set()
+    for name, declaration in source_admins.items():
+        posture = roles.get(name)
+        if not declaration.justification.strip():
+            reasons.append(f"source admin {name} lacks justification")
+        if name in {policy.runtime_role, "platform_api", "PUBLIC", "dotmac_app"}:
+            reasons.append(f"source admin {name} is a forbidden principal")
+        elif (
+            posture is None
+            or not posture.can_login
+            or not (
+                (name == policy.target_owner and posture.bypass_rls)
+                or posture.superuser
+            )
+        ):
+            reasons.append(f"source admin {name} lacks migration or DBA posture")
+        else:
+            posture_valid_source_admins.add(name)
     for name, expected in (
         ("app_admin", (True, True, False)),
         ("app_user", (True, False, False)),
@@ -665,20 +764,95 @@ def compile_plan(catalog: CatalogSnapshot, policy: AuthorityPolicy) -> Authority
             reasons.append(f"{name} holds cluster role or database creation authority")
         if role is not None and role.database_create:
             reasons.append(f"{name} effectively holds database CREATE")
+    bootstrap_name = "dotmac_schema_bootstrap"
+    expected_bootstrap = (bootstrap_name, policy.target_owner)
+    declarations = policy.operational_bootstrap_memberships
+    if (
+        len(declarations) != 1
+        or (
+            declarations[0].member,
+            declarations[0].role,
+        )
+        != expected_bootstrap
+    ):
+        reasons.append("exact operational bootstrap membership declaration is required")
+    elif not declarations[0].justification.strip():
+        reasons.append("operational bootstrap membership lacks justification")
+    bootstrap_role = roles.get(bootstrap_name)
+    if bootstrap_role is None or (
+        bootstrap_role.can_login,
+        bootstrap_role.inherits,
+        bootstrap_role.bypass_rls,
+        bootstrap_role.superuser,
+        bootstrap_role.can_create_database,
+        bootstrap_role.can_create_role,
+        bootstrap_role.database_create,
+    ) != (True, False, False, False, False, False, True):
+        reasons.append("operational bootstrap role posture is missing or invalid")
+    database_acl = {grant.grantee: grant for grant in catalog.database_acl_grants}
+    if len(database_acl) != len(catalog.database_acl_grants):
+        reasons.append("duplicate database ACL grantee")
+    for grant in catalog.database_acl_grants:
+        database_rights = set(grant.privileges)
+        options = set(grant.grant_options)
+        if grant.grantee not in {"PUBLIC", catalog.database_owner} | set(roles):
+            reasons.append("database ACL has unknown grantee")
+        if not database_rights <= {"CONNECT", "CREATE", "TEMPORARY"}:
+            reasons.append("database ACL has unknown privilege")
+        if not options <= database_rights:
+            reasons.append("database ACL grant options exceed privileges")
+        if grant.grantee == bootstrap_name:
+            if "CREATE" not in database_rights or options:
+                reasons.append(
+                    "bootstrap needs direct database CREATE without grant option"
+                )
+        elif "CREATE" in database_rights and grant.grantee != catalog.database_owner:
+            reasons.append("unreviewed direct database CREATE grant")
+        if options and grant.grantee != catalog.database_owner:
+            reasons.append("non-owner database grant options require review")
+    if bootstrap_name not in database_acl or (
+        "CREATE" not in database_acl[bootstrap_name].privileges
+    ):
+        reasons.append("bootstrap needs direct database CREATE without grant option")
     if len(catalog.objects) > MAX_OBJECTS or len(policy.objects) > MAX_OBJECTS:
         reasons.append("object limit exceeded")
     if len(catalog.roles) > MAX_ROLES:
         reasons.append("role limit exceeded")
-    protected = {policy.target_owner, policy.runtime_role}
+    if (
+        len(policy.source_admin_principals) > MAX_ROLES
+        or len(policy.operational_bootstrap_memberships) > MAX_ROLES
+        or len(catalog.database_acl_grants) > MAX_GRANTS_PER_OBJECT
+        or len(catalog.memberships) > MAX_ROLES * MAX_ROLES
+    ):
+        reasons.append("authority evidence or declaration limit exceeded")
+    protected = {policy.target_owner, policy.runtime_role, "platform_api"}
     protected.update(grant.role for item in policy.objects for grant in item.grants)
     protected.update(
         grant.role for item in policy.objects for grant in item.column_grants
     )
+    protected.update(source_admins)
+    bootstrap_membership_seen = False
     if any(
         member.member in protected or member.role in protected
         for member in catalog.memberships
+        if (member.member, member.role) != expected_bootstrap
     ):
         reasons.append("protected role membership requires separate authority review")
+    for member in catalog.memberships:
+        if member.member not in roles or member.role not in roles:
+            reasons.append("membership names unknown role")
+        if (member.member, member.role) == expected_bootstrap:
+            bootstrap_membership_seen = True
+            if (member.inherits, member.set_option, member.admin_option) != (
+                False,
+                True,
+                False,
+            ):
+                reasons.append("operational bootstrap membership options are invalid")
+        elif member.member == bootstrap_name:
+            reasons.append("unexpected operational bootstrap membership")
+    if not bootstrap_membership_seen:
+        reasons.append("operational bootstrap membership is absent")
     if len(set(catalog.memberships)) != len(catalog.memberships):
         reasons.append("duplicate membership evidence")
     if catalog.default_acls:
@@ -893,10 +1067,18 @@ def compile_plan(catalog: CatalogSnapshot, policy: AuthorityPolicy) -> Authority
             if not owner_entry and not observed <= desired.get(grantee, set()):
                 reasons.append(f"excess direct ACL for {grantee} on {identity}")
         for grantee, observed in effective.items():
-            if grantee not in {
-                item.owner,
-                policy.target_owner,
-            } and not observed <= desired.get(grantee, set()):
+            permitted_effective = desired.get(grantee, set()) | desired.get(
+                "PUBLIC", set()
+            )
+            if (
+                grantee
+                not in {
+                    item.owner,
+                    policy.target_owner,
+                    *posture_valid_source_admins,
+                }
+                and not observed <= permitted_effective
+            ):
                 reasons.append(f"excess effective ACL for {grantee} on {identity}")
         keyword, sql_name, order = _object_sql(item)
         grant_class = (

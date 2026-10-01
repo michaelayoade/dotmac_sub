@@ -2,8 +2,8 @@
 """Create or adopt the composed-module outbox dispatcher roles.
 
 This is an explicitly privileged cluster bootstrap, separate from ordinary
-Alembic execution. It never sets or prints a password. It owns the role and
-schema prerequisites migration 557 needs before it can harden relay functions.
+Alembic execution. It never sets or prints a password. The default path checks
+current app_admin ownership. It refuses the retired dotmac_app membership.
 
 Usage::
 
@@ -34,6 +34,7 @@ from psycopg import sql
 from app.outbox_dispatcher_roles import (
     OUTBOX_RELAY_OWNERSHIP_CONTRACT,
     RELAY_DISPATCHER_CONTRACT,
+    RelayOwnershipObservation,
     RolePosture,
     relay_dispatcher_violations,
     relay_ownership_violations,
@@ -63,48 +64,130 @@ def observe(conn: psycopg.Connection) -> dict[str, RolePosture]:
     return {str(row[0]): (bool(row[1]), bool(row[2]), bool(row[3])) for row in rows}
 
 
-def observe_ownership(conn: psycopg.Connection) -> tuple[bool, dict[str, bool]]:
-    """Read the ownership prerequisites migration 557 requires."""
+def observe_ownership(
+    conn: psycopg.Connection,
+) -> RelayOwnershipObservation:
+    """Read operational ownership context without changing cluster roles."""
 
     contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
+
     rows = conn.execute(
         "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
         ([contract.migration_role, contract.definer_role],),
     ).fetchall()
     roles = {str(row[0]) for row in rows}
     if contract.definer_role not in roles:
-        return False, dict.fromkeys(contract.schema_privileges, False)
+        return RelayOwnershipObservation(
+            contract.migration_role in roles,
+            False,
+            False,
+            dict.fromkeys(contract.schema_privileges, False),
+        )
     if contract.migration_role not in roles:
         member = False
+    elif contract.migration_role == contract.definer_role:
+        member = True
     else:
-        member = bool(
-            conn.execute(
-                "SELECT pg_has_role(%s, %s, 'MEMBER')",
-                (contract.migration_role, contract.definer_role),
-            ).fetchone()[0]
-        )
+        member_row = conn.execute(
+            "SELECT pg_has_role(%s, %s, 'MEMBER')",
+            (contract.migration_role, contract.definer_role),
+        ).fetchone()
+        member = bool(member_row is not None and member_row[0])
+
+    def has_schema_privilege(privilege: str) -> bool:
+        row = conn.execute(
+            "SELECT has_schema_privilege(%s, %s, %s)",
+            (contract.definer_role, contract.schema, privilege),
+        ).fetchone()
+        return bool(row is not None and row[0])
+
     privileges = {
-        privilege: bool(
-            conn.execute(
-                "SELECT has_schema_privilege(%s, %s, %s)",
-                (contract.definer_role, contract.schema, privilege),
-            ).fetchone()[0]
-        )
+        privilege: has_schema_privilege(privilege)
         for privilege in contract.schema_privileges
     }
-    return member, privileges
+    return RelayOwnershipObservation(
+        contract.migration_role in roles, True, member, privileges
+    )
 
 
-def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
+def observe_historical_membership(conn: psycopg.Connection) -> bool:
+    """A retired direct or indirect link must not pass operational verification."""
+
+    roles = conn.execute(
+        "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
+        (["dotmac_app", "app_admin"],),
+    ).fetchall()
+    if {str(row[0]) for row in roles} != {"dotmac_app", "app_admin"}:
+        return False
+    member_row = conn.execute(
+        "SELECT pg_has_role('dotmac_app', 'app_admin', 'MEMBER')"
+    ).fetchone()
+    return bool(member_row is None or member_row[0])
+
+
+def ensure_current_schema_privileges(
+    conn: psycopg.Connection, *, dry_run: bool
+) -> None:
+    """Apply the current app_admin public-schema contract to this database."""
+
+    contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
+    ownership = observe_ownership(conn)
+    if not ownership.definer_role_exists:
+        raise ValueError("app_admin is required for public-schema grants")
+    missing = tuple(
+        privilege
+        for privilege in contract.schema_privileges
+        if not ownership.definer_schema_privileges.get(privilege, False)
+    )
+    if not missing:
+        return
+    statement = sql.SQL("GRANT {} ON SCHEMA {} TO {}").format(
+        sql.SQL(", ").join(sql.SQL(privilege) for privilege in missing),
+        sql.Identifier(contract.schema),
+        sql.Identifier(contract.definer_role),
+    )
+    if dry_run:
+        print(
+            "would grant schema privileges: "
+            f"{', '.join(missing)} on {contract.schema} "
+            f"to {contract.definer_role}"
+        )
+    else:
+        conn.execute(statement)
+        print(
+            "granted schema privileges: "
+            f"{', '.join(missing)} on {contract.schema} "
+            f"to {contract.definer_role}"
+        )
+
+
+def bootstrap(
+    conn: psycopg.Connection,
+    *,
+    dry_run: bool,
+    repair: bool,
+) -> int:
+    if observe_historical_membership(conn):
+        print(
+            "DRIFT: retired dotmac_app membership in app_admin remains; "
+            "separate authority must retire it before operational repair.",
+            file=sys.stderr,
+        )
+        return 1
+    contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
     observed = observe(conn)
     ownership = observe_ownership(conn)
+    if not ownership.definer_role_exists or not ownership.migration_role_exists:
+        for violation in relay_ownership_violations(ownership, contract=contract):
+            print(f"DRIFT: {violation}", file=sys.stderr)
+        return 1
     wrong_existing = [
         violation
         for violation in (
             *relay_dispatcher_violations(observed),
             *relay_ownership_violations(
-                migration_role_is_definer_member=ownership[0],
-                definer_schema_privileges=ownership[1],
+                ownership,
+                contract=contract,
             ),
         )
         if not violation.endswith("is missing")
@@ -143,58 +226,19 @@ def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
             )
             print(f"repaired: {role} {have} -> {wanted}")
 
-    contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
-    member, privileges = observe_ownership(conn)
-    if not member:
-        statement = sql.SQL("GRANT {} TO {}").format(
-            sql.Identifier(contract.definer_role),
-            sql.Identifier(contract.migration_role),
-        )
-        if dry_run:
-            print(
-                f"would grant role membership: {contract.definer_role} "
-                f"to {contract.migration_role}"
-            )
-        else:
-            conn.execute(statement)
-            print(
-                f"granted role membership: {contract.definer_role} "
-                f"to {contract.migration_role}"
-            )
-    missing_privileges = tuple(
-        privilege
-        for privilege in contract.schema_privileges
-        if not privileges.get(privilege, False)
-    )
-    if missing_privileges:
-        statement = sql.SQL("GRANT {} ON SCHEMA {} TO {}").format(
-            sql.SQL(", ").join(sql.SQL(privilege) for privilege in missing_privileges),
-            sql.Identifier(contract.schema),
-            sql.Identifier(contract.definer_role),
-        )
-        if dry_run:
-            print(
-                "would grant schema privileges: "
-                f"{', '.join(missing_privileges)} on {contract.schema} "
-                f"to {contract.definer_role}"
-            )
-        else:
-            conn.execute(statement)
-            print(
-                "granted schema privileges: "
-                f"{', '.join(missing_privileges)} on {contract.schema} "
-                f"to {contract.definer_role}"
-            )
+    ensure_current_schema_privileges(conn, dry_run=dry_run)
     return 0
 
 
 def verify(conn: psycopg.Connection) -> int:
-    member, privileges = observe_ownership(conn)
+    ownership = observe_ownership(conn)
     violations = (
         *relay_dispatcher_violations(observe(conn)),
-        *relay_ownership_violations(
-            migration_role_is_definer_member=member,
-            definer_schema_privileges=privileges,
+        *relay_ownership_violations(ownership),
+        *(
+            ("retired dotmac_app membership in app_admin remains",)
+            if observe_historical_membership(conn)
+            else ()
         ),
     )
     for violation in violations:
@@ -209,7 +253,7 @@ def main() -> int:
     parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
     if args.verify_only and (args.dry_run or args.repair):
-        parser.error("--verify-only cannot be combined with --dry-run or --repair")
+        parser.error("--verify-only cannot be combined with repair")
 
     url_var = MIGRATION_URL_VAR if args.verify_only else BOOTSTRAP_URL_VAR
     url = os.environ.get(url_var, "").strip()
@@ -226,7 +270,11 @@ def main() -> int:
         with psycopg.connect(connect_url, autocommit=False) as conn:
             if args.verify_only:
                 return verify(conn)
-            return bootstrap(conn, dry_run=args.dry_run, repair=args.repair)
+            return bootstrap(
+                conn,
+                dry_run=args.dry_run,
+                repair=args.repair,
+            )
     except psycopg.Error:
         print(
             "database connection or role operation failed; connection details "

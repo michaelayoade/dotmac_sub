@@ -496,9 +496,8 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
     assert "postgresql://" not in helper
     assert "bootstrap_commercial_module_prereqs" in ci_test_bootstrap_source
     assert "bootstrap_outbox_dispatcher_roles" in ci_test_bootstrap_source
-    assert "bootstrap_disposable_database(target.url, label=target.database_name)" in (
-        ci_test_bootstrap_source
-    )
+    assert "bootstrap_disposable_database(" in ci_test_bootstrap_source
+    assert "target.url, label=target.database_name" in ci_test_bootstrap_source
     assert (
         '_bootstrap_outbox_url(\n        target.url.set(database="template1")'
         in ci_test_bootstrap_source
@@ -544,7 +543,11 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
         assert "MIGRATION_DATABASE_URL=postgresql" not in workflow_step
         assert "BOOTSTRAP_DATABASE_URL=postgresql" not in workflow_step
 
-    assert "POSTGRES_DB: dotmac_sub_test" in ci_workflow
+    assert "-e POSTGRES_DB=dotmac_sub_test" in ci_workflow
+    assert (
+        "postgis/postgis:16-3.4 postgres -c cluster_name=dotmac-sub-disposable-tests"
+        in ci_workflow
+    )
     assert "POSTGRES_DB=dotmac_sub_ci" in ci_workflow
     assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_workflow
     assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_gate

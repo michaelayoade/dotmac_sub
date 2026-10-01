@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
 from app.outbox_dispatcher_roles import (
+    HISTORICAL_557_RELAY_OWNERSHIP_CONTRACT,
     OUTBOX_RELAY_OWNERSHIP_CONTRACT,
     RELAY_DISPATCHER_CONTRACT,
 )
@@ -94,7 +95,7 @@ def test_migration_copy_matches_the_runtime_login_posture() -> None:
 
 
 def test_migration_copy_matches_the_runtime_function_ownership_prerequisites() -> None:
-    contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
+    contract = HISTORICAL_557_RELAY_OWNERSHIP_CONTRACT
     source = MIGRATION.read_text(encoding="utf-8")
 
     assert f'MIGRATION_ROLE = "{contract.migration_role}"' in source
@@ -104,6 +105,23 @@ def test_migration_copy_matches_the_runtime_function_ownership_prerequisites() -
         f"DEFINER_SCHEMA_PRIVILEGES = {contract.schema_privileges!r}".replace("'", '"')
         in source
     )
+    assert OUTBOX_RELAY_OWNERSHIP_CONTRACT.migration_role == "app_admin"
+    assert OUTBOX_RELAY_OWNERSHIP_CONTRACT.definer_role == "app_admin"
+
+
+def test_historical_replay_preparation_is_only_in_disposable_ci_bootstrap() -> None:
+    ci = (ROOT / "scripts/ci/bootstrap_test_database_prereqs.py").read_text(
+        encoding="utf-8"
+    )
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    operational = BOOTSTRAP.read_text(encoding="utf-8")
+    assert "_prepare_historical_557_replay" in ci
+    assert "cluster_name" in ci
+    assert "GRANT {} TO {}" in ci
+    assert "GRANT {} TO {}" not in operational
+    assert "--prepare-historical-replay" not in operational
+    assert "historical_replay" not in operational
+    assert "--prepare-historical-replay" not in deploy
 
 
 def test_role_creation_is_only_in_the_explicit_bootstrap() -> None:

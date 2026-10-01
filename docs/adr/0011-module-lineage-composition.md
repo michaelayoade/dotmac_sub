@@ -623,3 +623,34 @@ source alignment alone does not satisfy the runtime cutover gate. The bounded
 read-only catalog report supplies ownership and effective-privilege facts,
 not a grant plan or execution authority. The deployment runbook names the
 remaining controlled gates.
+
+## Amendment — 2026-10-01: permanent authority after cutover
+
+Michael selected a forward-only cutover: the target is a permanent access
+contract, with no compatibility runtime, legacy writer fallback, or return to
+the previous notification implementation after activation. `app_admin` owns
+migration authority and application objects; `app_user` is the application
+principal. Per-object operations must be reviewed against the owning service,
+including append-only records and the separate platform plane. Model presence
+or the former superuser connection does not establish an operation contract.
+
+The historical `dotmac_app -> app_admin` link and
+`dotmac_schema_bootstrap -> dotmac_app` link must be retired in a separate
+reviewed cluster-role operation. The operational bootstrap instead assumes
+`app_admin` with NOINHERIT, SET permitted, ADMIN forbidden, and a direct named
+database CREATE grant. Historical migration 557 remains historical source;
+its fresh-install prerequisite is not authority to retain those links in the
+running cutover estate. The pure object-plan compiler compares actual catalog
+facts to this target and blocks the currently observed links. It cannot alter
+memberships or approve their retirement.
+
+A restorable backup and disposable rehearsal remain prerequisites for the
+ownership change. They protect data and prove the planned operation; they do
+not authorize reactivating retired writers. Following notification activation,
+the supported pause stops new composition and drains already frozen messages
+through the chosen pipeline. Recovery must repair the selected authority.
+
+This decision approves the target direction, not an unreviewed privilege list,
+membership transfer, credential change, or live execution. The exact object
+policy, ordered operation, affected cluster consumers, backup evidence and
+execution approval remain controlled cutover gates.

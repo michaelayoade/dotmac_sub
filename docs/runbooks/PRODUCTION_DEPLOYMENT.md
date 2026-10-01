@@ -316,15 +316,20 @@ creates/adopts the schemas and Alembic skips already-present declared module
 schema creates.
 
 Historical migration `557_outbox_relay_prereq` retains its immutable
-`dotmac_app` membership prerequisite. This is historical bootstrap
-compatibility, not the authenticated migration executor: Alembic now requires
-both `session_user` and `current_user` to be `app_admin` before accessing its
-version table. `dotmac_app` remains privileged through that membership and
-must never serve application traffic. The definer must be able to own
-functions in `public`:
+`dotmac_app` membership prerequisite. Fresh historical replay uses the private
+initializer in `scripts/ci/bootstrap_test_database_prereqs.py` before that
+revision. The operational bootstrap exposes no historical mode. The CI
+initializer requires the checked-in disposable cluster's postmaster-context
+`cluster_name=dotmac-sub-disposable-tests` marker, a validated test endpoint
+and a permitted test host. The marker is configured purpose evidence, not
+authentication or execution approval; the caller still needs authorized test
+credentials. It does not authorize retaining the link in a running estate.
+Alembic requires both `session_user` and `current_user` to be `app_admin`
+before accessing its version table. Normal dispatcher verification and repair
+use `app_admin` directly, refuse the retired legacy link before writes, and
+never recreate it. The definer must be able to own functions in `public`:
 
 ```bash
-SELECT pg_has_role('dotmac_app', 'app_admin', 'MEMBER');
 SELECT has_schema_privilege('app_admin', 'public', 'USAGE');
 SELECT has_schema_privilege('app_admin', 'public', 'CREATE');
 ```
@@ -332,13 +337,16 @@ SELECT has_schema_privilege('app_admin', 'public', 'CREATE');
 Repair applies:
 
 ```sql
-GRANT app_admin TO dotmac_app;
 GRANT USAGE, CREATE ON SCHEMA public TO app_admin;
 ```
 
 Do not apply these manually as hidden deploy state. They belong to
 `scripts/bootstrap_outbox_dispatcher_roles.py --repair`, and the deploy
 preflight verifies them before backup.
+Only the gated CI initializer prepares the old membership needed to replay
+557. Its retirement in an existing estate is a separate reviewed cluster-role
+operation. A test-named database on an unmarked shared server does not satisfy
+the initializer's cluster boundary.
 
 ### Existing-estate cutover gate
 
@@ -348,6 +356,14 @@ objects, grant legacy table access, or prove the running process identity.
 The observed Seabone staging runtime still authenticates as `postgres` and
 bypasses RLS. A credential-only swap is insufficient: most legacy public
 tables lack `app_user` privileges.
+
+Michael also selected permanent forward-only authority, with no compatibility
+runtime or retired-writer fallback. The proposed per-object operation rules
+and outstanding classifications are in
+[`DATABASE_RUNTIME_ACCESS_CONTRACT.md`](../designs/DATABASE_RUNTIME_ACCESS_CONTRACT.md).
+Review and retire both legacy cluster-role links; normal deployment must not
+restore them. A missing grant after the cutover is repaired in the chosen
+authority. A restorable backup remains a prerequisite for protecting data.
 
 Before activating the split on an existing database, review an exact database,
 source-owner and ordered ownership/grant plan, bind execution to its digest,

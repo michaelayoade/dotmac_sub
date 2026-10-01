@@ -20,8 +20,10 @@ from app.database_role_plan import (
     NamedColumnGrant,
     NamedGrant,
     ObjectPolicy,
+    OperationalBootstrapMembership,
     PlanInputError,
     RolePosture,
+    SourceAdminPrincipal,
     TypeName,
     compile_plan,
     decode_catalog,
@@ -63,18 +65,28 @@ def _reviewed_inputs() -> tuple[CatalogSnapshot, AuthorityPolicy]:
         schema_version=1,
         database="sub_review",
         database_owner="postgres",
+        database_acl_grants=(
+            Grant("postgres", ("CONNECT", "CREATE", "TEMPORARY"), ("CREATE",)),
+            Grant("PUBLIC", ("CONNECT", "TEMPORARY"), ()),
+            Grant("dotmac_schema_bootstrap", ("CREATE",), ()),
+        ),
         scope_schemas=("public",),
         evidence=EvidenceCompleteness(
-            True, True, True, True, True, True, True, True, True
+            True, True, True, True, True, True, True, True, True, True
         ),
         roles=(
-            RolePosture("postgres", True, True, True, True, True, True),
-            RolePosture("legacy_writer", True, False, False, False, False, False),
-            RolePosture("app_admin", True, True, False, False, False, False),
-            RolePosture("app_user", True, False, False, False, False, False),
-            RolePosture("platform_api", True, False, False, False, False, False),
+            RolePosture("postgres", True, True, True, True, True, True, True),
+            RolePosture("legacy_writer", True, True, False, False, False, False, False),
+            RolePosture("app_admin", True, True, True, False, False, False, False),
+            RolePosture("app_user", True, True, False, False, False, False, False),
+            RolePosture("platform_api", True, True, False, False, False, False, False),
+            RolePosture(
+                "dotmac_schema_bootstrap", True, False, False, False, False, False, True
+            ),
         ),
-        memberships=(),
+        memberships=(
+            Membership("dotmac_schema_bootstrap", "app_admin", False, True, False),
+        ),
         default_acls=(),
         objects=objects,
     )
@@ -95,6 +107,16 @@ def _reviewed_inputs() -> tuple[CatalogSnapshot, AuthorityPolicy]:
         expected_database_owner="postgres",
         scope_schemas=("public",),
         approved_source_owners=("legacy_writer", "pg_database_owner"),
+        source_admin_principals=(
+            SourceAdminPrincipal("postgres", "database superuser observation"),
+        ),
+        operational_bootstrap_memberships=(
+            OperationalBootstrapMembership(
+                "dotmac_schema_bootstrap",
+                "app_admin",
+                "managed schema bootstrap contract",
+            ),
+        ),
         objects=tuple(
             ObjectPolicy(
                 object_identity(item),
@@ -428,7 +450,7 @@ def test_unexpected_owner_or_role_and_database_create_are_refused() -> None:
         catalog,
         roles=(
             *catalog.roles,
-            RolePosture("rogue", True, False, False, False, False, False),
+            RolePosture("rogue", True, True, False, False, False, False, False),
         ),
         objects=(catalog.objects[0], rogue, *catalog.objects[2:]),
     )
@@ -570,19 +592,339 @@ def test_incomplete_or_excess_acl_membership_and_defaults_block() -> None:
         "column ACL",
     )
     _blocked(
-        replace(catalog, memberships=(Membership("app_user", "legacy_writer", True),)),
+        replace(
+            catalog,
+            memberships=(
+                *catalog.memberships,
+                Membership("app_user", "legacy_writer", True, True, False),
+            ),
+        ),
         policy,
         "membership",
     )
     _blocked(
         replace(
-            catalog, memberships=(Membership("legacy_writer", "app_admin", False),)
+            catalog,
+            memberships=(
+                *catalog.memberships,
+                Membership("legacy_writer", "app_admin", False, True, False),
+            ),
         ),
         policy,
         "membership",
     )
     default = DefaultAcl("legacy_writer", "public", "table", "PUBLIC", ("SELECT",))
     _blocked(replace(catalog, default_acls=(default,)), policy, "default ACLs")
+
+
+def test_platform_api_membership_blocks_even_without_desired_platform_grants() -> None:
+    catalog, policy = _reviewed_inputs()
+    assert all(
+        grant.role != "platform_api"
+        for item in policy.objects
+        for grant in (*item.grants, *item.column_grants)
+    )
+    _blocked(
+        replace(
+            catalog,
+            memberships=(
+                *catalog.memberships,
+                Membership("platform_api", "legacy_writer", False, True, False),
+            ),
+        ),
+        policy,
+        "protected role membership",
+    )
+
+
+def test_declared_dba_effective_rights_on_other_owners_are_effective_only() -> None:
+    catalog, policy = _reviewed_inputs()
+    schema = replace(
+        catalog.objects[0],
+        effective_privileges=(
+            *catalog.objects[0].effective_privileges,
+            Grant("postgres", ("CREATE", "USAGE"), ()),
+        ),
+    )
+    admin_owned = replace(
+        catalog.objects[1],
+        owner="app_admin",
+        effective_privileges=(
+            *catalog.objects[1].effective_privileges,
+            Grant("postgres", ("SELECT", "UPDATE"), ()),
+        ),
+    )
+    catalog = replace(catalog, objects=(schema, admin_owned, *catalog.objects[2:]))
+    plan = compile_plan(catalog, policy)
+    assert plan.status == "ready_for_review"
+    assert not any('ALTER TABLE "public"."invoice" OWNER' in s for s in plan.statements)
+    _blocked(
+        catalog,
+        replace(policy, source_admin_principals=()),
+        "excess effective ACL for postgres",
+    )
+    assert (
+        plan.policy_sha256
+        != compile_plan(
+            catalog, replace(policy, source_admin_principals=())
+        ).policy_sha256
+    )
+
+    direct_extra = replace(
+        schema,
+        acl_grants=(Grant("postgres", ("CREATE",), ()),),
+    )
+    _blocked(
+        replace(catalog, objects=(direct_extra, *catalog.objects[1:])),
+        policy,
+        "excess direct ACL for postgres",
+    )
+    column_extra = replace(
+        admin_owned,
+        column_grants=(ColumnGrant("id", "postgres", ("UPDATE",), ()),),
+    )
+    _blocked(
+        replace(catalog, objects=(schema, column_extra, *catalog.objects[2:])),
+        policy,
+        "excess or unexplained column ACL",
+    )
+    delegated = replace(
+        admin_owned,
+        acl_grants=(Grant("postgres", ("SELECT",), ("SELECT",)),),
+    )
+    _blocked(
+        replace(catalog, objects=(schema, delegated, *catalog.objects[2:])),
+        policy,
+        "non-owner direct grant options",
+    )
+    effective_option = replace(
+        schema,
+        effective_privileges=(
+            *schema.effective_privileges[:-1],
+            Grant("postgres", ("CREATE", "USAGE"), ("CREATE",)),
+        ),
+    )
+    _blocked(
+        replace(catalog, objects=(effective_option, *catalog.objects[1:])),
+        policy,
+        "effective ACL grant options are not direct evidence",
+    )
+    desired = replace(
+        policy,
+        objects=tuple(
+            replace(
+                item, grants=(*item.grants, NamedGrant("postgres", ("SELECT",), None))
+            )
+            if item.identity == object_identity(admin_owned)
+            else item
+            for item in policy.objects
+        ),
+    )
+    _blocked(catalog, desired, "grant role has unsafe posture")
+
+
+def test_explicit_public_type_and_routine_grants_cover_effective_roles_only() -> None:
+    catalog, policy = _reviewed_inputs()
+    legacy_admin = RolePosture(
+        "dotmac_app", True, True, True, False, False, False, False
+    )
+    type_object = replace(
+        catalog.objects[3],
+        effective_privileges=(
+            Grant("PUBLIC", ("USAGE",), ()),
+            Grant("app_user", ("USAGE",), ()),
+            Grant("platform_api", ("USAGE",), ()),
+            Grant("dotmac_app", ("USAGE",), ()),
+        ),
+    )
+    routine = replace(
+        catalog.objects[4],
+        effective_privileges=(
+            Grant("PUBLIC", ("EXECUTE",), ()),
+            Grant("app_user", ("EXECUTE",), ()),
+            Grant("platform_api", ("EXECUTE",), ()),
+            Grant("dotmac_app", ("EXECUTE",), ()),
+        ),
+    )
+    catalog = replace(
+        catalog,
+        roles=(*catalog.roles, legacy_admin),
+        objects=(*catalog.objects[:3], type_object, routine),
+    )
+    type_policy = replace(
+        policy.objects[3],
+        classification="named",
+        grants=(NamedGrant("PUBLIC", ("USAGE",), "reviewed type compatibility"),),
+    )
+    policy = replace(
+        policy, objects=(*policy.objects[:3], type_policy, policy.objects[4])
+    )
+    plan = compile_plan(catalog, policy)
+    assert plan.status == "ready_for_review", plan.blocked_reasons
+    assert 'GRANT USAGE ON TYPE "public"."invoice_state" TO PUBLIC;' in plan.statements
+    assert not any('TO "dotmac_app"' in statement for statement in plan.statements)
+
+    extra_effective = replace(
+        catalog.objects[1],
+        effective_privileges=(
+            Grant("PUBLIC", ("SELECT",), ()),
+            Grant("app_user", ("SELECT", "UPDATE"), ()),
+            Grant("platform_api", ("SELECT",), ()),
+        ),
+    )
+    extra_catalog = replace(
+        catalog, objects=(catalog.objects[0], extra_effective, *catalog.objects[2:])
+    )
+    public_only = replace(
+        policy.objects[1],
+        grants=(NamedGrant("PUBLIC", ("SELECT",), "reviewed public table read"),),
+    )
+    public_policy = replace(
+        policy, objects=(policy.objects[0], public_only, *policy.objects[2:])
+    )
+    _blocked(extra_catalog, public_policy, "excess effective ACL for app_user")
+    direct_extra = replace(
+        extra_effective, acl_grants=(Grant("app_user", ("SELECT",), ()),)
+    )
+    _blocked(
+        replace(
+            extra_catalog,
+            objects=(catalog.objects[0], direct_extra, *catalog.objects[2:]),
+        ),
+        public_policy,
+        "excess direct ACL for app_user",
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ["legacy_writer", "app_user", "platform_api", "PUBLIC", "dotmac_app"]
+)
+def test_source_admin_declaration_rejects_ordinary_and_runtime_roles(name: str) -> None:
+    catalog, policy = _reviewed_inputs()
+    changed = replace(
+        policy,
+        source_admin_principals=(SourceAdminPrincipal(name, "synthetic review"),),
+    )
+    _blocked(
+        catalog,
+        changed,
+        "forbidden principal"
+        if name != "legacy_writer"
+        else "lacks migration or DBA posture",
+    )
+
+
+def test_exact_operational_bootstrap_membership_and_database_acl_are_required() -> None:
+    catalog, policy = _reviewed_inputs()
+    assert compile_plan(catalog, policy).status == "ready_for_review"
+    _blocked(
+        catalog,
+        replace(policy, operational_bootstrap_memberships=()),
+        "exact operational bootstrap membership declaration",
+    )
+    _blocked(
+        catalog,
+        replace(
+            policy,
+            operational_bootstrap_memberships=(
+                OperationalBootstrapMembership(
+                    "dotmac_schema_bootstrap", "legacy_writer", "wrong role"
+                ),
+            ),
+        ),
+        "exact operational bootstrap membership declaration",
+    )
+    _blocked(
+        replace(catalog, memberships=()),
+        policy,
+        "operational bootstrap membership is absent",
+    )
+    wrong_role = Membership(
+        "dotmac_schema_bootstrap", "legacy_writer", False, True, False
+    )
+    _blocked(
+        replace(catalog, memberships=(wrong_role,)),
+        policy,
+        "unexpected operational bootstrap membership",
+    )
+    for field, value in (
+        ("inherits", True),
+        ("set_option", False),
+        ("admin_option", True),
+    ):
+        changed = replace(catalog.memberships[0], **{field: value})
+        _blocked(
+            replace(catalog, memberships=(changed,)),
+            policy,
+            "operational bootstrap membership options",
+        )
+    for field, value in (
+        ("can_login", False),
+        ("inherits", True),
+        ("bypass_rls", True),
+        ("superuser", True),
+        ("can_create_database", True),
+        ("can_create_role", True),
+        ("database_create", False),
+    ):
+        bootstrap_roles = tuple(
+            replace(role, **{field: value})
+            if role.name == "dotmac_schema_bootstrap"
+            else role
+            for role in catalog.roles
+        )
+        _blocked(
+            replace(catalog, roles=bootstrap_roles),
+            policy,
+            "operational bootstrap role posture",
+        )
+    _blocked(
+        replace(catalog, database_acl_grants=catalog.database_acl_grants[:2]),
+        policy,
+        "bootstrap needs direct database CREATE",
+    )
+    delegated = replace(catalog.database_acl_grants[2], grant_options=("CREATE",))
+    _blocked(
+        replace(
+            catalog, database_acl_grants=(*catalog.database_acl_grants[:2], delegated)
+        ),
+        policy,
+        "bootstrap needs direct database CREATE without grant option",
+    )
+    public_create = replace(
+        catalog.database_acl_grants[1], privileges=("CONNECT", "CREATE", "TEMPORARY")
+    )
+    _blocked(
+        replace(
+            catalog,
+            database_acl_grants=(
+                catalog.database_acl_grants[0],
+                public_create,
+                catalog.database_acl_grants[2],
+            ),
+        ),
+        policy,
+        "unreviewed direct database CREATE grant",
+    )
+    _blocked(
+        replace(
+            catalog, evidence=replace(catalog.evidence, database_acl_complete=False)
+        ),
+        policy,
+        "database_acl_complete evidence",
+    )
+    historical = replace(
+        catalog,
+        roles=(
+            *catalog.roles,
+            RolePosture("dotmac_app", True, True, True, False, False, False, False),
+        ),
+        memberships=(
+            *catalog.memberships,
+            Membership("dotmac_app", "app_admin", False, True, False),
+        ),
+    )
+    _blocked(historical, policy, "protected role membership")
 
 
 def test_unknown_privilege_missing_effective_role_and_unjustified_public_block() -> (
@@ -628,6 +970,23 @@ def test_json_decoder_refuses_missing_unknown_and_oversized_evidence() -> None:
     source["evidence"].pop("grant_options_complete")
     with pytest.raises(PlanInputError, match="missing or unknown fields"):
         decode_catalog(source)
+    for section, field in (
+        ("evidence", "database_acl_complete"),
+        (None, "database_acl_grants"),
+    ):
+        source = json.loads(json.dumps(asdict(catalog)))
+        (source if section is None else source[section]).pop(field)
+        with pytest.raises(PlanInputError, match="missing or unknown fields"):
+            decode_catalog(source)
+    for section, field in (
+        ("roles", "inherits"),
+        ("memberships", "set_option"),
+        ("memberships", "admin_option"),
+    ):
+        source = json.loads(json.dumps(asdict(catalog)))
+        source[section][0].pop(field)
+        with pytest.raises(PlanInputError, match="missing or unknown fields"):
+            decode_catalog(source)
     source = json.loads(json.dumps(asdict(catalog)))
     source["objects"][0]["unmodeled"] = True
     with pytest.raises(PlanInputError, match="missing or unknown fields"):
@@ -645,6 +1004,15 @@ def test_json_decoder_refuses_missing_unknown_and_oversized_evidence() -> None:
     bad_policy = json.loads(json.dumps(asdict(policy)))
     bad_policy["objects"][0]["classification"] = "grant_everything"
     with pytest.raises(PlanInputError, match="unknown object policy"):
+        decode_policy(bad_policy)
+    for field in ("source_admin_principals", "operational_bootstrap_memberships"):
+        bad_policy = json.loads(json.dumps(asdict(policy)))
+        bad_policy.pop(field)
+        with pytest.raises(PlanInputError, match="missing or unknown fields"):
+            decode_policy(bad_policy)
+    bad_policy = json.loads(json.dumps(asdict(policy)))
+    bad_policy["source_admin_principals"][0]["justification"] = " "
+    with pytest.raises(PlanInputError, match="bounded nonempty text"):
         decode_policy(bad_policy)
 
 
