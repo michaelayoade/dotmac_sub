@@ -234,36 +234,31 @@ Why the old rule existed, so it is not reintroduced by habit: a squash-merged
 structural to two-trunk promotion and cannot occur with one trunk. If a
 long-lived branch is ever reintroduced, restore the merge-commit rule with it.
 
-### Branch protection: green is required, an approving review is not
+### Branch protection and the temporary admin review exception
 
-`main` requires its status checks to pass and **zero** approving reviews. That
-is deliberate, not an oversight. Do not add a review requirement without first
-satisfying the precondition below.
+The 2026-10-01 GitHub read-back confirms one required approving review and
+`enforce_admins=false` on branch protection. Michael established that temporary
+exception on 2026-09-27 so he can merge pull requests authored by his account;
+GitHub does not count self-approval. The authority and rollback conditions are
+[Governance decision 53](https://github.com/michaelayoade/dotmac_governance/blob/dbd9cec107ee5125a8d41f75065d3823f69d6b8e/docs/open-decisions.md),
+tracked by Governance issue #90, with review due 2026-10-27. The former
+zero-review configuration is historical and must not be used as current
+merge authority.
 
-Release automation here is single-account. The rolling version-bump pull request
-is generated on nearly every merge, agent-authored pull requests merge on green
-throughout the day, and **all of them are authored by the same account**, because
-the automation pushes with that account's `VERSION_BUMP_TOKEN`. GitHub does not
-permit self-approval, and that account is the only admin. So the only person who
-could satisfy a review requirement is the only person who could bypass it, and
-every automated merge would become an admin override.
+Active repository ruleset `24078272` separately requires all 15 CI contexts
+from GitHub Actions and a current base for `main`, with an empty bypass list.
+Those gates apply to administrators too. An admin merge under decision 53
+can bypass the approving-review requirement only; it cannot authorize a red
+check or a stale branch. Do not change the ruleset or branch protection to
+complete a release.
 
-That is worse than having no gate. It normalises the bypass and makes the audit
-trail dishonest, because routine traffic then looks like a deliberate exception.
-This was demonstrated in practice on 2026-07-31: the requirement was added and
-blocked a fully green bump pull request, stalling a waiting deployment, and was
-reverted within the hour.
-
-**Precondition for re-enabling.** Give automation its own identity — point
-`VERSION_BUMP_TOKEN` at a GitHub App installation token or a dedicated bot
-account, so its pull requests are authored by that identity and a human can
-approve them in one click. Never point it at `GITHUB_TOKEN`: GitHub raises no
-workflow runs for events made with it, so required checks never report and the
-pull request becomes permanently unmergeable. `version-bump-pr.yml` already
-validates the token and warns rather than falling back silently.
-
-Once automation is a separate identity, a review requirement becomes meaningful
-rather than ceremonial, and can be reconsidered.
+Decision 53 requires restoring admin enforcement once an independent approver
+is available for Michael-authored pull requests or Governance decision 5
+resolves human/agent identity separation, whichever comes first. Automation
+identity separation remains a follow-up: `VERSION_BUMP_TOKEN` should identify
+the approved automation identity so a different account can review its pull
+requests. `GITHUB_TOKEN` is not a substitute for that trigger-capable token;
+`version-bump-pr.yml` validates the token and refuses a silent fallback.
 
 ### `delete_branch_on_merge` deletes the head branch of every merged PR
 
