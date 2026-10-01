@@ -92,12 +92,15 @@ rights. Every table, sequence, enum/domain, routine and schema must be covered
 by the exact policy; source owners, PUBLIC grants and column grants are
 reviewed explicitly. The observation is not a ready-to-execute plan.
 
-No current caller was established for `ont_bundle_assignments`,
+Michael approved the proposed policy for `ont_bundle_assignments`,
 `service_order_actions`, `support_ticket_actor_assignees`, `tenant_domains`
-or `erp_operational_sync_state_id_seq`. Leave their policy unclassified until
-a named reader/writer or a reviewed retirement decision explains the target.
-Do not silently convert missing source evidence to an approved zero-rights
-decision.
+and `erp_operational_sync_state_id_seq` on 2026-10-01: retain their data under
+`app_admin` with no `app_user` grants. No current runtime caller was established
+in the bounded source review. The zero-runtime-access decision is explicit;
+it is not inferred from missing search hits and does not declare these objects
+retired or authorize dropping them. Their historical provenance and future
+domain ownership remain unresolved. Put this policy in the exact object plan;
+ownership transfer still needs the separate reviewed execution gate below.
 
 Kernel a97 maps four machine-credential columns absent from Sub migration 551
 and the staging catalog: `source_application`, `next_key_hash`,

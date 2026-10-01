@@ -48,6 +48,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import psycopg
 import pytest
 import sqlalchemy as sa
 from alembic.config import Config
@@ -108,7 +109,8 @@ def upgrade() -> None:
         (TENANT_SCOPE_CATALOG_V1.name, MODULE_DATABASE_ROLES_V1.name),
     )
 
-    op.execute(f"CREATE SCHEMA IF NOT EXISTS {{_SCHEMA}};")
+    # The disposable deployment bootstrap prepared the app_admin-owned schema.
+    # A restricted migration login has no database CREATE authority.
     op.execute(f"GRANT USAGE ON SCHEMA {{_SCHEMA}} TO app_user, platform_api;")
 
     op.create_table(
@@ -202,8 +204,23 @@ def composed(isolated_database: URL, standin_lineage: Path):
             bootstrap_connection.execute(
                 sa.text("CREATE SCHEMA mod_rehearsal AUTHORIZATION app_admin")
             )
+            assert (
+                bootstrap_connection.execute(
+                    sa.text(
+                        "SELECT pg_get_userbyid(nspowner) FROM pg_namespace "
+                        "WHERE nspname = 'mod_rehearsal'"
+                    )
+                ).scalar_one()
+                == "app_admin"
+            )
     finally:
         bootstrap_engine.dispose()
+    migration_url = isolated_database.set(drivername="postgresql", username="app_admin")
+    with psycopg.connect(_render(migration_url)) as migration_connection:
+        assert migration_connection.execute(
+            "SELECT session_user, current_user, "
+            "has_database_privilege(session_user, current_database(), 'CREATE')"
+        ).fetchone() == ("app_admin", "app_admin", False)
     command.upgrade(sub_only, "heads")
 
     engine = create_engine(isolated_database)

@@ -5,8 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from psycopg import sql
 from sqlalchemy.engine import make_url
 
+from app.commercial_module_prereqs import COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT
 from app.outbox_dispatcher_roles import (
     HISTORICAL_557_RELAY_OWNERSHIP_CONTRACT,
     OUTBOX_RELAY_OWNERSHIP_CONTRACT,
@@ -17,6 +19,73 @@ from app.outbox_dispatcher_roles import (
 )
 from scripts import bootstrap_outbox_dispatcher_roles as bootstrap_script
 from scripts.ci import bootstrap_test_database_prereqs as ci_bootstrap
+
+
+@pytest.mark.parametrize("posture_drift", [False, True])
+def test_disposable_login_password_setup_requires_guard_and_exact_role_posture(
+    posture_drift: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    statements: list[sql.Composable] = []
+    order: list[str] = []
+
+    class _Connection:
+        def __enter__(self) -> _Connection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, statement: sql.Composable) -> None:
+            statements.append(statement)
+
+    monkeypatch.setattr(
+        ci_bootstrap.psycopg, "connect", lambda *_a, **_k: _Connection()
+    )
+    monkeypatch.setattr(
+        ci_bootstrap,
+        "_require_disposable_cluster",
+        lambda *_a, **_k: order.append("guard"),
+    )
+    monkeypatch.setattr(
+        ci_bootstrap,
+        "bootstrap_commercial_module_prereqs",
+        lambda *_a, **_k: 0,
+    )
+    monkeypatch.setattr(ci_bootstrap, "_bootstrap_test_schema_login", lambda *_a: 0)
+    monkeypatch.setattr(ci_bootstrap, "_bootstrap_outbox_url", lambda *_a, **_k: 0)
+    observed = {
+        role: COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT[role].authority_posture
+        for role in ("app_user", "app_admin")
+    }
+    if posture_drift:
+        observed["app_user"] = (True, True, False, False, False)
+    monkeypatch.setattr(ci_bootstrap, "observe_roles", lambda *_a: observed)
+    password = "fixture apostrophe: O'Reilly"
+    url = make_url("postgresql+psycopg://postgres@localhost/dotmac_sub_test").set(
+        password=password
+    )
+
+    result = ci_bootstrap.bootstrap_disposable_database(url, label="test")
+
+    assert order == ["guard"]
+    role_statements = [
+        statement for statement in statements if "ALTER ROLE" in repr(statement)
+    ]
+    if posture_drift:
+        assert result == 2
+        assert role_statements == []
+    else:
+        assert result == 0
+        assert len(role_statements) == 2
+        for statement, role in zip(role_statements, ("app_user", "app_admin")):
+            parts = list(statement)
+            assert [type(part) for part in parts] == [sql.SQL, sql.Literal]
+            assert parts[0] == sql.SQL(f"ALTER ROLE {role} PASSWORD ")
+            assert parts[1].as_string(None) == "'fixture apostrophe: O''Reilly'"
+    output = capsys.readouterr()
+    assert password not in output.out + output.err
 
 
 class _MarkerResult:

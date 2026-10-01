@@ -24,7 +24,10 @@ import psycopg
 from psycopg import sql
 from sqlalchemy.engine import URL
 
-from app.commercial_module_prereqs import SCHEMA_BOOTSTRAP_ROLE
+from app.commercial_module_prereqs import (
+    COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT,
+    SCHEMA_BOOTSTRAP_ROLE,
+)
 from app.outbox_dispatcher_roles import (
     HISTORICAL_557_RELAY_OWNERSHIP_CONTRACT,
     relay_dispatcher_violations,
@@ -32,6 +35,7 @@ from app.outbox_dispatcher_roles import (
 from scripts.bootstrap_commercial_module_prereqs import (
     bootstrap as bootstrap_commercial_module_prereqs,
 )
+from scripts.bootstrap_commercial_module_prereqs import observe_roles
 from scripts.bootstrap_outbox_dispatcher_roles import (
     bootstrap as bootstrap_outbox_dispatcher_roles,
 )
@@ -230,8 +234,26 @@ def bootstrap_disposable_database(url: URL, *, label: str) -> int:
             return commercial_result
         if _bootstrap_test_schema_login(conn, url):
             return 2
-        # Disposable CI role login uses the disposable server's test password.
+        # On this marked disposable cluster alone, actual app_user/app_admin
+        # login tests use the synthetic server password from TEST_DATABASE_URL.
+        # Refuse drift before changing either cluster-wide credential.
         if url.password is not None:
+            observed = observe_roles(conn)
+            for role in ("app_user", "app_admin"):
+                if (
+                    observed.get(role)
+                    != COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT[role].authority_posture
+                ):
+                    print(
+                        "disposable database login posture drift; credential setup refused",
+                        file=sys.stderr,
+                    )
+                    return 2
+            conn.execute(
+                sql.SQL("ALTER ROLE app_user PASSWORD {}").format(
+                    sql.Literal(url.password)
+                )
+            )
             conn.execute(
                 sql.SQL("ALTER ROLE app_admin PASSWORD {}").format(
                     sql.Literal(url.password)
