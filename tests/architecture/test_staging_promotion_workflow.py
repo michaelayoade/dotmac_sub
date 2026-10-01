@@ -796,22 +796,18 @@ def test_runbook_records_the_merge_method_per_pull_request_kind() -> None:
     )
 
 
-def test_runbook_explains_why_main_requires_no_approving_review() -> None:
-    """The rule was added and reverted within an hour on 2026-07-31.
-
-    Single-account automation cannot satisfy a review requirement: bump and
-    agent pull requests are authored by the only admin, nobody may self-approve,
-    so every automated merge becomes an admin override. Recording why keeps it
-    from being re-added, and names the precondition for reconsidering it.
-    """
-
+def test_runbook_limits_the_temporary_admin_review_exception() -> None:
+    """The current review exception cannot bypass required CI or the base gate."""
     runbook = _read("docs/runbooks/STAGING_PROMOTION.md")
-
-    assert "an approving review is not" in runbook
+    assert "one required approving review" in runbook
+    assert "Governance decision 53" in runbook
+    assert "can bypass the approving-review requirement only" in runbook
+    assert "cannot authorize a red" in runbook
+    assert "check or a stale branch" in runbook
+    assert "Do not change the ruleset or branch protection" in runbook
+    assert "2026-10-27" in runbook
     assert "VERSION_BUMP_TOKEN" in runbook
-    # The deadlock that makes GITHUB_TOKEN the wrong identity must stay stated.
     assert "GITHUB_TOKEN" in runbook
-    assert "permanently unmergeable" in runbook
 
 
 def test_runbook_keeps_the_delete_branch_on_merge_lesson() -> None:
