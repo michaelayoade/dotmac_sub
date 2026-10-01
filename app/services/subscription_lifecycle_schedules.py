@@ -125,6 +125,72 @@ def cancel_scheduled_subscription_status_command(
     return schedule
 
 
+def stage_rebase_funded_tail_termination_schedules(
+    db: Session,
+    *,
+    subscription_id: object,
+    previous_tail: datetime,
+    extended_tail: datetime,
+    evidence_ref: str,
+) -> int:
+    """Move only next-cycle termination commands that target a funded tail.
+
+    Explicit calendar-date schedules are customer/operator decisions and are
+    deliberately left alone.  This participant is flush-only so the outage
+    compensation owner commits the entitlement, anchor, and schedule rebase as
+    one transaction.
+    """
+    previous = _aware_utc(previous_tail)
+    extended = _aware_utc(extended_tail)
+    if previous is None or extended is None or extended <= previous:
+        raise SubscriptionLifecycleScheduleError(
+            "A schedule rebase requires a later funded tail"
+        )
+    schedules = list(
+        db.scalars(
+            select(SubscriptionLifecycleSchedule)
+            .where(
+                SubscriptionLifecycleSchedule.subscription_id
+                == coerce_uuid(subscription_id),
+                SubscriptionLifecycleSchedule.status
+                == SubscriptionLifecycleScheduleStatus.pending,
+                SubscriptionLifecycleSchedule.command_kind.in_(
+                    (
+                        SubscriptionCommandKind.cancel.value,
+                        SubscriptionCommandKind.expire.value,
+                    )
+                ),
+                SubscriptionLifecycleSchedule.effective_timing
+                == SubscriptionEffectiveTiming.next_cycle.value,
+                SubscriptionLifecycleSchedule.effective_at == previous,
+            )
+            .with_for_update()
+        ).all()
+    )
+    if not schedules:
+        return 0
+
+    # The anchor is already staged by the caller.  Refresh the reviewed head so
+    # the eventual canonical lifecycle command is not falsely superseded by the
+    # compensation change it is meant to honor.
+    from app.services.subscription_lifecycle import resolve_subscription_lifecycle
+
+    db.flush()
+    reviewed_head = resolve_subscription_lifecycle(
+        db, str(coerce_uuid(subscription_id))
+    ).head
+    for schedule in schedules:
+        schedule.effective_at = extended
+        schedule.next_attempt_at = extended
+        schedule.reviewed_head = reviewed_head
+        schedule.last_message = (
+            f"Rebased from {previous.isoformat()} to {extended.isoformat()} "
+            f"by {evidence_ref}"
+        )
+    db.flush()
+    return len(schedules)
+
+
 def apply_due_subscription_status_commands(
     db: Session,
     *,
@@ -332,4 +398,5 @@ __all__ = [
     "apply_due_subscription_status_commands",
     "cancel_scheduled_subscription_status_command",
     "schedule_subscription_status_command",
+    "stage_rebase_funded_tail_termination_schedules",
 ]

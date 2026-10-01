@@ -45,6 +45,7 @@ from app.services.subscription_lifecycle_commands import (
 from app.services.subscription_lifecycle_schedules import (
     apply_due_subscription_status_commands,
     cancel_scheduled_subscription_status_command,
+    stage_rebase_funded_tail_termination_schedules,
 )
 from app.services.web_catalog_subscription_workflows import (
     execute_lifecycle_command_response,
@@ -746,6 +747,81 @@ def test_pending_status_schedule_can_be_canceled(db_session, subscriber, catalog
     assert result["claimed"] == 0
     db_session.refresh(subscription)
     assert subscription.status == SubscriptionStatus.active
+
+
+def test_outage_compensation_rebases_next_cycle_cancellation(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    outcome = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.cancel,
+            source="customer:cancel_at_paid_through",
+            effective_timing=SubscriptionEffectiveTiming.next_cycle,
+            expected_head=reviewed.head,
+            idempotency_key="cancel-after-funded-periods",
+        ),
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+    schedule = db_session.get(SubscriptionLifecycleSchedule, outcome.artifact_ids[0])
+    assert schedule is not None
+    previous = datetime(2026, 8, 1, tzinfo=UTC)
+    extended = previous + timedelta(hours=7)
+    subscription.next_billing_at = extended
+
+    changed = stage_rebase_funded_tail_termination_schedules(
+        db_session,
+        subscription_id=subscription.id,
+        previous_tail=previous,
+        extended_tail=extended,
+        evidence_ref="outage-compensation:test",
+    )
+
+    assert changed == 1
+    assert schedule.effective_at.replace(tzinfo=UTC) == extended
+    assert schedule.next_attempt_at.replace(tzinfo=UTC) == extended
+    assert (
+        schedule.reviewed_head
+        == resolve_subscription_lifecycle(db_session, str(subscription.id)).head
+    )
+
+
+def test_outage_compensation_preserves_explicit_date_cancellation(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    explicit_date = datetime(2026, 8, 1, tzinfo=UTC)
+    outcome = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.cancel,
+            source="admin:explicit_date",
+            effective_timing=SubscriptionEffectiveTiming.scheduled,
+            effective_at=explicit_date,
+            expected_head=reviewed.head,
+            idempotency_key="explicit-cancel-date",
+        ),
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+    schedule = db_session.get(SubscriptionLifecycleSchedule, outcome.artifact_ids[0])
+    assert schedule is not None
+    subscription.next_billing_at = explicit_date + timedelta(hours=7)
+
+    changed = stage_rebase_funded_tail_termination_schedules(
+        db_session,
+        subscription_id=subscription.id,
+        previous_tail=explicit_date,
+        extended_tail=explicit_date + timedelta(hours=7),
+        evidence_ref="outage-compensation:test",
+    )
+
+    assert changed == 0
+    assert schedule.effective_at.replace(tzinfo=UTC) == explicit_date
 
 
 def test_failed_due_status_command_retries_with_backoff(

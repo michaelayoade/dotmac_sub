@@ -31,6 +31,7 @@ from app.models.catalog import (
 from app.models.enforcement_lock import EnforcementLock
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.network import CPEDevice, DeviceStatus, OntAssignment, OntUnit
+from app.models.network_monitoring import CustomerOutageInterval
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.usage import RadiusAccountingSession, UsageRecord
 from app.services import catalog as catalog_service
@@ -1601,6 +1602,18 @@ def get_service_detail(
     if subscription.billing_mode:
         billing_mode = subscription.billing_mode.value
 
+    active_outage = db.scalar(
+        select(CustomerOutageInterval)
+        .where(
+            CustomerOutageInterval.subscription_id == subscription.id,
+            CustomerOutageInterval.state == "confirmed_unavailable",
+            CustomerOutageInterval.ended_at.is_(None),
+            CustomerOutageInterval.finalized_at.is_(None),
+        )
+        .order_by(CustomerOutageInterval.started_at.asc())
+        .limit(1)
+    )
+
     return {
         "subscription": subscription,
         "current_offer": current_offer,
@@ -1628,6 +1641,7 @@ def get_service_detail(
         ),
         "billing_mode": billing_mode,
         "billing_mode_display": "Prepaid" if billing_mode == "prepaid" else "Postpaid",
+        "active_outage": active_outage,
         **renewal_context,
         **copy,
     }

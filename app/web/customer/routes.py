@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.db import finish_read_transaction, get_db
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
@@ -76,6 +77,7 @@ from app.services.customer_portal_context import (
     resolve_customer_subscription,
 )
 from app.services.customer_portal_flow_payments import GatewayPaymentIncomplete
+from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition, file_uploads
 from app.services.nin_matching import mask_nin
@@ -84,6 +86,7 @@ from app.services.owner_commands import CommandContext
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
 )
+from app.services.settings_spec import resolve_value
 from app.services.topup_intents import (
     DirectTransferCancellationSource,
     TopupIntentLifecycleProjection,
@@ -731,7 +734,15 @@ def customer_billing(
     from app.web.customer.location import location_prompt_context
 
     location_prompt = location_prompt_context(db, customer, ignore_snooze=True)
+    period_purchase_enabled = (
+        resolve_value(db, SettingDomain.billing, "prepaid_period_purchase_enabled")
+        is True
+    )
     finish_read_transaction(db)
+    if not db.in_transaction():
+        # Make the adapter handoff explicit for the architecture contract while
+        # preserving the render path's expiration-safe read finalizer above.
+        db_session_adapter.release_read_transaction(db)
 
     from datetime import UTC, datetime
 
@@ -744,6 +755,7 @@ def customer_billing(
             "active_page": "billing",
             "location_prompt": location_prompt,
             "now": datetime.now(UTC),
+            "period_purchase_enabled": period_purchase_enabled,
         },
     )
 
@@ -2219,6 +2231,125 @@ def customer_contacts_update(
 # =============================================================================
 # Online Payment (Paystack / Flutterwave)
 # =============================================================================
+
+
+@router.get("/billing/service-periods", response_class=HTMLResponse)
+def customer_service_period_purchase(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/billing/service-periods",
+            status_code=303,
+        )
+    period_purchase_enabled = (
+        resolve_value(db, SettingDomain.billing, "prepaid_period_purchase_enabled")
+        is True
+    )
+    db_session_adapter.release_read_transaction(db)
+    if not period_purchase_enabled:
+        return RedirectResponse(url="/portal/billing", status_code=303)
+    return templates.TemplateResponse(
+        "customer/billing/service_periods.html",
+        {
+            "request": request,
+            "customer": customer,
+            **customer_portal.get_service_period_purchase_page(db, customer),
+            "active_page": "billing",
+        },
+    )
+
+
+@router.post("/billing/service-periods/preview")
+def customer_service_period_purchase_preview(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    try:
+        result = customer_portal.preview_service_period_purchase(
+            db,
+            customer,
+            subscription_id=str(payload.get("subscription_id") or ""),
+            period_count=int(payload.get("period_count") or 0),
+        )
+    except (ValueError, DomainError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return JSONResponse({"detail": message}, status_code=400)
+    return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.post("/billing/service-periods/intent")
+def customer_service_period_purchase_intent(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    if _is_read_only_customer(customer):
+        return JSONResponse({"detail": READ_ONLY_MUTATION_MESSAGE}, status_code=403)
+    try:
+        result = customer_portal.create_service_period_purchase_intent(
+            db,
+            customer,
+            subscription_id=str(payload.get("subscription_id") or ""),
+            period_count=int(payload.get("period_count") or 0),
+            preview_fingerprint=str(payload.get("preview_fingerprint") or ""),
+            provider=payload.get("provider"),
+            payment_method_id=payload.get("payment_method_id"),
+            redirect_url=str(
+                request.url_for("customer_service_period_purchase_verify")
+            ),
+            idempotency_key=(
+                request.headers.get("Idempotency-Key") or payload.get("idempotency_key")
+            ),
+        )
+    except (ValueError, DomainError, HTTPException) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return JSONResponse({"detail": message}, status_code=400)
+    return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.get("/billing/service-periods/verify", response_class=HTMLResponse)
+def customer_service_period_purchase_verify(
+    request: Request,
+    reference: str = Query(...),
+    provider: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        result = customer_portal.verify_and_settle_service_period_purchase(
+            db, customer, reference, provider=provider
+        )
+        return templates.TemplateResponse(
+            "customer/billing/service_periods_success.html",
+            {
+                "request": request,
+                "customer": customer,
+                **result,
+                "active_page": "billing",
+            },
+        )
+    except GatewayPaymentIncomplete as exc:
+        return _render_payment_return_status(
+            request,
+            reference=reference,
+            provider=provider,
+            flow="prepaid_period_purchase",
+            projection=exc.projection,
+        )
+    except Exception as exc:
+        return _payment_verification_error_response(request, exc, status_code=503)
 
 
 @router.get("/billing/pay", response_class=HTMLResponse)

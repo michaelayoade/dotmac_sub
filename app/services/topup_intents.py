@@ -98,6 +98,7 @@ class TopupIntentCompletionSource(str, Enum):
     account_credit_deposit = "account_credit_deposit"
     provider_webhook = "provider_webhook"
     customer_invoice_verify = "customer_invoice_verify"
+    customer_period_purchase_verify = "customer_period_purchase_verify"
     customer_legacy_topup_verify = "customer_legacy_topup_verify"
     gateway_reconciliation = "gateway_reconciliation"
     payment_proof_review = "payment_proof_review"
@@ -115,6 +116,7 @@ class GatewayTopupIntentFlow(str, Enum):
     """Gateway checkout flows whose durable trace is owned here."""
 
     invoice_payment = "invoice_payment"
+    prepaid_period_purchase = "prepaid_period_purchase"
     reseller_consolidated = "reseller_consolidated"
 
 
@@ -437,6 +439,9 @@ class StageGatewayTopupIntentCommand:
     billing_account_id: UUID | None = None
     invoice_id: UUID | None = None
     invoice_number: str | None = None
+    purchase_id: UUID | None = None
+    preview_fingerprint: str | None = None
+    idempotency_key: str | None = None
     reseller_id: UUID | None = None
     payment_method_id: UUID | None = None
     save_card: bool = False
@@ -853,6 +858,20 @@ def _gateway_intent_metadata(
         )
         if command.payment_method_id is not None:
             metadata["payment_method_id"] = str(command.payment_method_id)
+    elif command.flow is GatewayTopupIntentFlow.prepaid_period_purchase:
+        if command.account_id is None or command.purchase_id is None:
+            raise _error(
+                "gateway_scope_invalid",
+                "Period purchase gateway intent requires account and purchase identities",
+            )
+        metadata.update(
+            {
+                "purchase_id": str(command.purchase_id),
+                "account_id": str(command.account_id),
+            }
+        )
+        if command.payment_method_id is not None:
+            metadata["payment_method_id"] = str(command.payment_method_id)
     elif command.flow is GatewayTopupIntentFlow.reseller_consolidated:
         if command.billing_account_id is None or command.reseller_id is None:
             raise _error(
@@ -939,6 +958,8 @@ def stage_gateway_topup_intent(
                 existing.account_id == command.account_id,
                 existing.billing_account_id == command.billing_account_id,
                 existing.invoice_id == command.invoice_id,
+                str((existing.metadata_ or {}).get("purchase_id") or "")
+                == (str(command.purchase_id) if command.purchase_id else ""),
                 existing.provider_id == command.provider_id,
                 existing.capability_binding_id == command.capability_binding_id,
                 existing.provider_type == provider_type,
@@ -969,6 +990,36 @@ def stage_gateway_topup_intent(
         expires_at=expires_at,
         channel=channel,
         created_by=created_by,
+        purpose=(
+            "prepaid_period_purchase"
+            if command.flow is GatewayTopupIntentFlow.prepaid_period_purchase
+            else None
+        ),
+        allocation_policy=(
+            "selected_purchase_invoices_only"
+            if command.flow is GatewayTopupIntentFlow.prepaid_period_purchase
+            else None
+        ),
+        credit_application_policy=(
+            "none"
+            if command.flow is GatewayTopupIntentFlow.prepaid_period_purchase
+            else None
+        ),
+        policy_version=(
+            1
+            if command.flow is GatewayTopupIntentFlow.prepaid_period_purchase
+            else None
+        ),
+        preview_fingerprint=(
+            str(command.preview_fingerprint or "")
+            if command.flow is GatewayTopupIntentFlow.prepaid_period_purchase
+            else None
+        ),
+        idempotency_key=(
+            str(command.idempotency_key or "")
+            if command.flow is GatewayTopupIntentFlow.prepaid_period_purchase
+            else None
+        ),
         metadata_=metadata,
     )
     db.add(intent)

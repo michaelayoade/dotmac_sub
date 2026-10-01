@@ -97,6 +97,7 @@ class BillingAnchorProjectionSource(StrEnum):
     prepaid_settlement_reanchor = "prepaid_settlement_reanchor"
     subscription_billing_grant = "subscription_billing_grant"
     service_extension = "service_extension"
+    outage_compensation = "outage_compensation"
     reviewed_reconciliation = "reviewed_reconciliation"
 
 

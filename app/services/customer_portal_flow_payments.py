@@ -20,8 +20,10 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
+from app.models.catalog import BillingMode, Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.idempotency import IdempotencyKey
+from app.models.service_period_purchase import PrepaidPeriodPurchase
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -73,6 +75,13 @@ from app.services.payment_routing import (
     provider_for_intent,
     select_checkout_provider,
 )
+from app.services.prepaid_period_purchases import (
+    CreatePrepaidPeriodPurchaseCommand,
+    SettleVerifiedPrepaidPeriodPurchaseCommand,
+    create_prepaid_period_purchase,
+    preview_prepaid_period_purchase,
+    settle_verified_prepaid_period_purchase,
+)
 from app.services.provider_payment_settlements import (
     settle_verified_invoice_payment,
 )
@@ -100,6 +109,7 @@ _ONLINE_PROVIDER_LABELS = {
 }
 _DIRECT_TRANSFER_LABEL = "Direct bank transfer"
 _DEFAULT_TOPUP_PRESET_AMOUNTS = (1000, 2000, 5000, 10000, 20000, 50000)
+_PERIOD_PURCHASE_CHARGE_IDEMPOTENCY_SCOPE = "prepaid_period_purchase_saved_card_charge"
 
 
 class GatewayPaymentIncomplete(ValueError):
@@ -1802,6 +1812,289 @@ def create_topup_intent(
     }
 
 
+def get_service_period_purchase_page(db: Session, customer: dict) -> dict:
+    account_id = _customer_account_uuid(db, customer)
+    subscriptions = list(
+        db.scalars(
+            select(Subscription)
+            .where(
+                Subscription.subscriber_id == account_id,
+                Subscription.billing_mode == BillingMode.prepaid,
+            )
+            .order_by(Subscription.created_at, Subscription.id)
+        ).all()
+    )
+    return {
+        "subscriptions": subscriptions,
+        "saved_cards": [
+            method
+            for method in customer_cards.list_for_account(db, str(account_id))
+            if method.method_type == PaymentMethodType.card
+        ],
+        "payment_options": online_gateway_payment_options(db),
+        "max_periods": int(
+            resolve_value(
+                db, SettingDomain.billing, "prepaid_period_purchase_max_months"
+            )
+            or 12
+        ),
+    }
+
+
+def preview_service_period_purchase(
+    db: Session,
+    customer: dict,
+    *,
+    subscription_id: str,
+    period_count: int,
+) -> dict[str, object]:
+    quote = preview_prepaid_period_purchase(
+        db,
+        account_id=_customer_account_uuid(db, customer),
+        subscription_id=subscription_id,
+        period_count=period_count,
+        effective_at=datetime.now(UTC),
+    )
+    return {
+        "subscription_id": str(quote.subscription_id),
+        "period_count": quote.period_count,
+        "currency": quote.currency,
+        "coverage_starts_at": quote.coverage_starts_at,
+        "coverage_ends_at": quote.coverage_ends_at,
+        "subtotal": quote.subtotal,
+        "tax_total": quote.tax_total,
+        "total": quote.total,
+        "preview_fingerprint": quote.fingerprint,
+        "expires_at": quote.expires_at,
+        "periods": [
+            {
+                "ordinal": row.ordinal,
+                "starts_at": row.starts_at,
+                "ends_at": row.ends_at,
+                "subtotal": row.subtotal,
+                "tax_total": row.tax_total,
+                "total": row.total,
+            }
+            for row in quote.periods
+        ],
+    }
+
+
+def create_service_period_purchase_intent(
+    db: Session,
+    customer: dict,
+    *,
+    subscription_id: str,
+    period_count: int,
+    preview_fingerprint: str,
+    provider: str | None = None,
+    payment_method_id: str | None = None,
+    redirect_url: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
+    account_id = _customer_account_uuid(db, customer)
+    created_by = str(optional_customer_subscriber_id(db, customer) or account_id)
+    key = str(idempotency_key or "").strip()
+    if not key:
+        raise ValueError("Idempotency-Key is required")
+    db_session_adapter.release_read_transaction(db)
+    purchase = create_prepaid_period_purchase(
+        db,
+        CreatePrepaidPeriodPurchaseCommand(
+            account_id=account_id,
+            subscription_id=uuid.UUID(subscription_id),
+            period_count=period_count,
+            expected_fingerprint=preview_fingerprint,
+            idempotency_key=key,
+            created_by=created_by,
+            effective_at=datetime.now(UTC),
+        ),
+        context=CommandContext.system(
+            actor=f"customer:{created_by}",
+            scope="prepaid-period-purchase:create",
+            reason="Customer confirmed prepaid service-period quote",
+            idempotency_key=key,
+        ),
+    )
+
+    selected_payment_method_id = str(payment_method_id or "").strip() or None
+    route = select_checkout_provider(
+        db, "paystack" if selected_payment_method_id else provider
+    )
+    customer_email = _resolve_customer_email(db, customer)
+    _require_gateway_email(route.provider_type.value, customer_email)
+    selected_method = None
+    selected_token = None
+    if selected_payment_method_id:
+        if route.provider_type.value != "paystack":
+            raise ValueError("Saved cards can only be used with Paystack")
+        selected_method = customer_cards._owned(
+            db, str(account_id), selected_payment_method_id
+        )
+        if selected_method is None:
+            raise ValueError("Payment method not found")
+        selected_token = billing_service.payment_methods.get_decrypted_token(
+            db, str(selected_method.id)
+        )
+        if not selected_token:
+            raise ValueError("Payment method is not chargeable")
+    gateway_context = payment_gateway_adapter.build_context(
+        db,
+        provider_type=route.provider_type.value,
+        capability_binding_id=route.capability_binding_id,
+    )
+    reservation: IdempotencyKey | None = None
+    if selected_method is not None:
+        reservation, replayed = _reserve_charge_idempotency_key(
+            db,
+            scope=_PERIOD_PURCHASE_CHARGE_IDEMPOTENCY_SCOPE,
+            key=key,
+            account_id=account_id,
+            replay=lambda ref_id: _topup_intent_replay(db, ref_id),
+        )
+        if replayed is not None:
+            return replayed
+    reservation_id = reservation.id if reservation else None
+    db_session_adapter.release_read_transaction(db)
+    intent_result = gateway_topup_intents.create_customer_gateway_topup_intent(
+        db,
+        gateway_topup_intents.CreateCustomerGatewayTopupIntentCommand(
+            flow=gateway_topup_intents.CustomerGatewayTopupFlow.prepaid_period_purchase,
+            account_id=account_id,
+            purchase_id=purchase.id,
+            reference=gateway_context.reference,
+            provider_type=gateway_context.provider_type,
+            provider_id=route.provider_id,
+            capability_binding_id=route.capability_binding_id,
+            payment_method_id=selected_method.id if selected_method else None,
+            created_by=created_by,
+            expected_preview_fingerprint=purchase.preview_fingerprint,
+        ),
+        context=CommandContext.system(
+            actor=f"customer:{created_by}",
+            scope=gateway_topup_intents.CREATE_CUSTOMER_SCOPE,
+            reason="Customer prepaid service-period checkout intent",
+            idempotency_key=key,
+        ),
+    )
+    checkout_metadata = {"topup_intent_id": str(intent_result.intent_id)}
+    charged = False
+    if selected_method is not None:
+        try:
+            payment_capability.charge_authorization(
+                db,
+                authorization_code=selected_token,
+                email=customer_email,
+                amount_kobo=payment_capability.amount_to_kobo(
+                    intent_result.requested_amount
+                ),
+                reference=intent_result.reference,
+                metadata=checkout_metadata,
+                checkout_binding_id=route.capability_binding_id,
+            )
+        except Exception:
+            db_session_adapter.release_read_transaction(db)
+            gateway_topup_intents.fail_saved_card_charge(
+                db,
+                gateway_topup_intents.FailSavedCardChargeCommand(
+                    intent_id=intent_result.intent_id,
+                    reservation_id=reservation_id,
+                    reservation_scope=(
+                        gateway_topup_intents.SavedCardChargeScope.prepaid_period_purchase
+                    ),
+                ),
+                context=CommandContext.system(
+                    actor=f"customer:{created_by}",
+                    scope=gateway_topup_intents.FAIL_SAVED_CARD_SCOPE,
+                    reason="Record failed saved-card period purchase charge",
+                ),
+            )
+            raise
+        charged = True
+        _commit_charge_idempotency_ref(db, reservation, str(intent_result.intent_id))
+    checkout_url = None
+    if not charged:
+        checkout_url = initialize_hosted_checkout(
+            db,
+            customer,
+            provider_type=gateway_context.provider_type,
+            amount=intent_result.requested_amount,
+            reference=intent_result.reference,
+            redirect_url=redirect_url,
+            metadata=checkout_metadata,
+            default_callback_path="/portal/billing/service-periods/verify",
+            capability_binding_id=route.capability_binding_id,
+        )
+    return {
+        "purchase_id": str(purchase.id),
+        "intent_id": str(intent_result.intent_id),
+        "provider_type": gateway_context.provider_type,
+        "provider_public_key": gateway_context.public_key,
+        "reference": intent_result.reference,
+        "requested_amount": intent_result.requested_amount,
+        "currency": intent_result.currency,
+        "checkout_metadata": checkout_metadata,
+        "charged": charged,
+        "checkout_url": checkout_url,
+    }
+
+
+def verify_and_settle_service_period_purchase(
+    db: Session,
+    customer: dict,
+    reference: str,
+    *,
+    provider: str | None = None,
+) -> dict[str, object]:
+    account_id = _customer_account_uuid(db, customer)
+    intent = db.scalar(select(TopupIntent).where(TopupIntent.reference == reference))
+    if (
+        intent is None
+        or intent.account_id != account_id
+        or intent.purpose != "prepaid_period_purchase"
+        or intent.provider_id is None
+    ):
+        raise ValueError("Payment reference is not a service-period purchase")
+    provider_type = provider_for_intent(intent, provider).value
+    tx = _observe_gateway_for_customer(
+        db, intent=intent, provider_type=provider_type, account_id=account_id
+    )
+    intent_id = intent.id
+    provider_id = intent.provider_id
+    db_session_adapter.release_read_transaction(db)
+    settlement = settle_verified_prepaid_period_purchase(
+        db,
+        SettleVerifiedPrepaidPeriodPurchaseCommand(
+            intent_id=intent_id,
+            provider_id=provider_id,
+            external_transaction_id=tx.external_id,
+            amount=tx.amount,
+            provider_fee=round_money(to_decimal(getattr(tx, "provider_fee", 0))),
+            currency=tx.currency,
+            effective_at=datetime.now(UTC),
+            completion_source=TopupIntentCompletionSource.customer_period_purchase_verify,
+        ),
+        context=CommandContext.system(
+            actor=f"customer:{account_id}",
+            scope="prepaid-period-purchase:settle",
+            reason="Settle customer-verified service-period purchase",
+            idempotency_key=f"prepaid-period-purchase-settle:{intent_id}",
+        ),
+    )
+    purchase = db.get(PrepaidPeriodPurchase, settlement.purchase_id)
+    payment = db.get(Payment, settlement.payment_id)
+    return {
+        "purchase": purchase,
+        "payment": payment,
+        "invoice_ids": settlement.invoice_ids,
+        "entitlement_ids": settlement.entitlement_ids,
+        "coverage_ends_at": settlement.coverage_ends_at,
+        "already_recorded": settlement.replayed,
+        "provider_type": provider_type,
+        "reference": reference,
+    }
+
+
 def _latest_pending_direct_transfer_intent(
     db: Session, account_id: uuid.UUID
 ) -> TopupIntent | None:
@@ -2024,6 +2317,7 @@ __all__ = [
     "complete_invoice_payment_intent",
     "create_invoice_payment_intent",
     "create_topup_intent",
+    "create_service_period_purchase_intent",
     "create_direct_transfer_topup_intent",
     "customer_direct_bank_transfer_enabled",
     "direct_bank_transfer_enabled",
@@ -2032,8 +2326,11 @@ __all__ = [
     "get_direct_transfer_topup_page",
     "get_payment_page",
     "get_topup_page",
+    "get_service_period_purchase_page",
     "preview_topup",
+    "preview_service_period_purchase",
     "submit_direct_transfer_topup",
     "verify_and_record_payment",
     "verify_and_record_topup",
+    "verify_and_settle_service_period_purchase",
 ]

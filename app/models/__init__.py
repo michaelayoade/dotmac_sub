@@ -947,6 +947,14 @@ from app.models.service_extension import (  # noqa: F401
     ServiceExtensionScope,
     ServiceExtensionStatus,
 )
+from app.models.service_period_purchase import (  # noqa: F401
+    OutageCompensationDecision,
+    OutageCompensationDecisionInterval,
+    OutageCompensationDecisionStatus,
+    PrepaidPeriodPurchase,
+    PrepaidPeriodPurchasePeriod,
+    PrepaidPeriodPurchaseStatus,
+)
 from app.models.service_request import (  # noqa: F401
     ResellerServiceRequest,
     Serviceability,

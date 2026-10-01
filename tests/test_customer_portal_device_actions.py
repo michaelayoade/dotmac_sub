@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -14,6 +15,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.network import OntAssignment, OntUnit
+from app.models.network_monitoring import CustomerOutageInterval
 from app.models.subscriber import Subscriber
 from app.services import customer_portal_flow_services
 from app.services.customer_device_commands import (
@@ -200,6 +202,29 @@ def test_service_detail_renders_desired_wifi_name(db_session):
     assert 'name="ssid"' in html
     assert 'value="DesiredSSID"' in html
     assert "LegacySSID" not in html
+
+
+def test_service_detail_projects_active_network_outage(db_session):
+    subscriber, subscription, _ont = _active_subscription_with_ont(db_session)
+    interval = CustomerOutageInterval(
+        incident_id=uuid4(),
+        subscription_id=subscription.id,
+        state="confirmed_unavailable",
+        quality="exact",
+        started_at=datetime(2026, 10, 1, 8, tzinfo=UTC),
+        idempotency_key="portal-active-outage",
+    )
+    db_session.add(interval)
+    db_session.commit()
+
+    detail = get_service_detail(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        str(subscription.id),
+    )
+
+    assert detail is not None
+    assert detail["active_outage"].id == interval.id
 
 
 def test_customer_reboot_delegates_to_tracked_ont_action(db_session, monkeypatch):

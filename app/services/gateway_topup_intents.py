@@ -20,6 +20,10 @@ from app.models.integration_platform import (
     IntegrationCapabilityBinding,
     IntegrationInstallationState,
 )
+from app.models.service_period_purchase import (
+    PrepaidPeriodPurchase,
+    PrepaidPeriodPurchaseStatus,
+)
 from app.services import topup_intents
 from app.services.account_credit_deposits import (
     SUPPORTED_CURRENCY,
@@ -68,6 +72,7 @@ class CustomerGatewayTopupFlow(str, Enum):
 
     invoice_payment = "invoice_payment"
     account_credit_deposit = "account_credit_deposit"
+    prepaid_period_purchase = "prepaid_period_purchase"
 
 
 class SavedCardChargeScope(str, Enum):
@@ -75,6 +80,7 @@ class SavedCardChargeScope(str, Enum):
 
     invoice = "invoice_saved_card_charge"
     account_credit_deposit = "topup_saved_card_charge"
+    prepaid_period_purchase = "prepaid_period_purchase_saved_card_charge"
 
 
 class GatewayTopupIntentError(DomainError, ValueError):
@@ -87,6 +93,10 @@ def _error(suffix: str, message: str, **details: object) -> GatewayTopupIntentEr
         message=message,
         details=details,
     )
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +114,7 @@ class CreateCustomerGatewayTopupIntentCommand:
     invoice_id: UUID | None = None
     payment_method_id: UUID | None = None
     expected_preview_fingerprint: str | None = None
+    purchase_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,7 +351,7 @@ def _create_customer_gateway_topup_intent(
                 "Invoice gateway intent is already being created",
             ) from exc
         preview_fingerprint = None
-    else:
+    elif command.flow is CustomerGatewayTopupFlow.account_credit_deposit:
         if command.invoice_id is not None:
             raise _error(
                 "flow_evidence_invalid",
@@ -405,6 +416,67 @@ def _create_customer_gateway_topup_intent(
             replayed=replayed,
         )
         preview_fingerprint = preview.fingerprint
+    else:
+        if (
+            command.purchase_id is None
+            or command.invoice_id is not None
+            or command.requested_amount is not None
+        ):
+            raise _error(
+                "flow_evidence_invalid",
+                "Period purchase checkout requires only a purchase identity",
+            )
+        lock_account(db, str(command.account_id))
+        purchase = lock_for_update(db, PrepaidPeriodPurchase, command.purchase_id)
+        if purchase is None or purchase.account_id != command.account_id:
+            raise _error(
+                "purchase_not_found",
+                "Service-period purchase was not found for this account",
+            )
+        if purchase.status not in {
+            PrepaidPeriodPurchaseStatus.quoted,
+            PrepaidPeriodPurchaseStatus.payment_pending,
+        }:
+            raise _error(
+                "purchase_not_payable",
+                "Service-period purchase is no longer payable",
+                status=purchase.status.value,
+            )
+        expected = str(command.expected_preview_fingerprint or "").strip()
+        if expected != purchase.preview_fingerprint:
+            raise _error(
+                "preview_required",
+                "Review the latest service-period quote before checkout",
+            )
+        staged = topup_intents.stage_gateway_topup_intent(
+            db,
+            topup_intents.StageGatewayTopupIntentCommand(
+                flow=topup_intents.GatewayTopupIntentFlow.prepaid_period_purchase,
+                account_id=command.account_id,
+                purchase_id=purchase.id,
+                reference=command.reference,
+                provider_type=command.provider_type,
+                provider_id=command.provider_id,
+                capability_binding_id=command.capability_binding_id,
+                currency=purchase.currency,
+                requested_amount=purchase.total,
+                expires_at=min(expires_at, _utc(purchase.expires_at)),
+                payment_method_id=command.payment_method_id,
+                channel=topup_intents.TopupIntentChannel.customer_selfcare,
+                created_by=created_by,
+                preview_fingerprint=purchase.preview_fingerprint,
+                idempotency_key=purchase.idempotency_key,
+            ),
+            context=context,
+        )
+        if purchase.topup_intent_id not in {None, staged.intent.id}:
+            raise _error(
+                "purchase_intent_conflict",
+                "Service-period purchase is linked to another checkout",
+            )
+        purchase.topup_intent_id = staged.intent.id
+        purchase.status = PrepaidPeriodPurchaseStatus.payment_pending
+        preview_fingerprint = purchase.preview_fingerprint
 
     if not staged.replayed:
         topup_intents.stage_gateway_topup_intent_created_event(

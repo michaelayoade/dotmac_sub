@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Literal
@@ -46,6 +46,11 @@ from app.services.payment_provider_events import (
     PaymentProviderEventCommand,
     PaymentProviderEventError,
     PaymentProviderEventResult,
+)
+from app.services.prepaid_period_purchases import (
+    PrepaidPeriodPurchaseError,
+    SettleVerifiedPrepaidPeriodPurchaseCommand,
+    stage_verified_prepaid_period_purchase,
 )
 from app.services.topup_intents import (
     COMPLETION_SCOPE,
@@ -897,6 +902,54 @@ def _stage_deposit_settlement(
     )
 
 
+def _stage_period_purchase_settlement(
+    db: Session,
+    *,
+    prepared: _PreparedPaymentWebhook,
+    context: CommandContext,
+) -> _PreparedPaymentWebhook:
+    settlement = prepared.settlement
+    intent = prepared.topup_intent
+    if (
+        settlement is None
+        or settlement.status is not PaymentStatus.succeeded
+        or intent is None
+        or intent.purpose != "prepaid_period_purchase"
+    ):
+        return prepared
+    external_id = prepared.ingest.external_id
+    if settlement.amount is None or not external_id:
+        raise _error(
+            "period_purchase_rejected",
+            "Period purchase confirmation omitted amount or transaction identity",
+        )
+    try:
+        result = stage_verified_prepaid_period_purchase(
+            db,
+            SettleVerifiedPrepaidPeriodPurchaseCommand(
+                intent_id=intent.id,
+                provider_id=prepared.ingest.provider_id,
+                external_transaction_id=external_id,
+                amount=settlement.amount,
+                provider_fee=settlement.provider_fee,
+                currency=settlement.currency or intent.currency,
+                effective_at=datetime.now(UTC),
+            ),
+            context=context,
+        )
+    except PrepaidPeriodPurchaseError as exc:
+        raise _error(
+            "period_purchase_rejected",
+            exc.message,
+            purchase_error_code=exc.code,
+            intent_id=str(intent.id),
+        ) from exc
+    return replace(
+        prepared,
+        ingest=replace(prepared.ingest, payment_id=result.payment_id),
+    )
+
+
 def _expected_financial_effect_unresolved(event: PaymentProviderEventResult) -> bool:
     """A real money-movement was expected but could not be resolved to a payment.
 
@@ -962,7 +1015,11 @@ def _stage_topup_consequences(
         or settlement.status != PaymentStatus.succeeded
         or event.payment_id is None
         or intent is None
-        or intent.purpose == "account_credit_deposit"
+        or intent.purpose
+        in {
+            "account_credit_deposit",
+            "prepaid_period_purchase",
+        }
     ):
         return
     try:
@@ -1443,6 +1500,11 @@ def _process_claimed_payment_webhook(
         db,
         prepared=prepared,
         provider=command.provider,
+        context=context,
+    )
+    prepared = _stage_period_purchase_settlement(
+        db,
+        prepared=prepared,
         context=context,
     )
     event = _stage_provider_event(db, prepared.ingest, context=context)
