@@ -990,6 +990,8 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Create or edit templates and policies, choose the purpose that matches the customer message, preview the result, then save and verify it.",
         "For manual customer-page sends, suspended or blocked accounts may receive only account, billing, service, or credentials messages; canceled and disabled accounts receive none.",
         "Review delivery failure evidence before retrying or canceling a queued notification.",
+        "Before a controlled payment email adoption, review the receipt and invoice-paid comparison report, including both template IDs, purpose, conditions, and active state.",
+        "An authorized operator can copy both reviewed payment email templates once, then rerun the comparison. Resolve conflicts before retrying; customer delivery uses the current templates until the separate cutover.",
     ),
     _guide(
         "provisioning",
@@ -1710,6 +1712,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "resolve-notification",
             "Review or retry delivery",
             4,
+            permission="notification:write",
+        ),
+        _action(
+            "review-payment-email-adoption",
+            "Review payment email adoption evidence",
+            5,
+            permission="notification:read",
+        ),
+        _action(
+            "adopt-payment-email-templates",
+            "Copy reviewed payment email templates",
+            6,
             permission="notification:write",
         ),
     ),
