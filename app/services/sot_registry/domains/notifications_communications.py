@@ -1059,12 +1059,14 @@ DOMAIN = DomainSOT(
                         "payment_template_adoption.studio_conflict",
                         "payment_template_adoption.invalid_contexts",
                         "payment_template_adoption.invalid_tenant",
+                        "payment_template_adoption.unsafe_runtime_role",
                     ),
                     mapping_owner="Explicit operator backfill caller",
                     fail_closed_on=(
                         "ambiguous legacy email identity",
                         "invalid receipt content",
                         "Studio operator edits or draft changes",
+                        "PostgreSQL current role with SUPERUSER or BYPASSRLS",
                     ),
                 ),
                 migration=MigrationContract(
@@ -1086,6 +1088,7 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_payment_template_adoption.py",
                     "tests/architecture/test_payment_template_adoption_boundary.py",
+                    "tests/integration/test_payment_template_adoption_runtime_role_pg.py",
                 ),
             ),
         ),

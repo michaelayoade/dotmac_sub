@@ -1,5 +1,6 @@
 """SQLite behavior for explicit, dormant payment email content adoption."""
 
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -14,6 +15,7 @@ from app.models.notification import (
     NotificationTemplate,
     NotificationTemplatePurpose,
 )
+from app.services import payment_template_adoption as adoption
 from app.services.domain_errors import DomainError
 from app.services.operator_tenant import operator_tenant_id
 from app.services.owner_commands import CommandContext
@@ -304,3 +306,62 @@ def test_wrong_tenant_context_refused_before_transaction(adoption_db):
     with pytest.raises(DomainError, match="operator tenant"):
         adopt_payment_email_templates(adoption_db, context=wrong)
     assert studio.list_templates(adoption_db, operator_tenant_id()) == []
+
+
+@pytest.mark.parametrize(
+    "posture",
+    (
+        pytest.param((True, False), id="superuser"),
+        pytest.param((False, True), id="bypass-rls"),
+        pytest.param(None, id="missing-current-role"),
+    ),
+)
+def test_runtime_role_guard_refuses_elevated_or_unknown_posture(posture):
+    db = Mock()
+    db.get_bind.return_value.dialect.name = "postgresql"
+    db.execute.return_value.one_or_none.return_value = (
+        None if posture is None else Mock(rolsuper=posture[0], rolbypassrls=posture[1])
+    )
+
+    with pytest.raises(DomainError) as failure:
+        adoption._require_rls_runtime_role(db)
+
+    assert failure.value.code == "payment_template_adoption.unsafe_runtime_role"
+    assert failure.value.message == (
+        "Payment email adoption requires an RLS-enforced database role."
+    )
+    assert "current_user" in str(db.execute.call_args.args[0])
+
+
+@pytest.mark.parametrize("entrypoint", ("parity", "adoption"))
+def test_unsafe_role_refused_before_legacy_or_studio_access(
+    db_session, monkeypatch, entrypoint
+):
+    def refuse(_db):
+        raise adoption._error(
+            "unsafe_runtime_role",
+            "Payment email adoption requires an RLS-enforced database role.",
+        )
+
+    legacy = Mock(side_effect=AssertionError("legacy read after role refusal"))
+    studio_read = Mock(side_effect=AssertionError("Studio read after role refusal"))
+    studio_write = Mock(side_effect=AssertionError("Studio write after role refusal"))
+    monkeypatch.setattr(adoption, "_require_rls_runtime_role", refuse)
+    monkeypatch.setattr(adoption, "_legacy_snapshot", legacy)
+    monkeypatch.setattr(studio, "get_by_slug", studio_read)
+    monkeypatch.setattr(studio, "create_template", studio_write)
+
+    with pytest.raises(DomainError) as failure:
+        if entrypoint == "parity":
+            payment_email_parity_report(db_session)
+        else:
+            _adopt_owner(
+                db_session,
+                context=_context(),
+                reviewed=ReviewedPaymentEmailTemplates(uuid4(), uuid4()),
+            )
+
+    assert failure.value.code == "payment_template_adoption.unsafe_runtime_role"
+    legacy.assert_not_called()
+    studio_read.assert_not_called()
+    studio_write.assert_not_called()

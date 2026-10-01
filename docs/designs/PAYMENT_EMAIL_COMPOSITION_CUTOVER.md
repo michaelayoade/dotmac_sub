@@ -93,6 +93,19 @@ today, and the current source does not emit `ont_online`.
 
 ### Explicit expand identity and two-step content gate
 
+Both public parity and adoption boundaries first inspect PostgreSQL's actual
+`current_user` role posture. They refuse a superuser, a role with `BYPASSRLS`,
+an unavailable posture observation, or an unsupported database dialect before
+reading legacy content or accessing Studio. Adoption checks inside the owning
+transaction, so the role observation cannot create a caller transaction before
+the command boundary. SQLite remains a content-only unit test lane.
+
+Catalog flags and tests that assume `SET ROLE app_user` prove that role's
+policy, not the application connection's identity. Controlled staging
+acceptance requires an observation through the real app and worker connection
+showing `SUPERUSER=false` and `BYPASSRLS=false`, then parity and replay under
+that identity.
+
 The dormant `communications.payment_template_adoption` command takes the
 operator tenant UUID from `operator_tenant_id()` and maps exactly one EMAIL
 `NotificationTemplate` row for each code. For `payment_received`, the one row
@@ -222,6 +235,32 @@ A separate, unmerged cutover worktree contains an experimental payment-origin
 Template Studio content switch. None of those source changes are in this
 expand branch. They require their own review and release gate; this expand
 release must preserve the incumbent direct email and SMS behavior.
+
+### Staging runtime authority blocker observed 2026-10-01
+
+Michael explicitly named `seabone` for staging. A read-only observation through
+its existing `dotmac_sub_app` process, at source
+`2c33d50c007cbba507b73a1a563809faaea36dfb` and accepted image digest
+`sha256:fa78082b35f8b6dc0071c6116c7dd59a5f4ede7e87968a7c76d93cbedffda29b`,
+returned database `dotmac_sub` and `current_user=postgres` with both
+`SUPERUSER=true` and `BYPASSRLS=true`. Independent review found no checked-in
+staging exception permitting this runtime posture. This blocks real adoption.
+The source guard refuses real adoption and parity under that identity; a
+dormant package/lineage deployment does not resolve it.
+
+The same bounded catalog observation found only 14 of 661 public tables with
+any `app_user` DML privilege, while 665 public relations and 52 module relations
+were owned by `postgres`. Switching only the runtime DSN would therefore be
+insufficient. Source also uses the runtime DSN for Alembic and deploy
+prerequisite checks. Michael selected alignment of module schema and migration
+ownership with `app_admin`, with `app_user` for runtime traffic, on 2026-10-01.
+That separate reviewed change must reconcile the existing `dotmac_app` schema
+owner contract, split execution credentials, derive named grants from table
+and persistence-plane contracts, and rehearse against migrated PostgreSQL.
+An existing estate's ownership transfer still needs the exact reviewed
+database/owner/ordered-statement plan and a verified restorable backup. No
+database role, ownership, credential or deployment configuration was changed
+by this observation or by the dormant expansion.
 
 These are release gates, not authorization to infer a deployed cutover from an
 installed package or a source-only adoption test.

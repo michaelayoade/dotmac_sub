@@ -17,7 +17,8 @@ from uuid import UUID
 from dotmac_kernel.exceptions import BadRequestError, NotFoundError
 from dotmac_template_studio import RenderContext, register_contexts
 from dotmac_template_studio import service as studio
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.notification import (
@@ -150,6 +151,31 @@ def _error(code: str, message: str) -> DomainError:
         message=message,
         retryable=False,
     )
+
+
+def _require_rls_runtime_role(db: Session) -> None:
+    """Refuse parity or adoption when the current PostgreSQL role bypasses RLS."""
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        # SQLite exercises content behavior only; it cannot prove RLS isolation.
+        return
+    refused = _error(
+        "unsafe_runtime_role",
+        "Payment email adoption requires an RLS-enforced database role.",
+    )
+    if dialect != "postgresql":
+        raise refused
+    try:
+        posture = db.execute(
+            text(
+                "SELECT rolsuper, rolbypassrls FROM pg_catalog.pg_roles "
+                "WHERE rolname = current_user"
+            )
+        ).one_or_none()
+    except SQLAlchemyError:
+        raise refused from None
+    if posture is None or posture.rolsuper or posture.rolbypassrls:
+        raise refused
 
 
 @dataclass(frozen=True)
@@ -333,6 +359,7 @@ def _require_existing_match(
 def _adopt_in_transaction(
     db: Session, reviewed: ReviewedPaymentEmailTemplates
 ) -> AdoptionResult:
+    _require_rls_runtime_role(db)
     tenant_id = operator_tenant_id()
     snapshots = tuple(
         _legacy_snapshot(db, item, lock=True) for item in PAYMENT_TEMPLATES
@@ -435,6 +462,7 @@ def payment_email_parity_report(
     This is read-only. A missing row or invalid content is reported as evidence,
     not repaired. The caller must provide at least one context for each code.
     """
+    _require_rls_runtime_role(db)
     if contexts is None:
         contexts = REPRESENTATIVE_PAYMENT_EMAIL_CONTEXTS
     tenant_id = operator_tenant_id()
