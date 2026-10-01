@@ -66,12 +66,12 @@ def _module_imports_under_app() -> list[str]:
 def test_tagged_subscriptions_and_required_kernel_are_exact_pins() -> None:
     data = _pyproject()
     project_dependencies = data["project"]["dependencies"]  # type: ignore[index]
-    assert "dotmac-kernel==0.1.0a94" in project_dependencies
+    assert "dotmac-kernel==0.1.0a97" in project_dependencies
     assert "dotmac-subscriptions==0.1.0a3" in project_dependencies
 
     poetry_dependencies = data["tool"]["poetry"]["dependencies"]  # type: ignore[index]
     assert poetry_dependencies["dotmac-kernel"] == {
-        "version": "0.1.0a94",
+        "version": "0.1.0a97",
         "source": "forgejo",
     }
     assert poetry_dependencies["dotmac-subscriptions"] == {
@@ -128,6 +128,7 @@ def test_alembic_owns_all_installed_module_resources_before_env_runs() -> None:
         "dotmac_payments.migrations:versions",
         "dotmac_service_orders.migrations:versions",
         "dotmac_subscriptions.migrations:versions",
+        "dotmac_template_studio.migrations:versions",
     ]
 
     source = ALEMBIC_ENV.read_text(encoding="utf-8")

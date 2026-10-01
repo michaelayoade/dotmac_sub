@@ -22,6 +22,7 @@ the build on drift.
 | `mod_payments` | payments | `dotmac-payments` | `dotmac_payments` | `dotmac_app` |
 | `mod_serviceorders` | service_orders | `dotmac-service-orders` | `dotmac_service_orders` | `dotmac_app` |
 | `mod_subscriptions` | subscriptions | `dotmac-subscriptions` | `dotmac_subscriptions` | `dotmac_app` |
+| `mod_tstudio` | template_studio | `dotmac-template-studio` | `dotmac_template_studio` | `dotmac_app` |
 
 ## Contract for every schema above
 

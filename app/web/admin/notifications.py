@@ -1,16 +1,20 @@
 """Admin notifications management routes."""
 
 import json
+from dataclasses import asdict
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.notification import NotificationTemplatePurpose
-from app.services import staff_notification_read_state
+from app.services import payment_template_adoption, staff_notification_read_state
 from app.services import web_admin_notifications as web_admin_notifications_service
 from app.services import (
     web_notification_channels as web_notification_channels_service,
@@ -25,11 +29,80 @@ from app.services import (
 from app.services.auth_dependencies import require_permission, require_user_auth
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
+from app.services.operator_tenant import operator_tenant_id
 from app.services.owner_commands import CommandContext
 from app.timezone import APP_TIMEZONE_NAME
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/notifications", tags=["web-admin-notifications"])
+
+
+class PaymentTemplateAdoptionRequest(BaseModel):
+    confirm: Literal["ADOPT_PAYMENT_EMAIL_TEMPLATES"]
+    payment_received_legacy_id: UUID
+    invoice_paid_legacy_id: UUID
+
+
+def _payment_template_json(payload: object, *, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(
+        content=jsonable_encoder(payload),
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get(
+    "/payment-email-adoption/parity",
+    dependencies=[Depends(require_permission("notification:read"))],
+)
+def payment_email_adoption_parity(db: Session = Depends(get_db)) -> JSONResponse:
+    """Read current payment email render parity without changing either owner."""
+    report = payment_template_adoption.payment_email_parity_report(db)
+    return _payment_template_json(asdict(report))
+
+
+@router.post(
+    "/payment-email-adoption",
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def payment_email_adoption_run(
+    request: Request,
+    command: PaymentTemplateAdoptionRequest,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Explicitly adopt the two reviewed legacy identities once."""
+    auth = getattr(request.state, "auth", None) or {}
+    principal_id = auth.get("principal_id")
+    if auth.get("principal_type") != "system_user" or not principal_id:
+        return _payment_template_json(
+            {"error": "An authenticated staff operator is required."},
+            status_code=403,
+        )
+    db_session_adapter.release_read_transaction(db)
+    context = CommandContext.system(
+        actor=f"system_user:{principal_id}",
+        scope=str(operator_tenant_id()),
+        reason="Explicit payment email template adoption",
+        idempotency_key=(
+            f"payment-email-template-adoption:"
+            f"{command.payment_received_legacy_id}:{command.invoice_paid_legacy_id}"
+        ),
+    )
+    try:
+        result = payment_template_adoption.adopt_payment_email_templates(
+            db,
+            context=context,
+            reviewed=payment_template_adoption.ReviewedPaymentEmailTemplates(
+                payment_received_legacy_id=command.payment_received_legacy_id,
+                invoice_paid_legacy_id=command.invoice_paid_legacy_id,
+            ),
+        )
+    except DomainError as exc:
+        return _payment_template_json(
+            {"error": exc.message, "code": exc.code}, status_code=409
+        )
+    after = payment_template_adoption.payment_email_parity_report(db)
+    return _payment_template_json({"adoption": asdict(result), "parity": asdict(after)})
 
 
 def _sla_policy_command_context(

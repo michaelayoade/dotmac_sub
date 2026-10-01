@@ -992,6 +992,104 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.payment_template_adoption",
+            module="app.services.payment_template_adoption",
+            owns=("explicit payment email content adoption",),
+            depends_on=(
+                "communications.notification_service",
+                "tenancy.operator_tenant",
+            ),
+            notes=(
+                "Dormant explicit one-time coordinator. Template Studio alone owns "
+                "published content and subsequent authoring; Sub's legacy row "
+                "retains UUID, conditions, and active state until sealed cutover."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="explicit payment email content adoption",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "legacy payment email content",
+                            "operator tenant identity",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="legacy payment email content",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Current legacy NotificationTemplate EMAIL UUID, text, conditions, and active state.",
+                    ),
+                    AuthorityInput(
+                        name="operator tenant identity",
+                        owner="tenancy.operator_tenant",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Configured operator tenant UUID for Template Studio's tenant-scoped identity.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary=(
+                        "The explicit backfill enters execute_owner_command once on "
+                        "a transaction-free session. Studio service mutations "
+                        "flush and commit together in that transaction."
+                    ),
+                    locking=(
+                        "The Studio tenant/slug/channel unique constraint arbitrates "
+                        "concurrent creates; changed existing versions refuse adoption."
+                    ),
+                    idempotency=(
+                        "Legacy UUID and full snapshot digest bind each fixed Studio "
+                        "slug; exact replay performs no writes."
+                    ),
+                    retries=(
+                        "A conflict aborts the entire pair; an operator must resolve "
+                        "changed content before explicit retry."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "communications.payment_template_adoption"
+                        ),
+                        "payment_template_adoption.ambiguous_legacy",
+                        "payment_template_adoption.invalid_legacy",
+                        "payment_template_adoption.studio_conflict",
+                        "payment_template_adoption.invalid_contexts",
+                        "payment_template_adoption.invalid_tenant",
+                    ),
+                    mapping_owner="Explicit operator backfill caller",
+                    fail_closed_on=(
+                        "ambiguous legacy email identity",
+                        "invalid receipt content",
+                        "Studio operator edits or draft changes",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.SHADOWING,
+                    old_owner="No contracted one-time backfill owner",
+                    new_owner="communications.payment_template_adoption",
+                    verification="Explicit backfill and representative read-only parity report.",
+                    cutover_gate=(
+                        "First prove installed Studio content and parity; then seal "
+                        "the old content writer and switch rendering together."
+                    ),
+                    fallback_retirement="Retire legacy content writing at the sealed switch.",
+                ),
+                steward="customer communications",
+                design_refs=(
+                    "docs/designs/PAYMENT_EMAIL_COMPOSITION_CUTOVER.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_payment_template_adoption.py",
+                    "tests/architecture/test_payment_template_adoption_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="communications.customer_experience_intents",
             module="app.services.customer_experience_communications",
             owns=(

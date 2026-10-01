@@ -477,7 +477,7 @@ def check_only_tenant_is_imported_from_kernel_models_no_database_runtime() -> bo
     return True
 
 
-def check_kernel_pin_is_exact_a94() -> bool:
+def check_kernel_pin_is_exact_a97() -> bool:
     import tomllib
 
     with (REPO_ROOT / "pyproject.toml").open("rb") as fh:
@@ -486,7 +486,7 @@ def check_kernel_pin_is_exact_a94() -> bool:
     kernel_main = [
         d for d in main_deps if d.replace(" ", "").startswith("dotmac-kernel")
     ]
-    return kernel_main == ["dotmac-kernel==0.1.0a94"]
+    return kernel_main == ["dotmac-kernel==0.1.0a97"]
 
 
 COMPOSITION_CHECKS: dict[str, Callable[[], bool]] = {
@@ -497,9 +497,9 @@ COMPOSITION_CHECKS: dict[str, Callable[[], bool]] = {
         "remains Sub's own session and transaction authority."
     ): check_only_tenant_is_imported_from_kernel_models_no_database_runtime,
     (
-        "Sub pins dotmac-kernel at exactly 0.1.0a94 (no range) from the private "
+        "Sub pins dotmac-kernel at exactly 0.1.0a97 (no range) from the private "
         "forgejo index in [project.dependencies]."
-    ): check_kernel_pin_is_exact_a94,
+    ): check_kernel_pin_is_exact_a97,
 }
 
 

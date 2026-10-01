@@ -51,6 +51,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.assembly",
         "dotmac_kernel.capabilities",
         "dotmac_kernel.cache",
+        "dotmac_kernel.exceptions",
         "dotmac_kernel.features",
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.models",
@@ -118,6 +119,7 @@ DENIED_NAMES = frozenset(
 #: importable here — this entry is what makes the sentence true.
 RESTRICTED_MODULE_NAMES: dict[str, frozenset[str]] = {
     "dotmac_kernel.cache": frozenset({"TenantScope"}),
+    "dotmac_kernel.exceptions": frozenset({"BadRequestError", "NotFoundError"}),
     "dotmac_kernel.migrations.verify": frozenset({"require_prerequisites"}),
     "dotmac_kernel.models": frozenset({"Tenant", "TenantDomain"}),
     "dotmac_kernel.namespaces": frozenset({"module_schema"}),
@@ -362,6 +364,25 @@ def test_tenant_scope_is_admitted_but_platform_scope_is_not(tmp_path: Path) -> N
     violations = _kernel_import_violations(tmp_path)
     assert len(violations) == 1
     assert "only TenantScope" in violations[0]
+
+
+def test_only_named_kernel_exceptions_are_admitted(tmp_path: Path) -> None:
+    subject = tmp_path / "exceptions.py"
+    subject.write_text(
+        "from dotmac_kernel.exceptions import BadRequestError, NotFoundError\n",
+        encoding="utf-8",
+    )
+    assert not _kernel_import_violations(tmp_path)
+
+    subject.write_text(
+        "from dotmac_kernel.exceptions import ForbiddenError\n"
+        "import dotmac_kernel.exceptions\n",
+        encoding="utf-8",
+    )
+    violations = _kernel_import_violations(tmp_path)
+    assert len(violations) == 2
+    assert "only BadRequestError, NotFoundError" in violations[0]
+    assert "reaches every name" in violations[1]
 
 
 def test_plane_values_are_app_safe_but_the_installer_is_alembic_only(

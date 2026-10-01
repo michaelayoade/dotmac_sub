@@ -1185,14 +1185,14 @@ resolved_reference = "a4fe55f4ed704c556c4d1e3cc728ec4ef0dd8042"
 
 [[package]]
 name = "dotmac-kernel"
-version = "0.1.0a94"
+version = "0.1.0a97"
 description = "DotMac platform kernel — multi-tenant FastAPI foundation (config, RLS db, identity/tenancy models, security, platform auth, middleware, settings, features registry, audit)"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main", "dev"]
 files = [
-    {file = "dotmac_kernel-0.1.0a94-py3-none-any.whl", hash = "sha256:281481d06ec25b3ed968d40c01171116a89bb984c674a5f3cc46e74717743715"},
-    {file = "dotmac_kernel-0.1.0a94.tar.gz", hash = "sha256:491abcf903d0a37b950c288b2eea60fd398acf4c16c1c2100eb6eab9c5f1ba2d"},
+    {file = "dotmac_kernel-0.1.0a97-py3-none-any.whl", hash = "sha256:f4a460db0daf855c50a4336da1f0c9294af38c12e7588e49be9b80027cf37f11"},
+    {file = "dotmac_kernel-0.1.0a97.tar.gz", hash = "sha256:7d79f309df646dfff46be5eee49ff3c34ae9f2ee2af089e546cc58f6d973350d"},
 ]
 
 [package.dependencies]
@@ -1270,6 +1270,29 @@ files = [
 
 [package.dependencies]
 dotmac-kernel = ">=0.1.0a94"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
+name = "dotmac-template-studio"
+version = "0.2.0a5"
+description = "DotMac Template Studio — tenant-authored notification and document templates (ADR-0006 M1, the first stateful module)"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_template_studio-0.2.0a5-py3-none-any.whl", hash = "sha256:f9ec5458494375ef6fe5df83c58ab6451534d5a0e6edcd952fb878a52358ec7d"},
+    {file = "dotmac_template_studio-0.2.0a5.tar.gz", hash = "sha256:b33e4a1fe7d54a9565bde72784ff1b4b53fde27380dc6edb2c648809dfb16ff5"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a97"
+fastapi = ">=0.111,<0.116"
+pydantic = ">=2.7.4,<3.0"
 sqlalchemy = ">=2.0,<3.0"
 
 [package.source]
@@ -6204,4 +6227,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "c06e53593e2498f6dba6cba26f627a57865cbd9b40005756b018b6b7fd38c17f"
+content-hash = "5aa624ab711db738271cbc1d2515401370731a35094f55057572452481a737d0"

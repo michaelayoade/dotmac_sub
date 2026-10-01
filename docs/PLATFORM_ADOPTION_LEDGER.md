@@ -6,7 +6,9 @@ claim") and slice S3 (composition declared in `app/composition.py` — see "S3
 acceptance claim"). The pin moved to `dotmac-kernel==0.1.0a50` on 2026-08-13,
 to `dotmac-kernel==0.1.0a81` on 2026-08-20, to
 `dotmac-kernel==0.1.0a90` on 2026-08-22, to `dotmac-kernel==0.1.0a91` the same
-day, and to `dotmac-kernel==0.1.0a94` on 2026-08-25 — see "Pin history".
+day, to `dotmac-kernel==0.1.0a94` on 2026-08-25, and to
+`dotmac-kernel==0.1.0a97` for the proposed Template Studio shadow composition
+on 2026-09-30 — see "Pin history".
 Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
@@ -346,6 +348,47 @@ per-table cutover decisions.
 
 
 ## Pin history
+
+**2026-09-30 — `0.1.0a94` → `0.1.0a97` (source-only candidate).** Template
+Studio `0.2.0a5` requires Kernel `>=0.1.0a97` for its versioned web-surface
+contract. This isolated Sub worktree exact-pins a97 in both dependency
+declarations and the Poetry 2.4.1 lock. The Forgejo registry supplied wheel
+SHA256 `f4a460db0daf855c50a4336da1f0c9294af38c12e7588e49be9b80027cf37f11`
+and sdist SHA256
+`7d79f309df646dfff46be5eee49ff3c34ae9f2ee2af089e546cc58f6d973350d`;
+the isolated environment imports installed Kernel a97. Focused billing and
+composition-lineage tests pass. No production pin has moved. Template Studio's
+kernel-owned API/web routes remain outside Sub's runtime; a pure import seam
+and the full compatibility gate must pass before this candidate can merge.
+The a97 runtime graph adds four reviewed transitive imports:
+`machine_rotation` and `source_applications` through Kernel's package root,
+`web_surfaces` through the allowlisted assembly metadata, and `route_metadata`
+through capability and permission declarations. This moves the guarded
+transitive snapshot from twenty-six to thirty; it does not authorize Sub to
+mount or import those surfaces directly. The route and middleware guards remain
+the separate runtime proof.
+
+**2026-09-30 — Template Studio `0.2.0a5` (source-only Sub candidate).** Starter
+PR #766 merged as `94eca47845b93bd444a859abd6dc688411a5a7ea` after all 28
+hosted checks passed. Protected module release run 36734236451 published and
+registry-verified a5; the annotated `dotmac-template-studio-v0.2.0a5` tag
+peels to that same commit. A subsequent Starter PR #767 merged at `e066dd07`
+with 28 green checks; that source result does not itself change Sub delivery.
+This isolated expand worktree pins a5 exactly in
+`pyproject.toml` and `poetry.lock`; the registry wheel SHA-256 is
+`f9ec5458494375ef6fe5df83c58ab6451534d5a0e6edcd952fb878a52358ec7d`.
+Poetry installed it from the approved Forgejo source into the isolated
+environment. Its supported service import loads one additional transitive
+Kernel module, `flag_models`, for Studio's published-render strictness flag;
+the guarded runtime snapshot is now thirty-one. Sub does not directly import
+that module or mount Studio's Kernel-owned routes. The pin is installation
+evidence only: Sub still renders live
+payment notices from its legacy rows and has not adopted Studio content or
+switched delivery. This expand branch adds a dormant guarded backfill and
+read-only parity adapter. Its durable evidence is Studio version/provenance;
+it emits no dispatchable EventStore event or integration delivery. Controlled
+backfill evidence, parity, sealed writer
+retirement and PostgreSQL episode proof remain separate cutover gates.
 
 **2026-08-27 — adopted `dotmac-auth-oidc==0.1.0a2`.** The first adoption that
 adds a new Sub runtime import from the platform rather than moving an existing
@@ -823,7 +866,8 @@ modules (including any `dotmac_kernel._*` and `display`) are forbidden outright.
 | `dotmac_kernel.templating` / `.branding` | prohibited | — | Sub owns its Jinja environment, templates, and branding (`app/models/branding.py`, `templates/`) |
 | `dotmac_kernel.identity` | prohibited | — | Helpers over the kernel Party model; Sub identity is out of scope |
 | `dotmac_kernel.query` | prohibited | — | Trivial pagination/escape helpers with existing Sub equivalents; excluded to keep the surface exactly plan-shaped. May be promoted by a later ledger amendment |
-| `dotmac_kernel.errors` / `.exceptions` / `.logging` | prohibited | — | Sub owns its error taxonomy (`app/errors.py`) and logging config (`app/logging.py`); kernel error handlers are app-factory wiring |
+| `dotmac_kernel.exceptions` | named subset (consumed) | payment template expand | `BadRequestError` and `NotFoundError` only, used by the dormant Template Studio adoption command to preserve its supported service error contract. Bare module imports and every other exception name remain prohibited; Sub still owns its error taxonomy and handlers |
+| `dotmac_kernel.errors` / `.logging` | prohibited | — | Sub owns its error taxonomy (`app/errors.py`) and logging config (`app/logging.py`); kernel error handlers are app-factory wiring |
 | `dotmac_kernel.display` | prohibited | — | Kernel-internal (`INTERNAL_MODULES`); forbidden by the kernel itself |
 
 ## Kernel import allowlist (`app/`)
@@ -842,6 +886,7 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.assembly`
 - `dotmac_kernel.cache`
 - `dotmac_kernel.capabilities`
+- `dotmac_kernel.exceptions`
 - `dotmac_kernel.features`
 - `dotmac_kernel.machine_auth`
 - `dotmac_kernel.models`
@@ -859,6 +904,10 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_crypto`
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
+
+`dotmac_kernel.exceptions` is narrowed to `BadRequestError` and
+`NotFoundError` for the dormant payment-template adoption command. No other
+Kernel exception or bare import of that module is admitted.
 
 `dotmac_kernel.namespaces` is narrowed to `module_schema`, added 2026-08-31
 with the derived module schema contract. The commercial schema prerequisite

@@ -23,7 +23,7 @@ What this file proves, with zero skips:
 - the Sub app builds with the kernel installed, and every ``dotmac_kernel``
   module in its import graph is one the ledger allowlist admits OR one the
   kernel reaches for itself (``TRANSITIVE_KERNEL_MODULES``, a reviewed
-  snapshot — twenty-six of them, which is worth knowing) — and no kernel
+  snapshot — thirty-one of them, which is worth knowing) — and no kernel
   middleware is mounted, no kernel route endpoint is served, and the top-level
   route prefix set is exactly the reviewed pin.
 
@@ -57,9 +57,9 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a94"
-KERNEL_WHEEL_SHA256 = "281481d06ec25b3ed968d40c01171116a89bb984c674a5f3cc46e74717743715"
-KERNEL_SDIST_SHA256 = "491abcf903d0a37b950c288b2eea60fd398acf4c16c1c2100eb6eab9c5f1ba2d"
+KERNEL_PIN = "0.1.0a97"
+KERNEL_WHEEL_SHA256 = "f4a460db0daf855c50a4336da1f0c9294af38c12e7588e49be9b80027cf37f11"
+KERNEL_SDIST_SHA256 = "7d79f309df646dfff46be5eee49ff3c34ae9f2ee2af089e546cc58f6d973350d"
 
 #: The private index source name pyproject must route the kernel through.
 KERNEL_SOURCE = "forgejo"
@@ -67,7 +67,8 @@ KERNEL_SOURCE = "forgejo"
 #: What the kernel loads FOR ITS OWN USE once `app/` imports the settings
 #: resolver, measured rather than assumed — and larger than anyone expected.
 #:
-#: Consuming one kernel subsystem pulls twenty-six more modules into the process,
+#: Consuming Kernel and Template Studio surfaces pulls thirty-one more modules
+#: into the process,
 #: including `audit`, `security`, `identity`, `permissions` and `entitlements`
 #: — precisely the surfaces the adoption ledger keeps out of `app/`. Nothing in
 #: `app/` imports them and the AST guard still refuses one that tries; they are
@@ -84,6 +85,16 @@ KERNEL_SOURCE = "forgejo"
 #: The a81 -> a90 repin adds `machine_auth` and `machine_models`; they are
 #: loaded by the kernel's machine-credential facility but are not direct Sub
 #: imports and mount no runtime surface in `app.main`.
+#: The a94 -> a97 repin adds `machine_rotation` and `source_applications` through
+#: the Kernel package root, `web_surfaces` through Sub's allowlisted assembly
+#: metadata import, and `route_metadata` through the allowlisted capability
+#: and permission declarations. These imports do not mount Kernel routes or
+#: transfer application authority; the route and middleware tests below still
+#: enforce that boundary.
+#: Template Studio a5's supported service import also loads `flag_models`
+#: because published rendering can consult its declared strict-render flag.
+#: Sub will pass strictness explicitly at its content cutover; loading this
+#: helper does not install Studio's Kernel-owned route or flag policy in Sub.
 #:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
@@ -105,10 +116,12 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.entitlements",
         "dotmac_kernel.exceptions",
         "dotmac_kernel.external_identity",
+        "dotmac_kernel.flag_models",
         "dotmac_kernel.flags",
         "dotmac_kernel.identity",
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.machine_models",
+        "dotmac_kernel.machine_rotation",
         "dotmac_kernel.models_platform",
         "dotmac_kernel.modules",
         "dotmac_kernel.namespaces",
@@ -118,11 +131,14 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.prerequisites",
         "dotmac_kernel.product_manifest",
         "dotmac_kernel.query",
+        "dotmac_kernel.route_metadata",
         "dotmac_kernel.security",
         "dotmac_kernel.setting_domains",
         "dotmac_kernel.setting_scopes",
         "dotmac_kernel.settings_cache",
         "dotmac_kernel.settings_crypto",
+        "dotmac_kernel.source_applications",
+        "dotmac_kernel.web_surfaces",
     }
 )
 
@@ -254,7 +270,7 @@ def test_pyproject_pins_kernel_exactly_from_the_named_index() -> None:
 
 
 def test_lock_carries_the_reviewed_kernel_release_bytes() -> None:
-    """The current pin resolves to the exact reviewed a94 lock artifacts."""
+    """The current pin resolves to the exact reviewed a97 lock artifacts."""
     import tomllib
 
     with (PROJECT_ROOT / "poetry.lock").open("rb") as lock_file:

@@ -21,6 +21,24 @@ The manifest has one canonical graph. Domain, capability/module, and journey
 hierarchies are derived navigation views; they do not own parallel dependency
 lists or service declarations.
 
+## Payment email template adoption (expand phase)
+
+`communications.payment_template_adoption` coordinates one explicit backfill
+and read-only parity report for the two payment email templates. It maps the
+operator tenant's legacy `payment_received` and `invoice_paid` EMAIL identities
+to Studio's fixed `payment-received/email` and `invoice-paid/email` identities.
+The command keeps legacy UUIDs, conditions, active flags, purpose, and live
+content untouched. Purpose remains Sub's policy input for manual sends and is
+included in the adoption fingerprint and parity evidence. Ambiguous legacy
+rows or changed Studio content are refused; an exact replay is a no-op. Studio
+versions and provenance metadata are the durable evidence. The command emits
+no event or integration delivery. The guarded admin adapter invokes it;
+no task, scheduler, or handler does.
+
+Sub's legacy notification owner remains the live writer and renderer for
+payment email and SMS in this phase. Studio's published versions are shadow
+data until parity and a separate sealed owner switch are reviewed.
+
 ## Lead creation-date query ownership
 
 `sales.service` owns `LeadListDateRange` and `normalize_lead_date_range`.
@@ -754,6 +772,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `communications.surveys` | survey response records | `command_writer` | persisted Survey aggregate ← `communications.surveys`<br>typed public Survey response ← `communications.surveys` | `owner_managed` | `complete` | customer experience platform | `docs/designs/SURVEY_LIFECYCLE_AND_CREATION.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/test_surveys.py`<br>`tests/architecture/test_survey_boundary.py` |
 | `communications.customer_policy` | customer notification eligibility | `policy` | customer notification identity and preferences ← `customer.accounts`<br>account notification status ← `customer.accounts`<br>channel configuration ← `communications.channel_policy`<br>recipient suppression ledger ← `communications.eligibility`<br>recent notification history ← `communications.notification_service`<br>selected template purpose category ← `communications.notification_service`<br>evaluation time ← `external:system_clock` | `read_only` | `native` | customer communications | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/test_customer_bulk_actions.py`<br>`tests/test_communication_eligibility.py`<br>`tests/architecture/test_customer_notification_policy_boundary.py` |
 | `communications.customer_policy` | cohort-batched customer notification eligibility | `policy` | customer notification identity and preferences ← `customer.accounts`<br>account notification status ← `customer.accounts`<br>channel configuration ← `communications.channel_policy`<br>recipient suppression ledger ← `communications.eligibility`<br>recent notification history ← `communications.notification_service`<br>selected template purpose category ← `communications.notification_service`<br>evaluation time ← `external:system_clock` | `read_only` | `native` | customer communications | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/test_customer_bulk_actions.py`<br>`tests/test_communication_eligibility.py`<br>`tests/architecture/test_customer_notification_policy_boundary.py` |
+| `communications.payment_template_adoption` | explicit payment email content adoption | `application_coordinator` | legacy payment email content ← `communications.notification_service`<br>operator tenant identity ← `tenancy.operator_tenant` | `coordinator_managed` | `shadowing` | customer communications | `docs/designs/PAYMENT_EMAIL_COMPOSITION_CUTOVER.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_payment_template_adoption.py`<br>`tests/architecture/test_payment_template_adoption_boundary.py` |
 | `operations.sla_escalation` | operational SLA event policy lifecycle | `authoritative_record` | validated SLA policy command ← `operations.sla_escalation_commands`<br>current operational SLA records ← `operations.sla_escalation` | `participant` | `complete` | operations platform | `docs/ARCHITECTURE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_operational_escalation.py`<br>`tests/test_operational_sla_policy_ui.py`<br>`tests/architecture/test_operational_sla_policy_ownership.py` |
 | `operations.sla_escalation` | event-scoped escalation timing and channel policy | `event_policy` | current operational SLA records ← `operations.sla_escalation`<br>validated operational event observation ← `operations.sla_escalation` | `participant` | `complete` | operations platform | `docs/ARCHITECTURE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_operational_escalation.py`<br>`tests/test_operational_sla_policy_ui.py`<br>`tests/architecture/test_operational_sla_policy_ownership.py` |
 | `operations.sla_escalation` | operational escalation event and delivery planning | `authoritative_record` | current operational SLA records ← `operations.sla_escalation`<br>validated operational event observation ← `operations.sla_escalation`<br>operational participant records ← `operations.sla_escalation` | `participant` | `complete` | operations platform | `docs/ARCHITECTURE.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_operational_escalation.py`<br>`tests/test_operational_sla_policy_ui.py`<br>`tests/architecture/test_operational_sla_policy_ownership.py` |

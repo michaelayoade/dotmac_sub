@@ -153,11 +153,17 @@ def test_the_lineage_probe_is_load_bearing() -> None:
 
 
 def test_every_composed_module_exposes_its_versions_directory() -> None:
-    """`env.py` calls `versions_dir()`; a module without one fails at migration."""
+    """Every installed lineage resolves to packaged migration versions."""
 
     for import_name in _declared_lineages():
         migrations = import_module(f"{import_name}.migrations")
-        versions = migrations.versions_dir()
+        versions_dir = getattr(migrations, "versions_dir", None)
+        if versions_dir is None:
+            # Template Studio's supported package-root resource accessor is
+            # `migrations_dir()`, rather than `migrations.versions_dir()`.
+            versions_dir = getattr(import_module(import_name), "migrations_dir", None)
+        assert callable(versions_dir), f"{import_name}: no migration resource accessor"
+        versions = versions_dir()
         assert versions.is_dir(), f"{import_name}: {versions} is not a directory"
         assert any(versions.glob("*.py")), f"{import_name}: no revisions in {versions}"
 
