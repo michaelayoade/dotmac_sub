@@ -24,6 +24,7 @@ from app.services.sot_manifest import (
     owner_command_boundary_error_codes,
 )
 from app.services.sot_registry.model import DomainSOT
+from app.services.sot_registry.payment_email_contracts import PAYMENT_EMAIL_SERVICES
 
 
 def _team_inbox_contract(
@@ -197,6 +198,7 @@ DOMAIN = DomainSOT(
         "comms",
     ),
     services=(
+        *PAYMENT_EMAIL_SERVICES,
         SOTService(
             name="communication.document_delivery",
             module="app.services.document_delivery",
@@ -972,6 +974,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "communication intent lifecycle",
                 "recipient and channel delivery expansion",
+                "durable per-recipient source decisions and physical delivery coverage",
                 "intent delivery outcome projection",
                 "durable delivery attachment reference contract",
             ),
@@ -989,6 +992,138 @@ DOMAIN = DomainSOT(
                 "service immediately before SMTP transport. Required attachment "
                 "failure retries the complete delivery; body-only fallback is "
                 "forbidden."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="communication intent lifecycle",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=("communication request", "recipient policy"),
+                        canonical_writer="communications.intents",
+                    ),
+                    ConcernContract(
+                        name="recipient and channel delivery expansion",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "communication request",
+                            "channel policy",
+                            "recipient policy",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="durable per-recipient source decisions and physical delivery coverage",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=("recipient policy", "physical notification"),
+                        canonical_writer="communications.intents",
+                    ),
+                    ConcernContract(
+                        name="intent delivery outcome projection",
+                        role=OwnerRole.PROJECTION_WRITER,
+                        input_names=(
+                            "physical notification",
+                            "source decisions and coverage",
+                        ),
+                        canonical_writer="communications.intents",
+                    ),
+                    ConcernContract(
+                        name="durable delivery attachment reference contract",
+                        role=OwnerRole.POLICY,
+                        input_names=("communication request", "invoice PDF identity"),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="communication request",
+                        owner="communications.intents",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed CommunicationIntent from the calling domain owner.",
+                    ),
+                    AuthorityInput(
+                        name="channel policy",
+                        owner="communications.channel_policy",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Resolved template/event channel selection.",
+                    ),
+                    AuthorityInput(
+                        name="recipient policy",
+                        owner="communications.customer_policy",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Customer quiet, suppression, contact and duplicate decisions.",
+                    ),
+                    AuthorityInput(
+                        name="physical notification",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Existing queue and delivery status owner.",
+                    ),
+                    AuthorityInput(
+                        name="source decisions and coverage",
+                        owner="communications.intents",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Tenant-bound recipient decisions and explicit coverage rows.",
+                    ),
+                    AuthorityInput(
+                        name="invoice PDF identity",
+                        owner="financial.invoices",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed invoice-PDF entity reference, without attachment bytes.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="The calling owner commits; planning, coverage, queueing and projection only flush.",
+                    locking="Existing physical Notification is locked before coverage and decisions; first creation locks its decision; tenant unique constraints arbitrate races.",
+                    idempotency="An intent dedupe key replays the original plan; one source decision covers at most one physical Notification.",
+                    retries="The caller retries the whole transaction; recheck never revives a suppressed decision.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "communications.intents.decision_not_found",
+                        "communications.intents.intent_not_found",
+                        "communications.intents.notification_not_pending",
+                        "communications.intents.source_not_accepted",
+                        "communications.intents.coverage_conflict",
+                        "communications.intents.coverage_identity_mismatch",
+                        "communications.intents.coverage_content_mismatch",
+                        "communications.intents.coverage_timing_mismatch",
+                    ),
+                    mapping_owner="calling domain adapter or composition command owner",
+                    fail_closed_on=("unproved physical delivery coverage",),
+                ),
+                events=EventContract(
+                    event_types=("communication_intent.planned",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility="Identifier-only, non-dispatchable planning evidence has intent_id and accepted/suppressed counts; no customer content.",
+                    replay="One event is staged with each newly planned intent in the caller transaction; dedupe replay stages none.",
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="intent delivery status",
+                        input_names=(
+                            "physical notification",
+                            "source decisions and coverage",
+                        ),
+                        writer="communications.intents",
+                        freshness="Updated when the physical Notification outcome is projected.",
+                        stale_behavior="The source decision and coverage remain authoritative until projection runs.",
+                        drift_signal="Compare intent status against accepted covered source and physical delivery statuses.",
+                        rebuild_operation="Recompute each intent status from decisions, active coverage and physical Notification rows.",
+                        repair_owner="communications.intents",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="communications.intents",
+                    verification="Focused intent, notification, duplicate and PostgreSQL coverage tests.",
+                ),
+                steward="customer communications",
+                design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+                test_refs=(
+                    "tests/test_communication_intent_coverage.py",
+                    "tests/integration/test_communication_intent_coverage_pg.py",
+                    "tests/test_notifications_services.py",
+                ),
             ),
         ),
         SOTService(

@@ -789,8 +789,55 @@ class NotificationHandler:
                 )
                 continue
 
-            subject = self._render_subject(template, spec, context)
-            body = self._render_body(template, spec, context)
+            published_payment_email = None
+            if channel is NotificationChannel.email and event.event_type in {
+                EventType.payment_received,
+                EventType.invoice_paid,
+            }:
+                from app.services.payment_email_content import (
+                    PaymentEmailKind,
+                    render_payment_email,
+                )
+                from app.services.payment_email_cutover import active_cutover
+
+                cutover = active_cutover(db)
+                if cutover is not None:
+                    is_receipt = event.event_type is EventType.payment_received
+                    expected_legacy = (
+                        cutover.receipt_legacy_id
+                        if is_receipt
+                        else cutover.invoice_legacy_id
+                    )
+                    if template.id != expected_legacy:
+                        from app.services.domain_errors import DomainError
+
+                        raise DomainError(
+                            code="payment_email_cutover.identity_changed",
+                            message="Payment email routing identity changed",
+                            retryable=False,
+                        )
+                    published_payment_email = render_payment_email(
+                        db,
+                        kind=PaymentEmailKind.receipt
+                        if is_receipt
+                        else PaymentEmailKind.invoice_paid,
+                        expected_template_id=cutover.receipt_content_id
+                        if is_receipt
+                        else cutover.invoice_content_id,
+                        values=context,
+                    )
+                    if published_payment_email is None:
+                        logger.info(
+                            "Suppressed inactive published payment email for event %s",
+                            event.event_id,
+                        )
+                        continue
+            if published_payment_email is None:
+                subject = self._render_subject(template, spec, context)
+                body = self._render_body(template, spec, context)
+            else:
+                subject = published_payment_email.subject
+                body = published_payment_email.body
             unresolved = sorted(
                 {
                     *_UNRESOLVED_TEMPLATE_RE.findall(subject),
@@ -849,27 +896,35 @@ class NotificationHandler:
                             filename=download_filename(invoice),
                         ),
                     )
-                result = submit(
-                    db,
-                    CommunicationIntent(
-                        subscriber_id=subscriber_id,
-                        event_type=spec.template_code,
-                        category=spec.category,
-                        template_id=template.id,
-                        template_code=spec.template_code,
-                        subject=subject,
-                        body=body,
-                        channels=(channel,),
-                        persist_policy_suppressions=False,
-                        recipients={channel: recipient},
-                        attachments=attachments,
-                        dedupe_key=(
-                            f"event-notification:{event.event_id}:"
-                            f"{spec.template_code}:{channel.value}"
-                        ),
+                intent = CommunicationIntent(
+                    subscriber_id=subscriber_id,
+                    event_type=spec.template_code,
+                    category=spec.category,
+                    template_id=template.id,
+                    template_code=spec.template_code,
+                    subject=subject,
+                    body=body,
+                    channels=(channel,),
+                    persist_policy_suppressions=False,
+                    recipients={channel: recipient},
+                    attachments=attachments,
+                    dedupe_key=(
+                        f"event-notification:{event.event_id}:"
+                        f"{spec.template_code}:{channel.value}"
                     ),
                 )
-                queued_count = len(result.queued)
+                if published_payment_email is not None:
+                    from app.services.payment_email_dispatch import (
+                        dispatch_payment_email,
+                    )
+
+                    payment_result = dispatch_payment_email(
+                        db, event=event, intent=intent, content=published_payment_email
+                    )
+                    queued_count = len(payment_result.notification_ids)
+                else:
+                    result = submit(db, intent)
+                    queued_count = len(result.queued)
             if queued_count == 0:
                 logger.info(
                     "Suppressed notification for event %s on %s to %s by shared policy",
@@ -1029,6 +1084,10 @@ class NotificationHandler:
                     )
 
         if event.event_type == EventType.payment_received:
+            # Receipt identity belongs to the succeeded Payment, not a supplied
+            # event URL. Missing/foreign payments leave these fields unresolved.
+            context.pop("receipt_number", None)
+            context.pop("receipt_url", None)
             payment_id = event.payload.get("payment_id")
             if payment_id:
                 try:
@@ -1050,15 +1109,11 @@ class NotificationHandler:
                         )
                     ):
                         app_url = str(get_brand().get("app_url") or "").rstrip("/")
-                        context.setdefault(
-                            "receipt_number",
-                            payment_receipt_reference(
-                                payment.id, payment.receipt_number
-                            ),
+                        context["receipt_number"] = payment_receipt_reference(
+                            payment.id, payment.receipt_number
                         )
-                        context.setdefault(
-                            "receipt_url",
-                            f"{app_url}{payment_receipt_path(payment.id)}",
+                        context["receipt_url"] = (
+                            f"{app_url}{payment_receipt_path(payment.id)}"
                         )
                 except Exception:
                     logger.warning(

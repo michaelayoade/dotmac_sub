@@ -36,11 +36,16 @@ def _run_deploy(
     revision: str = REVISION,
     image_source_tree: str | None = None,
     health_success: bool = True,
+    primary_health_success: bool = True,
+    rollback_health_success: bool = True,
+    rollback_recreate_success: bool = True,
+    rollback_repin_failure: str | None = None,
     proxy_ready: bool = True,
     migration_lock_failures: int = 0,
     manifest_pins_ready: bool = True,
     github_checks_ready: bool = True,
     background_runtime_ready: bool = True,
+    rollback_gate_exit_code: int = 0,
     declared_services: tuple[str, ...] = FULL_SERVICES,
     write_override: bool = False,
     image_selector: str = "sha-32eebc1",
@@ -56,6 +61,12 @@ def _run_deploy(
     docker_log.write_text("")
     migration_attempts = tmp_path / "migration-attempts"
     migration_attempts.write_text("0")
+    up_attempts = tmp_path / "up-attempts"
+    up_attempts.write_text("0")
+    curl_attempts = tmp_path / "curl-attempts"
+    curl_attempts.write_text("0")
+    sed_attempts = tmp_path / "sed-attempts"
+    sed_attempts.write_text("0")
     app_env, server_name = (
         ("production", "dotmac-sub-prod")
         if deployment_target == "production"
@@ -113,6 +124,17 @@ fi
 if [[ "$*" == *"scripts.integrations.verify_manifest_pins"* ]]; then
   exit {0 if manifest_pins_ready else 1}
 fi
+if [[ "$*" == *"scripts.verify_payment_email_rollback"* ]]; then
+  printf 'rollback-gate image=%s sha=%s\\n' "$APP_IMAGE" "$GIT_SHA" >> "$DOCKER_LOG"
+  exit {rollback_gate_exit_code}
+fi
+if [[ "$*" == *" up -d "* ]]; then
+  attempts="$(cat "$UP_ATTEMPTS")"
+  printf '%s\\n' "$((attempts + 1))" > "$UP_ATTEMPTS"
+  if [[ "$attempts" == "1" && "{int(not rollback_recreate_success)}" == "1" ]]; then
+    exit 1
+  fi
+fi
 if [[ "$*" == *"config --services"* ]]; then
   printf '%s\\n' {declared_services_literal}
   exit 0
@@ -151,8 +173,27 @@ set -eu
 printf '%s\\n' "{nginx_config}"
 """,
     )
-    curl_exit_code = 0 if health_success else 1
-    _write_executable(bin_dir / "curl", f"#!/usr/bin/env bash\nexit {curl_exit_code}\n")
+    _write_executable(
+        bin_dir / "curl",
+        f"""#!/usr/bin/env bash
+attempts="$(cat "$CURL_ATTEMPTS")"
+printf '%s\\n' "$((attempts + 1))" > "$CURL_ATTEMPTS"
+if [[ "$attempts" == "0" ]]; then exit {0 if health_success else 1}; fi
+if [[ "$attempts" == "1" ]]; then exit {0 if primary_health_success else 1}; fi
+exit {0 if rollback_health_success else 1}
+""",
+    )
+    _write_executable(
+        bin_dir / "sed",
+        f"""#!/usr/bin/env bash
+if [[ "$*" == *"s|^GIT_SHA="* && "{rollback_repin_failure}" == "git_sha" ]]; then
+  attempts="$(cat "$SED_ATTEMPTS")"
+  printf '%s\\n' "$((attempts + 1))" > "$SED_ATTEMPTS"
+  if [[ "$attempts" == "1" ]]; then exit 1; fi
+fi
+exec /usr/bin/sed "$@"
+""",
+    )
     _write_executable(
         bin_dir / "python3",
         f"""#!/usr/bin/env bash
@@ -204,13 +245,22 @@ exit 0
         "DEPLOY_LOCK_FILE": str(tmp_path / "deploy.lock"),
         "DEPLOY_BACKUP_MODE": "skip_staging",
         "IMAGE_RETAIN_COUNT": "5",
-        "HEALTH_TIMEOUT_SECONDS": "0" if not health_success else "180",
+        "HEALTH_TIMEOUT_SECONDS": (
+            "0"
+            if not (
+                health_success and primary_health_success and rollback_health_success
+            )
+            else "180"
+        ),
         "CANDIDATE_DRAIN_SECONDS": "0",
         "BACKGROUND_RUNTIME_TIMEOUT_SECONDS": "0",
         "BACKGROUND_STABILITY_SECONDS": "0",
         "MIGRATION_RETRY_SECONDS": "0",
         "DOCKER_LOG": str(docker_log),
         "MIGRATION_ATTEMPTS": str(migration_attempts),
+        "UP_ATTEMPTS": str(up_attempts),
+        "CURL_ATTEMPTS": str(curl_attempts),
+        "SED_ATTEMPTS": str(sed_attempts),
         **production_evidence,
         **(extra_env or {}),
     }
@@ -390,9 +440,132 @@ def test_deploy_reports_candidate_before_health_failure_rollback(
     rollback_cleanup = commands.index(
         "rm -f dotmac_sub_app_candidate", diagnostic_logs + 1
     )
+    rollback_gate = next(
+        i
+        for i, command in enumerate(commands)
+        if "scripts.verify_payment_email_rollback" in command
+    )
     assert "run --no-deps -d" in candidate_command
     assert "run --rm --no-deps -d" not in candidate_command
-    assert diagnostic_logs < rollback_cleanup
+    assert diagnostic_logs < rollback_gate < rollback_cleanup
+
+
+def test_activated_or_unknown_floor_never_starts_old_image_after_health_failure(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path, health_success=False, rollback_gate_exit_code=2
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY ROLLBACK REFUSED" in result.stderr
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" in (
+        env_file.read_text()
+    )
+    commands = docker_log.read_text().splitlines()
+    gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payment_email_rollback" in item
+    )
+    assert (
+        f"rollback-gate image=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1 sha={REVISION}"
+        in commands
+    )
+    assert not any(" up -d " in item for item in commands[gate:])
+    assert "rm -f dotmac_sub_app_candidate" not in commands[gate:]
+
+
+def test_paused_floor_keeps_healthy_candidate_on_worker_failure(tmp_path: Path) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path, background_runtime_ready=False, rollback_gate_exit_code=2
+    )
+
+    assert result.returncode != 0
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" in (
+        env_file.read_text()
+    )
+    commands = docker_log.read_text().splitlines()
+    gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payment_email_rollback" in item
+    )
+    assert not any(" up -d " in item for item in commands[gate:])
+    assert "rm -f dotmac_sub_app_candidate" not in commands[gate:]
+
+
+def test_partial_repin_failure_retains_candidate_and_reports_uncertain_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        background_runtime_ready=False,
+        rollback_repin_failure="git_sha",
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY RESTORE FAILED: previous-image pin is incomplete" in result.stderr
+    assert "inspect APP_IMAGE/GIT_SHA" in result.stderr
+    env_text = env_file.read_text()
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_text
+    assert f"GIT_SHA={REVISION}" in env_text
+    commands = docker_log.read_text().splitlines()
+    gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payment_email_rollback" in item
+    )
+    assert not any(" up -d " in item for item in commands[gate:])
+    assert "rm -f dotmac_sub_app_candidate" not in commands[gate:]
+
+
+def test_previous_image_recreate_failure_retains_candidate(tmp_path: Path) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        background_runtime_ready=False,
+        rollback_recreate_success=False,
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY RESTORE FAILED: previous-image recreation failed" in result.stderr
+    assert "previous image restored and healthy" not in result.stderr
+    assert (
+        "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_file.read_text()
+    )
+    commands = docker_log.read_text().splitlines()
+    gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payment_email_rollback" in item
+    )
+    assert any(" up -d " in item for item in commands[gate:])
+    assert "rm -f dotmac_sub_app_candidate" not in commands[gate:]
+
+
+def test_previous_image_unhealthy_after_recreate_retains_candidate(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        primary_health_success=False,
+        rollback_health_success=False,
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY RESTORE FAILED: previous image is not healthy" in result.stderr
+    assert "previous image restored and healthy" not in result.stderr
+    assert (
+        "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_file.read_text()
+    )
+    commands = docker_log.read_text().splitlines()
+    gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payment_email_rollback" in item
+    )
+    assert any(" up -d " in item for item in commands[gate:])
+    assert "rm -f dotmac_sub_app_candidate" not in commands[gate:]
 
 
 def test_deploy_verifies_schema_then_warms_candidate_before_recreate(

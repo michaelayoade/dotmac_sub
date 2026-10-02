@@ -581,9 +581,11 @@ def seed_notification_settings(db: Session) -> None:
 def _seed_missing_notification_templates(db: Session) -> int:
     """Ensure required defaults exist and are usable without committing.
 
-    PostgreSQL and SQLite use the database unique constraint as the arbiter so
-    concurrent startup workers cannot both insert the same ``(code, channel)``
-    row. Existing operator-customized templates remain untouched.
+    Existing keys are read before an INSERT is considered, so a sealed legacy
+    template never reaches PostgreSQL's BEFORE INSERT trigger. For genuinely
+    missing keys, PostgreSQL and SQLite still use the unique constraint as the
+    arbiter between concurrent startup workers. Operator-customized templates
+    remain untouched.
     """
     from sqlalchemy import select as sa_select
     from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -1234,46 +1236,60 @@ def _seed_missing_notification_templates(db: Session) -> int:
 
     bind = db.get_bind()
     changed = 0
+    existing_keys = {
+        (code, channel)
+        for code, channel in db.execute(
+            sa_select(NotificationTemplate.code, NotificationTemplate.channel)
+        ).all()
+    }
     for tmpl_data in templates:
+        code = tmpl_data["code"]
+        channel = tmpl_data["channel"]
+        if not isinstance(code, str) or not isinstance(channel, NotificationChannel):
+            raise TypeError("Invalid notification template default identity")
+        key = (code, channel)
         existing = None
         inserted_id = None
-        if bind.dialect.name == "postgresql":
-            inserted_id = db.scalar(
-                postgresql_insert(NotificationTemplate)
-                .values(**tmpl_data)
-                .on_conflict_do_nothing(
-                    index_elements=[
-                        NotificationTemplate.code,
-                        NotificationTemplate.channel,
-                    ]
+        if key not in existing_keys:
+            if bind.dialect.name == "postgresql":
+                inserted_id = db.scalar(
+                    postgresql_insert(NotificationTemplate)
+                    .values(**tmpl_data)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            NotificationTemplate.code,
+                            NotificationTemplate.channel,
+                        ]
+                    )
+                    .returning(NotificationTemplate.id)
                 )
-                .returning(NotificationTemplate.id)
-            )
-        elif bind.dialect.name == "sqlite":
-            inserted_id = db.scalar(
-                sqlite_insert(NotificationTemplate)
-                .values(**tmpl_data)
-                .on_conflict_do_nothing(
-                    index_elements=[
-                        NotificationTemplate.code,
-                        NotificationTemplate.channel,
-                    ]
+            elif bind.dialect.name == "sqlite":
+                inserted_id = db.scalar(
+                    sqlite_insert(NotificationTemplate)
+                    .values(**tmpl_data)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            NotificationTemplate.code,
+                            NotificationTemplate.channel,
+                        ]
+                    )
+                    .returning(NotificationTemplate.id)
                 )
-                .returning(NotificationTemplate.id)
-            )
-        else:  # pragma: no cover - production/tests use PostgreSQL/SQLite
-            existing = db.scalars(
-                sa_select(NotificationTemplate).where(
-                    NotificationTemplate.code == tmpl_data["code"],
-                    NotificationTemplate.channel == tmpl_data["channel"],
-                )
-            ).first()
-            if existing is None:
-                existing = NotificationTemplate(**tmpl_data)
-                db.add(existing)
-                changed += 1
-                logger.info("Seeded notification template: %s", tmpl_data["code"])
-                continue
+            else:  # pragma: no cover - production/tests use PostgreSQL/SQLite
+                existing = db.scalars(
+                    sa_select(NotificationTemplate).where(
+                        NotificationTemplate.code == tmpl_data["code"],
+                        NotificationTemplate.channel == tmpl_data["channel"],
+                    )
+                ).first()
+                if existing is None:
+                    existing = NotificationTemplate(**tmpl_data)
+                    db.add(existing)
+                    changed += 1
+                    logger.info("Seeded notification template: %s", tmpl_data["code"])
+                    existing_keys.add(key)
+                    continue
+            existing_keys.add(key)
         if inserted_id is not None:
             changed += 1
             logger.info("Seeded notification template: %s", tmpl_data["code"])

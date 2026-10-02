@@ -614,6 +614,12 @@ def _deliver_notification_queue_stats(
                 notification.retry_count,
                 max_retries,
             )
+        # The queue owner retains its row lock while the payment owner checks
+        # every covered source and rebuilds only from still-eligible content.
+        from app.services.payment_email_episodes import prepare_claimed_payment_email
+
+        prepare_claimed_payment_email(db, notification)
+
         # The consent gate. This is the ONLY place all four transports are
         # called, so it is the only place the check is guaranteed to run --
         # putting it in each caller means the one that forgets is the one that
@@ -621,11 +627,14 @@ def _deliver_notification_queue_stats(
         #
         # A marketing suppression stops marketing and nothing else: an
         # unsubscribe must never stop an invoice. `may_send` owns that rule.
-        if not communication_eligibility.may_send(
-            db,
-            channel=notification.channel,
-            address=notification.recipient,
-            category=notification.category,
+        if (
+            notification.status is NotificationStatus.canceled
+            or not communication_eligibility.may_send(
+                db,
+                channel=notification.channel,
+                address=notification.recipient,
+                category=notification.category,
+            )
         ):
             notification.status = NotificationStatus.canceled
             notification.last_error = "suppressed"

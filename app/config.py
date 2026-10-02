@@ -26,6 +26,9 @@ def _env_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    # Explicit peer attribution gate for the standalone machine issuance CLI.
+    # Empty means no peer is accepted; there is no inferred identity.
+    accepted_source_applications: str = os.getenv("ACCEPTED_SOURCE_APPLICATIONS", "")
     database_url: str = os.getenv(
         "DATABASE_URL",
         "postgresql+psycopg://postgres:postgres@localhost:5434/dotmac_sub",

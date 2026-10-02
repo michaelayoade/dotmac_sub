@@ -127,6 +127,7 @@ def create_event_record(
         event_type=event.event_type.value,
         payload=_sanitize_payload(event.payload),
         status=status,
+        processed_at=datetime.now(UTC) if status is EventStatus.completed else None,
         actor=event.actor,
         subscriber_id=event.subscriber_id,
         account_id=event.account_id,

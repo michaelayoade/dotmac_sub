@@ -1320,9 +1320,34 @@ def finalize_reviewed_document_settlement_for_owner(
     _finalize_reviewed_document_payment_effects(db, invoice)
 
 
-def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
+def _finalize_invoice_payment_effects(
+    db: Session,
+    invoice: Invoice,
+    *,
+    causing_allocation: PaymentAllocation | None = None,
+) -> None:
     """Recompute invoice totals, restore eligible service, then derive account status."""
+    # Capture prior state after the canonical invoice lock, before recompute.
+    if causing_allocation is not None:
+        # Refresh only the transition field after acquiring the lock; a cached
+        # status read before a competing settlement cannot prove causation.
+        db.flush()
+        db.refresh(invoice, attribute_names=["status"], with_for_update=True)
+    else:
+        lock_for_update(db, Invoice, invoice.id)
+    previous_status = invoice.status
     _recalculate_invoice_totals(db, invoice)
+    if causing_allocation is not None:
+        from app.services.billing.payment_invoice_paid import (
+            stage_invoice_paid_payment_consequence,
+        )
+
+        stage_invoice_paid_payment_consequence(
+            db,
+            invoice=invoice,
+            allocation=causing_allocation,
+            previous_status=previous_status,
+        )
     # Sessions use autoflush=False, so make the recomputed balance visible
     # before has_overdue_balance queries the database.
     db.flush()
@@ -1820,7 +1845,9 @@ def _create_account_payment_from_preview(
     for allocation in allocations:
         invoice = get_by_id(db, Invoice, allocation.invoice_id)
         if invoice:
-            _finalize_invoice_payment_effects(db, invoice)
+            _finalize_invoice_payment_effects(
+                db, invoice, causing_allocation=allocation
+            )
             from app.services import sales_orders as sales_order_service
 
             sales_order_service.reconcile_sales_order_payment_from_invoice(
@@ -1993,7 +2020,9 @@ def _settle_existing_account_payment(
     for allocation in allocations:
         invoice = get_by_id(db, Invoice, allocation.invoice_id)
         if invoice:
-            _finalize_invoice_payment_effects(db, invoice)
+            _finalize_invoice_payment_effects(
+                db, invoice, causing_allocation=allocation
+            )
             from app.services import sales_orders as sales_order_service
 
             sales_order_service.reconcile_sales_order_payment_from_invoice(

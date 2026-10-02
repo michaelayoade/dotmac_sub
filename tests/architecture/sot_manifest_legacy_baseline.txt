@@ -19,7 +19,6 @@ communications.customer_experience_intents
 communications.customer_read_state
 communications.eligibility
 communications.ephemeral_actions
-communications.intents
 communications.notification_service
 control.domain_settings
 control.feature_registry

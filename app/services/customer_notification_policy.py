@@ -12,8 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.models.notification import (
+    CommunicationIntentRecipient,
+    CommunicationIntentRecord,
     Notification,
     NotificationChannel,
+    NotificationIntentCoverage,
     NotificationStatus,
 )
 from app.models.subscriber import Subscriber, SubscriberContact
@@ -468,6 +471,7 @@ def has_recent_notification(
     category: str | None,
     recipient: str | None,
     now: datetime | None = None,
+    exclude_notification_id: UUID | None = None,
 ) -> bool:
     window_minutes = _setting_int(db, "notification_dedupe_window_minutes", 0)
     if window_minutes <= 0:
@@ -485,15 +489,55 @@ def has_recent_notification(
         .filter(Notification.created_at >= cutoff)
         .filter(Notification.status != NotificationStatus.canceled)
     )
+    if exclude_notification_id is not None:
+        query = query.filter(Notification.id != exclude_notification_id)
     if subscriber_id is not None:
         query = query.filter(Notification.subscriber_id == subscriber_id)
-    if event_type:
-        query = query.filter(Notification.event_type == event_type)
     if category:
         query = query.filter(Notification.category == category)
     if recipient:
         query = query.filter(Notification.recipient == recipient)
-    return query.first() is not None
+    if not event_type:
+        return query.first() is not None
+    # A physical row with coverage no longer owns one event identity through
+    # its compatibility primary event_type: only still-accepted covered source
+    # decisions count. Legacy physical rows without coverage retain their
+    # direct event identity.
+    any_coverage = (
+        select(NotificationIntentCoverage.id)
+        .where(NotificationIntentCoverage.notification_id == Notification.id)
+        .correlate(Notification)
+        .exists()
+    )
+    if (
+        query.filter(Notification.event_type == event_type)
+        .filter(~any_coverage)
+        .first()
+        is not None
+    ):
+        return True
+    # A composed physical delivery may cover another source event identity.
+    # Only confirmed coverage counts; reservations and suppressed decisions do not.
+    return (
+        query.join(
+            NotificationIntentCoverage,
+            NotificationIntentCoverage.notification_id == Notification.id,
+        )
+        .join(
+            CommunicationIntentRecipient,
+            CommunicationIntentRecipient.id
+            == NotificationIntentCoverage.intent_recipient_id,
+        )
+        .join(
+            CommunicationIntentRecord,
+            CommunicationIntentRecord.id == CommunicationIntentRecipient.intent_id,
+        )
+        .filter(NotificationIntentCoverage.status == "covered")
+        .filter(CommunicationIntentRecipient.decision == "accepted")
+        .filter(CommunicationIntentRecord.event_type == event_type)
+        .first()
+        is not None
+    )
 
 
 def visible_notification_count(items: Iterable[object]) -> int:

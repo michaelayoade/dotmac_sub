@@ -14,7 +14,12 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.notification import NotificationTemplatePurpose
-from app.services import payment_template_adoption, staff_notification_read_state
+from app.services import (
+    payment_email_cutover,
+    payment_template_adoption,
+    payment_template_authoring,
+    staff_notification_read_state,
+)
 from app.services import web_admin_notifications as web_admin_notifications_service
 from app.services import (
     web_notification_channels as web_notification_channels_service,
@@ -35,6 +40,23 @@ from app.timezone import APP_TIMEZONE_NAME
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/notifications", tags=["web-admin-notifications"])
+
+
+class PaymentEmailCutoverRequest(BaseModel):
+    confirm: Literal["ACTIVATE_PAYMENT_EMAIL_CUTOVER"]
+    payment_received_legacy_id: UUID
+    invoice_paid_legacy_id: UUID
+
+
+class PaymentEmailPublishRequest(BaseModel):
+    expected_published_version: int
+    subject: str
+    body: str
+    is_active: bool | None = None
+
+
+class PaymentEmailPauseRequest(BaseModel):
+    confirm: Literal["PAUSE_PAYMENT_EMAIL_COMPOSITION"]
 
 
 class PaymentTemplateAdoptionRequest(BaseModel):
@@ -103,6 +125,134 @@ def payment_email_adoption_run(
         )
     after = payment_template_adoption.payment_email_parity_report(db)
     return _payment_template_json({"adoption": asdict(result), "parity": asdict(after)})
+
+
+@router.get(
+    "/payment-email-templates/{code}",
+    dependencies=[Depends(require_permission("notification:read"))],
+)
+def payment_email_template_detail(
+    code: Literal["payment_received", "invoice_paid"],
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Return the Studio publication pointer for an explicit operator edit."""
+    try:
+        draft = payment_template_authoring.payment_email_draft(db, code)
+    except DomainError as exc:
+        return _payment_template_json(
+            {"error": exc.message, "code": exc.code}, status_code=409
+        )
+    return _payment_template_json(asdict(draft))
+
+
+@router.post(
+    "/payment-email-templates/{code}/publish",
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def payment_email_template_publish(
+    request: Request,
+    code: Literal["payment_received", "invoice_paid"],
+    command: PaymentEmailPublishRequest,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Publish a reviewed payment email revision through Sub's owner boundary."""
+    auth = getattr(request.state, "auth", None) or {}
+    principal_id = auth.get("principal_id")
+    if auth.get("principal_type") != "system_user" or not principal_id:
+        return _payment_template_json(
+            {"error": "An authenticated staff operator is required."},
+            status_code=403,
+        )
+    db_session_adapter.release_read_transaction(db)
+    context = CommandContext.system(
+        actor=f"system_user:{principal_id}",
+        scope=str(operator_tenant_id()),
+        reason="Explicit payment email Template Studio publication",
+    )
+    try:
+        result = payment_template_authoring.publish_payment_email_template(
+            db,
+            context=context,
+            code=code,
+            expected_published_version=command.expected_published_version,
+            subject=command.subject,
+            body=command.body,
+            is_active=command.is_active,
+        )
+    except DomainError as exc:
+        return _payment_template_json(
+            {"error": exc.message, "code": exc.code}, status_code=409
+        )
+    return _payment_template_json(asdict(result))
+
+
+@router.post(
+    "/payment-email-cutover",
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def payment_email_cutover_run(
+    request: Request,
+    command: PaymentEmailCutoverRequest,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Atomically activate the producer, published content and composition."""
+    auth = getattr(request.state, "auth", None) or {}
+    principal_id = auth.get("principal_id")
+    if auth.get("principal_type") != "system_user" or not principal_id:
+        return _payment_template_json(
+            {"error": "An authenticated staff operator is required."}, status_code=403
+        )
+    db_session_adapter.release_read_transaction(db)
+    context = CommandContext.system(
+        actor=f"system_user:{principal_id}",
+        scope=str(operator_tenant_id()),
+        reason="Reviewed payment email authority cutover",
+    )
+    try:
+        tenant_id = payment_email_cutover.activate_payment_email_cutover(
+            db,
+            context=context,
+            reviewed=payment_template_adoption.ReviewedPaymentEmailTemplates(
+                command.payment_received_legacy_id, command.invoice_paid_legacy_id
+            ),
+        )
+    except DomainError as exc:
+        return _payment_template_json(
+            {"error": exc.message, "code": exc.code}, status_code=409
+        )
+    return _payment_template_json({"tenant_id": str(tenant_id), "active": True})
+
+
+@router.post(
+    "/payment-email-cutover/pause",
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def payment_email_composition_pause(
+    request: Request, command: PaymentEmailPauseRequest, db: Session = Depends(get_db)
+) -> JSONResponse:
+    auth = getattr(request.state, "auth", None) or {}
+    principal_id = auth.get("principal_id")
+    if auth.get("principal_type") != "system_user" or not principal_id:
+        return _payment_template_json(
+            {"error": "An authenticated staff operator is required."}, status_code=403
+        )
+    db_session_adapter.release_read_transaction(db)
+    try:
+        payment_email_cutover.pause_payment_email_composition(
+            db,
+            context=CommandContext.system(
+                actor=f"system_user:{principal_id}",
+                scope=str(operator_tenant_id()),
+                reason="Reviewed payment email composition pause",
+            ),
+        )
+    except DomainError as exc:
+        return _payment_template_json(
+            {"error": exc.message, "code": exc.code}, status_code=409
+        )
+    return _payment_template_json(
+        {"composition_enabled": False, "content_owner": "template_studio"}
+    )
 
 
 def _sla_policy_command_context(

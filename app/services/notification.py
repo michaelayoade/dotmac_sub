@@ -161,6 +161,7 @@ class NotificationTimingSource(StrEnum):
     immediate = "immediate"
     quiet_hours = "quiet_hours"
     due_now = "due_now"
+    minimum_floor = "minimum_floor"
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,50 +170,88 @@ class NotificationTimingDecision:
     source: NotificationTimingSource
 
 
+@dataclass(frozen=True, slots=True)
+class CustomerNotificationPolicyDecision:
+    accepted: bool
+    reason: str | None = None
+
+
 def resolve_notification_timing(
     db: Session,
     *,
     delivery_latency: NotificationDeliveryLatency,
     requested_send_at: datetime | None,
     quiet_hours_applicable: bool = True,
+    minimum_send_at: datetime | None = None,
 ) -> NotificationTimingDecision:
     """Resolve timing without allowing an implicit policy to replace intent."""
+
+    def bounded(decision: NotificationTimingDecision) -> NotificationTimingDecision:
+        if minimum_send_at is None:
+            return decision
+        floor = (
+            minimum_send_at.replace(tzinfo=UTC)
+            if minimum_send_at.tzinfo is None
+            else minimum_send_at.astimezone(UTC)
+        )
+        scheduled = decision.send_at
+        if scheduled is None or scheduled < floor:
+            return NotificationTimingDecision(
+                send_at=floor, source=NotificationTimingSource.minimum_floor
+            )
+        return decision
+
     if requested_send_at is not None:
         normalized_send_at = (
             requested_send_at.replace(tzinfo=UTC)
             if requested_send_at.tzinfo is None
             else requested_send_at.astimezone(UTC)
         )
-        return NotificationTimingDecision(
-            send_at=normalized_send_at,
-            source=NotificationTimingSource.explicit_schedule,
+        return bounded(
+            NotificationTimingDecision(
+                send_at=normalized_send_at,
+                source=NotificationTimingSource.explicit_schedule,
+            )
         )
     if delivery_latency is NotificationDeliveryLatency.immediate:
-        return NotificationTimingDecision(
-            send_at=None,
-            source=NotificationTimingSource.immediate,
+        return bounded(
+            NotificationTimingDecision(
+                send_at=None,
+                source=NotificationTimingSource.immediate,
+            )
         )
     if not quiet_hours_applicable:
-        return NotificationTimingDecision(
-            send_at=None,
-            source=NotificationTimingSource.due_now,
+        return bounded(
+            NotificationTimingDecision(
+                send_at=None,
+                source=NotificationTimingSource.due_now,
+            )
         )
     quiet_send_at = quiet_hours_send_at(db)
-    return NotificationTimingDecision(
-        send_at=quiet_send_at,
-        source=(
-            NotificationTimingSource.quiet_hours
-            if quiet_send_at is not None
-            else NotificationTimingSource.due_now
-        ),
+    return bounded(
+        NotificationTimingDecision(
+            send_at=quiet_send_at,
+            source=(
+                NotificationTimingSource.quiet_hours
+                if quiet_send_at is not None
+                else NotificationTimingSource.due_now
+            ),
+        )
     )
 
 
-def _request_immediate_delivery(notification_id: UUID) -> None:
+def _request_immediate_delivery(
+    notification_id: UUID, *, eta: datetime | None = None
+) -> None:
     try:
         from app.tasks.notifications import deliver_notification
 
-        deliver_notification.apply_async(args=[str(notification_id)], retry=False)
+        if eta is not None:
+            deliver_notification.apply_async(
+                args=[str(notification_id)], retry=False, eta=eta
+            )
+        else:
+            deliver_notification.apply_async(args=[str(notification_id)], retry=False)
     except Exception:
         logger.warning(
             "notification_immediate_delivery_dispatch_failed",
@@ -232,12 +271,25 @@ def _schedule_latency_wakeup(
     notification: Notification,
     *,
     delivery_latency: NotificationDeliveryLatency,
+    minimum_send_at: datetime | None = None,
 ) -> None:
-    if delivery_latency is not NotificationDeliveryLatency.immediate:
+    if (
+        delivery_latency is not NotificationDeliveryLatency.immediate
+        and minimum_send_at is None
+    ):
         return
     if notification.status is not NotificationStatus.queued:
         return
     if not _delivery_is_due(notification):
+        if minimum_send_at is None or notification.send_at is None:
+            return
+        scheduled = notification.send_at
+        run_after_commit(
+            db,
+            lambda _callback_db: _request_immediate_delivery(
+                notification.id, eta=scheduled
+            ),
+        )
         return
     run_after_commit(
         db,
@@ -328,6 +380,13 @@ class Templates(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: NotificationTemplateCreate):
         data = payload.model_dump()
+        from app.services.payment_email_cutover import legacy_content_is_sealed
+
+        if legacy_content_is_sealed(db, data["code"], data["channel"]):
+            raise HTTPException(
+                status_code=409,
+                detail="Payment email content is authored in Template Studio.",
+            )
         data["conditions"] = validate_conditions(data.get("conditions"))
         if data["is_active"]:
             validate_template_activation_text(
@@ -440,6 +499,23 @@ class Templates(ListResponseMixin):
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
         changes = payload.model_dump(exclude_unset=True)
+        from app.services.payment_email_cutover import legacy_content_is_sealed
+
+        sealed_before = legacy_content_is_sealed(db, template.code, template.channel)
+        sealed_after = legacy_content_is_sealed(
+            db,
+            changes.get("code", template.code),
+            changes.get("channel", template.channel),
+        )
+        if sealed_before or sealed_after:
+            if sealed_before != sealed_after or any(
+                key in changes and changes[key] != getattr(template, key)
+                for key in ("code", "channel", "subject", "body")
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Payment email content is authored in Template Studio.",
+                )
         effective_subject = changes.get("subject", template.subject)
         effective_body = changes.get("body", template.body)
         effective_code = changes.get("code", template.code)
@@ -469,8 +545,75 @@ class Templates(ListResponseMixin):
         template = db.get(NotificationTemplate, template_id)
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
+        from app.services.payment_email_cutover import legacy_content_is_sealed
+
+        if legacy_content_is_sealed(db, template.code, template.channel):
+            raise HTTPException(
+                status_code=409,
+                detail="Activated payment email routing identity cannot be deleted.",
+            )
         template.is_active = False
         db.commit()
+
+
+def evaluate_customer_notification_policy(
+    db: Session,
+    *,
+    subscriber_id: UUID | None,
+    channel: NotificationChannel,
+    category: str,
+    event_type: str | None,
+    recipient: str | None,
+    requested_status: NotificationStatus,
+    exclude_notification_id: UUID | None = None,
+) -> CustomerNotificationPolicyDecision:
+    """The single customer queue policy, usable before and during execution."""
+    if requested_status is not NotificationStatus.queued:
+        return CustomerNotificationPolicyDecision(accepted=True)
+    if channel_disabled_in_config(db, channel):
+        return CustomerNotificationPolicyDecision(
+            False, "Suppressed by notification channel configuration"
+        )
+    if subscriber_id is None:
+        return CustomerNotificationPolicyDecision(accepted=True)
+    if not status_allows_notification_for_subscriber(
+        db, subscriber_id=subscriber_id, category=category
+    ):
+        return CustomerNotificationPolicyDecision(
+            False, "Suppressed by account notification status policy"
+        )
+    if not is_notification_enabled_for_subscriber(
+        db,
+        subscriber_id=subscriber_id,
+        channel=channel,
+        category=category,
+        recipient=recipient,
+    ):
+        return CustomerNotificationPolicyDecision(
+            False, "Suppressed by customer notification preferences"
+        )
+    from app.services.communication_eligibility import suppression_reason
+
+    durable_suppression = suppression_reason(
+        db, channel=channel, category=category, address=recipient
+    )
+    if durable_suppression:
+        return CustomerNotificationPolicyDecision(
+            False, "Suppressed by communication ledger: " + durable_suppression
+        )
+    if has_recent_notification(
+        db,
+        subscriber_id=subscriber_id,
+        channel=channel,
+        event_type=event_type,
+        category=category,
+        recipient=recipient,
+        exclude_notification_id=exclude_notification_id,
+    ):
+        return CustomerNotificationPolicyDecision(
+            False, "Suppressed duplicate customer notification"
+        )
+    return CustomerNotificationPolicyDecision(accepted=True)
 
 
 class Notifications(ListResponseMixin):
@@ -531,69 +674,20 @@ class Notifications(ListResponseMixin):
         requested_status: NotificationStatus,
     ) -> None:
         """Apply shared customer notification gates to a pending notification."""
-        channel = data["channel"]
-        subscriber_id = data.get("subscriber_id")
         category = str(data.get("category") or "general")
         data["category"] = category
-        event_type = data.get("event_type")
-
-        if requested_status != NotificationStatus.queued:
-            return
-
-        if channel_disabled_in_config(db, channel):
-            data["status"] = NotificationStatus.canceled
-            data["last_error"] = "Suppressed by notification channel configuration"
-            return
-
-        if subscriber_id is None:
-            return
-
-        if not status_allows_notification_for_subscriber(
+        decision = evaluate_customer_notification_policy(
             db,
-            subscriber_id=subscriber_id,
+            subscriber_id=data.get("subscriber_id"),
+            channel=data["channel"],
             category=category,
-        ):
-            data["status"] = NotificationStatus.canceled
-            data["last_error"] = "Suppressed by account notification status policy"
-            return
-
-        if not is_notification_enabled_for_subscriber(
-            db,
-            subscriber_id=subscriber_id,
-            channel=channel,
-            category=category,
+            event_type=data.get("event_type"),
             recipient=recipient,
-        ):
-            data["status"] = NotificationStatus.canceled
-            data["last_error"] = "Suppressed by customer notification preferences"
-            return
-
-        from app.services.communication_eligibility import suppression_reason
-
-        durable_suppression = suppression_reason(
-            db,
-            channel=channel,
-            category=category,
-            address=recipient,
+            requested_status=requested_status,
         )
-        if durable_suppression:
+        if not decision.accepted:
             data["status"] = NotificationStatus.canceled
-            data["last_error"] = (
-                "Suppressed by communication ledger: " + durable_suppression
-            )
-            return
-
-        if has_recent_notification(
-            db,
-            subscriber_id=subscriber_id,
-            channel=channel,
-            event_type=event_type,
-            category=category,
-            recipient=recipient,
-        ):
-            data["status"] = NotificationStatus.canceled
-            data["last_error"] = "Suppressed duplicate customer notification"
-            return
+            data["last_error"] = decision.reason
 
     @staticmethod
     def _queue_internal(
@@ -603,6 +697,7 @@ class Notifications(ListResponseMixin):
         apply_customer_policy: bool,
         resolve_customer_identity: bool,
         persist_policy_suppression: bool,
+        minimum_send_at: datetime | None = None,
     ) -> Notification | None:
         """Queue a notification without committing the caller's transaction."""
         if payload.template_id:
@@ -633,6 +728,7 @@ class Notifications(ListResponseMixin):
                 quiet_hours_applicable=(
                     apply_customer_policy and subscriber_id is not None
                 ),
+                minimum_send_at=minimum_send_at,
             )
             data["send_at"] = timing.send_at
             metadata["delivery_timing_source"] = timing.source.value
@@ -658,12 +754,16 @@ class Notifications(ListResponseMixin):
             db,
             notification,
             delivery_latency=delivery_latency,
+            minimum_send_at=minimum_send_at,
         )
         return notification
 
     @staticmethod
     def _queue_customer_delivery(
-        db: Session, payload: NotificationCreate
+        db: Session,
+        payload: NotificationCreate,
+        *,
+        minimum_send_at: datetime | None = None,
     ) -> Notification:
         notification = Notifications._queue_internal(
             db,
@@ -671,6 +771,7 @@ class Notifications(ListResponseMixin):
             apply_customer_policy=True,
             resolve_customer_identity=True,
             persist_policy_suppression=True,
+            minimum_send_at=minimum_send_at,
         )
         if notification is None:  # pragma: no cover - impossible with persistence on.
             raise RuntimeError("notification was unexpectedly suppressed")
@@ -678,7 +779,10 @@ class Notifications(ListResponseMixin):
 
     @staticmethod
     def _queue_event_delivery(
-        db: Session, payload: NotificationCreate
+        db: Session,
+        payload: NotificationCreate,
+        *,
+        minimum_send_at: datetime | None = None,
     ) -> Notification | None:
         return Notifications._queue_internal(
             db,
@@ -686,15 +790,33 @@ class Notifications(ListResponseMixin):
             apply_customer_policy=True,
             resolve_customer_identity=True,
             persist_policy_suppression=False,
+            minimum_send_at=minimum_send_at,
         )
 
     @staticmethod
     def queue_customer_notification(
-        db: Session, payload: NotificationCreate
+        db: Session,
+        payload: NotificationCreate,
+        *,
+        minimum_send_at: datetime | None = None,
     ) -> Notification:
         """Create a durable intent, then queue its customer-facing delivery."""
+        if payload.template_id is not None and payload.communication_intent_id is None:
+            from app.services.payment_email_cutover import legacy_content_is_sealed
+
+            template = db.get(NotificationTemplate, payload.template_id)
+            if template is not None and legacy_content_is_sealed(
+                db, template.code, template.channel
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Payment email templates require their event receipt or invoice context.",
+                )
+
         if payload.communication_intent_id is not None:
-            return Notifications._queue_customer_delivery(db, payload)
+            return Notifications._queue_customer_delivery(
+                db, payload, minimum_send_at=minimum_send_at
+            )
         from app.services.communication_intents import CommunicationIntent, submit
 
         subscriber_id = payload.subscriber_id or resolve_subscriber_id_for_recipient(
@@ -718,6 +840,7 @@ class Notifications(ListResponseMixin):
                 requested_last_error=payload.last_error,
                 delivery_latency=payload.delivery_latency,
             ),
+            minimum_send_at=minimum_send_at,
         )
         notification = next(
             (
@@ -734,11 +857,28 @@ class Notifications(ListResponseMixin):
 
     @staticmethod
     def queue_event_notification(
-        db: Session, payload: NotificationCreate
+        db: Session,
+        payload: NotificationCreate,
+        *,
+        minimum_send_at: datetime | None = None,
     ) -> Notification | None:
         """Create a durable event intent and drop policy-suppressed deliveries."""
+        if payload.template_id is not None and payload.communication_intent_id is None:
+            from app.services.payment_email_cutover import legacy_content_is_sealed
+
+            template = db.get(NotificationTemplate, payload.template_id)
+            if template is not None and legacy_content_is_sealed(
+                db, template.code, template.channel
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Payment email templates require their event receipt or invoice context.",
+                )
+
         if payload.communication_intent_id is not None:
-            return Notifications._queue_event_delivery(db, payload)
+            return Notifications._queue_event_delivery(
+                db, payload, minimum_send_at=minimum_send_at
+            )
         from app.services.communication_intents import CommunicationIntent, submit
 
         subscriber_id = payload.subscriber_id or resolve_subscriber_id_for_recipient(
@@ -763,6 +903,7 @@ class Notifications(ListResponseMixin):
                 requested_last_error=payload.last_error,
                 delivery_latency=payload.delivery_latency,
             ),
+            minimum_send_at=minimum_send_at,
         )
         return next(
             (
@@ -776,15 +917,31 @@ class Notifications(ListResponseMixin):
 
     @staticmethod
     def queue_internal_notification(
-        db: Session, payload: NotificationCreate
+        db: Session,
+        payload: NotificationCreate,
+        *,
+        minimum_send_at: datetime | None = None,
     ) -> Notification:
         """Queue a staff/internal notification without customer policy gates."""
+        if payload.template_id is not None and payload.communication_intent_id is None:
+            from app.services.payment_email_cutover import legacy_content_is_sealed
+
+            template = db.get(NotificationTemplate, payload.template_id)
+            if template is not None and legacy_content_is_sealed(
+                db, template.code, template.channel
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Payment email templates require their event receipt or invoice context.",
+                )
+
         notification = Notifications._queue_internal(
             db,
             payload,
             apply_customer_policy=False,
             resolve_customer_identity=False,
             persist_policy_suppression=True,
+            minimum_send_at=minimum_send_at,
         )
         if notification is None:  # pragma: no cover - impossible without policy drop.
             raise RuntimeError("internal notification was unexpectedly suppressed")

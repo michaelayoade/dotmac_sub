@@ -324,7 +324,7 @@ def test_runtime_role_guard_refuses_elevated_or_unknown_posture(posture):
     )
 
     with pytest.raises(DomainError) as failure:
-        adoption._require_rls_runtime_role(db)
+        adoption.require_rls_runtime_role(db)
 
     assert failure.value.code == "payment_template_adoption.unsafe_runtime_role"
     assert failure.value.message == (
@@ -346,7 +346,7 @@ def test_unsafe_role_refused_before_legacy_or_studio_access(
     legacy = Mock(side_effect=AssertionError("legacy read after role refusal"))
     studio_read = Mock(side_effect=AssertionError("Studio read after role refusal"))
     studio_write = Mock(side_effect=AssertionError("Studio write after role refusal"))
-    monkeypatch.setattr(adoption, "_require_rls_runtime_role", refuse)
+    monkeypatch.setattr(adoption, "require_rls_runtime_role", refuse)
     monkeypatch.setattr(adoption, "_legacy_snapshot", legacy)
     monkeypatch.setattr(studio, "get_by_slug", studio_read)
     monkeypatch.setattr(studio, "create_template", studio_write)

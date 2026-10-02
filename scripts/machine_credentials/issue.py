@@ -1,70 +1,52 @@
 #!/usr/bin/env python3
-"""Mint one kernel machine credential. Prints the raw key ONCE, to stdout.
+"""Issue one Kernel machine credential; print its raw key once after commit.
 
-The kernel ships `hash_machine_key` and no minting helper, deliberately: how a
-product decides who gets a credential is not the kernel's business. So issuance
-is here, as a script rather than a shell one-liner, because a credential minted
-from someone's terminal history leaves nothing anyone can review afterwards.
-
-    python -m scripts.machine_credentials.issue \
-        --label erp-ar-sync \
-        --scope billing:invoice:read --scope customer:read ...
-
-## What it will not do
-
-**It will not reuse a label.** `uq_machine_credentials_tenant_label` would
-refuse anyway; refusing here says why. Reissuing means minting the replacement
-under a new label, moving the caller, and revoking the old row — in that order,
-so there is a moment when both work and the move is observable rather than a
-leap.
-
-**It will not accept an empty scope set.** `scopes` is NOT NULL with no default
-precisely so a credential cannot exist without saying what it may do, and the
-kernel's `has_scope` is exact membership: an empty list authorises nothing. A
-credential that can do nothing is not a safe default, it is a silent outage —
-so say what you mean.
-
-**It will not log the raw key.** It is returned once, on stdout, and never
-stored: what the row holds is `hmac-sha256:<digest>`, from which the key cannot
-be recovered. Losing it means minting another.
-
-## Ordering, when replacing a live credential
-
-1. mint the replacement (this script)
-2. update the caller
-3. watch the OLD row stop being used before revoking it
-4. revoke
-
-Step 3 is the one worth insisting on. During the migration window both the
-kernel table and the legacy `api_keys` table are read, so a caller that did not
-actually move keeps working — and revoking on the assumption that it moved is
-how a scheduled job breaks at 3am rather than while someone is watching.
+The caller's real source application must be named in this deployment's
+ACCEPTED_SOURCE_APPLICATIONS configuration. The dedicated HMAC material is
+loaded through Sub's held OpenBao SecretSource before issuance. Existing
+labels are never reused; issue a replacement, move its caller, then revoke
+the old credential after observing that it is no longer used.
 """
 
 from __future__ import annotations
 
 import argparse
-import secrets
 import sys
-from uuid import UUID, uuid4
 
-from dotmac_kernel.machine_auth import MachineCredential, hash_machine_key
-from dotmac_kernel.models import Tenant
+from dotmac_kernel.machine_auth import MACHINE_KEY_SECRET_NAME
+from dotmac_kernel.machine_models import MachineCredential
+from dotmac_kernel.machine_rotation import issue_credential
+from dotmac_kernel.secret_sources import get_secret
+from dotmac_kernel.source_applications import (
+    SourceApplicationRegistry,
+    install_source_applications,
+)
 from sqlalchemy import select
 
+from app.config import settings
 from app.db import SessionLocal
+from app.services.kernel_secret_source import install as install_secret_source
+from app.services.operator_tenant import operator_tenant
 
 
-def _resolve_tenant(db, slug: str) -> UUID:
-    tenant = db.scalar(select(Tenant).where(Tenant.slug == slug))
-    if tenant is None:
-        raise SystemExit(f"no tenant with slug {slug!r}")
-    return tenant.id
+def _install_issuance_context(source_application: str) -> None:
+    codes = [
+        code.strip()
+        for code in settings.accepted_source_applications.split(",")
+        if code.strip()
+    ]
+    registry = SourceApplicationRegistry(codes)
+    registry.require(source_application)
+    install_source_applications(registry)
+    install_secret_source()
+    if not get_secret(MACHINE_KEY_SECRET_NAME):
+        raise SystemExit(f"refusing issuance: {MACHINE_KEY_SECRET_NAME} is not held")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True)
+    parser.add_argument("--source-application", required=True)
     parser.add_argument(
         "--scope",
         action="append",
@@ -72,16 +54,15 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="repeatable; the credential's access is exactly these",
     )
-    parser.add_argument("--tenant-slug", default="operator")
     args = parser.parse_args(argv)
 
     scopes = sorted({s.strip() for s in args.scopes if s.strip()})
     if not scopes:
         raise SystemExit("refusing to mint a credential with no scopes")
 
-    raw = secrets.token_urlsafe(32)
+    _install_issuance_context(args.source_application)
     with SessionLocal() as db:
-        tenant_id = _resolve_tenant(db, args.tenant_slug)
+        tenant_id = operator_tenant(db).id
         existing = db.scalar(
             select(MachineCredential).where(
                 MachineCredential.tenant_id == tenant_id,
@@ -94,20 +75,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"({existing.id}). Mint the replacement under a new label, move "
                 "the caller, then revoke the old row."
             )
-        credential = MachineCredential(
-            id=uuid4(),
+        credential, raw = issue_credential(
+            db,
             tenant_id=tenant_id,
             label=args.label,
-            key_hash=hash_machine_key(raw),
+            source_application=args.source_application,
             scopes=scopes,
-            is_active=True,
         )
-        db.add(credential)
-        db.commit()
         credential_id = credential.id
+        db.commit()
 
     print(f"credential_id: {credential_id}", file=sys.stderr)
     print(f"label:         {args.label}", file=sys.stderr)
+    print(f"source:        {args.source_application}", file=sys.stderr)
     print(f"scopes:        {' '.join(scopes)}", file=sys.stderr)
     print("raw key (shown once, not stored):", file=sys.stderr)
     print(raw)

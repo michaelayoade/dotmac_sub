@@ -632,14 +632,18 @@ def emit_event(
     service_order_id: UUID | str | None = None,
     defer_until_commit: bool = True,
     dispatch_after_commit: bool = True,
+    record_only: bool = False,
 ) -> Event:
-    """Emit an event to all registered handlers.
+    """Emit an event to handlers, or record evidence without dispatch.
 
-    This is the main entry point for services to emit events. After calling
-    this function, the event will be:
+    This is the main entry point for services to emit events. Ordinary events
+    can be:
     - Delivered to subscribed webhook endpoints (via Celery task)
     - Recorded as a lifecycle event (if applicable)
     - Queued as a notification (if template configured)
+
+    Record-only events are stored as completed evidence in the caller's
+    transaction and are never routed to handlers.
 
     Args:
         db: Database session
@@ -652,6 +656,8 @@ def emit_event(
         subscription_id: Related subscription ID
         invoice_id: Related invoice ID
         service_order_id: Related service order ID
+        record_only: Persist completed evidence without handlers, callbacks,
+            or an outbox claim. The dispatch timing flags do not apply.
 
     Returns:
         The created Event object
@@ -696,6 +702,19 @@ def emit_event(
         invoice_id=to_uuid(invoice_id),
         service_order_id=to_uuid(service_order_id),
     )
+
+    if record_only:
+        # The evidence row shares the caller's transaction but never enters
+        # the pending or failed queues. Do not initialize handlers here: even
+        # non-SQL dry adapters must not dispatch a record-only fact.
+        if isinstance(db, Session):
+            event_store_service.create_event_record(
+                db,
+                event,
+                status=EventStatus.completed,
+            )
+        logger.info("event_recorded_only", extra=_event_extra(event))
+        return event
 
     dispatcher = get_dispatcher()
 

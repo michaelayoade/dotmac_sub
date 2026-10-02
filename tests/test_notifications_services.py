@@ -85,6 +85,67 @@ def test_immediate_latency_schedules_targeted_delivery_after_commit(
     assert delivery_wakeups == [((), {"args": [str(notification.id)], "retry": False})]
 
 
+def test_immediate_minimum_send_at_schedules_after_commit_wakeup(
+    db_session, monkeypatch
+):
+    delivery_wakeups: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        notification_tasks.deliver_notification,
+        "apply_async",
+        lambda *args, **kwargs: delivery_wakeups.append((args, kwargs)),
+    )
+    minimum = datetime.now(UTC) + timedelta(seconds=60)
+    notification = notification_service.notifications.queue_internal_notification(
+        db_session,
+        NotificationCreate(
+            channel=NotificationChannel.email,
+            recipient="window@example.com",
+            body="Receipt content",
+            delivery_latency=NotificationDeliveryLatency.immediate,
+        ),
+        minimum_send_at=minimum,
+    )
+    assert notification.send_at == minimum
+    assert delivery_wakeups == []
+    db_session.commit()
+    assert delivery_wakeups == [
+        ((), {"args": [str(notification.id)], "retry": False, "eta": minimum})
+    ]
+
+
+def test_minimum_send_at_preserves_later_customer_quiet_hours(
+    db_session, subscriber, monkeypatch
+):
+    delivery_wakeups: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        notification_tasks.deliver_notification,
+        "apply_async",
+        lambda *args, **kwargs: delivery_wakeups.append((args, kwargs)),
+    )
+    minimum = datetime.now(UTC) + timedelta(seconds=60)
+    quiet = minimum + timedelta(hours=2)
+    monkeypatch.setattr(notification_service, "quiet_hours_send_at", lambda _db: quiet)
+    notification = notification_service.notifications.queue_customer_notification(
+        db_session,
+        NotificationCreate(
+            subscriber_id=subscriber.id,
+            channel=NotificationChannel.email,
+            recipient=subscriber.email,
+            category="billing",
+            event_type="billing.notice",
+            body="Receipt content",
+        ),
+        minimum_send_at=minimum,
+    )
+    assert notification.send_at == quiet
+    assert notification.metadata_["delivery_timing_source"] == "quiet_hours"
+    assert delivery_wakeups == []
+    db_session.commit()
+    assert delivery_wakeups == [
+        ((), {"args": [str(notification.id)], "retry": False, "eta": quiet})
+    ]
+
+
 def test_immediate_latency_bypasses_implicit_quiet_hours(db_session, monkeypatch):
     quiet_send_at = datetime.now(UTC) + timedelta(hours=8)
     monkeypatch.setattr(

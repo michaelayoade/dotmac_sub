@@ -994,6 +994,12 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review delivery failure evidence before retrying or canceling a queued notification.",
         "Before a controlled payment email adoption, review the receipt and invoice-paid comparison report, including both template IDs, purpose, conditions, and active state.",
         "An authorized operator can copy both reviewed payment email templates once, then rerun the comparison. Resolve conflicts before retrying; customer delivery uses the current templates until the separate cutover.",
+        notes=(
+            "After the reviewed payment email cutover, Template Studio's published versions own receipt and invoice-paid email wording. The old email content is sealed; notification purpose, conditions, and active routing remain in Sub.",
+            "Payment email publication is an authorized operator API operation, not a control on this page. It requires the expected published version; reload and review the current version if another publication changed it.",
+            "One eligible receipt and invoice-paid notice proved to come from the same payment may share one email. Collection can wait up to 60 seconds and delivery still observes quiet hours. The receipt reference and link remain in the email; payment SMS is sent individually.",
+            "The authorized one-way composition pause stops new pairing and its invoice-paid producer. Already queued payment emails finish with their frozen content and source coverage. Template Studio remains the email content owner, old content stays sealed, and pause does not restore or resume the legacy email path.",
+        ),
     ),
     _guide(
         "provisioning",

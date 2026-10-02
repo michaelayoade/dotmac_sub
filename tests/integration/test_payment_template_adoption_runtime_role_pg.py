@@ -14,9 +14,9 @@ from app.services.operator_tenant import operator_tenant_id
 from app.services.owner_commands import CommandContext
 from app.services.payment_template_adoption import (
     ReviewedPaymentEmailTemplates,
-    _require_rls_runtime_role,
     adopt_payment_email_templates,
     payment_email_parity_report,
+    require_rls_runtime_role,
 )
 
 
@@ -91,4 +91,4 @@ def test_migrated_postgres_app_user_passes_runtime_role_guard(
     assert not posture.rolsuper
     assert not posture.rolbypassrls
 
-    _require_rls_runtime_role(db_session)
+    require_rls_runtime_role(db_session)

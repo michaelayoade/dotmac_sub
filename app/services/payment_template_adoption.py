@@ -153,7 +153,7 @@ def _error(code: str, message: str) -> DomainError:
     )
 
 
-def _require_rls_runtime_role(db: Session) -> None:
+def require_rls_runtime_role(db: Session) -> None:
     """Refuse parity or adoption when the current PostgreSQL role bypasses RLS."""
     dialect = db.get_bind().dialect.name
     if dialect == "sqlite":
@@ -359,7 +359,7 @@ def _require_existing_match(
 def _adopt_in_transaction(
     db: Session, reviewed: ReviewedPaymentEmailTemplates
 ) -> AdoptionResult:
-    _require_rls_runtime_role(db)
+    require_rls_runtime_role(db)
     tenant_id = operator_tenant_id()
     snapshots = tuple(
         _legacy_snapshot(db, item, lock=True) for item in PAYMENT_TEMPLATES
@@ -462,7 +462,7 @@ def payment_email_parity_report(
     This is read-only. A missing row or invalid content is reported as evidence,
     not repaired. The caller must provide at least one context for each code.
     """
-    _require_rls_runtime_role(db)
+    require_rls_runtime_role(db)
     if contexts is None:
         contexts = REPRESENTATIVE_PAYMENT_EMAIL_CONTEXTS
     tenant_id = operator_tenant_id()

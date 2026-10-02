@@ -866,7 +866,7 @@ modules (including any `dotmac_kernel._*` and `display`) are forbidden outright.
 | `dotmac_kernel.templating` / `.branding` | prohibited | — | Sub owns its Jinja environment, templates, and branding (`app/models/branding.py`, `templates/`) |
 | `dotmac_kernel.identity` | prohibited | — | Helpers over the kernel Party model; Sub identity is out of scope |
 | `dotmac_kernel.query` | prohibited | — | Trivial pagination/escape helpers with existing Sub equivalents; excluded to keep the surface exactly plan-shaped. May be promoted by a later ledger amendment |
-| `dotmac_kernel.exceptions` | named subset (consumed) | payment template expand | `BadRequestError` and `NotFoundError` only, used by the dormant Template Studio adoption command to preserve its supported service error contract. Bare module imports and every other exception name remain prohibited; Sub still owns its error taxonomy and handlers |
+| `dotmac_kernel.exceptions` | named subset (consumed) | payment template expand/cutover | `BadRequestError`, `NotFoundError` and `ConflictError` only. Adoption uses the first two; versioned payment publication translates Studio publication conflicts into Sub's stable domain error. Bare module imports and every other exception name remain prohibited; Sub still owns its error taxonomy and handlers |
 | `dotmac_kernel.errors` / `.logging` | prohibited | — | Sub owns its error taxonomy (`app/errors.py`) and logging config (`app/logging.py`); kernel error handlers are app-factory wiring |
 | `dotmac_kernel.display` | prohibited | — | Kernel-internal (`INTERNAL_MODULES`); forbidden by the kernel itself |
 
@@ -905,8 +905,11 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
 
-`dotmac_kernel.exceptions` is narrowed to `BadRequestError` and
-`NotFoundError` for the dormant payment-template adoption command. No other
+`dotmac_kernel.exceptions` is narrowed to `BadRequestError`,
+`NotFoundError` and `ConflictError` for payment-template adoption and versioned
+Studio publication. The cutover's publication coordinator catches Studio's
+supported conflict exception and maps it into Sub's domain error; it does not
+install Kernel web/error handlers. No other
 Kernel exception or bare import of that module is admitted.
 
 `dotmac_kernel.namespaces` is narrowed to `module_schema`, added 2026-08-31
