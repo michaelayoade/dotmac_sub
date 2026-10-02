@@ -340,7 +340,7 @@ def _admin_command_context(
     return CommandContext(
         command_id=command_id,
         correlation_id=command_id,
-        actor=actor_id or "system:vendor-admin",
+        actor=f"user:{actor_id}" if actor_id else "system:vendor-admin",
         scope=scope,
         reason=reason,
     )

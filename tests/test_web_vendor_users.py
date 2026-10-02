@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import get_db
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.auth import UserCredential
 from app.models.field_vendor import FieldVendorUser
+from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
 from app.services import vendor_admin
@@ -23,8 +25,19 @@ def _operator_tenant(db_session):
     provision_operator_tenant(db_session)
 
 
-def _client(db_session) -> TestClient:
+def _client(db_session, *, actor_id: UUID | None = None) -> TestClient:
     app = FastAPI()
+
+    if actor_id is not None:
+
+        @app.middleware("http")
+        async def authenticate_admin(request, call_next):
+            request.state.auth = {
+                "principal_type": "system_user",
+                "principal_id": str(actor_id),
+            }
+            return await call_next(request)
+
     app.include_router(router, prefix="/admin")
     app.dependency_overrides[get_db] = lambda: db_session
     for route in router.routes:
@@ -160,7 +173,7 @@ def test_admin_can_update_existing_vendor_user_role(db_session):
         code=f"VRU-{uuid4().hex[:8]}",
     )
     vendor_id = str(vendor.id)
-    client = _client(db_session)
+    client = _client(db_session, actor_id=uuid4())
     client.post(
         f"/admin/vendors/{vendor_id}/users",
         data={
@@ -205,7 +218,7 @@ def test_admin_can_update_existing_vendor_user_profile(db_session):
         code=f"VPU-{uuid4().hex[:8]}",
     )
     vendor_id = str(vendor.id)
-    client = _client(db_session)
+    client = _client(db_session, actor_id=uuid4())
     client.post(
         f"/admin/vendors/{vendor_id}/users",
         data={
@@ -286,3 +299,72 @@ def test_setup_link_route_delegates_to_vendor_service(db_session, monkeypatch):
     assert response.status_code == 303
     assert response.headers["location"] == f"/admin/vendors/{vendor_id}"
     assert captured["membership_id"] == str(membership.id)
+
+
+def test_admin_command_context_uses_supported_audit_actor_types():
+    actor_id = uuid4()
+
+    admin_context = web_vendors_service._admin_command_context(
+        actor_id=str(actor_id),
+        scope="vendor-user",
+        reason="verify admin actor",
+    )
+    fallback_context = web_vendors_service._admin_command_context(
+        actor_id=None,
+        scope="vendor-user",
+        reason="verify fallback actor",
+    )
+
+    assert admin_context.actor == f"user:{actor_id}"
+    assert fallback_context.actor == "system:vendor-admin"
+
+
+def test_logged_in_admin_setup_link_queues_vendor_recovery_email(db_session):
+    vendor = vendor_admin.create_committed(
+        db_session,
+        name="Setup Link Delivery Vendor",
+        code=f"SLD-{uuid4().hex[:8]}",
+    )
+    vendor_id = str(vendor.id)
+    vendor_email = f"setup-delivery-{uuid4().hex[:8]}@vendor.example"
+    admin_actor_id = uuid4()
+    client = _client(db_session, actor_id=admin_actor_id)
+    client.post(
+        f"/admin/vendors/{vendor_id}/users",
+        data={
+            "first_name": "Ada",
+            "last_name": "Obi",
+            "email": vendor_email,
+            "role": "field",
+        },
+        follow_redirects=False,
+    )
+    membership = db_session.query(FieldVendorUser).one()
+
+    response = client.post(
+        f"/admin/vendors/{vendor_id}/users/{membership.id}/setup-link",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/vendors/{vendor_id}"
+    intent = (
+        db_session.query(CommunicationIntentRecord)
+        .filter(CommunicationIntentRecord.event_type == "auth.password_recovery")
+        .one()
+    )
+    notification = (
+        db_session.query(Notification)
+        .filter(Notification.communication_intent_id == intent.id)
+        .one()
+    )
+    assert notification.recipient == vendor_email
+    assert notification.audience_type == "system_user"
+    assert notification.audience_id == membership.system_user_id
+    audit_event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "auth.password_recovery_requested")
+        .one()
+    )
+    assert audit_event.actor_type is AuditActorType.user
+    assert audit_event.actor_id == str(admin_actor_id)
