@@ -1840,7 +1840,7 @@ class TestSuspendResumeServiceLayer:
         assert result is None
 
     def test_apply_service_resume_restores_subscription(
-        self, db_session, subscription, subscriber
+        self, db_session, active_subscription, subscriber
     ) -> None:
         from app.models.catalog import SubscriptionStatus
         from app.models.subscription_pause import (
@@ -1852,9 +1852,8 @@ class TestSuspendResumeServiceLayer:
             apply_service_suspend,
         )
 
-        # First suspend the subscription
-        subscription.status = SubscriptionStatus.active
-        db_session.commit()
+        # Start from a lifecycle-activated subscription with a billing anchor.
+        subscription = active_subscription
 
         apply_service_suspend(
             db_session,
@@ -2100,15 +2099,14 @@ class TestVacationHoldCeleryTask:
         return db_session.query(SubscriptionPauseCause).one()
 
     def test_resume_expired_holds_processes_expired_locks(
-        self, db_session, subscription, subscriber
+        self, db_session, active_subscription, subscriber
     ) -> None:
         from datetime import UTC, datetime, timedelta
         from unittest.mock import MagicMock, patch
 
         from app.models.catalog import SubscriptionStatus
 
-        subscription.status = SubscriptionStatus.active
-        db_session.commit()
+        subscription = active_subscription
 
         cause = self._pause_for_customer(db_session, subscription, subscriber)
         cause.scheduled_resume_at = datetime.now(UTC) - timedelta(hours=1)
