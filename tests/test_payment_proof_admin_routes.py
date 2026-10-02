@@ -134,14 +134,13 @@ class TestAdminWebVerifyRejectHandlers:
                 request=MagicMock(),
                 proof_id=proof_id,
                 amount="4500.00",
-                auto_allocate="no",
                 review_notes="checked",
                 db=_clean_session_mock(),
                 auth={"principal_id": "admin-1"},
             )
         kwargs = service.verify_proof.call_args.kwargs
         assert kwargs["amount"] == "4500.00"
-        assert kwargs["auto_allocate"] is False
+        assert "auto_allocate" not in kwargs
         assert kwargs["verified_by"] == "admin-1"
         assert response.status_code == 303
         assert response.headers["location"].startswith(
@@ -171,7 +170,6 @@ class TestAdminWebVerifyRejectHandlers:
                 request=MagicMock(),
                 proof_id=proof_id,
                 amount="",
-                auto_allocate="yes",
                 review_notes="",
                 db=_clean_session_mock(),
                 auth={"principal_id": "admin-1"},
@@ -879,7 +877,6 @@ class TestAdminPagesRender:
                 request=request,
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 amount="not-a-number",
-                auto_allocate="no",
                 review_notes="checked statement",
                 db=db_session,
                 auth={"principal_id": "admin", "roles": ["admin"]},
@@ -888,7 +885,6 @@ class TestAdminPagesRender:
         text = self._text(response)
         assert response.status_code == 400
         assert 'value="not-a-number"' in text
-        assert '<option value="no" selected>' in text
         assert "checked statement" in text
         assert "Invalid verified amount" in text
         assert 'aria-invalid="true"' in text

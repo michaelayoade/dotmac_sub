@@ -63,6 +63,10 @@ class PrepaidRenewalHandler:
             return
         if event.event_type not in FUNDING_INCREASE_EVENT_TYPES:
             return
+        if event.payload.get("access_consequence") == (
+            "historical_debt_settlement_only"
+        ):
+            return
         account_id = _require_account_id(event)
         payment_id = _require_payment_id(event)
         with owner_session(db) as owner_db:

@@ -658,8 +658,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/billing/payment-proofs",),
         "Compare the receipt and claimed transfer with bank evidence and duplicate warnings.",
         "Verify and record the confirmed amount, or reject with a clear reason.",
+        "Verified customer payments are automatically applied to the oldest eligible issued, partially paid, or overdue invoices; reviewers cannot keep usable credit unapplied while eligible debt remains.",
         "Check the resulting proof, payment, invoice, and Billing tab.",
-        notes=("Never verify a transfer from the image alone.",),
+        notes=(
+            "Never verify a transfer from the image alone.",
+            "Paying historical prepaid debt settles that receivable without moving its recorded period or restoring current service; current renewals retain their normal service effects.",
+        ),
     ),
     _guide(
         "payment-reconciliation",
@@ -1413,9 +1417,10 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "decide-payment-proof",
             "Verify or reject payment proof",
             1,
+            2,
             permission="billing:proof:verify",
         ),
-        _action("verify-proof-result", "Verify the resulting records", 2),
+        _action("verify-proof-result", "Verify the resulting records", 3),
     ),
     "payment-reconciliation": (
         _action("filter-reconciliation", "Filter reconciliation evidence", 0),

@@ -99,6 +99,29 @@ def test_confirmed_settlement_settles_the_invoice(db_session, subscriber):
     assert inv.balance_due == Decimal("0.00")
 
 
+def test_confirmed_account_payment_settlement_auto_allocates_oldest_invoice(
+    db_session, subscriber
+):
+    older = _invoice(db_session, subscriber.id, "3000.00", "INV-SETTLE-OLDER")
+    newer = _invoice(db_session, subscriber.id, "3000.00", "INV-SETTLE-NEWER")
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            account_id=subscriber.id,
+            amount=Decimal("3000.00"),
+            currency="NGN",
+            status="pending",
+        ),
+    )
+
+    _settle(db_session, payment)
+
+    db_session.refresh(older)
+    db_session.refresh(newer)
+    assert older.status == InvoiceStatus.paid
+    assert newer.status == InvoiceStatus.issued
+
+
 def test_update_cannot_resurrect_a_refunded_payment(db_session, subscriber):
     """refunded -> succeeded is forbidden by the transition table.
 

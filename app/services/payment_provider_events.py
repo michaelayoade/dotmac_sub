@@ -815,7 +815,7 @@ def _stage_financial_consequences(
                     status=PaymentStatus.pending,
                     memo=f"{provider.name} observation: {observation.event_type}",
                 ),
-                auto_allocate=False,
+                auto_allocate=account_id is not None,
                 origin=PaymentSettlementOrigin.provider_event,
             )
     elif payment and command.invoice_id and invoice and not payment.allocations:

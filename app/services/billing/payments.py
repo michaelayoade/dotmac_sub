@@ -11,7 +11,7 @@ from enum import Enum
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -41,6 +41,8 @@ from app.models.billing import (
     PaymentSettlement,
     PaymentSettlementOrigin,
     PaymentStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
 )
 from app.models.catalog import (
     BillingCycle,
@@ -153,6 +155,24 @@ class RefundCapability:
 class PaymentEditCapability:
     allowed: bool
     reason: str | None
+
+
+class PaymentAllocationFinalizationMode(str, Enum):
+    """Bound the consequences requested by a payment-allocation caller."""
+
+    standard = "standard"
+    historical_debt = "historical_debt"
+    issuance_reserved_credit = "issuance_reserved_credit"
+    reviewed_document_correction = "reviewed_document_correction"
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentAllocationFinalizationDecision:
+    """Typed consequence policy for one invoice application."""
+
+    mode: PaymentAllocationFinalizationMode
+    reason: str
+    subscription_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -1006,10 +1026,9 @@ def _offer_settled_account_credit(
     from app.services.billing.account_credit import AccountCreditApplications
 
     if not payment.auto_allocate_on_settlement:
-        # An explicit operator decision, not an oversight. Verifying a payment
-        # proof with auto_allocate=False, and the provider-settlement path that
-        # runs its own application afterwards, both mean "hold this as credit".
-        # The column exists precisely to record that.
+        # Reserved-credit and explicitly controlled settlement paths apply or
+        # preserve this credit themselves. The column records that ownership
+        # decision and prevents the generic offer from double-allocating it.
         return
     if payment.billing_account_id is not None:
         return
@@ -1066,6 +1085,79 @@ def _invoice_subscription_lines(
     if subscription is None or subscription.billing_mode != BillingMode.prepaid:
         return None
     return subscription, lines
+
+
+def resolve_payment_allocation_finalization(
+    db: Session,
+    invoice: Invoice,
+) -> PaymentAllocationFinalizationDecision:
+    """Classify prepaid debt without treating every late renewal as historical.
+
+    A period is historical only when the invoice carries explicit historical
+    provenance or when later funded entitlement proves that service already
+    moved beyond this period. A merely lapsed subscription, stale billing
+    anchor, canceled extension, or late payment remains a current-renewal
+    settlement and keeps the standard re-anchor behavior.
+    """
+
+    resolved = _invoice_subscription_lines(db, invoice)
+    if (
+        resolved is None
+        or invoice.billing_period_start is None
+        or invoice.billing_period_end is None
+    ):
+        return PaymentAllocationFinalizationDecision(
+            mode=PaymentAllocationFinalizationMode.standard,
+            reason="invoice_is_not_a_period_bound_prepaid_renewal",
+        )
+    subscription, _lines = resolved
+    metadata = invoice.metadata_ if isinstance(invoice.metadata_, dict) else {}
+    if metadata.get("payment_finalization_mode") == "historical_debt":
+        return PaymentAllocationFinalizationDecision(
+            mode=PaymentAllocationFinalizationMode.historical_debt,
+            reason="explicit_historical_debt_provenance",
+            subscription_id=subscription.id,
+        )
+    subscription_anchor = subscription.next_billing_at
+    invoice_period_end = invoice.billing_period_end
+    if subscription_anchor is not None and subscription_anchor.tzinfo is None:
+        subscription_anchor = subscription_anchor.replace(tzinfo=UTC)
+    if invoice_period_end.tzinfo is None:
+        invoice_period_end = invoice_period_end.replace(tzinfo=UTC)
+    if (
+        invoice.splynx_invoice_id is not None
+        and subscription_anchor is not None
+        and invoice_period_end < subscription_anchor
+    ):
+        return PaymentAllocationFinalizationDecision(
+            mode=PaymentAllocationFinalizationMode.historical_debt,
+            reason="carried_in_period_precedes_subscription_anchor",
+            subscription_id=subscription.id,
+        )
+    later_entitlement_id = db.scalar(
+        select(ServiceEntitlement.id)
+        .where(
+            ServiceEntitlement.subscription_id == subscription.id,
+            ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            ServiceEntitlement.starts_at >= invoice.billing_period_end,
+            or_(
+                ServiceEntitlement.source_invoice_id.is_(None),
+                ServiceEntitlement.source_invoice_id != invoice.id,
+            ),
+        )
+        .limit(1)
+    )
+    if later_entitlement_id is not None:
+        return PaymentAllocationFinalizationDecision(
+            mode=PaymentAllocationFinalizationMode.historical_debt,
+            reason="later_funded_entitlement_exists",
+            subscription_id=subscription.id,
+        )
+    return PaymentAllocationFinalizationDecision(
+        mode=PaymentAllocationFinalizationMode.standard,
+        reason="current_or_lapsed_prepaid_renewal",
+        subscription_id=subscription.id,
+    )
 
 
 def _base_subscription_invoice_lines(lines: list[InvoiceLine]) -> list[InvoiceLine]:
@@ -1282,14 +1374,6 @@ def _reanchor_paid_prepaid_invoice_if_lapsed(
     return True
 
 
-class PaymentAllocationFinalizationMode(str, Enum):
-    """Bound the consequences requested by a payment-allocation caller."""
-
-    standard = "standard"
-    issuance_reserved_credit = "issuance_reserved_credit"
-    reviewed_document_correction = "reviewed_document_correction"
-
-
 def _finalize_reviewed_document_payment_effects(
     db: Session,
     invoice: Invoice,
@@ -1320,6 +1404,23 @@ def finalize_reviewed_document_settlement_for_owner(
     _finalize_reviewed_document_payment_effects(db, invoice)
 
 
+def _finalize_historical_debt_payment_effects(
+    db: Session,
+    invoice: Invoice,
+) -> None:
+    """Settle receivable evidence without granting present-day service."""
+
+    _recalculate_invoice_totals(db, invoice)
+    db.flush()
+    if invoice.status is not InvoiceStatus.paid:
+        revoke_prepaid_entitlements_for_unpaid_invoice(db, invoice)
+
+    from app.services.account_lifecycle import compute_account_status
+
+    compute_account_status(db, str(invoice.account_id))
+    db.flush()
+
+
 def _finalize_invoice_payment_effects(
     db: Session,
     invoice: Invoice,
@@ -1336,6 +1437,10 @@ def _finalize_invoice_payment_effects(
     else:
         lock_for_update(db, Invoice, invoice.id)
     previous_status = invoice.status
+    decision = resolve_payment_allocation_finalization(db, invoice)
+    if decision.mode is PaymentAllocationFinalizationMode.historical_debt:
+        _finalize_historical_debt_payment_effects(db, invoice)
+        return
     _recalculate_invoice_totals(db, invoice)
     if causing_allocation is not None:
         from app.services.billing.payment_invoice_paid import (
@@ -1383,6 +1488,11 @@ def finalize_invoice_application_for_owner(
     effective_at: datetime,
 ) -> None:
     """Flush-only participant for a typed non-Payment invoice application."""
+
+    decision = resolve_payment_allocation_finalization(db, invoice)
+    if decision.mode is PaymentAllocationFinalizationMode.historical_debt:
+        _finalize_historical_debt_payment_effects(db, invoice)
+        return
 
     _recalculate_invoice_totals(db, invoice)
     db.flush()
@@ -1674,6 +1784,7 @@ def _build_payment_creation_preview(
             db.query(Invoice)
             .filter(Invoice.account_id == payload.account_id)
             .filter(Invoice.is_active.is_(True))
+            .filter(Invoice.is_proforma.is_not(True))
             .filter(
                 Invoice.status.in_(
                     [
@@ -1684,7 +1795,11 @@ def _build_payment_creation_preview(
                 )
             )
             .filter(Invoice.balance_due > 0)
-            .order_by(Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc())
+            .order_by(
+                Invoice.due_at.asc().nulls_last(),
+                Invoice.created_at.asc(),
+                Invoice.id.asc(),
+            )
             .all()
         )
         invoice_requests = [
@@ -1842,9 +1957,13 @@ def _create_account_payment_from_preview(
         db, payment, preview.unallocated_amount
     )
     db.flush()
+    allocation_finalization_modes: set[PaymentAllocationFinalizationMode] = set()
     for allocation in allocations:
         invoice = get_by_id(db, Invoice, allocation.invoice_id)
         if invoice:
+            allocation_finalization_modes.add(
+                resolve_payment_allocation_finalization(db, invoice).mode
+            )
             _finalize_invoice_payment_effects(
                 db, invoice, causing_allocation=allocation
             )
@@ -1875,6 +1994,12 @@ def _create_account_payment_from_preview(
     db.add(settlement)
     db.flush()
     _offer_settled_account_credit(db, payment, settlement)
+    historical_debt_only = (
+        bool(allocations)
+        and allocation_finalization_modes
+        == {PaymentAllocationFinalizationMode.historical_debt}
+        and preview.unallocated_amount == Decimal("0.00")
+    )
     AuditEvents.stage(
         db,
         AuditEventCreate(
@@ -1902,7 +2027,11 @@ def _create_account_payment_from_preview(
                 "prepaid_funding_after": str(preview.prepaid_funding_after),
                 "account_credit_before": str(preview.account_credit_before),
                 "account_credit_after": str(preview.account_credit_after),
-                "access_consequence": preview.access_consequence,
+                "access_consequence": (
+                    "historical_debt_settlement_only"
+                    if historical_debt_only
+                    else preview.access_consequence
+                ),
             },
         ),
     )
@@ -1917,6 +2046,11 @@ def _create_account_payment_from_preview(
             "currency": payment.currency,
             "invoice_id": allocation_invoice_id,
             "status": payment.status.value,
+            "access_consequence": (
+                "historical_debt_settlement_only"
+                if historical_debt_only
+                else preview.access_consequence
+            ),
         },
         account_id=payment.account_id,
         invoice_id=allocation_invoice_id,
@@ -2017,9 +2151,13 @@ def _settle_existing_account_payment(
         db, payment, preview.unallocated_amount
     )
     db.flush()
+    allocation_finalization_modes: set[PaymentAllocationFinalizationMode] = set()
     for allocation in allocations:
         invoice = get_by_id(db, Invoice, allocation.invoice_id)
         if invoice:
+            allocation_finalization_modes.add(
+                resolve_payment_allocation_finalization(db, invoice).mode
+            )
             _finalize_invoice_payment_effects(
                 db, invoice, causing_allocation=allocation
             )
@@ -2050,6 +2188,12 @@ def _settle_existing_account_payment(
     db.add(settlement)
     db.flush()
     _offer_settled_account_credit(db, payment, settlement)
+    historical_debt_only = (
+        bool(allocations)
+        and allocation_finalization_modes
+        == {PaymentAllocationFinalizationMode.historical_debt}
+        and preview.unallocated_amount == Decimal("0.00")
+    )
     AuditEvents.stage(
         db,
         AuditEventCreate(
@@ -2073,7 +2217,11 @@ def _settle_existing_account_payment(
                 ),
                 "prepaid_ledger_entry_id": None,
                 "prepaid_amount": "0.00",
-                "access_consequence": preview.access_consequence,
+                "access_consequence": (
+                    "historical_debt_settlement_only"
+                    if historical_debt_only
+                    else preview.access_consequence
+                ),
             },
         ),
     )
@@ -2089,6 +2237,11 @@ def _settle_existing_account_payment(
             "invoice_id": allocation_invoice_id,
             "from_status": PaymentStatus.pending.value,
             "to_status": PaymentStatus.succeeded.value,
+            "access_consequence": (
+                "historical_debt_settlement_only"
+                if historical_debt_only
+                else preview.access_consequence
+            ),
         },
         account_id=payment.account_id,
         invoice_id=allocation_invoice_id,
@@ -5135,6 +5288,9 @@ class PaymentAllocations(ListResponseMixin):
         payload: PaymentAllocationConfirm,
         *,
         funding_position_at: datetime | None,
+        finalization_mode: PaymentAllocationFinalizationMode = (
+            PaymentAllocationFinalizationMode.standard
+        ),
     ) -> PaymentAllocationResult:
         """Stage a boundary-scoped allocation without ending the transaction."""
 
@@ -5142,7 +5298,7 @@ class PaymentAllocations(ListResponseMixin):
             db,
             payload,
             complete_transaction=False,
-            finalization_mode=PaymentAllocationFinalizationMode.standard,
+            finalization_mode=finalization_mode,
             funding_position_at=funding_position_at,
         )
 
@@ -5299,6 +5455,11 @@ class PaymentAllocations(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Payment not found")
         if invoice is None:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        resolved_finalization_mode = finalization_mode
+        if finalization_mode is PaymentAllocationFinalizationMode.standard:
+            resolved_finalization_mode = resolve_payment_allocation_finalization(
+                db, invoice
+            ).mode
         preview_request = PaymentAllocationPreviewRequest(
             payment_id=payload.payment_id,
             invoice_id=payload.invoice_id,
@@ -5309,7 +5470,7 @@ class PaymentAllocations(ListResponseMixin):
             preview_request,
             funding_position_at=funding_position_at,
             reserve_prepaid_funding=(
-                finalization_mode is PaymentAllocationFinalizationMode.standard
+                resolved_finalization_mode is PaymentAllocationFinalizationMode.standard
             ),
         )
         if preview.fingerprint != payload.preview_fingerprint:
@@ -5366,11 +5527,14 @@ class PaymentAllocations(ListResponseMixin):
             # the parent to ensure the next sync page includes it.
             payment.updated_at = datetime.now(UTC)
             reservation.ref_id = str(allocation.id)
-            if (
-                finalization_mode
-                is PaymentAllocationFinalizationMode.reviewed_document_correction
+            if resolved_finalization_mode is (
+                PaymentAllocationFinalizationMode.reviewed_document_correction
             ):
                 _finalize_reviewed_document_payment_effects(db, invoice)
+            elif resolved_finalization_mode is (
+                PaymentAllocationFinalizationMode.historical_debt
+            ):
+                _finalize_historical_debt_payment_effects(db, invoice)
             else:
                 _finalize_invoice_payment_effects(db, invoice)
                 from app.services import sales_orders as sales_order_service
@@ -5405,11 +5569,16 @@ class PaymentAllocations(ListResponseMixin):
                         "receivable_after": str(preview.receivable_after),
                         "access_consequence": (
                             "unchanged_reviewed_document_correction"
-                            if finalization_mode
+                            if resolved_finalization_mode
                             is PaymentAllocationFinalizationMode.reviewed_document_correction
-                            else preview.access_consequence
+                            else (
+                                "historical_debt_settlement_only"
+                                if resolved_finalization_mode
+                                is PaymentAllocationFinalizationMode.historical_debt
+                                else preview.access_consequence
+                            )
                         ),
-                        "finalization_mode": finalization_mode.value,
+                        "finalization_mode": resolved_finalization_mode.value,
                     },
                 ),
             )
@@ -5420,10 +5589,10 @@ class PaymentAllocations(ListResponseMixin):
             # consumes money that was already observed; its owner projects the
             # fingerprint-bound anchor in the same transaction and must not
             # emit a second payment observation.
-            if (
-                finalization_mode
-                is not PaymentAllocationFinalizationMode.reviewed_document_correction
-            ):
+            if resolved_finalization_mode not in {
+                PaymentAllocationFinalizationMode.reviewed_document_correction,
+                PaymentAllocationFinalizationMode.historical_debt,
+            }:
                 emit_event(
                     db,
                     EventType.payment_received,

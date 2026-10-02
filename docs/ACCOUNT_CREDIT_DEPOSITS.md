@@ -138,11 +138,23 @@ owner preserves gross and fee evidence while crediting the authorized net
 amount. Changing that policy requires a new owner contract and preview, not an
 adapter-side net calculation.
 
-Eligible invoices are active `issued`, `partially_paid` or `overdue` invoices
-with a positive same-currency balance. Draft, void, written-off, inactive, and
-incompatible-currency invoices consume nothing. Oldest due debt wins; creation
-time and ID are stable tiebreakers. Partial credit leaves an invoice partially
-paid. Only a fully paid invoice reaches the existing entitlement/access owner.
+Eligible invoices are active, non-proforma `issued`, `partially_paid` or
+`overdue` invoices with a positive same-currency balance. Draft, void,
+written-off, inactive, proforma, fully paid, and incompatible-currency invoices
+consume nothing. Oldest due debt wins; creation time and ID are stable
+tiebreakers. Partial credit leaves an invoice partially paid. This allocation
+policy is system-owned for verified customer payments; customer and reviewer
+adapters cannot retain usable payment credit while eligible debt remains.
+
+Fully paid prepaid invoices then use a typed finalization decision. Native
+current or genuinely lapsed renewals retain the standard settlement behavior.
+Carried-in prepaid periods that precede the current subscription anchor,
+explicitly marked historical debt, and periods that authoritative later
+entitlement proves were superseded use
+`historical_debt`: allocation and receivable settlement remain normal, but the
+recorded period, billing anchor, current entitlement, and access state do not
+change. Merely being late, having a stale anchor, or having a canceled extension
+does not classify a renewal as historical.
 
 ## Refunds, reversals, void and access
 

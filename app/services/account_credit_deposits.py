@@ -932,19 +932,22 @@ class AccountCreditDeposits:
         # Race policy: cash is accepted, then any invoice that appeared after
         # intent creation immediately consumes the evidenced credit.
         application = AccountCreditApplications.apply(db, str(intent.account_id))
+        remaining_account_credit = round_money(
+            get_account_credit_balance(db, str(intent.account_id), currency=currency)
+        )
+        historical_debt_only = (
+            application.changed
+            and set(application.invoices_touched)
+            == set(application.historical_debt_invoices)
+            and remaining_account_credit == Decimal("0.00")
+        )
         metadata = dict(intent.metadata_ or {})
         metadata.update(
             {
                 "settlement_payment_id": str(payment.id),
                 "application_allocation_ids": application.allocation_ids,
                 "applied_amount": str(application.applied),
-                "remaining_account_credit": str(
-                    round_money(
-                        get_account_credit_balance(
-                            db, str(intent.account_id), currency=currency
-                        )
-                    )
-                ),
+                "remaining_account_credit": str(remaining_account_credit),
             }
         )
         intent.metadata_ = metadata
@@ -975,7 +978,9 @@ class AccountCreditDeposits:
                     "policy_version": intent.policy_version,
                     "application_allocation_ids": application.allocation_ids,
                     "access_consequence": (
-                        "invoice_owner_rechecks_only_if_fully_funded"
+                        "historical_debt_settlement_only"
+                        if historical_debt_only
+                        else "invoice_owner_rechecks_only_if_fully_funded"
                     ),
                     "settlement_source": command.source.value,
                     "command_id": str(context.command_id),
@@ -995,6 +1000,12 @@ class AccountCreditDeposits:
                 "currency": currency,
                 "applied_amount": str(application.applied),
                 "allocation_ids": application.allocation_ids,
+                "historical_debt_invoice_ids": (application.historical_debt_invoices),
+                "access_consequence": (
+                    "historical_debt_settlement_only"
+                    if historical_debt_only
+                    else "canonical_funding_change"
+                ),
                 "origin": AccountCreditFundingOrigin.account_credit_deposit.value,
                 "source": command.source.value,
                 "command_id": str(context.command_id),

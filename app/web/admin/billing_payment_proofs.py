@@ -173,7 +173,6 @@ def payment_proofs_verify(
     request: Request,
     proof_id: UUID,
     amount: str = Form(""),
-    auto_allocate: str = Form("yes"),
     review_notes: str = Form(""),
     db: Session = Depends(get_db),
     auth: dict = Depends(require_permission("billing:proof:verify")),
@@ -193,7 +192,6 @@ def payment_proofs_verify(
             proof_id=str(proof_id),
             verified_by=str(auth.get("principal_id")),
             amount=amount,
-            auto_allocate=auto_allocate == "yes",
             review_notes=review_notes,
         )
     except DomainError as exc:
@@ -201,7 +199,6 @@ def payment_proofs_verify(
             action_key=web_payment_proofs_service.VERIFY_ACTION_KEY,
             values={
                 "amount": amount,
-                "auto_allocate": auto_allocate,
                 "review_notes": review_notes,
             },
             error=exc,

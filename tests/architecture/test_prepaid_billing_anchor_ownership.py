@@ -40,6 +40,15 @@ def _tree(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
+def test_payment_finalizer_guards_historical_prepaid_debt() -> None:
+    source = PAYMENTS.read_text(encoding="utf-8")
+
+    assert "PaymentAllocationFinalizationMode.historical_debt" in source
+    assert "resolve_payment_allocation_finalization(db, invoice)" in source
+    assert "_finalize_historical_debt_payment_effects(db, invoice)" in source
+    assert '"historical_debt_settlement_only"' in source
+
+
 def _module_function_names(path: Path) -> set[str]:
     return {
         node.name

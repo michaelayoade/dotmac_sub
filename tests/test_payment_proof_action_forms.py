@@ -65,7 +65,6 @@ def test_subscriber_review_actions_declare_fields_impact_and_confirmation() -> N
     assert "succeeded payment" in str(verify.impact)
     assert [field.key for field in verify.fields] == [
         "amount",
-        "auto_allocate",
         "review_notes",
     ]
     assert verify.field("amount").kind is ActionFieldKind.decimal
@@ -126,7 +125,6 @@ def test_failed_submission_binds_typed_field_error_and_values() -> None:
         action_key=web_payment_proofs.VERIFY_ACTION_KEY,
         values={
             "amount": "not-a-number",
-            "auto_allocate": "no",
             "review_notes": "bank mismatch",
         },
         error=error,
@@ -138,14 +136,13 @@ def test_failed_submission_binds_typed_field_error_and_values() -> None:
 
     assert verify.field("amount").value == "not-a-number"
     assert verify.field("amount").error == "Invalid verified amount"
-    assert verify.field("auto_allocate").value == "no"
     assert verify.field("review_notes").value == "bank mismatch"
 
 
 def test_unfielded_domain_error_becomes_general_error() -> None:
     submission = web_payment_proofs.review_error_submission(
         action_key=web_payment_proofs.VERIFY_ACTION_KEY,
-        values={"amount": "5000.00", "auto_allocate": "yes"},
+        values={"amount": "5000.00"},
         error=payment_proofs.PaymentProofReviewError(
             code="financial.payment_proofs.duplicate_transfer_reference",
             message="Reference already verified",
@@ -159,7 +156,7 @@ def test_unfielded_domain_error_becomes_general_error() -> None:
     assert verify.general_error == "Reference already verified"
 
 
-def test_consolidated_binding_discards_inapplicable_allocation_value() -> None:
+def test_review_binding_discards_removed_allocation_value() -> None:
     submission = ActionFormSubmission.from_mapping(
         web_payment_proofs.VERIFY_ACTION_KEY,
         {
@@ -170,7 +167,7 @@ def test_consolidated_binding_discards_inapplicable_allocation_value() -> None:
     )
 
     verify = web_payment_proofs._review_actions(
-        _proof(consolidated=True), [], can_review=True, submission=submission
+        _proof(), [], can_review=True, submission=submission
     )[0]
 
     assert verify.field("amount").value == "8500.00"

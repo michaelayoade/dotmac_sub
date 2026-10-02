@@ -1908,6 +1908,17 @@ class TestPaymentReceivedRestoreGuard:
         return invoice
 
     @patch("app.services.collections.restore_account_services")
+    def test_historical_debt_settlement_does_not_restore_service(
+        self, mock_restore, db_session, subscriber
+    ):
+        event = self._payment_event(subscriber.id)
+        event.payload["access_consequence"] = "historical_debt_settlement_only"
+
+        EnforcementHandler().handle(db_session, event)
+
+        mock_restore.assert_not_called()
+
+    @patch("app.services.collections.restore_account_services")
     def test_partial_payment_is_submitted_to_owner(
         self, mock_restore, db_session, subscriber
     ):

@@ -2305,6 +2305,24 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   customer financial position excludes that internal debit so the transfer
   does not double-change total funding. Provider adapters and APIs call the
   same owner.
+- Automatic customer-payment boundary: verified subscriber payments and
+  settled account credit always offer compatible value to active,
+  non-proforma `issued`, `partially_paid`, and `overdue` invoices in due date,
+  creation time, and invoice-ID order. Customer and reviewer transports do not
+  select this policy. Reserved-credit, reviewed-document, refund, reversal,
+  consolidated, and other explicitly controlled owners keep their bounded
+  allocation modes.
+- Historical prepaid-debt boundary: `financial.payments` resolves one typed
+  finalization mode before applying invoice consequences. Carried-in prepaid
+  periods before the current subscription anchor, explicit historical-debt
+  provenance, or authoritative later funded entitlement route to
+  `historical_debt`. That mode settles the receivable but
+  preserves the recorded period and billing anchor, creates no current
+  entitlement, and requests no access restoration. A late or lapsed native
+  renewal without superseding evidence remains `standard`, so its established
+  re-anchor and current-entitlement behavior is unchanged. The standard
+  finalizer repeats this guard so a future caller cannot bypass the routing
+  decision.
 - Reconciliation boundary: native unallocated-credit reconciliation is an
   orchestration adapter, not a money writer. For each payment/invoice transfer
   it calls the same allocation preview and fingerprint-bound confirmation with

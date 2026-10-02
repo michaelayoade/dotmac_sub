@@ -403,7 +403,7 @@ def test_verify_creates_succeeded_payment_and_notifies(db_session):
     )
     assert proof["status"] == "submitted"
 
-    out = _verify(db_session, proof["id"], verified_by="admin-1", auto_allocate=True)
+    out = _verify(db_session, proof["id"], verified_by="admin-1")
     assert out["status"] == "verified"
     assert out["payment_id"] is not None
 
@@ -581,27 +581,28 @@ def test_verify_rejects_invalid_or_nonpositive_amount(db_session):
     assert exc.value.field == "amount"
 
 
-def test_verify_without_auto_allocate_keeps_money_as_credit(db_session):
-    """auto_allocate=False must NOT silently fall back to auto-allocation:
-    the open invoice stays open and the amount becomes account credit."""
+def test_verified_customer_payment_automatically_allocates_open_invoice(db_session):
+    """Allocation is a system policy, not a reviewer-selected option."""
     from app.services.billing._common import get_account_credit_balance
 
     sub = _account(db_session)
     invoice = _open_invoice(db_session, sub, amount="3000.00")
     proof = _submit(db_session, sub, amount="5000", reference="TRF-CRED")
 
-    out = _verify(db_session, proof["id"], verified_by="admin-1", auto_allocate=False)
+    out = _verify(db_session, proof["id"], verified_by="admin-1")
     payment = db_session.get(Payment, out["payment_id"])
     allocations = (
         db_session.query(PaymentAllocation)
         .filter(PaymentAllocation.payment_id == payment.id)
         .all()
     )
-    assert allocations == []
+    assert len(allocations) == 1
+    assert allocations[0].invoice_id == invoice.id
+    assert allocations[0].amount == Decimal("3000.00")
     db_session.refresh(invoice)
-    assert invoice.status == InvoiceStatus.issued
-    assert Decimal(str(invoice.balance_due)) == Decimal("3000.00")
-    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("5000.00")
+    assert invoice.status == InvoiceStatus.paid
+    assert Decimal(str(invoice.balance_due)) == Decimal("0.00")
+    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("2000.00")
 
 
 def test_deposit_proof_review_uses_typed_account_credit_owner(db_session):
@@ -690,12 +691,12 @@ def test_deposit_proof_review_maps_missing_prepaid_baseline_to_domain_error(
     assert db_session.query(Payment).count() == 0
 
 
-def test_verify_with_auto_allocate_pays_open_invoice(db_session):
+def test_verify_pays_open_invoice_by_system_policy(db_session):
     sub = _account(db_session)
     invoice = _open_invoice(db_session, sub, amount="3000.00")
     proof = _submit(db_session, sub, amount="5000", reference="TRF-ALLOC")
 
-    out = _verify(db_session, proof["id"], verified_by="admin-1", auto_allocate=True)
+    out = _verify(db_session, proof["id"], verified_by="admin-1")
     db_session.refresh(invoice)
     assert invoice.status == InvoiceStatus.paid
     payment = db_session.get(Payment, out["payment_id"])

@@ -715,6 +715,10 @@ class EnforcementHandler:
 
     def _handle_payment_received(self, db: Session, event: Event) -> None:
         """Submit payment observation to the financial-access reconciler."""
+        if event.payload.get("access_consequence") == (
+            "historical_debt_settlement_only"
+        ):
+            return
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             return

@@ -213,6 +213,7 @@ SERVICES: tuple[SOTService, ...] = (
             "exact settlement allocation and unallocated-credit links",
             "confirmed payment funding-change outbox event",
             "settled account-credit allocation preview and confirmation",
+            "historical prepaid debt settlement consequence classification",
             "exact invoice-credit and account-credit-consumption links",
             "native unallocated-credit reconciliation transactions",
             "historical payment settlement evidence reconciliation",

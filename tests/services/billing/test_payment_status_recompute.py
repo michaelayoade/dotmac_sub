@@ -15,6 +15,7 @@ from app.models.billing import (
     LedgerEntryType,
     LedgerSource,
     Payment,
+    PaymentAllocation,
     PaymentSettlement,
     PaymentSettlementOrigin,
     PaymentStatus,
@@ -356,6 +357,136 @@ def test_lapsed_prepaid_invoice_payment_reanchors_period_to_payment_date(db_sess
     assert entitlement.source_invoice_id == invoice.id
     assert entitlement.starts_at == _utc_naive(datetime(2026, 8, 4, 23, tzinfo=UTC))
     assert entitlement.ends_at == _utc_naive(datetime(2026, 9, 4, 23, tzinfo=UTC))
+
+
+def test_backdated_prepaid_debt_settlement_preserves_historical_service_state(
+    db_session,
+):
+    subscriber = _make_subscriber(db_session, status=SubscriberStatus.suspended)
+    historical_start = datetime(2025, 10, 1, tzinfo=UTC)
+    historical_end = datetime(2025, 11, 1, tzinfo=UTC)
+    current_start = datetime(2026, 9, 1, tzinfo=UTC)
+    current_end = datetime(2026, 10, 1, tzinfo=UTC)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        status=SubscriptionStatus.suspended,
+        billing_mode=BillingMode.prepaid,
+        billing_cycle=BillingCycle.monthly,
+        next_billing_at=current_end,
+    )
+    invoice = _make_prepaid_renewal_invoice(
+        db_session,
+        subscriber,
+        subscription,
+        period_start=historical_start,
+        period_end=historical_end,
+    )
+    invoice.invoice_number = "INV-110488"
+    invoice.splynx_invoice_id = 110488
+    later_entitlement = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        starts_at=current_start,
+        ends_at=current_end,
+        amount_funded=Decimal("1000.00"),
+        currency="NGN",
+    )
+    db_session.add(later_entitlement)
+    db_session.commit()
+
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            account_id=subscriber.id,
+            amount=Decimal("1000.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime(2026, 10, 2, 12, tzinfo=UTC),
+        ),
+    )
+
+    db_session.refresh(invoice)
+    db_session.refresh(subscription)
+    db_session.refresh(subscriber)
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert invoice.billing_period_start == _utc_naive(historical_start)
+    assert invoice.billing_period_end == _utc_naive(historical_end)
+    assert subscription.next_billing_at == _utc_naive(current_end)
+    assert subscription.status is SubscriptionStatus.suspended
+    assert subscriber.status is SubscriberStatus.suspended
+    assert [item.id for item in db_session.query(ServiceEntitlement).all()] == [
+        later_entitlement.id
+    ]
+    allocation = db_session.query(PaymentAllocation).one()
+    assert allocation.invoice_id == invoice.id
+    assert allocation.amount == Decimal("1000.00")
+    funding_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "payment.received")
+        .one()
+    )
+    assert (
+        funding_event.payload["access_consequence"] == "historical_debt_settlement_only"
+    )
+
+
+def test_mixed_historical_and_normal_invoices_use_distinct_finalization(db_session):
+    subscriber = _make_subscriber(db_session, status=SubscriberStatus.active)
+    historical_start = datetime(2025, 10, 1, tzinfo=UTC)
+    historical_end = datetime(2025, 11, 1, tzinfo=UTC)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+        billing_cycle=BillingCycle.monthly,
+        next_billing_at=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    historical = _make_prepaid_renewal_invoice(
+        db_session,
+        subscriber,
+        subscription,
+        period_start=historical_start,
+        period_end=historical_end,
+        total="1000.00",
+    )
+    historical.invoice_number = "INV-110488-MIXED"
+    historical.splynx_invoice_id = 110489
+    historical.due_at = datetime(2025, 11, 1, tzinfo=UTC)
+    normal = _make_overdue_invoice(db_session, subscriber, total="500.00")
+    normal.due_at = datetime(2026, 9, 1, tzinfo=UTC)
+    db_session.commit()
+
+    billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            account_id=subscriber.id,
+            amount=Decimal("1500.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime(2026, 10, 2, 12, tzinfo=UTC),
+        ),
+    )
+
+    db_session.refresh(historical)
+    db_session.refresh(normal)
+    db_session.refresh(subscription)
+    assert historical.status is InvoiceStatus.paid
+    assert normal.status is InvoiceStatus.paid
+    assert historical.billing_period_start == _utc_naive(historical_start)
+    assert historical.billing_period_end == _utc_naive(historical_end)
+    assert subscription.next_billing_at == _utc_naive(datetime(2026, 10, 1, tzinfo=UTC))
+    assert db_session.query(ServiceEntitlement).count() == 0
+    funding_event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "payment.received")
+        .one()
+    )
+    assert funding_event.payload["access_consequence"] != (
+        "historical_debt_settlement_only"
+    )
 
 
 def test_lapsed_prepaid_payment_in_first_wat_hour_uses_new_local_day(db_session):

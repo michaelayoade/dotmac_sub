@@ -229,22 +229,6 @@ def _review_actions(
             help_text=amount_help,
         )
     ]
-    if not consolidated:
-        verify_fields.append(
-            ActionField(
-                key="auto_allocate",
-                label="Allocation",
-                kind=ActionFieldKind.select,
-                value="yes",
-                options=(
-                    ActionOption(value="yes", label="Apply to oldest open invoices"),
-                    ActionOption(value="no", label="Keep as account credit"),
-                ),
-                help_text=(
-                    "Any amount not allocated to an invoice remains account credit."
-                ),
-            )
-        )
     verify_fields.append(
         ActionField(
             key="review_notes",
@@ -534,7 +518,6 @@ def verify_proof(
     proof_id: str,
     verified_by: str,
     amount: str | None,
-    auto_allocate: bool,
     review_notes: str | None,
 ) -> dict[str, object | None]:
     return payment_proofs_service.verify_proof(
@@ -543,7 +526,6 @@ def verify_proof(
         context=context,
         verified_by=verified_by,
         amount=(amount or "").strip() or None,
-        auto_allocate=auto_allocate,
         review_notes=review_notes,
     ).to_dict()
 

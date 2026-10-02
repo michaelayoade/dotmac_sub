@@ -66,7 +66,11 @@ from app.services.billing._common import (
     resolve_invoice_settlement_amounts,
 )
 from app.services.billing.ledger import LedgerEntries
-from app.services.billing.payments import PaymentAllocations
+from app.services.billing.payments import (
+    PaymentAllocationFinalizationMode,
+    PaymentAllocations,
+    resolve_payment_allocation_finalization,
+)
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.domain_errors import DomainError
 
@@ -87,6 +91,7 @@ class AccountCreditApplicationResult:
     invoices_settled: list[str] = field(default_factory=list)
     invoices_touched: list[str] = field(default_factory=list)
     allocation_ids: list[str] = field(default_factory=list)
+    historical_debt_invoices: list[str] = field(default_factory=list)
     unbacked_credit: Decimal = Decimal("0.00")
     invoice_remaining: Decimal = Decimal("0.00")
 
@@ -1151,6 +1156,7 @@ class AccountCreditApplications:
             invoice_remaining = round_money(to_decimal(invoice.balance_due or 0))
             if invoice_remaining <= 0:
                 continue
+            finalization = resolve_payment_allocation_finalization(db, invoice)
             for payment, _room in sources:
                 available = remaining_by_currency.get(currency, Decimal("0.00"))
                 payment_room = room_by_payment.get(payment.id, Decimal("0.00"))
@@ -1201,6 +1207,7 @@ class AccountCreditApplications:
                                 idempotency_key=_allocation_key(payment, invoice),
                             ),
                             funding_position_at=funding_position_at,
+                            finalization_mode=finalization.mode,
                         )
                     )
                     applied = round_money(
@@ -1224,6 +1231,12 @@ class AccountCreditApplications:
                 )
                 if str(invoice.id) not in result.invoices_touched:
                     result.invoices_touched.append(str(invoice.id))
+                if (
+                    finalization.mode
+                    is PaymentAllocationFinalizationMode.historical_debt
+                    and str(invoice.id) not in result.historical_debt_invoices
+                ):
+                    result.historical_debt_invoices.append(str(invoice.id))
                 invoice_remaining = round_money(invoice_remaining - applied)
                 remaining_by_currency[currency] = round_money(available - applied)
                 room_by_payment[payment.id] = round_money(payment_room - applied)

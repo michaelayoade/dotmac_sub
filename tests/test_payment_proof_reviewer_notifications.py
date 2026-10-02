@@ -254,7 +254,6 @@ def test_review_resolution_closes_inbox_and_suppresses_configured_escalations(
         proof["id"],
         context=_review_context("verify"),
         verified_by=reviewer_id,
-        auto_allocate=False,
     )
 
     alert = db_session.query(AdminAlert).one()

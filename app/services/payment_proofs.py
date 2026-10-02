@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -30,8 +30,6 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.billing import (
     BillingAccount,
-    Invoice,
-    InvoiceStatus,
     Payment,
     PaymentSettlementOrigin,
     PaymentStatus,
@@ -59,9 +57,6 @@ from app.services.topup_intents import (
     DIRECT_TRANSFER_PROVIDER,
     DirectTransferBankAccountEvidence,
 )
-
-if TYPE_CHECKING:
-    from app.schemas.billing import PaymentAllocationApply
 
 logger = logging.getLogger(__name__)
 
@@ -1162,43 +1157,6 @@ def list_admin(
     return out
 
 
-def _open_invoice_allocations(
-    db: Session, account_id: UUID, amount: Decimal
-) -> list[PaymentAllocationApply]:
-    """Spread the verified amount across the oldest open invoices."""
-    from app.schemas.billing import PaymentAllocationApply
-
-    open_statuses = {
-        InvoiceStatus.issued,
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.overdue,
-    }
-    invoices = (
-        db.query(Invoice)
-        .filter(Invoice.account_id == account_id)
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.status.in_(open_statuses))
-        .order_by(Invoice.created_at.asc())
-        .all()
-    )
-    allocations: list[PaymentAllocationApply] = []
-    remaining = amount
-    for inv in invoices:
-        if remaining <= Decimal("0.00"):
-            break
-        due = Decimal(str(inv.balance_due or 0))
-        if due <= Decimal("0.00"):
-            continue
-        take = min(due, remaining)
-        allocations.append(
-            PaymentAllocationApply(
-                invoice_id=inv.id, amount=take, memo="bank-transfer proof"
-            )
-        )
-        remaining -= take
-    return allocations
-
-
 def _exact_linked_direct_transfer_intent(
     db: Session,
     proof: PaymentProof,
@@ -1231,7 +1189,6 @@ def verify_proof(
     context: CommandContext,
     verified_by: str,
     amount: MoneyInput = None,
-    auto_allocate: bool = True,
     review_notes: str | None = None,
 ) -> PaymentProofResult:
     return execute_owner_command(
@@ -1244,7 +1201,6 @@ def verify_proof(
             context=context,
             verified_by=verified_by,
             amount=amount,
-            auto_allocate=auto_allocate,
             review_notes=review_notes,
         ),
     )
@@ -1257,7 +1213,6 @@ def _verify_proof(
     context: CommandContext,
     verified_by: str,
     amount: MoneyInput = None,
-    auto_allocate: bool = True,
     review_notes: str | None = None,
 ) -> PaymentProofResult:
     """Confirm the transfer and create the real Payment.
@@ -1389,6 +1344,7 @@ def _verify_proof(
         direct_transfer_metadata.get("withholding_tax") or {}
     )
     wht_record_id: UUID | None = None
+    auto_allocate = True
     if deposit_intent is not None:
         from app.services.account_credit_deposits import (
             AccountCreditDeposits,
@@ -1473,8 +1429,6 @@ def _verify_proof(
                 )
             ]
             auto_allocate = False
-        elif auto_allocate:
-            allocations = _open_invoice_allocations(db, proof.account_id, value)
         payment = billing_service.payments.stage_create(
             db,
             PaymentCreate(
