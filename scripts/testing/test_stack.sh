@@ -9,8 +9,8 @@
 # are hardcoded here.
 #
 # Usage:
-#   scripts/testing/test_stack.sh create     # create dotmac_test DB
-#   scripts/testing/test_stack.sh migrate    # migrate with a held app_admin URL
+#   scripts/testing/test_stack.sh create     # create dotmac_test DB + extensions
+#   scripts/testing/test_stack.sh migrate    # alembic upgrade heads (working-tree alembic)
 #   scripts/testing/test_stack.sh seed        # load edge-case fixtures
 #   scripts/testing/test_stack.sh up          # (re)start the test app on :8010
 #   scripts/testing/test_stack.sh down        # stop+remove the test app container
@@ -36,37 +36,25 @@ REDIS_DB_INDEX="5"   # isolate from the live app's settings cache / sessions (db
 
 # --- derive secrets from .env + the running pg container --------------------
 [ -f .env ] || { echo "no .env in $REPO" >&2; exit 1; }
-if grep -Eq '^[[:space:]]*(export[[:space:]]+)?MIGRATION_DATABASE_URL[[:space:]]*=' .env; then
-  echo 'REFUSED: MIGRATION_DATABASE_URL must not be persisted in .env' >&2
-  exit 1
-fi
-# The application URL supplies only the disposable app_user runtime connection.
+# live DATABASE_URL (dotmac_app DSN) — swap the db name to dotmac_test
 LIVE_DB_URL="$(grep -E '^DATABASE_URL=' .env | head -1 | cut -d= -f2-)"
-[ -n "$LIVE_DB_URL" ] || { echo 'DATABASE_URL is required in .env' >&2; exit 1; }
-RUNTIME_USER="${LIVE_DB_URL#*://}"
-RUNTIME_USER="${RUNTIME_USER%%[:@/]*}"
-[ "$RUNTIME_USER" = app_user ] || {
-  echo 'REFUSED: the test stack runtime requires an app_user DATABASE_URL' >&2
-  exit 1
-}
 TEST_DB_URL="${LIVE_DB_URL%/*}/${TEST_DB}"
+DB_OWNER="$(printf '%s' "$LIVE_DB_URL" | sed -E 's#.*://([^:/]+).*#\1#')"
 REDIS_PW="$(grep -E '^REDIS_LOCAL_PASSWORD=' .env | head -1 | cut -d= -f2-)"
 REDIS_URL="redis://:${REDIS_PW}@redis-local:6379/${REDIS_DB_INDEX}"
 PG_SUPER_PW="$(docker exec "$PG_CONTAINER" printenv POSTGRES_PASSWORD)"
 PG_SUPER_USER="$(docker exec "$PG_CONTAINER" printenv POSTGRES_USER)"
 
 psql_super() { # args: -d DB -c SQL ...
-  PGPASSWORD="$PG_SUPER_PW" docker exec -e PGPASSWORD "$PG_CONTAINER" psql -U "$PG_SUPER_USER" "$@"
+  docker exec -e PGPASSWORD="$PG_SUPER_PW" "$PG_CONTAINER" psql -U "$PG_SUPER_USER" "$@"
 }
 
 run_in_image() { # runs a command in a one-off app container w/ test env + mounts
-  DATABASE_URL="$TEST_DB_URL" \
-  REDIS_URL="$REDIS_URL" \
-  SESSION_REDIS_URL="$REDIS_URL" \
-  CELERY_BROKER_URL="$REDIS_URL" \
   docker run --rm --network "$NETWORK" --env-file .env \
-    -e DATABASE_URL -e MIGRATION_DATABASE_URL= \
-    -e REDIS_URL -e SESSION_REDIS_URL -e CELERY_BROKER_URL \
+    -e DATABASE_URL="$TEST_DB_URL" \
+    -e REDIS_URL="$REDIS_URL" \
+    -e SESSION_REDIS_URL="$REDIS_URL" \
+    -e CELERY_BROKER_URL="$REDIS_URL" \
     -e APP_ENV=development \
     -v "$REPO/app:/app/app" \
     -v "$REPO/alembic:/app/alembic" \
@@ -75,61 +63,24 @@ run_in_image() { # runs a command in a one-off app container w/ test env + mount
     --entrypoint sh "$IMAGE" -lc "$1"
 }
 
-run_migration_image() {
-  # This database shares a cluster with live local Sub. Roles and passwords are
-  # cluster-wide, so a disposable-database helper must never change them here.
-  # The operator must hold an existing, separately provisioned app_admin URL.
-  [ -n "${MIGRATION_DATABASE_URL:-}" ] || {
-    echo 'REFUSED: MIGRATION_DATABASE_URL for dotmac_test is required' >&2
-    return 2
-  }
-  DATABASE_URL="$TEST_DB_URL" \
-  MIGRATION_DATABASE_URL="$MIGRATION_DATABASE_URL" \
-  docker run --rm --network "$NETWORK" --env-file .env \
-    -e DATABASE_URL -e MIGRATION_DATABASE_URL \
-    -v "$REPO/app:/app/app" \
-    -v "$REPO/alembic:/app/alembic" \
-    -v "$REPO/alembic.ini:/app/alembic.ini" \
-    -v "$REPO/scripts:/app/scripts" \
-    --entrypoint python "$IMAGE" -c '
-import os
-import sys
-
-from alembic import command
-from alembic.config import Config
-from sqlalchemy.engine import make_url
-
-runtime = make_url(os.environ["DATABASE_URL"])
-admin = make_url(os.environ["MIGRATION_DATABASE_URL"])
-if runtime.username != "app_user" or runtime.database != "dotmac_test":
-    sys.exit("REFUSED: disposable runtime must connect as app_user to dotmac_test")
-if (admin.username, admin.host, admin.port or 5432, admin.database) != (
-    "app_admin", runtime.host, runtime.port or 5432, "dotmac_test"
-):
-    sys.exit("REFUSED: migration URL must name app_admin on the exact dotmac_test endpoint")
-config = Config("/app/alembic.ini")
-command.upgrade(config, "heads")
-print("disposable database migrated as app_admin")
-'
-}
-
 cmd_create() {
   echo ">> creating database $TEST_DB"
   if psql_super -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$TEST_DB'" | grep -q 1; then
     echo "   already exists"
   else
+    psql_super -d postgres -c "CREATE DATABASE $TEST_DB OWNER $DB_OWNER" >/dev/null 2>&1 || \
     psql_super -d postgres -c "CREATE DATABASE $TEST_DB" >/dev/null
   fi
-  echo '>> installing database-local extensions'
-  for ext in postgis postgis_topology pg_trgm btree_gist; do
-    psql_super -d "$TEST_DB" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";" >/dev/null
+  echo ">> installing extensions"
+  for ext in postgis postgis_topology postgis_tiger_geocoder fuzzystrmatch pg_trgm pgcrypto dblink postgres_fdw; do
+    psql_super -d "$TEST_DB" -c "CREATE EXTENSION IF NOT EXISTS \"$ext\" CASCADE;" >/dev/null 2>&1 \
+      && echo "   ok $ext" || echo "   FAIL $ext"
   done
-  echo '>> app_admin role, schema, and grant prerequisites must be pre-provisioned'
 }
 
 cmd_migrate() {
   echo ">> alembic upgrade heads against $TEST_DB"
-  run_migration_image
+  run_in_image 'alembic upgrade heads 2>&1 | tail -6; echo "--- current ---"; alembic current 2>&1 | tail -1'
 }
 
 cmd_seed() {
@@ -140,15 +91,12 @@ cmd_seed() {
 cmd_up() {
   echo ">> (re)starting $APP_CONTAINER on http://127.0.0.1:$HOST_PORT"
   docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
-  DATABASE_URL="$TEST_DB_URL" \
-  REDIS_URL="$REDIS_URL" \
-  SESSION_REDIS_URL="$REDIS_URL" \
-  CELERY_BROKER_URL="$REDIS_URL" \
-  CELERY_RESULT_BACKEND="redis://:${REDIS_PW}@redis-local:6379/6" \
   docker run -d --name "$APP_CONTAINER" --network "$NETWORK" --env-file .env \
-    -e DATABASE_URL -e MIGRATION_DATABASE_URL= \
-    -e REDIS_URL -e SESSION_REDIS_URL -e CELERY_BROKER_URL \
-    -e CELERY_RESULT_BACKEND \
+    -e DATABASE_URL="$TEST_DB_URL" \
+    -e REDIS_URL="$REDIS_URL" \
+    -e SESSION_REDIS_URL="$REDIS_URL" \
+    -e CELERY_BROKER_URL="$REDIS_URL" \
+    -e CELERY_RESULT_BACKEND="redis://:${REDIS_PW}@redis-local:6379/6" \
     -e APP_ENV=development \
     -e SERVER_NAME=dotmac-sub-test \
     -e GLITCHTIP_ENABLED=false \

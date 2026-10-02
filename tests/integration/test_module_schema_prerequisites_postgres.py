@@ -194,7 +194,7 @@ def test_bootstrap_creates_a_dropped_schema_to_full_contract(
     assert commercial_schema_violations(observe_schemas(rollback_conn)) == ()
 
     observed = observe_schemas(rollback_conn)[sample_schema]
-    assert observed.owner_role == "app_admin"
+    assert observed.owner_role == "dotmac_app"
     assert observed.public_privileges == ()
     assert observed.probe_observed is True
     assert observed.probe_privileges == ()
@@ -221,16 +221,12 @@ def test_planted_ownership_drift_is_caught(
     rollback_conn: psycopg.Connection, sample_schema: str
 ) -> None:
     rollback_conn.execute(
-        sql.SQL("ALTER SCHEMA {} OWNER TO dotmac_app").format(
+        sql.SQL("ALTER SCHEMA {} OWNER TO app_admin").format(
             sql.Identifier(sample_schema)
         )
     )
     violations = commercial_schema_violations(observe_schemas(rollback_conn))
-    assert any("is owned by 'dotmac_app'" in violation for violation in violations)
-    result = run_bootstrap(rollback_conn, dry_run=False, repair=True)
-    assert result.outcome is Outcome.BLOCKED
-    assert result.exit_code != 0
-    assert observe_schemas(rollback_conn)[sample_schema].owner_role == "dotmac_app"
+    assert any("is owned by 'app_admin'" in violation for violation in violations)
 
 
 def test_planted_public_grant_is_caught_by_the_probe(
@@ -297,13 +293,13 @@ def test_the_restricted_migration_role_cannot_do_the_bootstraps_job(
     powers. Whatever password it had used, this is what it would have hit.
     """
     granted = rollback_conn.execute(
-        "SELECT has_database_privilege('app_admin', current_database(), 'CREATE')"
+        "SELECT has_database_privilege('dotmac_app', current_database(), 'CREATE')"
     ).fetchone()
     assert granted is not None and not granted[0], (
-        "app_admin must never hold database-level CREATE (ADR-0011)"
+        "dotmac_app must never hold database-level CREATE (ADR-0011)"
     )
 
-    rollback_conn.execute("SET ROLE app_admin")
+    rollback_conn.execute("SET ROLE dotmac_app")
     try:
         with pytest.raises(InsufficientPrivilege):
             rollback_conn.execute("CREATE SCHEMA mod_should_not_be_creatable")

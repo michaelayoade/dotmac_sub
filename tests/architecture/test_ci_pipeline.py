@@ -476,7 +476,6 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
     commercial_bootstrap = "scripts/bootstrap_commercial_module_prereqs.py"
     dispatcher_bootstrap = "scripts/bootstrap_outbox_dispatcher_roles.py"
     ci_test_bootstrap = "scripts.ci.bootstrap_test_database_prereqs"
-    migrated_test_database = "scripts.ci.migrated_test_database"
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     ci_test_bootstrap_source = (
         ROOT / "scripts/ci/bootstrap_test_database_prereqs.py"
@@ -496,8 +495,9 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
     assert "postgresql://" not in helper
     assert "bootstrap_commercial_module_prereqs" in ci_test_bootstrap_source
     assert "bootstrap_outbox_dispatcher_roles" in ci_test_bootstrap_source
-    assert "bootstrap_disposable_database(" in ci_test_bootstrap_source
-    assert "target.url, label=target.database_name" in ci_test_bootstrap_source
+    assert "_bootstrap_test_target(target.url, label=target.database_name)" in (
+        ci_test_bootstrap_source
+    )
     assert (
         '_bootstrap_outbox_url(\n        target.url.set(database="template1")'
         in ci_test_bootstrap_source
@@ -534,20 +534,21 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
         ) : e2e_gate.index("- name: Run Playwright suite")
     ]
     for workflow_step in (ci_migration, nightly_migration, gate_migration):
-        assert 'TEST_DATABASE_URL="$DATABASE_URL"' in workflow_step
-        assert ci_test_bootstrap in workflow_step
-        assert migrated_test_database in workflow_step
-        assert workflow_step.index(ci_test_bootstrap) < workflow_step.index(
-            migrated_test_database
+        assert 'BOOTSTRAP_DATABASE_URL="$DATABASE_URL"' in workflow_step
+        assert commercial_bootstrap in workflow_step
+        assert dispatcher_bootstrap in workflow_step
+        assert workflow_step.index(commercial_bootstrap) < workflow_step.index(
+            dispatcher_bootstrap
         )
-        assert "MIGRATION_DATABASE_URL=postgresql" not in workflow_step
+        assert workflow_step.index(dispatcher_bootstrap) < workflow_step.index(
+            "alembic upgrade heads"
+        )
         assert "BOOTSTRAP_DATABASE_URL=postgresql" not in workflow_step
+        assert 'echo "$BOOTSTRAP_DATABASE_URL"' not in workflow_step
 
-    assert "-e POSTGRES_DB=dotmac_sub_test" in ci_workflow
-    assert (
-        "postgis/postgis:16-3.4 postgres -c cluster_name=dotmac-sub-disposable-tests"
-        in ci_workflow
-    )
+    assert f"{dispatcher_bootstrap} --repair" in ci_migration
+
+    assert "POSTGRES_DB: dotmac_sub_test" in ci_workflow
     assert "POSTGRES_DB=dotmac_sub_ci" in ci_workflow
     assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_workflow
     assert "POSTGRES_DB=dotmac_sub_e2e" in e2e_gate

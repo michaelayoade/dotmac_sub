@@ -75,7 +75,6 @@ def _run_deploy(
     (deploy_dir / ".env").write_text(
         "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
         "GIT_SHA=old0000000000000000000000000000000000000\n"
-        "DATABASE_URL=postgresql+psycopg://app_user@db/dotmac_sub_test\n"
         f"APP_ENV={app_env}\n"
         f"SERVER_NAME={server_name}\n"
     )
@@ -231,14 +230,8 @@ exit 0
             "PRODUCTION_RELEASE_EVIDENCE": str(authorization),
             "PRODUCTION_BACKUP_DECISION_FILE": str(backup_decision),
         }
-    inherited_env = dict(os.environ)
-    # Pytest's database fixture installs DATABASE_URL for the test process.
-    # The deploy must read its runtime URL only from the staged .env.
-    inherited_env.pop("DATABASE_URL", None)
-    inherited_env.pop("MIGRATION_DATABASE_URL_FILE", None)
     env = {
-        **inherited_env,
-        "MIGRATION_DATABASE_URL": "postgresql+psycopg://app_admin@db/dotmac_sub_test",
+        **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "DEPLOY_DIR": str(deploy_dir),
         "REPO_DIR": str(repo_root),

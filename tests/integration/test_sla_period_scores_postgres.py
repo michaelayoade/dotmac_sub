@@ -34,7 +34,6 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
-from tests.integration.migration_authority import migration_database
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "479_inbox_lifecycle_audit"
@@ -71,8 +70,7 @@ def _temporary_database(prefix: str) -> Iterator[URL]:
         database_url=target.render_as_string(hide_password=False),
     )
     try:
-        with migration_database(target):
-            yield target
+        yield target
     finally:
         app_config.settings = original
         with psycopg.connect(_render(maintenance), autocommit=True) as admin:

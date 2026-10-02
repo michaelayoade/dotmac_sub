@@ -68,7 +68,7 @@ jobs:
             -e POSTGRES_USER=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
             -e POSTGRES_DB=dotmac_sub_e2e \
             --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres" --health-interval 5s \
-            --health-retries 10 postgis/postgis:16-3.4 postgres -c cluster_name=dotmac-sub-disposable-tests
+            --health-retries 10 postgis/postgis:16-3.4
           docker run -d --name e2e-redis --network e2e-net \
             -p 127.0.0.1:56379:6379 redis:7
           for i in $(seq 1 30); do
@@ -100,14 +100,15 @@ jobs:
 
       - name: Migrate + seed
         run: |
-          COMMON="--network e2e-net -e APP_ENV=test \
+          COMMON="--network e2e-net \
             -e DATABASE_URL=postgresql+psycopg://postgres@e2e-db:5432/dotmac_sub_e2e \
             -e SECRET_KEY=e2e-test-secret-key-not-for-production \
             -e REDIS_URL=redis://e2e-redis:6379/0"
           docker run --rm $COMMON dotmac-sub:e2e sh -c \
-            'TEST_DATABASE_URL="$DATABASE_URL" python -m scripts.ci.bootstrap_test_database_prereqs'
+            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'
           docker run --rm $COMMON dotmac-sub:e2e sh -c \
-            'TEST_DATABASE_URL="$DATABASE_URL" python -m scripts.ci.migrated_test_database'
+            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --repair'
+          docker run --rm $COMMON dotmac-sub:e2e alembic upgrade heads
           docker run --rm $COMMON dotmac-sub:e2e python -m scripts.seed.seed_rbac
           docker run --rm $COMMON dotmac-sub:e2e python -m scripts.seed.seed_admin \
             --email e2e.admin@example.com --first-name E2E --last-name Admin \

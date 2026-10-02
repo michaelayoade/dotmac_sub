@@ -1,29 +1,11 @@
-import os
 from logging.config import fileConfig
-from pathlib import Path
-
-from dotenv import dotenv_values
-
-# Check the process-held migration URL before importing app.db: app.config
-# loads .env as an import side effect. A stored migration credential must never
-# become valid merely because a caller used Alembic directly instead of Make.
-_migration_url = os.environ.get("MIGRATION_DATABASE_URL", "").strip()
-if not _migration_url:
-    raise RuntimeError("MIGRATION_DATABASE_URL must be supplied by the process")
-if "MIGRATION_DATABASE_URL" in dotenv_values(
-    Path(__file__).resolve().parents[1] / ".env"
-):
-    raise RuntimeError("MIGRATION_DATABASE_URL must not be persisted in .env")
 
 from dotmac_kernel.planes import install_module_plane_selections
 from dotmac_kernel.prerequisites import install_prerequisite_bindings
 from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
 
 from alembic import context
-from app.commercial_module_prereqs import (
-    MigrationPrincipalObservation,
-    migration_principal_is_valid,
-)
+from app.config import settings
 from app.db import (
     Base,
     apply_migration_idle_transaction_timeout,
@@ -78,7 +60,7 @@ from app.models import (  # noqa: F401
 
 config = context.config
 
-config.set_main_option("sqlalchemy.url", _migration_url.replace("%", "%%"))
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # Installed BEFORE the revision map is built. A composed module's migration
 # resolves its `depends_on` from these bindings at script-load time, so an
@@ -141,7 +123,17 @@ def include_object(object, name, type_, reflected, compare_to):
 
 
 def run_migrations_offline() -> None:
-    raise RuntimeError("offline Alembic cannot prove the app_admin login")
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
 
 
 def _set_migration_lock_timeout(connection) -> None:
@@ -190,37 +182,6 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        # Authenticate as the migration principal itself. SET ROLE from a
-        # superuser or application login is not proof of migration authority.
-        if connection.dialect.name != "postgresql":
-            raise RuntimeError("Alembic requires PostgreSQL and app_admin")
-        row = connection.exec_driver_sql(
-            "SELECT session_user, current_user, rolcanlogin, rolbypassrls, "
-            "rolsuper, rolcreatedb, rolcreaterole, "
-            "has_database_privilege(session_user, current_database(), 'CREATE') "
-            "FROM pg_roles WHERE rolname = session_user"
-        ).one_or_none()
-        observed = None
-        if row is not None and len(row) == 8:
-            try:
-                observed = MigrationPrincipalObservation(
-                    session_user=row[0],
-                    current_user=row[1],
-                    can_login=row[2],
-                    bypass_rls=row[3],
-                    superuser=row[4],
-                    can_create_database=row[5],
-                    can_create_role=row[6],
-                    database_create=row[7],
-                )
-            except ValueError:
-                observed = None
-        if not migration_principal_is_valid(observed):
-            raise RuntimeError(
-                "Alembic requires an actual app_admin login with "
-                "BYPASSRLS, NOSUPERUSER, NOCREATEDB, NOCREATEROLE "
-                "and no database CREATE"
-            )
         ensure_alembic_version_table(connection)
         _set_migration_lock_timeout(connection)
         _set_migration_idle_transaction_timeout(connection)

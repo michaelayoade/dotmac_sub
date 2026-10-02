@@ -175,13 +175,9 @@ def cloned_database(
         template = migrated_template(revision)
         clone = template_database.clone_from_template(template_base_url, template)
         clones.append(clone)
-        # The clone is the explicit target for any later Alembic command in
-        # this test. Its login is app_admin; application writes use the
-        # separate runtime URL below.
-        monkeypatch.setenv(
-            "MIGRATION_DATABASE_URL",
-            clone.set(username="app_admin").render_as_string(hide_password=False),
-        )
+        # `alembic/env.py` resolves its target from `app_config.settings`, so a
+        # test that runs Alembic against its clone needs this, not the Config's
+        # `sqlalchemy.url`.
         from app import config as app_config
 
         monkeypatch.setattr(

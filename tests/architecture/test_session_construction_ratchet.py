@@ -103,10 +103,7 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +3 from tests/integration/test_notification_template_seed_concurrency.py:
 #: one migrated PostgreSQL engine plus two independently committing sessions
 #: prove concurrent startup seeders safely converge on one template per key.
-#: +1 from tests/integration/test_module_lineage_rehearsal.py: the disposable
-#: database fixture creates its stand-in schema before Alembic and disposes
-#: that bootstrap engine in a finally block.
-TEST_FIXTURE_BASELINE_TOTAL = 164
+TEST_FIXTURE_BASELINE_TOTAL = 163
 
 
 def _baseline() -> dict[str, int]:

@@ -24,7 +24,6 @@ from app.models.auth import AuthProvider, UserCredential
 from app.models.party import Party, PartyRole, PartyRoleStatus, PartyRoleType, PartyType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
-from tests.integration.migration_authority import migration_database
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "526_audit_events_kernel_r1"
@@ -69,8 +68,7 @@ def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
         ),
     )
     try:
-        with migration_database(target):
-            yield target
+        yield target
     finally:
         with psycopg.connect(_render(maintenance), autocommit=True) as admin:
             admin.execute(

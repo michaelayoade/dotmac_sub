@@ -610,27 +610,25 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dotmac_sub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
-      APP_ENV: test
       DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test"
       TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Start marked disposable PostgreSQL cluster
-        run: |
-          docker run -d --name integration-db -p 127.0.0.1:5432:5432 \
-            -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
-            -e POSTGRES_DB=dotmac_sub_test \
-            --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres" \
-            --health-interval 10s --health-timeout 5s --health-retries 5 \
-            postgis/postgis:16-3.4 postgres -c cluster_name=dotmac-sub-disposable-tests
-          for i in $(seq 1 30); do
-            [ "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' integration-db)" = healthy ] && exit 0
-            sleep 2
-          done
-          echo 'disposable PostgreSQL cluster did not become healthy' >&2
-          exit 1
 
       - uses: ./.github/actions/setup-ci-python
         with:
@@ -806,7 +804,7 @@ jobs:
             -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
             -e POSTGRES_DB=dotmac_sub_ci \
             --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres" --health-interval 5s \
-            --health-retries 10 postgis/postgis:16-3.4 postgres -c cluster_name=dotmac-sub-disposable-tests
+            --health-retries 10 postgis/postgis:16-3.4
           docker run -d --name ci-redis --network ci-net redis:7
           for i in $(seq 1 30); do
             [ "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ci-db)" = "healthy" ] && break
@@ -838,14 +836,15 @@ jobs:
       - name: Run migrations and application health check
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
         run: |
-          common_args="--network ci-net -e APP_ENV=test \
+          common_args="--network ci-net \
             -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
             -e SECRET_KEY=ci-test-secret-key-not-for-production \
             -e REDIS_URL=redis://ci-redis:6379/0"
           docker run --rm $common_args dotmac-sub:ci sh -c \
-            'TEST_DATABASE_URL="$DATABASE_URL" python -m scripts.ci.bootstrap_test_database_prereqs'
+            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'
           docker run --rm $common_args dotmac-sub:ci sh -c \
-            'TEST_DATABASE_URL="$DATABASE_URL" python -m scripts.ci.migrated_test_database'
+            'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --repair'
+          docker run --rm $common_args dotmac-sub:ci alembic upgrade heads
           docker run -d --name ci-app $common_args \
             -e CELERY_BROKER_URL=redis://ci-redis:6379/0 dotmac-sub:ci
           for i in $(seq 1 60); do

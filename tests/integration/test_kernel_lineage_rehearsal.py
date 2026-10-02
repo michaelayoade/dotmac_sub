@@ -83,7 +83,6 @@ from scripts.migration.kernel_lineage_rehearsal_evidence import (
     read_bundle,
     target_contract_errors,
 )
-from tests.integration.migration_authority import migration_database
 
 #: The first kernel revision expected to fail against Sub's schema.
 #:
@@ -182,8 +181,7 @@ def isolated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
             "settings",
             replace(app_config.settings, database_url=_render(database_url)),
         )
-        with migration_database(database_url):
-            yield database_url
+        yield database_url
     finally:
         with psycopg.connect(_psycopg_url(maintenance), autocommit=True) as admin:
             admin.execute(

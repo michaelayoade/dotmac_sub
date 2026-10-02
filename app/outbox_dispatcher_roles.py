@@ -24,7 +24,7 @@ RELAY_DISPATCHER_CONTRACT: Final[dict[str, RolePosture]] = {
 
 @dataclass(frozen=True, slots=True)
 class RelayOwnershipContract:
-    """One relay function ownership context; historical replay is explicit."""
+    """Privileges required before migration 557 can own relay functions."""
 
     migration_role: str
     definer_role: str
@@ -33,28 +33,11 @@ class RelayOwnershipContract:
 
 
 OUTBOX_RELAY_OWNERSHIP_CONTRACT: Final[RelayOwnershipContract] = RelayOwnershipContract(
-    migration_role="app_admin",
+    migration_role="dotmac_app",
     definer_role="app_admin",
     schema="public",
     schema_privileges=("USAGE", "CREATE"),
 )
-
-HISTORICAL_557_RELAY_OWNERSHIP_CONTRACT: Final[RelayOwnershipContract] = (
-    RelayOwnershipContract(
-        migration_role="dotmac_app",
-        definer_role="app_admin",
-        schema="public",
-        schema_privileges=("USAGE", "CREATE"),
-    )
-)
-
-
-@dataclass(frozen=True, slots=True)
-class RelayOwnershipObservation:
-    migration_role_exists: bool
-    definer_role_exists: bool
-    migration_role_is_definer_member: bool
-    definer_schema_privileges: Mapping[str, bool]
 
 
 def relay_dispatcher_violations(
@@ -76,29 +59,20 @@ def relay_dispatcher_violations(
 
 
 def relay_ownership_violations(
-    observation: RelayOwnershipObservation,
     *,
-    contract: RelayOwnershipContract = OUTBOX_RELAY_OWNERSHIP_CONTRACT,
+    migration_role_is_definer_member: bool,
+    definer_schema_privileges: Mapping[str, bool],
 ) -> tuple[str, ...]:
     """Describe missing relay ownership prerequisites without mutating them."""
 
+    contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
     violations: list[str] = []
-    if not observation.definer_role_exists:
-        violations.append(f"database role {contract.definer_role!r} is missing")
-    if (
-        contract.migration_role != contract.definer_role
-        and not observation.migration_role_exists
-    ):
-        violations.append(f"database role {contract.migration_role!r} is missing")
-    elif (
-        contract.migration_role != contract.definer_role
-        and not observation.migration_role_is_definer_member
-    ):
+    if not migration_role_is_definer_member:
         violations.append(
             f"{contract.migration_role} is not a member of {contract.definer_role}"
         )
     for privilege in contract.schema_privileges:
-        if not observation.definer_schema_privileges.get(privilege, False):
+        if not definer_schema_privileges.get(privilege, False):
             violations.append(
                 f"{contract.definer_role} lacks {privilege} on schema {contract.schema}"
             )
@@ -106,11 +80,9 @@ def relay_ownership_violations(
 
 
 __all__ = [
-    "HISTORICAL_557_RELAY_OWNERSHIP_CONTRACT",
     "OUTBOX_RELAY_OWNERSHIP_CONTRACT",
     "RELAY_DISPATCHER_CONTRACT",
     "RelayOwnershipContract",
-    "RelayOwnershipObservation",
     "RolePosture",
     "relay_dispatcher_violations",
     "relay_ownership_violations",

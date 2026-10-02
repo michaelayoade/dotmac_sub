@@ -102,14 +102,6 @@ stands. Each is recorded as a typed `BlockingPrerequisite` on its module.
 
 ## Deploying
 
-**Unavailable under the 2026-10-01 database-authority alignment.** The pinned
-legacy image and single `shadow_app` database login do not satisfy the separate
-`app_admin` migration contract. This checkout's Compose migration service
-refuses before Alembic; the steps below are historical instructions until a
-separately reviewed image and bootstrap contract re-enable the stack. Existing
-running hosts are not changed. See the production runbook's
-[existing-estate cutover gate](PRODUCTION_DEPLOYMENT.md#existing-estate-cutover-gate).
-
 The target host also runs live Keycloak. The script treats the host as something
 it is a guest on:
 

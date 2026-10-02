@@ -23,23 +23,21 @@ def test_bootstrap_allows_restricted_verify_without_database_create(
     with psycopg.connect(_psycopg_url(isolated_database), autocommit=False) as admin:
         assert bootstrap(admin, dry_run=False, repair=True) == 0
         admin.execute(
-            sql.SQL("REVOKE CREATE ON DATABASE {} FROM PUBLIC, app_admin").format(
+            sql.SQL("REVOKE CREATE ON DATABASE {} FROM PUBLIC, dotmac_app").format(
                 sql.Identifier(database_name)
             )
         )
         admin.execute(
-            sql.SQL("GRANT CONNECT ON DATABASE {} TO app_admin").format(
+            sql.SQL("GRANT CONNECT ON DATABASE {} TO dotmac_app").format(
                 sql.Identifier(database_name)
             )
         )
         assert bootstrap(admin, dry_run=False, repair=True) == 0
 
-    with psycopg.connect(
-        _psycopg_url(isolated_database.set(username="app_admin")),
-        autocommit=True,
-    ) as conn:
+    with psycopg.connect(_psycopg_url(isolated_database), autocommit=True) as conn:
+        conn.execute("SET ROLE dotmac_app")
         assert not conn.execute(
-            "SELECT has_database_privilege('app_admin', current_database(), 'CREATE')"
+            "SELECT has_database_privilege('dotmac_app', current_database(), 'CREATE')"
         ).fetchone()[0]
 
         with pytest.raises(psycopg.errors.InsufficientPrivilege):

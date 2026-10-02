@@ -24,7 +24,6 @@ from alembic import command
 from app import config as app_config
 from app.models.billing import Invoice, InvoiceDueDateBasis, InvoiceStatus
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
-from tests.integration.migration_authority import migration_database
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "536_integrator_ingress_scopes"
@@ -59,8 +58,7 @@ def predecessor_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
         ),
     )
     try:
-        with migration_database(target):
-            yield target
+        yield target
     finally:
         with psycopg.connect(_render(maintenance), autocommit=True) as admin:
             admin.execute(

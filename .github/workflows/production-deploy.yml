@@ -222,7 +222,6 @@ jobs:
       - name: Deploy authorized digest
         env:
           PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
-          MIGRATION_DATABASE_URL_FILE: ${{ vars.MIGRATION_DATABASE_URL_FILE }}
           IMAGE_DIGEST: ${{ needs.verify.outputs.image_digest }}
           HOTFIX: ${{ inputs.hotfix_no_migrations }}
           CHANGE_REFERENCE: ${{ inputs.change_reference }}
@@ -299,5 +298,4 @@ jobs:
             exit 1
           fi
           REPO_DIR="$GITHUB_WORKSPACE" DEPLOY_DIR="$PRODUCTION_DEPLOY_DIR" \
-            python scripts/with_migration_connection.py -- \
-              bash scripts/deploy_production.sh "${args[@]}"
+            bash scripts/deploy_production.sh "${args[@]}"

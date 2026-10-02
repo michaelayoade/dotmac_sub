@@ -236,7 +236,7 @@ def test_a_missing_schema_does_not_report_phantom_objects(guarded_ops) -> None:
         "CREATE SCHEMA IF NOT EXISTS mod_payments;",
         "CREATE SCHEMA mod_payments;",
         'CREATE SCHEMA "mod_payments";',
-        "CREATE SCHEMA mod_payments AUTHORIZATION app_admin;",
+        "CREATE SCHEMA mod_payments AUTHORIZATION dotmac_app;",
     ),
 )
 def test_declared_precreated_module_schema_create_is_skipped(

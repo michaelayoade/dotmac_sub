@@ -23,16 +23,6 @@ rollback boundary in one operation.
   from Python's safe path, so a stale or locally modified `scripts/` package
   cannot interpret release evidence or decide backup policy.
 - The database backup and deploy locks are writable.
-- `DATABASE_URL` is the non-superuser, NOBYPASSRLS `app_user` runtime
-  connection after the reviewed ownership/grant cutover. The deploy reads it
-  only from the deploy directory's `.env`; an inherited process
-  `DATABASE_URL`, including an empty exported value, is refused before any
-  Compose command because it would override Compose's `--env-file` value.
-  The deploy process receives a distinct held `MIGRATION_DATABASE_URL` for an
-  actual `app_admin` login (`BYPASSRLS`, `NOSUPERUSER`, `NOCREATEDB`,
-  `NOCREATEROLE`, without database `CREATE`). Never persist that URL in `.env`.
-  Compose masks it in long-running services and injects it only into one-shot
-  migration/prerequisite containers. Missing or shared DSNs fail before repair.
 - The module prerequisite repair leg has the dedicated
   `dotmac_schema_bootstrap` credential available as a root-owned `0400` pgpass
   file at `/etc/dotmac/sub/schema-bootstrap.pgpass`, with the passwordless
@@ -51,47 +41,6 @@ rollback boundary in one operation.
 
 The deployment refuses to start if the running Nginx configuration does not
 contain the warm candidate upstream.
-
-### Held migration connection for workflow deploys
-
-The staging and production environments set the **non-secret** protected
-variable `MIGRATION_DATABASE_URL_FILE` to an absolute, host-local path outside
-the source checkout and deployment directory. A separately authorized host
-materializer must provision the file before deployment: it must be a regular
-file owned by the runner's effective user, exactly mode `0400`, and contain
-one UTF-8 PostgreSQL `app_admin` URL of at most 8192 bytes with no newline.
-Neither this repository nor its workflow creates or copies that credential.
-The materializer and its authorization are host operations, not consequences
-of merging this code.
-
-`scripts/with_migration_connection.py` refuses a missing or conflicting
-pointer, symlink, wrong owner/mode, source/deploy path, malformed URL, or an
-already-set `MIGRATION_DATABASE_URL` or `DATABASE_URL`. It passes the URL only
-in the child environment of the exact staging or production deploy adapter
-via `exec`, never in arguments or logs. The deploy preflight still checks that the
-URL differs from the runtime `DATABASE_URL` in `.env`; direct process-held
-`MIGRATION_DATABASE_URL` remains available for separately authorized manual
-operator use. The file path must not be placed in `.env`, and the credential
-must not be copied to app or worker configuration. Long-running Compose
-services keep `MIGRATION_DATABASE_URL` empty.
-
-Before schema repair, backup, or Alembic, the deploy runs
-`scripts/verify_database_connection_pair.py` in one short-lived container of
-the exact candidate image. It receives the runtime URL read from `.env` as
-`DATABASE_PAIR_RUNTIME_URL` and the held migration URL as environment values
-only. Two read-only catalog sessions (10-second connection and statement
-limits) prove actual `session_user` and `current_user` identities, the checked
-in role postures, and the same `current_database()`, TCP server address/port,
-and `pg_postmaster_start_time()`. DNS aliases may differ; incomplete or
-different observed backend identities refuse the deploy. No application rows
-or schema are read or changed by this proof, and connection errors report only
-generic codes. The runtime URL is never passed in arguments or printed.
-
-For an initial deployment, the PostgreSQL service must already be reachable
-from the candidate image's Compose network, and the separate `app_user` and
-`app_admin` logins must already be provisioned with their required posture.
-The pair proof does not create a database or a role and cannot be bypassed by
-the first-deployment authorization.
 
 Before anything touches the host, `scripts/deploy_production.sh` verifies the
 typed production authorization and observes the running revision. The gate is
@@ -125,11 +74,10 @@ resume modes.
    unavailable evidence fails closed before backup or database mutation.
 4. Verify the warm-candidate port is free. A port collision fails here before
    backup or migration.
-5. Require the separate one-shot migration connection and prove both actual
-   logins reach the same database backend. Run database prerequisite bootstrap
-   if `BOOTSTRAP_DATABASE_URL` is supplied, then verify commercial module
-   schemas and outbox dispatcher roles through the restricted migration
-   connection. Missing prerequisites fail here before backup and Alembic.
+5. Run database prerequisite bootstrap if `BOOTSTRAP_DATABASE_URL` is supplied,
+   then verify commercial module schemas and outbox dispatcher roles through
+   the restricted migration connection. Missing prerequisites fail here before
+   backup and before Alembic.
 6. Back up the database.
 7. Run candidate-image pre-migration state checks against the target database.
 8. Pin the immutable image and revision.
@@ -208,13 +156,9 @@ verification it could not satisfy.
 Repair on the deployment path uses a dedicated cluster role,
 `dotmac_schema_bootstrap`: NOSUPERUSER, NOCREATEDB, NOCREATEROLE,
 NOREPLICATION, NOBYPASSRLS, NOINHERIT, with `CONNECT` and `CREATE` on this
-database only, and separately provisioned to act as `app_admin` so it can
-create missing schemas with the approved `app_admin` owner. Its ability to
-assume that role is elevated authority despite its own NOBYPASSRLS flag;
-membership must be separately reviewed and is never granted by ordinary
-deployment. It has no routine application or migration use; only the repair
-leg connects as it. Existing schema-owner drift blocks every repair mode
-before writes. An ownership transfer requires a separate reviewed plan.
+database only, and a member of `dotmac_app` without admin option so it can
+`CREATE SCHEMA ... AUTHORIZATION dotmac_app`. It has no routine application or
+migration use; nothing but the repair leg ever connects as it.
 
 OpenBao is the system of record for its production credential,
 `secret/dotmac/postgres/sub-production-primary/schema-bootstrap`. The
@@ -222,7 +166,7 @@ deployment consumes already-held material and does not fetch OpenBao on the
 deployment path: the credential is materialised on the host as a root-owned
 `0400` pgpass file at `/etc/dotmac/sub/schema-bootstrap.pgpass`, readable only
 by the deployment adapter's fixed account and by nothing else — not the
-application container, not any other service account, not `app_admin`.
+application container, not any other service account, not `dotmac_app`.
 
 That account is `root` on production and `dotmac` on staging, set with
 `SCHEMA_BOOTSTRAP_OWNER` (default `root`). Note what is deliberately NOT
@@ -276,9 +220,7 @@ postgres-local:5432:dotmac_sub:dotmac_schema_bootstrap:<value from OpenBao>
 ```
 
 The bootstrap has three modes. `--repair-schemas` is the deployment's mode: it
-holds only `dotmac_schema_bootstrap`, so it creates missing schemas and repairs
-schema grants only when it can act as `app_admin`. Existing ownership drift
-requires a separate cutover. It never transfers ownership and,
+holds only `dotmac_schema_bootstrap`, so it creates and repairs schemas and,
 being NOCREATEROLE, reports a missing or mis-postured cluster role as `blocked`
 rather than working around it.
 
@@ -304,32 +246,24 @@ BOOTSTRAP_DATABASE_URL=postgresql://postgres@.../dotmac_sub \
 deploy owner runs it before backup and before `alembic upgrade heads`.
 
 ```bash
-MIGRATION_DATABASE_URL=postgresql://app_admin@.../dotmac_sub \
+MIGRATION_DATABASE_URL=postgresql://dotmac_app@.../dotmac_sub \
   python scripts/bootstrap_commercial_module_prereqs.py --verify-only
 
-MIGRATION_DATABASE_URL=postgresql://app_admin@.../dotmac_sub \
+MIGRATION_DATABASE_URL=postgresql://dotmac_app@.../dotmac_sub \
   python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only
 ```
 
-Do not permanently grant database-level `CREATE` to `app_admin`; the bootstrap
+Do not permanently grant database-level `CREATE` to `dotmac_app`; the bootstrap
 creates/adopts the schemas and Alembic skips already-present declared module
 schema creates.
 
-Historical migration `557_outbox_relay_prereq` retains its immutable
-`dotmac_app` membership prerequisite. Fresh historical replay uses the private
-initializer in `scripts/ci/bootstrap_test_database_prereqs.py` before that
-revision. The operational bootstrap exposes no historical mode. The CI
-initializer requires the checked-in disposable cluster's postmaster-context
-`cluster_name=dotmac-sub-disposable-tests` marker, a validated test endpoint
-and a permitted test host. The marker is configured purpose evidence, not
-authentication or execution approval; the caller still needs authorized test
-credentials. It does not authorize retaining the link in a running estate.
-Alembic requires both `session_user` and `current_user` to be `app_admin`
-before accessing its version table. Normal dispatcher verification and repair
-use `app_admin` directly, refuse the retired legacy link before writes, and
-never recreate it. The definer must be able to own functions in `public`:
+The outbox dispatcher bootstrap also owns the function-ownership prerequisites
+for migration `557_outbox_relay_prereq`. The restricted migration role must be
+able to become the definer, and the definer must be able to own functions in
+`public`:
 
 ```bash
+SELECT pg_has_role('dotmac_app', 'app_admin', 'MEMBER');
 SELECT has_schema_privilege('app_admin', 'public', 'USAGE');
 SELECT has_schema_privilege('app_admin', 'public', 'CREATE');
 ```
@@ -337,65 +271,13 @@ SELECT has_schema_privilege('app_admin', 'public', 'CREATE');
 Repair applies:
 
 ```sql
+GRANT app_admin TO dotmac_app;
 GRANT USAGE, CREATE ON SCHEMA public TO app_admin;
 ```
 
 Do not apply these manually as hidden deploy state. They belong to
 `scripts/bootstrap_outbox_dispatcher_roles.py --repair`, and the deploy
 preflight verifies them before backup.
-Only the gated CI initializer prepares the old membership needed to replay
-557. Its retirement in an existing estate is a separate reviewed cluster-role
-operation. A test-named database on an unmarked shared server does not satisfy
-the initializer's cluster boundary.
-
-### Existing-estate cutover gate
-
-Michael approved `app_admin` module-schema/migration ownership and `app_user`
-runtime on 2026-10-01. Source alignment does not provision credentials, transfer
-objects, grant legacy table access, or prove the running process identity.
-The observed Seabone staging runtime still authenticates as `postgres` and
-bypasses RLS. A credential-only swap is insufficient: most legacy public
-tables lack `app_user` privileges.
-
-Michael also selected permanent forward-only authority, with no compatibility
-runtime or retired-writer fallback. The proposed per-object operation rules
-and outstanding classifications are in
-[`DATABASE_RUNTIME_ACCESS_CONTRACT.md`](../designs/DATABASE_RUNTIME_ACCESS_CONTRACT.md).
-Review and retire both legacy cluster-role links; normal deployment must not
-restore them. A missing grant after the cutover is repaired in the chosen
-authority. A restorable backup remains a prerequisite for protecting data.
-
-Before activating the split on an existing database, review an exact database,
-source-owner and ordered ownership/grant plan, bind execution to its digest,
-rehearse on disposable PostgreSQL, and verify a restorable backup plus
-maintenance/quiescence. Keep the database-level owner/CREATE disposition
-explicit: this repository's migration role deliberately lacks database-level
-CREATE, so a generic plan that also transfers the database itself to
-`app_admin` does not satisfy this contract. Never apply blanket public-table
-grants: tenant and platform persistence planes retain their own contracts.
-
-`REPORT_DATABASE_URL` with catalog visibility runs
-`python -m scripts.report_database_authority`. It is read-only, has a 10-second
-statement timeout and a 2,000-relation ceiling, and emits named owners and
-effective privileges without rows or connection values. Effective privileges
-include ownership/membership; this observation is one input to a reviewed
-plan, not a direct ACL grant plan or authorization to execute it. Reobserve
-the actual app and worker login after deployment and exercise positive and
-negative RLS paths as that login before template adoption.
-
-The local `scripts/testing/test_stack.sh` uses a separate database on the
-existing local cluster. It requires an already-provisioned `app_user` runtime
-and process-held `app_admin` migration URL for the exact `dotmac_test`
-endpoint. Its create path installs only database-local extensions; it never
-uses the disposable-CI role/password bootstrap against that shared cluster.
-Required schema and runtime grants remain separately provisioned. A disposable
-database does not make its server's roles or passwords disposable.
-
-The digest-pinned legacy shadow stack and temporary prerequisite-repair
-workflow cannot satisfy this authority split. Their migration/repair paths
-now refuse explicitly; existing running hosts are not modified. Re-enabling
-either needs a separately reviewed image and bootstrap contract. Do not repin
-an image to work around the refusal.
 
 ## Post-migration resume
 
@@ -526,17 +408,3 @@ tree drifted for days undetected.
   background processing is unavailable.
 - Database migrations are forward-only and are not rolled back automatically,
   so every release migration must remain compatible with the previous image.
-
-
-The current executor preflight also refuses cluster `CREATEDB`/`CREATEROLE`
-and effective database `CREATE` for `app_admin`. Managed `--repair-schemas`
-authenticates as `dotmac_schema_bootstrap` itself: LOGIN, NOINHERIT,
-NOSUPERUSER, NOBYPASSRLS, NOCREATEDB and NOCREATEROLE, plus owner membership
-and a named CREATE grant on this database. Substituting a privileged login
-is refused even if it can SET ROLE. Historical revision 546 retains its
-three-flag compatibility reader; the current bootstrap checks all five flags.
-
-Disposable CI provisioning creates a missing synthetic schema-bootstrap login
-with the test server's held password and owner membership. It refuses drift
-on an existing login, and does not rotate that login's password. This helper
-is not the provisioning path for staging or an existing developer cluster.

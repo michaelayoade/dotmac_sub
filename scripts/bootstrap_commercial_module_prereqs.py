@@ -15,10 +15,10 @@ Three modes, because two different credentials do two different jobs:
 
 ``--repair-schemas``
     The mode the deployment runs, holding only ``dotmac_schema_bootstrap``:
-    CONNECT + CREATE on this database. It creates missing schemas and repairs
-    grants only when the role can act as ``app_admin``. Existing ownership
-    drift is blocked for a separately reviewed cutover. It cannot create
-    roles — the credential is NOCREATEROLE.
+    CONNECT + CREATE on this database and nothing else. It creates and repairs
+    schemas. It cannot create roles — the credential is NOCREATEROLE — so a
+    missing or mis-postured role is reported as ``blocked``, never worked
+    around.
 
 ``--verify-only``
     Read-only, through the restricted migration role.
@@ -32,7 +32,7 @@ Usage::
     PGPASSFILE=/etc/dotmac/sub/schema-bootstrap.pgpass \\
         python scripts/bootstrap_commercial_module_prereqs.py --repair-schemas
 
-    MIGRATION_DATABASE_URL=postgresql://app_admin@host/db \\
+    MIGRATION_DATABASE_URL=postgresql://dotmac_app@host/db \\
         python scripts/bootstrap_commercial_module_prereqs.py --verify-only
 
 Exit codes: 0 satisfied or repaired, 1 contract drift, 2 usage/connection
@@ -65,13 +65,11 @@ from app.commercial_module_prereqs import (
     PROBED_SCHEMA_PRIVILEGES,
     PUBLIC_PROBE_ROLE,
     SCHEMA_BOOTSTRAP_ROLE,
-    AuthorityRolePosture,
     DatabaseRoleContract,
-    MigrationPrincipalObservation,
     ModuleSchemaObservation,
-    commercial_role_authority_violations,
+    RolePosture,
+    commercial_bootstrap_role_violations,
     commercial_schema_violations,
-    migration_principal_is_valid,
     module_schema_contract,
 )
 
@@ -111,21 +109,15 @@ class BootstrapResult:
     notes: list[str] = field(default_factory=list)
 
 
-def _attributes(contract: DatabaseRoleContract | AuthorityRolePosture) -> str:
+def _attributes(contract: DatabaseRoleContract | RolePosture) -> str:
     if isinstance(contract, DatabaseRoleContract):
-        can_login, bypass_rls, superuser, can_create_database, can_create_role = (
-            contract.authority_posture
-        )
+        can_login, bypass_rls, superuser = contract.posture
     else:
-        can_login, bypass_rls, superuser, can_create_database, can_create_role = (
-            contract
-        )
+        can_login, bypass_rls, superuser = contract
     return (
         f"{'LOGIN' if can_login else 'NOLOGIN'} "
         f"{'BYPASSRLS' if bypass_rls else 'NOBYPASSRLS'} "
-        f"{'SUPERUSER' if superuser else 'NOSUPERUSER'} "
-        f"{'CREATEDB' if can_create_database else 'NOCREATEDB'} "
-        f"{'CREATEROLE' if can_create_role else 'NOCREATEROLE'}"
+        f"{'SUPERUSER' if superuser else 'NOSUPERUSER'}"
     )
 
 
@@ -148,7 +140,7 @@ def _as_role(conn: psycopg.Connection, role: str) -> Iterator[None]:
     """Run a block as ``role``.
 
     ``dotmac_schema_bootstrap`` is NOINHERIT on purpose, so holding membership
-    in ``app_admin`` does not silently confer its privileges. Owner-only DDL
+    in ``dotmac_app`` does not silently confer its privileges. Owner-only DDL
     (REVOKE from PUBLIC, GRANT USAGE) therefore has to SET ROLE explicitly,
     which is also what keeps the schema owner correct rather than incidental.
     """
@@ -168,25 +160,15 @@ def _as_role(conn: psycopg.Connection, role: str) -> Iterator[None]:
             pass
 
 
-def observe_roles(conn: psycopg.Connection) -> dict[str, AuthorityRolePosture]:
+def observe_roles(conn: psycopg.Connection) -> dict[str, RolePosture]:
     """Read only the posture flags owned by the checked-in contract."""
 
     rows = conn.execute(
-        "SELECT rolname, rolcanlogin, rolbypassrls, rolsuper, "
-        "rolcreatedb, rolcreaterole "
+        "SELECT rolname, rolcanlogin, rolbypassrls, rolsuper "
         "FROM pg_roles WHERE rolname = ANY(%s)",
         (list(COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT),),
     ).fetchall()
-    return {
-        str(row[0]): (
-            bool(row[1]),
-            bool(row[2]),
-            bool(row[3]),
-            bool(row[4]),
-            bool(row[5]),
-        )
-        for row in rows
-    }
+    return {str(row[0]): (bool(row[1]), bool(row[2]), bool(row[3])) for row in rows}
 
 
 def _role_exists(conn: psycopg.Connection, role: str) -> bool:
@@ -287,7 +269,7 @@ def _bootstrap_roles(
     result: BootstrapResult,
 ) -> int:
     observed = observe_roles(conn)
-    violations = commercial_role_authority_violations(observed)
+    violations = commercial_bootstrap_role_violations(observed)
     result.roles_verified = len(COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT) - len(violations)
 
     if violations and not allow_role_creation:
@@ -328,7 +310,7 @@ def _bootstrap_roles(
                 result.roles_created += 1
                 print(f"created role: {role} {wanted}")
             continue
-        if actual == wanted_contract.authority_posture:
+        if actual == wanted_contract.posture:
             print(f"adopted role: {role} already {wanted}")
             continue
 
@@ -353,23 +335,6 @@ def _bootstrap_schemas(
     contract = module_schema_contract()
     result.schemas_total = len(contract)
     observed = observe_schemas(conn)
-    # A populated schema is an ownership migration, not prerequisite repair.
-    # Refuse even with --repair/--repair-schemas; an exact catalog plan and
-    # separately approved cutover must own those transfers.
-    owner_mismatches = [
-        expected.schema
-        for expected in contract
-        if (actual := observed.get(expected.schema)) is not None
-        and actual.owner_role != expected.owner_role
-    ]
-    if owner_mismatches:
-        for schema in owner_mismatches[:MAX_REPORTED_VIOLATIONS]:
-            print(
-                f"BLOCKED: schema {schema!r} has a different owner; "
-                "existing schema ownership requires a reviewed cutover",
-                file=sys.stderr,
-            )
-        return EXIT_BLOCKED
     wrong_existing = [
         violation
         for violation in commercial_schema_violations(observed)
@@ -406,8 +371,19 @@ def _bootstrap_schemas(
             print(
                 f"adopted schema: {expected.schema} already owner={expected.owner_role}"
             )
+        elif dry_run:
+            print(
+                f"would repair schema owner: {expected.schema} "
+                f"{actual.owner_role} -> {expected.owner_role}"
+            )
         else:
-            raise AssertionError("schema owner mismatch passed the refusal gate")
+            conn.execute(
+                sql.SQL("ALTER SCHEMA {} OWNER TO {}").format(schema_id, owner_id)
+            )
+            print(
+                f"repaired schema owner: {expected.schema} "
+                f"{actual.owner_role} -> {expected.owner_role}"
+            )
 
         if dry_run:
             print(f"would revoke schema public access: {expected.schema}")
@@ -435,44 +411,8 @@ def _bootstrap_schemas(
 
 def _all_violations(conn: psycopg.Connection) -> tuple[str, ...]:
     return (
-        *commercial_role_authority_violations(observe_roles(conn)),
+        *commercial_bootstrap_role_violations(observe_roles(conn)),
         *commercial_schema_violations(observe_schemas(conn)),
-    )
-
-
-def _schema_bootstrap_principal_is_valid(conn: psycopg.Connection) -> bool:
-    """Prove the actual schema-repair login, including named database CREATE."""
-
-    identity = conn.execute(
-        """
-        SELECT session_user, current_user, principal.rolcanlogin,
-               principal.rolbypassrls, principal.rolsuper, principal.rolcreatedb,
-               principal.rolcreaterole, principal.rolinherit,
-               CASE WHEN to_regrole('app_admin') IS NULL THEN false
-                    ELSE pg_has_role(session_user, 'app_admin', 'MEMBER') END,
-               EXISTS (
-                   SELECT 1
-                     FROM pg_database AS db_catalog
-                     CROSS JOIN LATERAL aclexplode(db_catalog.datacl) AS acl
-                    WHERE db_catalog.datname = current_database()
-                      AND acl.grantee = principal.oid
-                      AND acl.privilege_type = 'CREATE'
-               )
-          FROM pg_roles AS principal
-         WHERE principal.rolname = session_user
-        """
-    ).fetchone()
-    return identity is not None and tuple(identity) == (
-        SCHEMA_BOOTSTRAP_ROLE,
-        SCHEMA_BOOTSTRAP_ROLE,
-        True,
-        False,
-        False,
-        False,
-        False,
-        False,
-        True,
-        True,
     )
 
 
@@ -510,36 +450,7 @@ def run_bootstrap(
     contract = module_schema_contract()
     result.schemas_total = len(contract)
 
-    if not allow_role_creation and not _schema_bootstrap_principal_is_valid(conn):
-        result.outcome = Outcome.BLOCKED
-        result.exit_code = EXIT_BLOCKED
-        result.blocked_reason = (
-            "schema repair requires an actual dotmac_schema_bootstrap login "
-            "with NOINHERIT, NOBYPASSRLS, NOSUPERUSER, NOCREATEDB, "
-            "NOCREATEROLE, app_admin role membership and a named database "
-            "CREATE grant"
-        )
-        return result
-
     standing = _all_violations(conn)
-    # Refuse before role repair can write anything. A context manager commits
-    # on normal return, including a blocked result.
-    observed_schemas = observe_schemas(conn)
-    owner_drift = tuple(
-        expected.schema
-        for expected in contract
-        if (actual := observed_schemas.get(expected.schema)) is not None
-        and actual.owner_role != expected.owner_role
-    )
-    if owner_drift:
-        result.outcome = Outcome.BLOCKED
-        result.exit_code = EXIT_BLOCKED
-        result.violations = standing
-        result.blocked_reason = (
-            "existing module schema ownership differs from app_admin; "
-            "a separately reviewed cutover is required"
-        )
-        return result
     if not standing:
         # Nothing to do. Say so explicitly and mutate nothing — an
         # already-satisfied database must not be written to just because a
@@ -605,35 +516,6 @@ def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
 
 
 def verify(conn: psycopg.Connection) -> int:
-    row = conn.execute(
-        "SELECT session_user, current_user, rolcanlogin, rolbypassrls, "
-        "rolsuper, rolcreatedb, rolcreaterole, "
-        "has_database_privilege(session_user, current_database(), 'CREATE') "
-        "FROM pg_roles WHERE rolname = session_user"
-    ).fetchone()
-    observed = None
-    if row is not None and len(row) == 8:
-        try:
-            observed = MigrationPrincipalObservation(
-                session_user=row[0],
-                current_user=row[1],
-                can_login=row[2],
-                bypass_rls=row[3],
-                superuser=row[4],
-                can_create_database=row[5],
-                can_create_role=row[6],
-                database_create=row[7],
-            )
-        except ValueError:
-            observed = None
-    if not migration_principal_is_valid(observed):
-        print(
-            "COMMERCIAL MODULE PREREQUISITE BLOCKED: verify-only requires "
-            "an actual app_admin login with BYPASSRLS, NOSUPERUSER, "
-            "NOCREATEDB, NOCREATEROLE and no database CREATE",
-            file=sys.stderr,
-        )
-        return EXIT_BLOCKED
     violations = _all_violations(conn)
     _report(violations, "COMMERCIAL MODULE PREREQUISITE")
     if violations:

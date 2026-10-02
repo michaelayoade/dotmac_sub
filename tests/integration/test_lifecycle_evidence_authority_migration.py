@@ -36,7 +36,6 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
-from tests.integration.migration_authority import migration_database
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "473_lead_reseller_ownership"
@@ -87,8 +86,7 @@ def fresh_migration_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
         ),
     )
     try:
-        with migration_database(target):
-            yield target
+        yield target
     finally:
         with psycopg.connect(_render(maintenance), autocommit=True) as admin:
             admin.execute(

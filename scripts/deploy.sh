@@ -52,17 +52,6 @@ DEPLOY_DIR="${DEPLOY_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REPO_DIR="${REPO_DIR:-${DEPLOY_DIR}}"
 cd "${DEPLOY_DIR}"
 
-# Compose substitutes an inherited process value before consulting --env-file.
-# The deploy's runtime connection must come only from this directory's .env;
-# refuse even an exported empty value before any Compose command is possible.
-refuse_inherited_runtime_url() {
-  if [[ ${DATABASE_URL+x} ]]; then
-    echo "DEPLOY REFUSED: inherited DATABASE_URL is forbidden; use the deploy .env runtime connection." >&2
-    return 1
-  fi
-}
-refuse_inherited_runtime_url || exit 1
-
 # Read a key out of .env without sourcing it (sourcing a deploy .env pulls in
 # every secret and DATABASE_URL as shell state). Defined up here because
 # DB_CONTAINER is needed by the orphaned-pg_dump guard below, long before the
@@ -409,7 +398,7 @@ run_migrations() {
   local output
   local rc
   while ((attempt <= MIGRATION_MAX_ATTEMPTS)); do
-    if output="$(migration_container alembic upgrade heads 2>&1)"; then
+    if output="$("${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0
     else
@@ -451,7 +440,7 @@ run_migrations() {
 PREREQUISITE_OUTCOME="unknown"
 
 # Where the deployment adapter finds the dedicated schema-creation credential.
-# Root-owned, 0400, never readable by the app, the runner or app_admin. The
+# Root-owned, 0400, never readable by the app, the runner or dotmac_app. The
 # password is only ever read by libpq from this file - never the URL, argv,
 # environment or log.
 SCHEMA_BOOTSTRAP_PGPASS="${SCHEMA_BOOTSTRAP_PGPASS:-$(env_value SCHEMA_BOOTSTRAP_PGPASS)}"
@@ -463,46 +452,10 @@ SCHEMA_BOOTSTRAP_URL="${SCHEMA_BOOTSTRAP_URL:-$(env_value SCHEMA_BOOTSTRAP_URL)}
 # account; root is the default and what production uses.
 SCHEMA_BOOTSTRAP_OWNER="${SCHEMA_BOOTSTRAP_OWNER:-root}"
 
-# This connection is present only in one-shot migration/prerequisite
-# containers. docker-compose.yml's long-running app/workers receive only
-# DATABASE_URL. Never place the migration DSN in the deploy .env: Compose's
-# env_file would otherwise hand it to every runtime container.
-migration_connection_preflight() {
-  if [[ -n "$(env_value MIGRATION_DATABASE_URL)" ]]; then
-    echo "DEPLOY REFUSED: MIGRATION_DATABASE_URL must not be persisted in .env." >&2
-    return 1
-  fi
-  if [[ -z "${MIGRATION_DATABASE_URL:-}" ]]; then
-    echo "DEPLOY REFUSED: MIGRATION_DATABASE_URL is required for one-shot migrations." >&2
-    return 1
-  fi
-  if [[ "${MIGRATION_DATABASE_URL}" == "$(env_value DATABASE_URL)" ]]; then
-    echo "DEPLOY REFUSED: migration and application DSNs must be separate." >&2
-    return 1
-  fi
-  # Both URLs are resolved inside the candidate image's Compose network; the
-  # host cannot assume db/postgres-local service names resolve there. Pass
-  # values only through this one-shot child's environment, never argv/logs.
-  local runtime_url
-  runtime_url="$(env_value DATABASE_URL)"
-  if ! APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
-    DATABASE_PAIR_RUNTIME_URL="${runtime_url}" \
-    MIGRATION_DATABASE_URL="${MIGRATION_DATABASE_URL}" \
-    "${COMPOSE[@]}" run --rm --no-deps \
-      -e DATABASE_PAIR_RUNTIME_URL -e MIGRATION_DATABASE_URL app \
-      python scripts/verify_database_connection_pair.py; then
-    echo "DEPLOY REFUSED: runtime and migration connections did not prove one backend." >&2
-    return 1
-  fi
-}
-
-migration_container() {
-  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
-    "${COMPOSE[@]}" run --rm --no-deps -e MIGRATION_DATABASE_URL app "$@"
-}
-
 module_prerequisites_satisfied() {
-  migration_container python scripts/bootstrap_commercial_module_prereqs.py --verify-only \
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only' \
     >/dev/null 2>&1
 }
 
@@ -628,7 +581,7 @@ statement of what was missing or why nothing had been attempted.
 To resolve, provision the dedicated role and its held credential on this host:
   - role dotmac_schema_bootstrap (NOSUPERUSER NOCREATEDB NOCREATEROLE
     NOREPLICATION NOBYPASSRLS NOINHERIT), CONNECT + CREATE on this database
-    only, able to create fresh app_admin-owned schemas
+    only, member of dotmac_app without admin option
   - credential materialised root-owned 0400 at the pgpass path above
 See docs/runbooks/PRODUCTION_DEPLOYMENT.md, "Module database prerequisites".
 REFUSAL
@@ -649,10 +602,14 @@ REFUSAL
 
 verify_database_prerequisites() {
   log "Verifying commercial module prerequisites with the restricted migration connection"
-  migration_container python scripts/bootstrap_commercial_module_prereqs.py --verify-only
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py --verify-only'
 
   log "Verifying outbox dispatcher prerequisites with the restricted migration connection"
-  migration_container python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps app sh -c \
+    'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only'
 }
 
 database_heads() {
@@ -1074,7 +1031,6 @@ fi
   --revision "${GITHUB_RELEASE_REVISION}" \
   --branch "${GITHUB_RELEASE_BRANCH}"
 
-migration_connection_preflight
 run_database_prerequisite_bootstrap
 verify_database_prerequisites
 

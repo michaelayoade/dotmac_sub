@@ -70,7 +70,7 @@ jobs:
             -e POSTGRES_USER=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
             -e POSTGRES_DB=dotmac_sub_e2e \
             --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres" --health-interval 5s \
-            --health-retries 10 postgis/postgis:16-3.4 postgres -c cluster_name=dotmac-sub-disposable-tests
+            --health-retries 10 postgis/postgis:16-3.4
           docker run -d --name e2e-redis --network e2e-net \
             -p 127.0.0.1:56379:6379 redis:7
           for i in $(seq 1 30); do
@@ -156,15 +156,15 @@ jobs:
       - name: Migrate + seed + start app from this PR's code
         if: steps.relevance.outputs.relevant == 'true'
         env:
-          APP_ENV: test
           DATABASE_URL: "postgresql+psycopg://postgres@127.0.0.1:55432/dotmac_sub_e2e"
           SECRET_KEY: "e2e-test-secret-key-not-for-production"
           REDIS_URL: "redis://127.0.0.1:56379/0"
         run: |
-          TEST_DATABASE_URL="$DATABASE_URL" \
-            poetry run python -m scripts.ci.bootstrap_test_database_prereqs
-          TEST_DATABASE_URL="$DATABASE_URL" \
-            poetry run python -m scripts.ci.migrated_test_database
+          BOOTSTRAP_DATABASE_URL="$DATABASE_URL" \
+            poetry run python scripts/bootstrap_commercial_module_prereqs.py
+          BOOTSTRAP_DATABASE_URL="$DATABASE_URL" \
+            poetry run python scripts/bootstrap_outbox_dispatcher_roles.py --repair
+          poetry run alembic upgrade heads
           poetry run python -m scripts.seed.seed_rbac
           poetry run python -m scripts.seed.seed_admin \
             --email e2e.admin@example.com --first-name E2E --last-name Admin \

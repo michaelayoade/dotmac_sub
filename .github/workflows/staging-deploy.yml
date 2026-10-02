@@ -255,12 +255,10 @@ jobs:
           COMPOSE_PROJECT_NAME: dotmac_sub
           IMAGE_DIGEST: ${{ needs.verify.outputs.image_digest }}
           STAGING_DEPLOY_DIR: ${{ vars.STAGING_DEPLOY_DIR }}
-          MIGRATION_DATABASE_URL_FILE: ${{ vars.MIGRATION_DATABASE_URL_FILE }}
         run: |
           set -euo pipefail
           cd "$STAGING_DEPLOY_DIR"
-          python scripts/with_migration_connection.py -- \
-            bash scripts/deploy_staging.sh "$IMAGE_DIGEST"
+          bash scripts/deploy_staging.sh "$IMAGE_DIGEST"
 
       - name: Verify deployed digest, evidence labels, and health
         env:
