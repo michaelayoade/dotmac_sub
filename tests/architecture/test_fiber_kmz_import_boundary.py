@@ -185,14 +185,18 @@ def test_import_classification_is_append_only_and_handoff_uses_review_api() -> N
     transfer_ui = (
         PROJECT_ROOT / "static" / "js" / "admin" / "network_map_transfer.js"
     ).read_text(encoding="utf-8")
+    transfer_owner = (
+        PROJECT_ROOT / "app" / "services" / "network_map_transfer.py"
+    ).read_text(encoding="utf-8")
 
     assert "class FiberTopologyFeatureClassificationReview" in model
     assert "fiber_topology_feature_classification_reviews" in migration
     assert "BEFORE UPDATE OR DELETE" in migration
     assert "network-map-import-apply" in transfer_ui
     assert "network/map-v2/proposals" in transfer_ui
-    assert "geometry?.type === 'Point'" in transfer_ui
-    assert "properties.match_status === 'new'" in transfer_ui
+    assert "proposal_eligibility === 'eligible'" in transfer_ui
+    assert 'if feature.geometry_type != "Point":' in transfer_owner
+    assert 'if plan.match_status != "new":' in transfer_owner
     assert "currentFeatures" in transfer_ui
 
 

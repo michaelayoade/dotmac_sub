@@ -1052,6 +1052,7 @@ def test_vacation_hold_and_resume_use_exact_customer_pause(
             subscription_id=str(subscription.id),
             kind=SubscriptionCommandKind.vacation_hold,
             source=f"customer:{subscriber.id}:vacation_hold",
+            effective_at=hold_at,
             expected_head=reviewed.head,
             idempotency_key="vacation-owner:hold",
             vacation_hold_days=7,

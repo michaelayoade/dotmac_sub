@@ -447,6 +447,22 @@ def device_reboot_preview(
     )
 
 
+def _network_map_transfer_controls(
+    auth: dict[str, object], db: Session
+) -> dict[str, object]:
+    return {
+        "can_import": has_permission(auth, db, network_map_transfer.IMPORT_PERMISSION),
+        "can_propose": has_permission(
+            auth, db, network_map_asset_changes.PROPOSE_PERMISSION
+        ),
+        "can_export": has_permission(auth, db, network_map_transfer.EXPORT_PERMISSION),
+        "can_export_customers": has_permission(
+            auth, db, network_map_transfer.CUSTOMER_PERMISSION
+        ),
+        "max_upload_bytes": network_map_transfer.MAX_UPLOAD_BYTES,
+    }
+
+
 @router.get(
     "/map",
     response_class=HTMLResponse,
@@ -463,17 +479,7 @@ def comprehensive_network_map(
     context = _base_context(request, db, active_page="network-map")
     projection = network_map_service.build_network_map_projection(db=db)
     context.update(projection.to_template_context())
-    context["network_map_transfer"] = {
-        "can_import": has_permission(auth, db, network_map_transfer.IMPORT_PERMISSION),
-        "can_propose": has_permission(
-            auth, db, network_map_asset_changes.PROPOSE_PERMISSION
-        ),
-        "can_export": has_permission(auth, db, network_map_transfer.EXPORT_PERMISSION),
-        "can_export_customers": has_permission(
-            auth, db, network_map_transfer.CUSTOMER_PERMISSION
-        ),
-        "max_upload_bytes": network_map_transfer.MAX_UPLOAD_BYTES,
-    }
+    context["network_map_transfer"] = _network_map_transfer_controls(auth, db)
     return templates.TemplateResponse("admin/network/map.html", context)
 
 
@@ -729,6 +735,7 @@ def comprehensive_network_map_v2(
         base_projection=base_projection,
     )
     context.update(base_projection.to_template_context())
+    context["network_map_transfer"] = _network_map_transfer_controls(auth, db)
     context["network_map_v2"] = v2_projection.to_transport()
     proposals = network_map_asset_changes.list_proposals(db, limit=100)
     context["network_map_v2_governance"] = {

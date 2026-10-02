@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import get_type_hints
 from uuid import uuid4
 
+import pytest
+from fastapi import Request
 from fastapi.routing import APIRoute
 
 from app.models.network import FiberSegment, FiberSegmentType, FiberTerminationPoint
@@ -101,6 +103,43 @@ def test_v2_route_is_isolated_and_uses_the_original_map_permission():
         get_type_hints(network_map.build_network_map_v2_projection)["return"]
         is NetworkMapV2Projection
     )
+
+
+@pytest.mark.parametrize(
+    "endpoint_name", ("comprehensive_network_map", "comprehensive_network_map_v2")
+)
+@pytest.mark.parametrize("transfer_allowed", (True, False))
+def test_map_pages_render_permission_scoped_transfer_controls(
+    db_session, monkeypatch, endpoint_name, transfer_allowed
+):
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/admin/network/map-v2",
+            "query_string": b"",
+            "headers": [],
+            "server": ("testserver", 80),
+            "root_path": "",
+        }
+    )
+    monkeypatch.setattr(
+        web_network,
+        "_base_context",
+        lambda request, db, active_page: {
+            "request": request,
+            "active_page": active_page,
+        },
+    )
+    monkeypatch.setattr(
+        web_network, "has_permission", lambda auth, db, permission: transfer_allowed
+    )
+    response = getattr(web_network, endpoint_name)(request, db=db_session, auth={})
+    assert response.status_code == 200
+    assert (b'id="btn-import-kmz"' in response.body) is transfer_allowed
+    assert (b'id="btn-export-kmz"' in response.body) is transfer_allowed
+    assert response.context["network_map_transfer"]["can_propose"] is transfer_allowed
 
 
 def test_network_map_v2_extends_the_reviewed_base_template():
