@@ -819,8 +819,8 @@ def test_offer_access_requirement_is_registered_as_a_new_contracted_owner():
     }
 
 
-def test_catalog_policy_is_left_completely_untouched():
-    """Negative control: the deliberately separate owner is unchanged."""
+def test_catalog_policy_remains_separate_from_access_requirement():
+    """Catalog VAT policy stays separate from the access-requirement owner."""
 
     policies = _source("app/services/catalog/policies.py")
     assert "offer_access_requirement" not in policies
@@ -830,6 +830,7 @@ def test_catalog_policy_is_left_completely_untouched():
     assert catalog_policy.owns == (
         "catalog policy lookup",
         "offer policy interpretation",
+        "catalog price VAT basis",
     )
 
 

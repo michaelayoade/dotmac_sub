@@ -111,6 +111,7 @@ from app.services.subscription_ipv4_projection import (
     SubscriptionServiceIPv4,
     resolve_subscription_service_ipv4,
 )
+from app.services.subscription_lifecycle import resolve_subscription_pause_detail
 from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
@@ -3742,39 +3743,20 @@ def _subscription_vacation_hold(
 
     Returns None if no active vacation hold exists.
     """
-    from app.models.subscription_pause import (
-        SubscriptionPauseCause,
-        SubscriptionPauseCauseStatus,
-        SubscriptionPauseEpisode,
-        SubscriptionPauseReason,
-    )
+    from app.models.subscription_pause import SubscriptionPauseReason
 
-    row = (
-        db.query(SubscriptionPauseCause, SubscriptionPauseEpisode)
-        .join(
-            SubscriptionPauseEpisode,
-            SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
-        )
-        .filter(SubscriptionPauseEpisode.subscription_id == subscription.id)
-        .filter(
-            SubscriptionPauseCause.reason_code
-            == SubscriptionPauseReason.customer_vacation_hold.value
-        )
-        .filter(
-            SubscriptionPauseCause.status == SubscriptionPauseCauseStatus.active.value
-        )
-        .first()
+    detail = resolve_subscription_pause_detail(
+        db, subscription.id, reason=SubscriptionPauseReason.customer_vacation_hold
     )
-    if row is None:
+    if detail is None:
         return None
-    cause, episode = row
     return {
-        "pause_cause_id": str(cause.id),
-        "pause_episode_id": str(episode.id),
-        "created_at": episode.effective_at,
-        "resume_at": cause.scheduled_resume_at,
+        "pause_cause_id": str(detail.cause_id),
+        "pause_episode_id": str(detail.episode_id),
+        "created_at": detail.effective_at,
+        "resume_at": detail.scheduled_resume_at,
         "notes": "Customer-requested vacation hold",
-        "source": cause.source_id,
+        "source": detail.source_id,
     }
 
 
@@ -3783,38 +3765,19 @@ def _subscription_administrative_pause(
 ) -> dict[str, object] | None:
     """Return the exact active administrative pause cause, when present."""
 
-    from app.models.subscription_pause import (
-        SubscriptionPauseCause,
-        SubscriptionPauseCauseStatus,
-        SubscriptionPauseEpisode,
-        SubscriptionPauseReason,
-    )
+    from app.models.subscription_pause import SubscriptionPauseReason
 
-    row = (
-        db.query(SubscriptionPauseCause, SubscriptionPauseEpisode)
-        .join(
-            SubscriptionPauseEpisode,
-            SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
-        )
-        .filter(SubscriptionPauseEpisode.subscription_id == subscription.id)
-        .filter(
-            SubscriptionPauseCause.reason_code
-            == SubscriptionPauseReason.administrative.value
-        )
-        .filter(
-            SubscriptionPauseCause.status == SubscriptionPauseCauseStatus.active.value
-        )
-        .first()
+    detail = resolve_subscription_pause_detail(
+        db, subscription.id, reason=SubscriptionPauseReason.administrative
     )
-    if row is None:
+    if detail is None:
         return None
-    cause, episode = row
     return {
-        "pause_cause_id": str(cause.id),
-        "pause_episode_id": str(episode.id),
-        "created_at": episode.effective_at,
-        "previous_next_billing_at": episode.previous_next_billing_at,
-        "source": cause.source_id,
+        "pause_cause_id": str(detail.cause_id),
+        "pause_episode_id": str(detail.episode_id),
+        "created_at": detail.effective_at,
+        "previous_next_billing_at": detail.previous_next_billing_at,
+        "source": detail.source_id,
     }
 
 

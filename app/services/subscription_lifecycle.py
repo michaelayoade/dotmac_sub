@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -397,6 +398,50 @@ class VacationHoldPolicyDecision:
     active_cause_id: str | None
     active_episode_id: str | None
     scheduled_resume_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionPauseDetail:
+    cause_id: UUID
+    episode_id: UUID
+    reason: SubscriptionPauseReason
+    effective_at: datetime
+    previous_next_billing_at: datetime | None
+    scheduled_resume_at: datetime | None
+    source_id: str
+
+
+def resolve_subscription_pause_detail(
+    db: Session,
+    subscription_id: UUID,
+    *,
+    reason: SubscriptionPauseReason,
+) -> SubscriptionPauseDetail | None:
+    """Project an active pause cause and its exact episode for service views."""
+    row = db.execute(
+        select(SubscriptionPauseCause, SubscriptionPauseEpisode)
+        .join(
+            SubscriptionPauseEpisode,
+            SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
+        )
+        .where(
+            SubscriptionPauseEpisode.subscription_id == subscription_id,
+            SubscriptionPauseCause.reason_code == reason.value,
+            SubscriptionPauseCause.status == SubscriptionPauseCauseStatus.active.value,
+        )
+    ).first()
+    if row is None:
+        return None
+    cause, episode = row
+    return SubscriptionPauseDetail(
+        cause_id=cause.id,
+        episode_id=episode.id,
+        reason=reason,
+        effective_at=episode.effective_at,
+        previous_next_billing_at=episode.previous_next_billing_at,
+        scheduled_resume_at=cause.scheduled_resume_at,
+        source_id=cause.source_id,
+    )
 
 
 def resolve_vacation_hold_policy(

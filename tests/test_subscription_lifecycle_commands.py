@@ -46,6 +46,7 @@ from app.services.subscription_lifecycle import (
     SubscriptionLifecycleError,
     preview_subscription_command,
     resolve_subscription_lifecycle,
+    resolve_subscription_pause_detail,
 )
 from app.services.subscription_lifecycle_commands import (
     execute_subscription_command,
@@ -1061,6 +1062,24 @@ def test_vacation_hold_and_resume_use_exact_customer_pause(
     )
     assert held_replay.replayed is True
     assert held_replay.artifact_ids == (str(cause.id),)
+    detail = resolve_subscription_pause_detail(
+        db_session,
+        subscription.id,
+        reason=SubscriptionPauseReason.customer_vacation_hold,
+    )
+    assert detail is not None
+    assert detail.cause_id == cause.id
+    assert detail.episode_id == episode.id
+    assert detail.effective_at == episode.effective_at
+    assert detail.scheduled_resume_at == cause.scheduled_resume_at
+    assert (
+        resolve_subscription_pause_detail(
+            db_session,
+            subscription.id,
+            reason=SubscriptionPauseReason.administrative,
+        )
+        is None
+    )
 
     held_head = resolve_subscription_lifecycle(db_session, str(subscription.id)).head
     resumed = execute_subscription_command(
@@ -1084,6 +1103,14 @@ def test_vacation_hold_and_resume_use_exact_customer_pause(
     assert episode.status == SubscriptionPauseEpisodeStatus.resumed.value
     assert subscription.status == SubscriptionStatus.active
     assert subscription.next_billing_at == original_anchor + (resume_at - hold_at)
+    assert (
+        resolve_subscription_pause_detail(
+            db_session,
+            subscription.id,
+            reason=SubscriptionPauseReason.customer_vacation_hold,
+        )
+        is None
+    )
     resumed_replay = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(

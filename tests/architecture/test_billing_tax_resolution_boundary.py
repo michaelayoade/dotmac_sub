@@ -69,7 +69,8 @@ def test_catalog_calculator_delegates_default_tax_application() -> None:
     assert "resolve_default_tax_application(db)" in calculator
     assert "TaxApplication.exclusive if with_vat" not in calculator
     assert "const taxApplication = {{ tax_application | tojson }}" in template
-    assert "this.taxApplication === 'inclusive'" in template
+    assert "line.tax_application === 'inclusive'" in template
+    assert "line.tax_application === 'exempt'" in template
 
 
 def test_catalog_compatibility_tax_copy_does_not_claim_prices_include_vat() -> None:

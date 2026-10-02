@@ -17,7 +17,15 @@ from app.models.billing import (
     PaymentStatus,
     ServiceEntitlement,
 )
-from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.catalog import (
+    AccessType,
+    BillingMode,
+    CatalogOffer,
+    PriceBasis,
+    ServiceType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.event_store import EventStore
 from app.models.notification import (
@@ -292,13 +300,31 @@ def test_real_settlement_paid_consequence_and_activation_gate(
 
 @pytest.mark.parametrize("explicit_allocation", (True, False))
 def test_activated_historical_debt_settlement_does_not_compose_current_renewal(
-    db_session, subscriber, adopted, subscription, explicit_allocation
+    db_session, subscriber, adopted, explicit_allocation
 ):
     _activate(db_session, adopted)
     anchor = datetime(2026, 10, 1, tzinfo=UTC)
-    subscription.billing_mode = BillingMode.prepaid
-    subscription.status = SubscriptionStatus.suspended
-    subscription.next_billing_at = anchor
+    # The general catalog fixture seeds legacy notification content. Construct
+    # only this historical service record so adoption parity remains intact.
+    offer = CatalogOffer(
+        name="Historical debt offer",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_mode=BillingMode.prepaid,
+    )
+    db_session.add(offer)
+    db_session.flush()
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.suspended,
+        billing_mode=BillingMode.prepaid,
+        unit_price=Decimal("100"),
+        next_billing_at=anchor,
+    )
+    db_session.add(subscription)
+    db_session.flush()
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number=f"INV-{uuid4()}",
