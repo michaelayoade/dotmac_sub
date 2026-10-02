@@ -1136,8 +1136,8 @@ def test_scheduled_owner_refuses_historical_catch_up(
     assert db_session.query(AccountAdjustment).count() == 0
 
 
-def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
-    db_session, subscriber, subscription, monkeypatch
+def test_scheduled_owner_does_not_bill_suspended_prepaid_service(
+    db_session, subscriber, subscription
 ):
     _prepare_scheduled_cycle(db_session, subscriber, subscription)
     subscription.status = SubscriptionStatus.suspended
@@ -1152,21 +1152,6 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
     )
     db_session.add(lock)
     db_session.commit()
-    monkeypatch.setattr(
-        "app.services.collections._core.resolve_prepaid_funding",
-        lambda _db, account, *, now=None: PrepaidFundingDecision(
-            account_id=str(account.id),
-            available_balance=Decimal("50.00"),
-            required_balance=Decimal("0.00"),
-            currency="NGN",
-            covered_subscription_ids=(subscription.id,),
-        ),
-    )
-    monkeypatch.setattr(
-        "app.services.account_lifecycle.emit_event",
-        lambda *_args, **_kwargs: None,
-    )
-
     summary = execute_due_prepaid_service_renewals(
         db_session,
         _scheduled_command(
@@ -1178,25 +1163,20 @@ def test_scheduled_owner_restores_canonically_funded_prepaid_lock(
 
     db_session.refresh(lock)
     db_session.refresh(subscription)
-    assert summary["prepaid_renewals_funded"] == 1
+    assert summary["prepaid_renewals_scanned"] == 0
+    assert summary["prepaid_renewals_funded"] == 0
     assert summary["prepaid_renewals_restored"] == 0
-    assert lock.is_active is False
-    assert subscription.status == SubscriptionStatus.active
-    event = (
+    assert lock.is_active is True
+    assert subscription.status == SubscriptionStatus.suspended
+    assert (
         db_session.query(EventStore)
         .filter_by(
             event_type="prepaid_service.renewed",
             subscription_id=subscription.id,
         )
-        .one()
+        .count()
+        == 0
     )
-    assert event.payload["source"] == "scheduled"
-    assert event.payload["schema_version"] == 2
-    assert event.payload["invoice_id"] is not None
-    assert event.payload["ledger_entry_id"] is None
-    assert str(event.invoice_id) == event.payload["invoice_id"]
-    assert event.payload["trigger_payment_id"] is None
-    assert event.payload["renewed_through"] == "2026-08-01T00:00:00+00:00"
 
 
 @pytest.mark.parametrize(
@@ -1287,6 +1267,40 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     assert event.payload["schema_version"] == 2
     assert event.payload["invoice_id"] is not None
     assert str(event.invoice_id) == event.payload["invoice_id"]
+
+
+def test_funding_change_does_not_bill_administratively_suspended_service(
+    db_session, subscriber, subscription
+):
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+    subscription.status = SubscriptionStatus.suspended
+    subscriber.status = SubscriberStatus.suspended
+    lock = EnforcementLock(
+        subscription_id=subscription.id,
+        subscriber_id=subscriber.id,
+        reason=EnforcementReason.admin,
+        source="pytest:administrative-suspension",
+        is_active=True,
+    )
+    db_session.add(lock)
+    db_session.commit()
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=datetime(2026, 7, 20, 17, 30, tzinfo=UTC),
+        funding_currency="NGN",
+        evidence_ref="pytest:unrelated-account-credit-event",
+    )
+
+    db_session.refresh(lock)
+    db_session.refresh(subscription)
+    assert result.disposition == FundingChangeRenewalDisposition.no_due_service
+    assert result.scanned == 0
+    assert result.funded == 0
+    assert lock.is_active is True
+    assert subscription.status == SubscriptionStatus.suspended
+    assert db_session.query(ServiceEntitlement).count() == 0
 
 
 def test_funding_change_leaves_service_due_while_payable_invoice_remains(

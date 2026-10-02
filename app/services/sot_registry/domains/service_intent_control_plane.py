@@ -1032,6 +1032,7 @@ DOMAIN = DomainSOT(
                 "service-change delivery-mode decision",
                 "service-address qualification and field-fee preview",
                 "vacation-hold duration, annual-limit, cooldown, and resume policy",
+                "administrative pause and suspension billing-impact distinction",
                 "subscription command and outcome contracts",
             ),
             depends_on=(
@@ -1063,7 +1064,8 @@ DOMAIN = DomainSOT(
                 "subscription command idempotent replay",
                 "structured subscription command outcomes",
                 "persisted relocation qualification and fee evidence",
-                "vacation-hold and exact customer-lock resume orchestration",
+                "vacation-hold and exact customer pause-cause resume orchestration",
+                "administrative pause and exact cause resume orchestration",
                 "independently committed subscription command batches",
             ),
             depends_on=(
@@ -1086,7 +1088,11 @@ DOMAIN = DomainSOT(
                 "single and bulk adapters delegate here instead of writing "
                 "subscription lifecycle fields directly."
                 " Customer, admin, and automatic vacation-hold adapters all "
-                "delegate customer_hold lock creation/resolution here."
+                "delegate customer-vacation pause-cause creation and release here."
+                " The separate administrative Pause command uses an administrative "
+                "pause cause and preserves the unused billing interval; Suspend is "
+                "an enforcement lock whose preview stops future recurring billing "
+                "without moving the billing anchor."
             ),
         ),
         SOTService(
@@ -1097,6 +1103,7 @@ DOMAIN = DomainSOT(
                 "deferred command execution leases and bounded retry",
                 "scheduled lifecycle cancellation",
                 "deferred lifecycle execution evidence",
+                "scheduled administrative pause and resume execution",
             ),
             depends_on=(
                 "service_intent.subscription_lifecycle",

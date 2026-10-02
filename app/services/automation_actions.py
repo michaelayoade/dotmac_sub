@@ -147,36 +147,52 @@ def _set_support_ticket_priority(
 def _suspend_support_ticket_service_for_sla_breach(
     db: Session, command: ExecuteAutomationActionCommand
 ) -> AutomationActionOutcome:
+    """Execute an immutable legacy action key using the canonical Pause owner."""
+
+    from app.models.subscription_pause import (
+        SubscriptionPauseBillingPolicy,
+        SubscriptionPauseResumePolicy,
+    )
     from app.services.ticket_sla_service_automation import (
-        SuspendTicketServiceForSlaBreachCommand,
-        suspend_unique_active_service_for_ticket_sla_breach,
+        PauseTicketServiceForSlaBreachCommand,
+        TicketSlaServiceSelectionPolicy,
+        pause_unique_active_service_for_ticket_sla_breach,
     )
 
     if command.target.entity_type != "support.ticket":
         raise AutomationActionExecutorError(
-            "The ticket SLA service-suspension action received the wrong target type."
+            "The retired ticket SLA action received the wrong target type."
         )
     if command.inputs:
         raise AutomationActionExecutorError(
-            "The ticket SLA service-suspension action does not accept inputs."
+            "The retired ticket SLA action does not accept inputs."
         )
-    outcome = suspend_unique_active_service_for_ticket_sla_breach(
+    outcome = pause_unique_active_service_for_ticket_sla_breach(
         db,
-        SuspendTicketServiceForSlaBreachCommand(
+        PauseTicketServiceForSlaBreachCommand(
             ticket_id=command.target.entity_id,
             event_id=command.event_id,
             rule_id=command.rule_id,
             rule_version_id=command.rule_version_id,
             step_index=command.step_index,
+            selection_policy=(
+                TicketSlaServiceSelectionPolicy.unique_active_subscription
+            ),
+            resume_policy=(
+                SubscriptionPauseResumePolicy.manual_after_ticket_resolution
+            ),
+            billing_policy=(
+                SubscriptionPauseBillingPolicy.extend_by_effective_pause_duration
+            ),
             context=command.context,
         ),
     )
     return AutomationActionOutcome(
         disposition=AutomationActionDisposition.succeeded,
         outcome_code=(
-            "support_ticket_service_suspension_replayed"
+            "support_ticket_service_pause_replayed"
             if outcome.replayed
-            else "support_ticket_service_suspended"
+            else "support_ticket_service_paused"
         ),
     )
 

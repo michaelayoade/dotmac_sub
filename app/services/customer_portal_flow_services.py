@@ -1872,7 +1872,7 @@ def _vacation_reason_message(reason: str, decision) -> str:
             f"Please wait {remaining} more day(s) before using another vacation hold."
         )
     if reason == "vacation_hold_duration_out_of_range":
-        return f"Suspension must be between 1 and {decision.max_days} days"
+        return f"Pause must be between 1 and {decision.max_days} days"
     if reason == "active_customer_hold_missing":
         return "Cannot resume: no customer-initiated hold was found."
     return "This subscription is not eligible for that vacation-hold action."
@@ -1997,16 +1997,16 @@ def apply_service_suspend(
             requested_days=days,
         )
         raise ValueError(_vacation_reason_message(outcome.error_code or "", decision))
-    lock_id = outcome.artifact_ids[0] if outcome.artifact_ids else None
-    from app.models.enforcement_lock import EnforcementLock
+    cause_id = outcome.artifact_ids[0] if outcome.artifact_ids else None
+    from app.models.subscription_pause import SubscriptionPauseCause
 
-    lock = db.get(EnforcementLock, coerce_uuid(lock_id)) if lock_id else None
-    if lock is None or lock.resume_at is None:
-        raise ValueError("Vacation hold did not return exact lock evidence")
-    resume_at = lock.resume_at
+    cause = db.get(SubscriptionPauseCause, coerce_uuid(cause_id)) if cause_id else None
+    if cause is None or cause.scheduled_resume_at is None:
+        raise ValueError("Vacation hold did not return exact pause-cause evidence")
+    resume_at = cause.scheduled_resume_at
 
     logger.info(
-        "Customer %s suspended subscription %s for %d days (vacation hold, resume_at=%s)",
+        "Customer %s paused subscription %s for %d days (vacation hold, resume_at=%s)",
         subscriber_id,
         subscription_id,
         days,
@@ -2016,7 +2016,7 @@ def apply_service_suspend(
     return {
         "subscription_id": subscription_id,
         "days": days,
-        "lock_id": str(lock.id),
+        "pause_cause_id": str(cause.id),
         "resume_at": resume_at.isoformat(),
     }
 
@@ -2027,7 +2027,10 @@ def get_resume_page(
     subscription_id: str,
 ) -> dict | None:
     """Build context for the resume service confirmation page."""
-    from app.models.enforcement_lock import EnforcementLock
+    from app.models.subscription_pause import (
+        SubscriptionPauseCause,
+        SubscriptionPauseEpisode,
+    )
     from app.services.subscription_lifecycle import (
         SubscriptionCommandKind,
         resolve_vacation_hold_policy,
@@ -2043,19 +2046,22 @@ def get_resume_page(
         subscription,
         command_kind=SubscriptionCommandKind.vacation_resume,
     )
-    if not decision.eligible or decision.active_lock_id is None:
+    if not decision.eligible or decision.active_cause_id is None:
         return None
-    lock = db.get(EnforcementLock, coerce_uuid(decision.active_lock_id))
-    if lock is None:
+    cause = db.get(SubscriptionPauseCause, coerce_uuid(decision.active_cause_id))
+    if cause is None:
+        return None
+    episode = db.get(SubscriptionPauseEpisode, cause.pause_episode_id)
+    if episode is None:
         return None
 
     offer = subscription.offer
     return {
         "subscription": subscription,
         "offer_name": offer.name if offer else "Service",
-        "lock": lock,
-        "suspended_since": lock.created_at,
-        "resume_at": lock.resume_at,
+        "pause_cause": cause,
+        "paused_since": episode.effective_at,
+        "resume_at": cause.scheduled_resume_at,
     }
 
 
@@ -2066,7 +2072,7 @@ def apply_service_resume(
 ) -> dict:
     """Resume a customer-initiated vacation hold on a subscription."""
     from app.models.audit import AuditActorType
-    from app.models.enforcement_lock import EnforcementLock
+    from app.models.subscription_pause import SubscriptionPauseCause
     from app.services.subscription_lifecycle import (
         SubscriptionCommandKind,
         SubscriptionEffectiveTiming,
@@ -2088,13 +2094,13 @@ def apply_service_resume(
         subscription,
         command_kind=SubscriptionCommandKind.vacation_resume,
     )
-    if not decision.eligible or decision.active_lock_id is None:
+    if not decision.eligible or decision.active_cause_id is None:
         reason = (
             decision.reasons[0] if decision.reasons else "active_customer_hold_missing"
         )
         raise ValueError(_vacation_reason_message(reason, decision))
-    lock = db.get(EnforcementLock, coerce_uuid(decision.active_lock_id))
-    if lock is None:
+    cause = db.get(SubscriptionPauseCause, coerce_uuid(decision.active_cause_id))
+    if cause is None:
         raise ValueError("Cannot resume: exact customer-hold evidence is missing")
 
     subscriber_id = str(subscription.subscriber_id)
@@ -2108,7 +2114,7 @@ def apply_service_resume(
             effective_timing=SubscriptionEffectiveTiming.immediate,
             reason="Customer-initiated resume via portal",
             expected_head=snapshot.head,
-            idempotency_key=f"customer-vacation-resume:{lock.id}",
+            idempotency_key=f"customer-vacation-resume:{cause.id}",
         ),
         actor_id=subscriber_id,
         actor_type=AuditActorType.user,

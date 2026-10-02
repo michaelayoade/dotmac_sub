@@ -129,6 +129,10 @@ class AutomationActionCapability:
     #: Declarative mutually-exclusive consequence family. Publication rejects
     #: overlapping rules with the same trigger and conflict scope.
     conflict_scope: str | None = None
+    #: Retired actions may remain executable only so immutable published rule
+    #: versions can complete against their historical action key. They are not
+    #: offered to rule builders or accepted in new/updated definitions.
+    authoring_enabled: bool = True
     #: An action may be admitted for draft authoring before its runtime
     #: event-to-command adapter is ready. Publication must reject it until this
     #: flag is enabled in a later reviewed slice.

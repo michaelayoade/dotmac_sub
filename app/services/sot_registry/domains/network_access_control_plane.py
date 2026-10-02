@@ -38,6 +38,8 @@ DOMAIN = DomainSOT(
                 "persisted access restriction intent",
                 "subscription access-status transitions",
                 "subscription pause episodes and independently releasable causes",
+                "scheduled customer-vacation pause and resume evidence",
+                "reviewed administrative pause and resume evidence",
                 "prepaid pause-compensation entitlement evidence",
                 "exact pause-duration billing-anchor adjustment",
                 "subscription billing-anchor projection",
@@ -75,6 +77,13 @@ DOMAIN = DomainSOT(
                 "service it first stages one zero-value ServiceEntitlement linked "
                 "uniquely to the pause episode, preserving paid invoice periods and "
                 "failing closed when canonical coverage evidence is ambiguous."
+                " Customer vacation holds use the same pause episode owner with a "
+                "typed customer cause and scheduled resume instant; they never "
+                "create an enforcement lock or project the service as suspended."
+                " Administrative Pause uses the typed administrative cause and "
+                "extends the billing anchor by exact elapsed pause time on resume; "
+                "Suspend is an enforcement lock that stops access and future "
+                "recurring billing without preserving unused period time."
             ),
         ),
         SOTService(

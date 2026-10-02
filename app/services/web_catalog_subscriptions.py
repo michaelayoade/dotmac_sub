@@ -43,7 +43,6 @@ from app.models.catalog import (
     billing_cycle_suffix,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
 from app.models.network import (
     IPAssignment,
@@ -3739,25 +3738,83 @@ def _subscription_radius_sync_evidence(
 def _subscription_vacation_hold(
     db: Session, subscription: Subscription
 ) -> dict[str, object] | None:
-    """Get active vacation hold (customer_hold) info for a subscription.
+    """Get the active customer-vacation pause cause for a subscription.
 
     Returns None if no active vacation hold exists.
     """
-    lock = (
-        db.query(EnforcementLock)
-        .filter(EnforcementLock.subscription_id == subscription.id)
-        .filter(EnforcementLock.reason == EnforcementReason.customer_hold)
-        .filter(EnforcementLock.is_active.is_(True))
+    from app.models.subscription_pause import (
+        SubscriptionPauseCause,
+        SubscriptionPauseCauseStatus,
+        SubscriptionPauseEpisode,
+        SubscriptionPauseReason,
+    )
+
+    row = (
+        db.query(SubscriptionPauseCause, SubscriptionPauseEpisode)
+        .join(
+            SubscriptionPauseEpisode,
+            SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
+        )
+        .filter(SubscriptionPauseEpisode.subscription_id == subscription.id)
+        .filter(
+            SubscriptionPauseCause.reason_code
+            == SubscriptionPauseReason.customer_vacation_hold.value
+        )
+        .filter(
+            SubscriptionPauseCause.status == SubscriptionPauseCauseStatus.active.value
+        )
         .first()
     )
-    if not lock:
+    if row is None:
         return None
+    cause, episode = row
     return {
-        "lock_id": str(lock.id),
-        "created_at": lock.created_at,
-        "resume_at": lock.resume_at,
-        "notes": lock.notes,
-        "source": lock.source,
+        "pause_cause_id": str(cause.id),
+        "pause_episode_id": str(episode.id),
+        "created_at": episode.effective_at,
+        "resume_at": cause.scheduled_resume_at,
+        "notes": "Customer-requested vacation hold",
+        "source": cause.source_id,
+    }
+
+
+def _subscription_administrative_pause(
+    db: Session, subscription: Subscription
+) -> dict[str, object] | None:
+    """Return the exact active administrative pause cause, when present."""
+
+    from app.models.subscription_pause import (
+        SubscriptionPauseCause,
+        SubscriptionPauseCauseStatus,
+        SubscriptionPauseEpisode,
+        SubscriptionPauseReason,
+    )
+
+    row = (
+        db.query(SubscriptionPauseCause, SubscriptionPauseEpisode)
+        .join(
+            SubscriptionPauseEpisode,
+            SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
+        )
+        .filter(SubscriptionPauseEpisode.subscription_id == subscription.id)
+        .filter(
+            SubscriptionPauseCause.reason_code
+            == SubscriptionPauseReason.administrative.value
+        )
+        .filter(
+            SubscriptionPauseCause.status == SubscriptionPauseCauseStatus.active.value
+        )
+        .first()
+    )
+    if row is None:
+        return None
+    cause, episode = row
+    return {
+        "pause_cause_id": str(cause.id),
+        "pause_episode_id": str(episode.id),
+        "created_at": episode.effective_at,
+        "previous_next_billing_at": episode.previous_next_billing_at,
+        "source": cause.source_id,
     }
 
 
@@ -3985,6 +4042,7 @@ def subscription_detail_context(
     enforcement_state = _subscription_enforcement_state(db, subscription)
     external_radius_rows = _subscription_external_radius_rows(db, credential)
     vacation_hold = _subscription_vacation_hold(db, subscription)
+    administrative_pause = _subscription_administrative_pause(db, subscription)
     return {
         "access_credential": credential,
         "password_sync": password_sync,
@@ -4008,6 +4066,7 @@ def subscription_detail_context(
         "enforcement_state": enforcement_state,
         "external_radius_rows": external_radius_rows,
         "vacation_hold": vacation_hold,
+        "administrative_pause": administrative_pause,
     }
 
 

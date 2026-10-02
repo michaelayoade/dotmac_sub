@@ -315,6 +315,7 @@ class PauseSubscriptionCauseCommand:
     actor: str
     idempotency_key: str
     context: CommandContext
+    scheduled_resume_at: datetime | None = None
     ticket_id: UUID | None = None
     sla_clock_id: UUID | None = None
     sla_breach_id: UUID | None = None
@@ -1617,6 +1618,20 @@ def pause_subscription_for_cause(
 
     if command.effective_at.tzinfo is None or command.effective_at.utcoffset() is None:
         raise ValueError("Pause effective_at must be timezone-aware")
+    if command.scheduled_resume_at is not None:
+        if (
+            command.scheduled_resume_at.tzinfo is None
+            or command.scheduled_resume_at.utcoffset() is None
+        ):
+            raise ValueError("Pause scheduled_resume_at must be timezone-aware")
+        if command.scheduled_resume_at <= command.effective_at:
+            raise ValueError("Pause scheduled resume must follow its effective time")
+    if (
+        command.resume_policy
+        is SubscriptionPauseResumePolicy.scheduled_or_customer_requested
+        and command.scheduled_resume_at is None
+    ):
+        raise ValueError("Scheduled customer pause requires a resume time")
     if not command.source_id.strip() or not command.idempotency_key.strip():
         raise ValueError("Pause source and idempotency evidence are required")
 
@@ -1747,8 +1762,14 @@ def pause_subscription_for_cause(
         workflow_policy_snapshot={
             "selection_policy": command.selection_policy,
             "resume_policy": command.resume_policy.value,
+            "scheduled_resume_at": (
+                command.scheduled_resume_at.isoformat()
+                if command.scheduled_resume_at is not None
+                else None
+            ),
         },
         activated_at=command.effective_at,
+        scheduled_resume_at=command.scheduled_resume_at,
         idempotency_key=command.idempotency_key,
     )
     db.add(cause)

@@ -1276,7 +1276,6 @@ DOMAIN = DomainSOT(
             name="support.ticket_sla_service_consequence",
             module="app.services.ticket_sla_service_automation",
             owns=(
-                "ticket SLA-breach service suspension consequence",
                 "ticket resolution SLA-breach service pause consequence",
                 "ticket pause resume eligibility preview",
             ),
@@ -1287,15 +1286,6 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
-                    ConcernContract(
-                        name="ticket SLA-breach service suspension consequence",
-                        role=OwnerRole.APPLICATION_COORDINATOR,
-                        input_names=(
-                            "canonical support ticket customer link",
-                            "canonical subscription lifecycle state",
-                            "durable automation action identity",
-                        ),
-                    ),
                     ConcernContract(
                         name="ticket resolution SLA-breach service pause consequence",
                         role=OwnerRole.APPLICATION_COORDINATOR,
@@ -1337,8 +1327,8 @@ DOMAIN = DomainSOT(
                         owner="access.subscription_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "Locked Subscription rows and active EnforcementLock "
-                            "rows for the linked customer account"
+                            "Locked Subscription rows and active pause evidence "
+                            "for the linked customer account"
                         ),
                     ),
                     AuthorityInput(
@@ -1364,16 +1354,16 @@ DOMAIN = DomainSOT(
                     mode=TransactionMode.COORDINATOR_MANAGED,
                     boundary=(
                         "One owner command locks the Ticket and candidate services, "
-                        "then delegates suspension or pause episode, lifecycle, and "
+                        "then delegates pause episode, lifecycle, and "
                         "billing-anchor writes to access.subscription_lifecycle as "
                         "flush-only participants."
                     ),
                     locking=(
-                        "The Ticket, exact prior automation lock, and active service "
+                        "The Ticket, exact prior pause cause, and active service "
                         "candidates are selected with row locks."
                     ),
                     idempotency=(
-                        "The event, rule version, and step derive one stable lock "
+                        "The event, rule version, and step derive one stable pause-cause "
                         "source; an exact active source is returned as replay."
                     ),
                     retries=(
@@ -1422,7 +1412,6 @@ DOMAIN = DomainSOT(
                         ),
                         ("support.ticket_sla_service_consequence.stale_resume_preview"),
                         ("support.ticket_sla_service_consequence.resume_ineligible"),
-                        ("support.ticket_sla_service_consequence.idempotency_conflict"),
                         *owner_command_boundary_error_codes(
                             "support.ticket_sla_service_consequence"
                         ),
@@ -1438,8 +1427,6 @@ DOMAIN = DomainSOT(
                     event_types=(
                         "subscription.paused",
                         "subscription.pause_resumed",
-                        "subscription.suspended",
-                        "enforcement_lock.created",
                     ),
                     schema_version=1,
                     delivery_owner="events.dispatcher",
@@ -1448,8 +1435,8 @@ DOMAIN = DomainSOT(
                         "automation provenance is retained in source and command evidence."
                     ),
                     replay=(
-                        "Automation run/step evidence and the exact enforcement-lock "
-                        "source reconstruct the consequence."
+                        "Automation run/step evidence and the exact pause-cause source "
+                        "reconstruct the consequence."
                     ),
                 ),
                 migration=MigrationContract(
@@ -1463,7 +1450,8 @@ DOMAIN = DomainSOT(
                         "coordinator are admitted together"
                     ),
                     fallback_retirement=(
-                        "no legacy SLA rule is created or reinterpreted"
+                        "the retired Suspend key is hidden from authoring and its "
+                        "immutable published versions execute the canonical Pause owner"
                     ),
                 ),
                 steward="support and access operations",
@@ -2377,19 +2365,17 @@ DOMAIN = DomainSOT(
             ),
             AutomationActionCapability(
                 key="support.ticket.suspend_unique_active_service",
-                label=(
-                    "Suspend the linked customer's only active service "
-                    "(billing unchanged; ambiguous links fail closed)"
-                ),
+                label=("Retired SLA Suspend action (historical rules execute Pause)"),
                 entity_type="support.ticket",
                 command_owner="support.ticket_sla_service_consequence",
-                command_name=("suspend_unique_active_service_for_ticket_sla_breach"),
+                command_name=("pause_unique_active_service_for_ticket_sla_breach"),
                 input_schema_version=1,
                 inputs=(),
-                author_permission="subscription:suspend",
-                runtime_scope="subscription:suspend",
-                idempotency="event, rule version, step, and enforcement-lock source",
+                author_permission="subscription:pause",
+                runtime_scope="subscription:pause",
+                idempotency="event, rule version, step, and pause-cause source",
                 conflict_scope="support.ticket.sla_service_access_consequence",
+                authoring_enabled=False,
                 runtime_enabled=True,
             ),
         ),

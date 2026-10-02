@@ -53,9 +53,10 @@ def test_runtime_preserves_typed_action_retry_classification() -> None:
     assert "retryable=False" in source
 
 
-def test_ticket_sla_consequence_delegates_to_subscription_owner() -> None:
+def test_ticket_sla_consequence_delegates_only_to_pause_owner() -> None:
     source = _source("app/services/ticket_sla_service_automation.py")
-    assert "account_lifecycle.suspend_subscription(" in source
+    assert "account_lifecycle.pause_subscription_for_cause(" in source
+    assert "account_lifecycle.suspend_subscription(" not in source
     assert "subscription.status = " not in source
     assert ".commit(" not in source
     assert ".rollback(" not in source

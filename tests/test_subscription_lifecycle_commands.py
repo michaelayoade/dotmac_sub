@@ -30,6 +30,13 @@ from app.models.subscription_lifecycle_schedule import (
     SubscriptionLifecycleSchedule,
     SubscriptionLifecycleScheduleStatus,
 )
+from app.models.subscription_pause import (
+    SubscriptionPauseCause,
+    SubscriptionPauseCauseStatus,
+    SubscriptionPauseEpisode,
+    SubscriptionPauseEpisodeStatus,
+    SubscriptionPauseReason,
+)
 from app.services.subscription_lifecycle import (
     SubscriptionCommandKind,
     SubscriptionCommandOutcome,
@@ -37,6 +44,7 @@ from app.services.subscription_lifecycle import (
     SubscriptionEffectiveTiming,
     SubscriptionLifecycleCommand,
     SubscriptionLifecycleError,
+    preview_subscription_command,
     resolve_subscription_lifecycle,
 )
 from app.services.subscription_lifecycle_commands import (
@@ -381,6 +389,89 @@ def test_suspend_and_restore_delegate_to_account_lifecycle(
     assert lock.is_active is False
     assert restored.status == SubscriptionCommandOutcomeStatus.applied
     assert subscription.status == SubscriptionStatus.active
+
+
+def test_administrative_pause_preserves_time_while_suspend_keeps_billing(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    db_session.commit()
+    paused_at = datetime(2026, 7, 15, 9, 30, tzinfo=UTC)
+    resumed_at = paused_at + timedelta(days=5, hours=4)
+    original_anchor = subscription.next_billing_at
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    suspend_preview = preview_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.suspend,
+            source="admin:test",
+            reason="fraud investigation",
+            expected_head=reviewed.head,
+        ),
+        now=paused_at,
+    )
+    pause_command = SubscriptionLifecycleCommand(
+        subscription_id=str(subscription.id),
+        kind=SubscriptionCommandKind.pause,
+        source="admin:test",
+        reason="customer-requested temporary service stop",
+        effective_at=paused_at,
+        expected_head=reviewed.head,
+        idempotency_key="administrative-pause:hold",
+    )
+    pause_preview = preview_subscription_command(
+        db_session,
+        pause_command,
+        now=paused_at,
+    )
+
+    assert (
+        suspend_preview.billing_impact.action
+        == "stop_collection_without_preserving_period"
+    )
+    assert suspend_preview.billing_impact.collectible_after is False
+    assert pause_preview.billing_impact.action == "pause_collection_and_preserve_period"
+    paused = execute_subscription_command(
+        db_session,
+        pause_command,
+        now=paused_at,
+    )
+
+    assert paused.status == SubscriptionCommandOutcomeStatus.applied
+    cause = db_session.get(SubscriptionPauseCause, paused.artifact_ids[0])
+    assert cause is not None
+    episode = db_session.get(SubscriptionPauseEpisode, cause.pause_episode_id)
+    assert episode is not None
+    assert cause.reason_code == SubscriptionPauseReason.administrative.value
+    assert cause.scheduled_resume_at is None
+    assert subscription.status == SubscriptionStatus.paused
+    assert subscription.next_billing_at == original_anchor
+    assert db_session.query(EnforcementLock).count() == 0
+
+    paused_head = resolve_subscription_lifecycle(db_session, str(subscription.id)).head
+    resumed = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.resume_pause,
+            source="admin:test",
+            reason="customer requested reconnection",
+            effective_at=resumed_at,
+            expected_head=paused_head,
+            idempotency_key="administrative-pause:resume",
+        ),
+        now=resumed_at,
+    )
+
+    db_session.refresh(cause)
+    db_session.refresh(episode)
+    db_session.refresh(subscription)
+    assert resumed.status == SubscriptionCommandOutcomeStatus.applied
+    assert cause.status == SubscriptionPauseCauseStatus.released.value
+    assert episode.status == SubscriptionPauseEpisodeStatus.resumed.value
+    assert subscription.status == SubscriptionStatus.active
+    assert subscription.next_billing_at == original_anchor + (resumed_at - paused_at)
 
 
 def test_restore_rejects_unresolved_prepaid_financial_lock_and_redirects_operator(
@@ -914,7 +1005,7 @@ def test_next_cycle_rejects_an_explicit_custom_date() -> None:
         )
 
 
-def test_vacation_hold_and_resume_use_exact_customer_lock(
+def test_vacation_hold_and_resume_use_exact_customer_pause(
     db_session, subscriber, catalog_offer, monkeypatch
 ):
     monkeypatch.setattr(
@@ -927,6 +1018,9 @@ def test_vacation_hold_and_resume_use_exact_customer_lock(
     )
     subscription = _subscription(db_session, subscriber, catalog_offer)
     db_session.commit()
+    hold_at = datetime(2026, 7, 15, 9, 30, tzinfo=UTC)
+    resume_at = hold_at + timedelta(days=3, hours=2)
+    original_anchor = subscription.next_billing_at
     reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
     held = execute_subscription_command(
         db_session,
@@ -934,18 +1028,24 @@ def test_vacation_hold_and_resume_use_exact_customer_lock(
             subscription_id=str(subscription.id),
             kind=SubscriptionCommandKind.vacation_hold,
             source=f"customer:{subscriber.id}:vacation_hold",
+            effective_at=hold_at,
             expected_head=reviewed.head,
             idempotency_key="vacation-owner:hold",
             vacation_hold_days=7,
         ),
+        now=hold_at,
     )
     assert held.status == SubscriptionCommandOutcomeStatus.applied
     assert len(held.artifact_ids) == 1
-    lock = db_session.get(EnforcementLock, held.artifact_ids[0])
-    assert lock is not None
-    assert lock.reason == EnforcementReason.customer_hold
-    assert lock.resume_at is not None
-    assert subscription.status == SubscriptionStatus.suspended
+    cause = db_session.get(SubscriptionPauseCause, held.artifact_ids[0])
+    assert cause is not None
+    episode = db_session.get(SubscriptionPauseEpisode, cause.pause_episode_id)
+    assert episode is not None
+    assert cause.reason_code == SubscriptionPauseReason.customer_vacation_hold.value
+    assert cause.scheduled_resume_at is not None
+    assert cause.status == SubscriptionPauseCauseStatus.active.value
+    assert episode.status == SubscriptionPauseEpisodeStatus.active.value
+    assert subscription.status == SubscriptionStatus.paused
     held_replay = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(
@@ -956,9 +1056,10 @@ def test_vacation_hold_and_resume_use_exact_customer_lock(
             idempotency_key="vacation-owner:hold",
             vacation_hold_days=7,
         ),
+        now=hold_at,
     )
     assert held_replay.replayed is True
-    assert held_replay.artifact_ids == (str(lock.id),)
+    assert held_replay.artifact_ids == (str(cause.id),)
 
     held_head = resolve_subscription_lifecycle(db_session, str(subscription.id)).head
     resumed = execute_subscription_command(
@@ -967,28 +1068,35 @@ def test_vacation_hold_and_resume_use_exact_customer_lock(
             subscription_id=str(subscription.id),
             kind=SubscriptionCommandKind.vacation_resume,
             source=f"customer:{subscriber.id}:vacation_resume",
+            effective_at=resume_at,
             expected_head=held_head,
-            idempotency_key=f"vacation-owner:resume:{lock.id}",
+            idempotency_key=f"vacation-owner:resume:{cause.id}",
         ),
+        now=resume_at,
     )
-    db_session.refresh(lock)
+    db_session.refresh(cause)
+    db_session.refresh(episode)
     db_session.refresh(subscription)
     assert resumed.status == SubscriptionCommandOutcomeStatus.applied
-    assert resumed.artifact_ids == (str(lock.id),)
-    assert lock.is_active is False
+    assert resumed.artifact_ids == (str(cause.id),)
+    assert cause.status == SubscriptionPauseCauseStatus.released.value
+    assert episode.status == SubscriptionPauseEpisodeStatus.resumed.value
     assert subscription.status == SubscriptionStatus.active
+    assert subscription.next_billing_at == original_anchor + (resume_at - hold_at)
     resumed_replay = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(
             subscription_id=str(subscription.id),
             kind=SubscriptionCommandKind.vacation_resume,
             source=f"customer:{subscriber.id}:vacation_resume",
+            effective_at=resume_at,
             expected_head=held_head,
-            idempotency_key=f"vacation-owner:resume:{lock.id}",
+            idempotency_key=f"vacation-owner:resume:{cause.id}",
         ),
+        now=resume_at,
     )
     assert resumed_replay.replayed is True
-    assert resumed_replay.artifact_ids == (str(lock.id),)
+    assert resumed_replay.artifact_ids == (str(cause.id),)
 
 
 def test_vacation_hold_policy_rejects_annual_limit_inside_owner(

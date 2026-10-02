@@ -12,7 +12,6 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 # service. Used for "is the service actually up" semantics.
 LIVE_SERVICE_STATUSES = (
     SubscriptionStatus.active,
-    SubscriptionStatus.suspended,
     SubscriptionStatus.pending,
 )
 
@@ -23,9 +22,12 @@ LIVE_SERVICE_STATUSES = (
 # keep chasing and auto-charging so they can pay and be restored. Excluding it
 # (the pre-2026-06-26 behavior) meant that the moment enforcement walled a
 # non-payer, autopay/reminders/dunning could never recover them — a major
-# collections leak. Paused states (``stopped`` and the reversible ``disabled``)
-# and terminal states (``hidden``, ``archived``, ``canceled`` and ``expired``)
-# stay excluded — these must not keep pinging or charging the customer.
+# collections leak. ``suspended`` remains here only so an already-recorded debt
+# can still be resolved; this set is not authority to create a new recurring
+# service period. Recurring postpaid and prepaid owners apply their narrower
+# lifecycle gates before creating a charge. Paused states (``paused``,
+# ``stopped`` and the reversible ``disabled``) and terminal states (``hidden``,
+# ``archived``, ``canceled`` and ``expired``) stay excluded.
 COLLECTIBLE_SERVICE_STATUSES = (
     SubscriptionStatus.active,
     SubscriptionStatus.suspended,

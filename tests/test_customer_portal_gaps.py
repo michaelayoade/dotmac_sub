@@ -1789,11 +1789,15 @@ class TestSuspendResumeServiceLayer:
         assert "subscription" in result
         assert "max_days" in result
 
-    def test_apply_service_suspend_creates_enforcement_lock(
+    def test_apply_service_suspend_creates_customer_pause_cause(
         self, db_session, subscription, subscriber
     ) -> None:
         from app.models.catalog import SubscriptionStatus
-        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.models.subscription_pause import (
+            SubscriptionPauseCause,
+            SubscriptionPauseCauseStatus,
+            SubscriptionPauseReason,
+        )
         from app.services.customer_portal_flow_services import apply_service_suspend
 
         subscription.status = SubscriptionStatus.active
@@ -1809,25 +1813,21 @@ class TestSuspendResumeServiceLayer:
         assert result["subscription_id"] == str(subscription.id)
         assert result["days"] == 7
 
-        # Verify lock was created
-        lock = (
-            db_session.query(EnforcementLock)
-            .filter(
-                EnforcementLock.subscription_id == subscription.id,
-                EnforcementLock.reason == EnforcementReason.customer_hold,
-            )
-            .first()
-        )
-        assert lock is not None
-        assert lock.is_active is True
+        cause = db_session.query(SubscriptionPauseCause).one()
+        assert cause is not None
+        assert cause.reason_code == SubscriptionPauseReason.customer_vacation_hold.value
+        assert cause.status == SubscriptionPauseCauseStatus.active.value
+        assert cause.scheduled_resume_at is not None
+        db_session.refresh(subscription)
+        assert subscription.status is SubscriptionStatus.paused
 
-    def test_get_resume_page_returns_none_without_customer_hold_lock(
+    def test_get_resume_page_returns_none_without_customer_pause_cause(
         self, db_session, subscription, subscriber
     ) -> None:
         from app.models.catalog import SubscriptionStatus
         from app.services.customer_portal_flow_services import get_resume_page
 
-        subscription.status = SubscriptionStatus.suspended
+        subscription.status = SubscriptionStatus.paused
         db_session.commit()
 
         result = get_resume_page(
@@ -1836,14 +1836,17 @@ class TestSuspendResumeServiceLayer:
             str(subscription.id),
         )
 
-        # No customer_hold lock exists, so cannot self-service resume
+        # No customer vacation pause cause exists, so cannot self-service resume.
         assert result is None
 
     def test_apply_service_resume_restores_subscription(
         self, db_session, subscription, subscriber
     ) -> None:
         from app.models.catalog import SubscriptionStatus
-        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.models.subscription_pause import (
+            SubscriptionPauseCause,
+            SubscriptionPauseCauseStatus,
+        )
         from app.services.customer_portal_flow_services import (
             apply_service_resume,
             apply_service_suspend,
@@ -1860,7 +1863,7 @@ class TestSuspendResumeServiceLayer:
             days=7,
         )
         db_session.refresh(subscription)
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.paused
 
         # Now resume it
         result = apply_service_resume(
@@ -1873,17 +1876,8 @@ class TestSuspendResumeServiceLayer:
         assert result["restored"] is True
         assert subscription.status == SubscriptionStatus.active
 
-        # Verify lock was resolved
-        lock = (
-            db_session.query(EnforcementLock)
-            .filter(
-                EnforcementLock.subscription_id == subscription.id,
-                EnforcementLock.reason == EnforcementReason.customer_hold,
-            )
-            .first()
-        )
-        assert lock is not None
-        assert lock.is_active is False
+        cause = db_session.query(SubscriptionPauseCause).one()
+        assert cause.status == SubscriptionPauseCauseStatus.released.value
 
 
 class TestVacationHoldUsageLimits:
@@ -2092,6 +2086,19 @@ class TestVacationHoldUsageLimits:
 class TestVacationHoldCeleryTask:
     """Tests for the vacation hold auto-resume Celery task."""
 
+    @staticmethod
+    def _pause_for_customer(db_session, subscription, subscriber):
+        from app.models.subscription_pause import SubscriptionPauseCause
+        from app.services.customer_portal_flow_services import apply_service_suspend
+
+        apply_service_suspend(
+            db_session,
+            {"account_id": subscriber.id},
+            str(subscription.id),
+            days=7,
+        )
+        return db_session.query(SubscriptionPauseCause).one()
+
     def test_resume_expired_holds_processes_expired_locks(
         self, db_session, subscription, subscriber
     ) -> None:
@@ -2099,25 +2106,16 @@ class TestVacationHoldCeleryTask:
         from unittest.mock import MagicMock, patch
 
         from app.models.catalog import SubscriptionStatus
-        from app.models.enforcement_lock import EnforcementReason
-        from app.services.account_lifecycle import suspend_subscription
 
-        # First suspend the subscription properly
         subscription.status = SubscriptionStatus.active
         db_session.commit()
 
-        lock = suspend_subscription(
-            db_session,
-            str(subscription.id),
-            reason=EnforcementReason.customer_hold,
-            source="test",
-        )
-        # Set resume_at to the past
-        lock.resume_at = datetime.now(UTC) - timedelta(hours=1)
+        cause = self._pause_for_customer(db_session, subscription, subscriber)
+        cause.scheduled_resume_at = datetime.now(UTC) - timedelta(hours=1)
         db_session.commit()
 
         db_session.refresh(subscription)
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.paused
 
         # Import and run the task function directly
         from app.tasks.vacation_holds import resume_expired_holds
@@ -2145,21 +2143,12 @@ class TestVacationHoldCeleryTask:
         from unittest.mock import MagicMock, patch
 
         from app.models.catalog import SubscriptionStatus
-        from app.models.enforcement_lock import EnforcementReason
-        from app.services.account_lifecycle import suspend_subscription
 
-        # Suspend the subscription
         subscription.status = SubscriptionStatus.active
         db_session.commit()
 
-        lock = suspend_subscription(
-            db_session,
-            str(subscription.id),
-            reason=EnforcementReason.customer_hold,
-            source="test",
-        )
-        # Set resume_at to the future
-        lock.resume_at = datetime.now(UTC) + timedelta(days=7)
+        cause = self._pause_for_customer(db_session, subscription, subscriber)
+        cause.scheduled_resume_at = datetime.now(UTC) + timedelta(days=7)
         db_session.commit()
 
         from app.tasks.vacation_holds import resume_expired_holds
@@ -2177,7 +2166,7 @@ class TestVacationHoldCeleryTask:
         assert result["resumed"] == 0
 
         db_session.refresh(subscription)
-        assert subscription.status == SubscriptionStatus.suspended
+        assert subscription.status == SubscriptionStatus.paused
 
     def test_resume_expired_holds_handles_errors_gracefully(
         self, db_session, subscription, subscriber
@@ -2186,20 +2175,12 @@ class TestVacationHoldCeleryTask:
         from unittest.mock import MagicMock, patch
 
         from app.models.catalog import SubscriptionStatus
-        from app.models.enforcement_lock import EnforcementReason
-        from app.services.account_lifecycle import suspend_subscription
 
-        # Suspend the subscription
         subscription.status = SubscriptionStatus.active
         db_session.commit()
 
-        lock = suspend_subscription(
-            db_session,
-            str(subscription.id),
-            reason=EnforcementReason.customer_hold,
-            source="test",
-        )
-        lock.resume_at = datetime.now(UTC) - timedelta(hours=1)
+        cause = self._pause_for_customer(db_session, subscription, subscriber)
+        cause.scheduled_resume_at = datetime.now(UTC) - timedelta(hours=1)
         db_session.commit()
 
         from app.tasks.vacation_holds import resume_expired_holds

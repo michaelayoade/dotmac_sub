@@ -37,7 +37,7 @@ def test_automation_pause_action_delegates_to_registered_coordinator() -> None:
     assert "Subscriber.status" not in adapter_source
 
 
-def test_pause_and_legacy_suspend_actions_are_publication_conflicts() -> None:
+def test_sla_suspend_action_is_retired_from_authoring() -> None:
     pause = automation_capabilities.action_capability(
         "support.ticket.pause_unique_active_service"
     )
@@ -47,5 +47,30 @@ def test_pause_and_legacy_suspend_actions_are_publication_conflicts() -> None:
 
     assert pause is not None
     assert suspend is not None
+    assert pause.authoring_enabled
+    assert not suspend.authoring_enabled
+    assert suspend.command_name == pause.command_name
+    assert suspend.runtime_scope == "subscription:pause"
     assert pause.conflict_scope == suspend.conflict_scope
     assert pause.conflict_scope == "support.ticket.sla_service_access_consequence"
+
+    action_source = (ROOT / "app/services/automation_actions.py").read_text(
+        encoding="utf-8"
+    )
+    sla_source = (ROOT / "app/services/ticket_sla_service_automation.py").read_text(
+        encoding="utf-8"
+    )
+    assert "SuspendTicketServiceForSlaBreachCommand" not in sla_source
+    assert "suspend_unique_active_service_for_ticket_sla_breach" not in sla_source
+    assert "account_lifecycle.suspend_subscription(" not in sla_source
+    assert (
+        "immutable legacy action key using the canonical Pause owner" in action_source
+    )
+    builder_source = (ROOT / "app/web/admin/automation_center.py").read_text(
+        encoding="utf-8"
+    )
+    hub_source = (ROOT / "app/services/web_automation_center.py").read_text(
+        encoding="utf-8"
+    )
+    assert "action.authoring_enabled" in builder_source
+    assert "action.authoring_enabled" in hub_source

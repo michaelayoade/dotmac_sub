@@ -265,16 +265,16 @@ class SubscriptionStatus(enum.Enum):
 
     DotMac-only statuses:
       paused   — first-class non-billable pause with durable cause evidence
-      suspended — generic suspension (local origin)
+      suspended — access and future recurring billing stopped; unused time is not preserved
       archived  — generic archive (local origin)
       expired   — contract/prepaid period ended
     """
 
     pending = "pending"  # Awaiting activation / provisioning
     active = "active"  # Service running, subscriber can connect
-    blocked = "blocked"  # Temporarily blocked
-    suspended = "suspended"  # Generic suspension (DotMac-native)
-    paused = "paused"  # Temporary non-billable pause; service identity preserved
+    blocked = "blocked"  # Recoverable restriction; billing/collections continue
+    suspended = "suspended"  # Access and future recurring billing stopped
+    paused = "paused"  # Non-billable clock freeze; unused time is preserved
     stopped = "stopped"  # Manually paused by admin
     disabled = "disabled"  # Administratively paused; explicit re-enable required
     hidden = "hidden"  # Not visible to customer

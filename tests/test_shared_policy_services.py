@@ -118,6 +118,7 @@ def test_subscription_lifecycle_status_sets_are_named_by_workflow():
     assert SubscriptionStatus.active in PORTAL_VISIBLE_SERVICE_STATUSES
     assert SubscriptionStatus.stopped in PORTAL_VISIBLE_SERVICE_STATUSES
     assert SubscriptionStatus.blocked in BILLING_COLLECTIBLE_SERVICE_STATUSES
+    assert SubscriptionStatus.suspended not in BILLING_COLLECTIBLE_SERVICE_STATUSES
     assert SubscriptionStatus.blocked in RADIUS_PROJECTABLE_SERVICE_STATUSES
     assert SubscriptionStatus.active in MRR_COUNTABLE_SERVICE_STATUSES
     assert SubscriptionStatus.suspended not in MRR_COUNTABLE_SERVICE_STATUSES

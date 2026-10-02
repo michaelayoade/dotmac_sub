@@ -197,27 +197,24 @@ payload contains the operator tenant, Ticket, SLA clock, breach time, normalized
 priority, and ticket type. The trigger does not reinterpret an overdue date;
 it is staged only when the owner records the breach.
 
-Two admitted actions are available for this trigger. The legacy-compatible
-`support.ticket.suspend_unique_active_service` keeps billing unchanged.
-The new `support.ticket.pause_unique_active_service` creates a first-class,
-non-billable pause and preserves unused service time. The Automation Center adapter
+Only `support.ticket.pause_unique_active_service` is authorable for this
+trigger. It creates a first-class, non-billable pause and preserves unused
+service time. The Automation Center adapter
 delegates to `support.ticket_sla_service_consequence`, which locks the Ticket,
 uses its canonical customer-account link, and requires exactly one active
 Subscription. Missing customer identity, zero active services, multiple active
 services, or conflicting replay evidence fail closed and are retained in the
 automation step evidence. The coordinator delegates the actual status and
-enforcement-lock writes to `access.subscription_lifecycle`.
+pause-episode and billing-anchor writes to `access.subscription_lifecycle`.
 
-Both actions declare the same
-`support.ticket.sla_service_access_consequence` conflict scope. Publication
-rejects overlapping rules for the SLA trigger unless their conditions are
-provably disjoint, so pause and suspension cannot race for the same breach.
-
-The suspension action suspends network access with a dedicated `ticket_sla` enforcement
-lock. It does not
-pause billing and does not restore service automatically. Its stable lock
-source includes event, rule-version, and step identity so a retry after the
-side effect replays the exact success rather than selecting another service.
+The retired `support.ticket.suspend_unique_active_service` key remains
+runtime-readable only for immutable published rule versions created before the
+cutover. It is hidden from the builder, rejected from new or draft definitions,
+and its compatibility executor delegates to the same canonical Pause owner with
+the fixed `unique_active_subscription`, `manual_after_ticket_resolution`, and
+`extend_by_effective_pause_duration` policies. It never creates a suspension or
+an enforcement lock. This preserves historical rule identity without preserving
+the retired business decision.
 
 The pause action additionally locks and verifies the durable
 `support.ticket.sla_breached` event, its SLA clock, and its breach record. It
@@ -244,12 +241,11 @@ fingerprint, releases only the selected cause, and resumes only after the final
 cause is gone. The billing anchor moves once by `[effective_at, resumed_at)`;
 the generic restore paths cannot resume a paused subscription.
 
-The workflow builder exposes this trigger and both actions alongside the other
+The workflow builder exposes this trigger and the Pause action alongside the other
 registered Support capabilities. It requires the trigger's Ticket-read
 permission plus each selected action's own permission
-(`subscription:suspend` or `subscription:pause`) at draft and publication
-time. The suspension description states that billing is unchanged; the pause
-description states that exact unused time is preserved. Both explain that
+(`subscription:pause`) at draft and publication time. The pause
+description states that exact unused time is preserved. It explains that
 service selection fails closed when there is no unique active service and that
 restoration requires an authorized follow-up. Any high-impact confirmation
 belongs in the generic workflow publication step; there is no separate

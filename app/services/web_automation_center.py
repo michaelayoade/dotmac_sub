@@ -178,7 +178,9 @@ def build_automation_center_data(
             "actions": tuple(
                 action.key
                 for action in manifest.actions
-                if action.entity_type == target_type and action.runtime_enabled
+                if action.entity_type == target_type
+                and action.authoring_enabled
+                and action.runtime_enabled
             ),
             "script_target": any(
                 target.entity_type == target_type for target in manifest.script_targets
@@ -195,6 +197,7 @@ def build_automation_center_data(
             (authorized or trigger.author_permission in permission_keys)
             and any(
                 action.entity_type == trigger.entity_type
+                and action.authoring_enabled
                 and action.runtime_enabled
                 and (authorized or action.author_permission in permission_keys)
                 for candidate in manifests

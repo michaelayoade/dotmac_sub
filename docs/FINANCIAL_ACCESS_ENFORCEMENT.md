@@ -627,7 +627,7 @@ settlement command, which atomically allocates funding, creates entitlement,
 and advances the billing anchor. Ambiguous or changed evidence leaves all
 customer and financial state unchanged.
 
-## Ticket SLA subscription pause
+## Subscription pause
 
 `paused` is distinct from `suspended`. A paused subscription denies normal
 network access and is not collectible, but retains its service configuration,
@@ -643,6 +643,18 @@ and a partial unique index permits at most one active episode per subscription.
 The support coordinator may add the typed
 `ticket_resolution_sla_breach` cause only after revalidating a durable breach
 event, breached SLA clock, unresolved Ticket, and one unique active service.
+The customer vacation workflow adds the typed `customer_vacation_hold` cause
+with a required `scheduled_resume_at`. Customer vacation never creates an
+enforcement lock: it projects `paused`, stops recurring service-period
+consumption, and resumes either on an explicit customer request or at the
+scheduled instant through the same lifecycle command owner.
+The admin lifecycle workflow adds the typed `administrative` cause for an
+operator-selected Pause. Its preview states that collection stops and the
+billing clock is preserved. The distinct Suspend command remains an
+enforcement hold: network access and future recurring billing stop, but unused
+time is not preserved and the billing anchor is not extended on restoration.
+Existing invoices and ledger obligations remain historical financial facts;
+suspension does not void or credit them.
 
 The initial billing treatment is selected by the immutable Automation rule as
 `extend_by_effective_pause_duration`. Pause records the canonical billing

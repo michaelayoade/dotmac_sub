@@ -3270,8 +3270,10 @@ SERVICES: tuple[SOTService, ...] = (
             "fingerprint-approved missed renewal execution",
             "reviewed legacy prepaid renewal tax-invoice correction",
             "reviewed unused prepaid renewal correction",
+            "suspension-aware prepaid renewal eligibility",
         ),
         depends_on=(
+            "access.subscription_lifecycle",
             "billing.contracts",
             "customer.accounts",
             "financial.account_adjustments",
@@ -3355,7 +3357,13 @@ SERVICES: tuple[SOTService, ...] = (
             "renewal correction accepts only one exact un-invoiced adjustment "
             "and linked active entitlement: it reverses the historical ledger "
             "debit and entitlement atomically, restoring verified prepaid funding "
-            "without creating money, service access, or a replacement period."
+            "without creating money, service access, or a replacement period. "
+            "Routine and scheduled renewal exclude suspended subscriptions. A "
+            "settlement-triggered recovery may admit a suspended subscription only "
+            "when an active prepaid enforcement lock proves the financial cause; "
+            "the same transaction funds the new period and restores that lock. An "
+            "administrative suspension is never renewed by scheduled billing or an "
+            "unrelated account-credit event."
         ),
         contract=ServiceContract(
             concerns=(
@@ -3364,6 +3372,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "prepaid subscription and renewal terms",
+                        "canonical subscription lifecycle state",
                         "effective compatibility tax treatment",
                         "settled payment evidence",
                         "verified customer funding position",
@@ -3377,6 +3386,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.RESOLVER,
                     input_names=(
                         "prepaid subscription and renewal terms",
+                        "canonical subscription lifecycle state",
                         "effective compatibility tax treatment",
                         "verified customer funding position",
                         "funded service entitlement evidence",
@@ -3388,6 +3398,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "settled payment evidence",
                         "prepaid subscription and renewal terms",
+                        "canonical subscription lifecycle state",
                     ),
                 ),
                 ConcernContract(
@@ -3494,6 +3505,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "settled payment evidence",
                         "verified customer funding position",
                         "prepaid subscription and renewal terms",
+                        "canonical subscription lifecycle state",
                         "invoice and payment participant protocols",
                     ),
                     canonical_writer="financial.prepaid_service_renewals",
@@ -3504,9 +3516,18 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "verified customer funding position",
                         "prepaid subscription and renewal terms",
+                        "canonical subscription lifecycle state",
                         "invoice and payment participant protocols",
                     ),
                     canonical_writer="financial.prepaid_service_renewals",
+                ),
+                ConcernContract(
+                    name="suspension-aware prepaid renewal eligibility",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "canonical subscription lifecycle state",
+                        "settled payment evidence",
+                    ),
                 ),
                 ConcernContract(
                     name="fingerprint-approved missed renewal execution",
@@ -3544,6 +3565,17 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical subscription lifecycle state",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "Subscription.status plus the exact active EnforcementLock "
+                        "reason: active and blocked admit routine renewal; suspended "
+                        "admits only settlement-triggered recovery when an active "
+                        "prepaid lock proves the financial cause"
+                    ),
+                ),
                 AuthorityInput(
                     name="reviewed service calendar query",
                     owner="financial.prepaid_service_renewals",

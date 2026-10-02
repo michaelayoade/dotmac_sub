@@ -746,7 +746,6 @@ def test_current_prepaid_invoice_payment_keeps_existing_period_anchor(db_session
     [
         SubscriptionStatus.active,
         SubscriptionStatus.blocked,
-        SubscriptionStatus.suspended,
     ],
 )
 def test_canonical_prepaid_funding_renewal_creates_entitlement(

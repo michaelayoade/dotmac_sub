@@ -32,6 +32,8 @@ _STATUS_COMMANDS = frozenset(
     {
         SubscriptionCommandKind.activate,
         SubscriptionCommandKind.suspend,
+        SubscriptionCommandKind.pause,
+        SubscriptionCommandKind.resume_pause,
         SubscriptionCommandKind.disable,
         SubscriptionCommandKind.restore,
         SubscriptionCommandKind.cancel,

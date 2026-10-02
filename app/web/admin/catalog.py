@@ -113,7 +113,9 @@ def _assert_lifecycle_command_permission(
     action_permission = {
         SubscriptionCommandKind.activate: "subscription:activate",
         SubscriptionCommandKind.restore: "subscription:activate",
+        SubscriptionCommandKind.resume_pause: "subscription:activate",
         SubscriptionCommandKind.suspend: "subscription:suspend",
+        SubscriptionCommandKind.pause: "subscription:suspend",
     }.get(kind)
     if action_permission and auth and has_permission(auth, db, action_permission):
         return

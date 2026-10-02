@@ -535,6 +535,18 @@ def _command_contract_rejection(
     if (
         command.kind
         in {
+            SubscriptionCommandKind.pause,
+            SubscriptionCommandKind.resume_pause,
+        }
+        and not command.reason
+    ):
+        return (
+            "administrative_pause_reason_required",
+            "Administrative pause commands require an operational reason",
+        )
+    if (
+        command.kind
+        in {
             SubscriptionCommandKind.vacation_hold,
             SubscriptionCommandKind.vacation_resume,
         }
@@ -616,6 +628,10 @@ def _dispatch_command(
         )
 
     from app.services.account_lifecycle import (
+        PauseSubscriptionCauseCommand,
+        ResumePausedSubscriptionCauseCommand,
+        pause_subscription_for_cause,
+        release_pause_cause_and_resume_subscription,
         suspend_subscription,
         transition_subscription_status,
     )
@@ -642,61 +658,184 @@ def _dispatch_command(
             "Subscription suspension command applied",
         )
 
-    if command.kind == SubscriptionCommandKind.vacation_hold:
-        lock = suspend_subscription(
+    if command.kind == SubscriptionCommandKind.pause:
+        from app.models.subscription_pause import (
+            SubscriptionPauseBillingPolicy,
+            SubscriptionPauseReason,
+            SubscriptionPauseResumePolicy,
+            SubscriptionPauseSource,
+        )
+
+        command_key = subscription_command_idempotency_key(command)
+        if command_key is None:
+            raise SubscriptionCommandExecutionRejected(
+                "idempotency_key_required",
+                "Administrative pause requires an idempotency key",
+            )
+        pause = pause_subscription_for_cause(
             db,
-            command.subscription_id,
-            reason=EnforcementReason.customer_hold,
-            source=command.source,
-            notes=reason,
-            evidence_context=evidence_context,
-            evidence_effective_at=preview.effective_at,
+            PauseSubscriptionCauseCommand(
+                subscription_id=subscription.id,
+                reason=SubscriptionPauseReason.administrative,
+                source_type=SubscriptionPauseSource.administrator,
+                source_id=f"administrative-pause:{subscription.id}:{command_key}",
+                selection_policy="explicit_administrative_subscription",
+                resume_policy=SubscriptionPauseResumePolicy.manual,
+                billing_policy=(
+                    SubscriptionPauseBillingPolicy.extend_by_effective_pause_duration
+                ),
+                requested_at=preview.effective_at,
+                effective_at=preview.effective_at,
+                actor=actor_id or command.source,
+                idempotency_key=command_key,
+                context=evidence_context,
+            ),
         )
-        assert command.vacation_hold_days is not None
-        lock.resume_at = preview.effective_at + timedelta(
-            days=command.vacation_hold_days
-        )
-        db.flush()
         return (
             SubscriptionCommandOutcomeStatus.applied,
-            (str(lock.id),),
+            (str(pause.cause_id),),
+            "Subscription paused; billing and service clocks are stopped",
+        )
+
+    if command.kind == SubscriptionCommandKind.resume_pause:
+        from app.models.subscription_pause import (
+            SubscriptionPauseCause,
+            SubscriptionPauseCauseStatus,
+            SubscriptionPauseEpisode,
+            SubscriptionPauseReason,
+        )
+
+        administrative_cause = db.scalar(
+            select(SubscriptionPauseCause)
+            .join(
+                SubscriptionPauseEpisode,
+                SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
+            )
+            .where(
+                SubscriptionPauseEpisode.subscription_id == subscription.id,
+                SubscriptionPauseCause.reason_code
+                == SubscriptionPauseReason.administrative.value,
+                SubscriptionPauseCause.status
+                == SubscriptionPauseCauseStatus.active.value,
+            )
+            .with_for_update()
+        )
+        if administrative_cause is None:
+            raise SubscriptionCommandExecutionRejected(
+                "active_administrative_pause_missing",
+                "No active administrative pause exists",
+            )
+        resumed = release_pause_cause_and_resume_subscription(
+            db,
+            ResumePausedSubscriptionCauseCommand(
+                cause_id=administrative_cause.id,
+                preview_fingerprint=preview.current.head,
+                resumed_at=preview.effective_at,
+                actor=actor_id or command.source,
+                reason=reason,
+                context=evidence_context,
+            ),
+        )
+        return (
+            SubscriptionCommandOutcomeStatus.applied,
+            (str(administrative_cause.id),),
+            (
+                "Administrative pause ended and service restored"
+                if resumed.resulting_status == SubscriptionStatus.active
+                else "Administrative pause ended; another access restriction remains"
+            ),
+        )
+
+    if command.kind == SubscriptionCommandKind.vacation_hold:
+        from app.models.subscription_pause import (
+            SubscriptionPauseBillingPolicy,
+            SubscriptionPauseReason,
+            SubscriptionPauseResumePolicy,
+            SubscriptionPauseSource,
+        )
+
+        assert command.vacation_hold_days is not None
+        command_key = subscription_command_idempotency_key(command)
+        if command_key is None:
+            raise SubscriptionCommandExecutionRejected(
+                "idempotency_key_required",
+                "Vacation hold requires an idempotency key",
+            )
+        pause = pause_subscription_for_cause(
+            db,
+            PauseSubscriptionCauseCommand(
+                subscription_id=subscription.id,
+                reason=SubscriptionPauseReason.customer_vacation_hold,
+                source_type=SubscriptionPauseSource.customer_portal,
+                source_id=f"vacation-hold:{subscription.id}:{command_key}",
+                selection_policy="explicit_customer_subscription",
+                resume_policy=(
+                    SubscriptionPauseResumePolicy.scheduled_or_customer_requested
+                ),
+                billing_policy=(
+                    SubscriptionPauseBillingPolicy.extend_by_effective_pause_duration
+                ),
+                requested_at=preview.effective_at,
+                effective_at=preview.effective_at,
+                scheduled_resume_at=preview.effective_at
+                + timedelta(days=command.vacation_hold_days),
+                actor=actor_id or command.source,
+                idempotency_key=command_key,
+                context=evidence_context,
+            ),
+        )
+        return (
+            SubscriptionCommandOutcomeStatus.applied,
+            (str(pause.cause_id),),
             "Vacation hold applied",
         )
 
     if command.kind == SubscriptionCommandKind.vacation_resume:
-        from app.models.enforcement_lock import EnforcementLock
-        from app.services.account_lifecycle import restore_subscription
-
-        vacation_lock = db.scalar(
-            select(EnforcementLock).where(
-                EnforcementLock.subscription_id == subscription.id,
-                EnforcementLock.reason == EnforcementReason.customer_hold,
-                EnforcementLock.is_active.is_(True),
-            )
+        from app.models.subscription_pause import (
+            SubscriptionPauseCause,
+            SubscriptionPauseCauseStatus,
+            SubscriptionPauseEpisode,
+            SubscriptionPauseReason,
         )
-        if vacation_lock is None:
+
+        vacation_cause = db.scalar(
+            select(SubscriptionPauseCause)
+            .join(
+                SubscriptionPauseEpisode,
+                SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
+            )
+            .where(
+                SubscriptionPauseEpisode.subscription_id == subscription.id,
+                SubscriptionPauseCause.reason_code
+                == SubscriptionPauseReason.customer_vacation_hold.value,
+                SubscriptionPauseCause.status
+                == SubscriptionPauseCauseStatus.active.value,
+            )
+            .with_for_update()
+        )
+        if vacation_cause is None:
             raise SubscriptionCommandExecutionRejected(
                 "active_customer_hold_missing",
                 "No active customer vacation hold exists",
             )
-        trigger = "admin" if command.source.startswith("admin:") else "customer"
-        restored = restore_subscription(
+        resumed = release_pause_cause_and_resume_subscription(
             db,
-            command.subscription_id,
-            trigger=trigger,
-            resolved_by=command.source,
-            reason=EnforcementReason.customer_hold,
-            notes=reason,
-            evidence_context=evidence_context,
-            evidence_effective_at=preview.effective_at,
+            ResumePausedSubscriptionCauseCommand(
+                cause_id=vacation_cause.id,
+                preview_fingerprint=preview.current.head,
+                resumed_at=preview.effective_at,
+                actor=actor_id or command.source,
+                reason=reason,
+                context=evidence_context,
+            ),
         )
         return (
             SubscriptionCommandOutcomeStatus.applied,
-            (str(vacation_lock.id),),
+            (str(vacation_cause.id),),
             (
                 "Vacation hold cleared and service restored"
-                if restored
-                else "Vacation hold cleared; another access restriction remains"
+                if resumed.resulting_status == SubscriptionStatus.active
+                else "Vacation hold cleared; another pause or access restriction remains"
             ),
         )
     target_status = {
@@ -910,35 +1049,65 @@ def _replay_outcome(
         ):
             artifact_ids = (snapshot.pending_change.request_id,)
     elif command.kind in {
+        SubscriptionCommandKind.pause,
+        SubscriptionCommandKind.resume_pause,
         SubscriptionCommandKind.vacation_hold,
         SubscriptionCommandKind.vacation_resume,
     }:
-        from app.models.enforcement_lock import EnforcementLock
+        from app.models.subscription_pause import (
+            SubscriptionPauseCause,
+            SubscriptionPauseEpisode,
+            SubscriptionPauseReason,
+        )
 
-        lock: EnforcementLock | None = None
+        cause: SubscriptionPauseCause | None = None
         if command.kind == SubscriptionCommandKind.vacation_resume:
-            raw_lock_id = str(command.idempotency_key or "").rsplit(":", 1)[-1]
+            raw_cause_id = str(command.idempotency_key or "").rsplit(":", 1)[-1]
             try:
-                lock = db.get(EnforcementLock, coerce_uuid(raw_lock_id))
+                cause = db.get(SubscriptionPauseCause, coerce_uuid(raw_cause_id))
             except (TypeError, ValueError):
-                lock = None
-        else:
-            lock = db.scalar(
-                select(EnforcementLock)
-                .where(
-                    EnforcementLock.subscription_id
-                    == coerce_uuid(command.subscription_id),
-                    EnforcementLock.reason == EnforcementReason.customer_hold,
-                    EnforcementLock.source == command.source,
-                )
-                .order_by(EnforcementLock.created_at.desc())
+                cause = None
+        elif command.kind in {
+            SubscriptionCommandKind.pause,
+            SubscriptionCommandKind.vacation_hold,
+        }:
+            command_key = subscription_command_idempotency_key(command)
+            reason = (
+                SubscriptionPauseReason.administrative
+                if command.kind == SubscriptionCommandKind.pause
+                else SubscriptionPauseReason.customer_vacation_hold
             )
+            cause = db.scalar(
+                select(SubscriptionPauseCause)
+                .join(
+                    SubscriptionPauseEpisode,
+                    SubscriptionPauseEpisode.id
+                    == SubscriptionPauseCause.pause_episode_id,
+                )
+                .where(
+                    SubscriptionPauseEpisode.subscription_id
+                    == coerce_uuid(command.subscription_id),
+                    SubscriptionPauseCause.reason_code == reason.value,
+                    SubscriptionPauseCause.idempotency_key == command_key,
+                )
+                .order_by(SubscriptionPauseCause.created_at.desc())
+            )
+        expected_reasons = {
+            SubscriptionCommandKind.pause: SubscriptionPauseReason.administrative,
+            SubscriptionCommandKind.vacation_hold: (
+                SubscriptionPauseReason.customer_vacation_hold
+            ),
+            SubscriptionCommandKind.vacation_resume: (
+                SubscriptionPauseReason.customer_vacation_hold
+            ),
+        }
+        expected_reason = expected_reasons.get(command.kind)
         if (
-            lock is not None
-            and lock.subscription_id == coerce_uuid(command.subscription_id)
-            and lock.reason == EnforcementReason.customer_hold
+            cause is not None
+            and expected_reason is not None
+            and cause.reason_code == expected_reason.value
         ):
-            artifact_ids = (str(lock.id),)
+            artifact_ids = (str(cause.id),)
     elif command.effective_timing != SubscriptionEffectiveTiming.immediate:
         from app.models.subscription_lifecycle_schedule import (
             SubscriptionLifecycleSchedule,

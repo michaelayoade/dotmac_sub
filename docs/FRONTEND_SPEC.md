@@ -742,6 +742,9 @@ status (including delinquent) does not hide a matching customer. Plan-name text
 and `Subscriber.billing_enabled` are not chargeability evidence. An account
 with coherent paid service remains billable; any missing or contradictory price
 keeps the whole account in review until staff resolves it.
+This is commercial catalog classification, not recurring-run eligibility:
+`suspended`, `paused`, `stopped`, and `disabled` services are excluded by the
+lifecycle billing gate even when their retained contract price is coherent.
 
 #### `GET /admin/customers/{type}/{id}` (Person Detail)
 **Template:** `admin/customers/detail.html`

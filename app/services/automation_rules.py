@@ -753,6 +753,12 @@ def _validate_definition(
     selected_scopes = {trigger.key}
     for position, step in enumerate(actions):
         capability = automation_capabilities.action_capability(step.action_key)
+        if not capability.authoring_enabled:
+            raise _error(
+                "action_retired",
+                "This action is retired and cannot be added to a rule.",
+                action_key=capability.key,
+            )
         if capability.entity_type != trigger.entity_type:
             raise _error(
                 "action_target_mismatch",
@@ -839,6 +845,12 @@ def _validate_persisted_definition(
         action_key = str(step.get("action_key") or "")
         persisted_action_keys.append(action_key)
         capability = automation_capabilities.action_capability(action_key)
+        if not capability.authoring_enabled and version.published_at is None:
+            raise _error(
+                "action_retired",
+                "This retired action cannot be published from a draft.",
+                action_key=action_key,
+            )
         if capability.entity_type != trigger.entity_type:
             raise _error(
                 "action_target_mismatch",

@@ -36,11 +36,13 @@ class SubscriptionPauseCauseStatus(str, enum.Enum):
 
 class SubscriptionPauseReason(str, enum.Enum):
     ticket_resolution_sla_breach = "ticket_resolution_sla_breach"
+    customer_vacation_hold = "customer_vacation_hold"
     administrative = "administrative"
 
 
 class SubscriptionPauseSource(str, enum.Enum):
     automation_workflow = "automation_workflow"
+    customer_portal = "customer_portal"
     administrator = "administrator"
 
 
@@ -50,6 +52,7 @@ class SubscriptionPauseBillingPolicy(str, enum.Enum):
 
 class SubscriptionPauseResumePolicy(str, enum.Enum):
     manual_after_ticket_resolution = "manual_after_ticket_resolution"
+    scheduled_or_customer_requested = "scheduled_or_customer_requested"
     manual = "manual"
 
 
@@ -216,6 +219,9 @@ class SubscriptionPauseCause(Base):
     )
     activated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
+    )
+    scheduled_resume_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
     )
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     released_by: Mapped[str | None] = mapped_column(String(160))

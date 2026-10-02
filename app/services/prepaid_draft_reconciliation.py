@@ -6692,6 +6692,7 @@ def settle_reviewed_existing_prepaid_draft(
                     "Continuous successor-period evidence is incomplete.",
                 )
             from app.services.prepaid_service_renewals import (
+                PrepaidRenewalEligibilityContext,
                 PrepaidServiceRenewalError,
                 PrepaidServiceRenewalSource,
                 confirm_prepaid_service_renewal,
@@ -6707,6 +6708,9 @@ def settle_reviewed_existing_prepaid_draft(
                     ends_at=current.successor_period_end,
                     amount=current.successor_amount,
                     currency=current.successor_currency,
+                    eligibility_context=(
+                        PrepaidRenewalEligibilityContext.funding_recovery
+                    ),
                 )
                 if not successor_preview.allowed:
                     _error(

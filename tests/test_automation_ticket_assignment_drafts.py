@@ -6,7 +6,12 @@ from uuid import UUID
 import pytest
 
 from app.models.support import TicketPriority
-from app.services import automation_actions, automation_capabilities, automation_rules
+from app.services import (
+    automation_actions,
+    automation_capabilities,
+    automation_rules,
+    ticket_sla_service_automation,
+)
 from app.services.automation_actions import runtime_registry_errors
 from app.services.automation_contracts import AutomationOperator
 from app.services.events.handlers.automation import HANDLED_EVENT_TYPES
@@ -57,7 +62,7 @@ def test_ticket_assignment_pilot_is_runtime_enabled() -> None:
     )
 
 
-def test_ticket_sla_suspension_capability_is_available_to_workflows() -> None:
+def test_ticket_sla_suspension_capability_is_retired_from_authoring() -> None:
     trigger = automation_capabilities.trigger_capability("support.ticket.sla_breached")
     action = automation_capabilities.action_capability(
         "support.ticket.suspend_unique_active_service"
@@ -65,21 +70,22 @@ def test_ticket_sla_suspension_capability_is_available_to_workflows() -> None:
 
     assert trigger.runtime_enabled
     assert action.runtime_enabled
-    _schema, conditions, actions = automation_rules._validate_definition(
-        db=SimpleNamespace(),
-        trigger_key=trigger.key,
-        conditions=(),
-        actions=(
-            automation_rules.AutomationActionStep(
-                action_key=action.key,
-                inputs=(),
+    assert not action.authoring_enabled
+    with pytest.raises(automation_rules.AutomationRuleError) as exc_info:
+        automation_rules._validate_definition(
+            db=SimpleNamespace(),
+            trigger_key=trigger.key,
+            conditions=(),
+            actions=(
+                automation_rules.AutomationActionStep(
+                    action_key=action.key,
+                    inputs=(),
+                ),
             ),
-        ),
-        permission_keys=frozenset({"support:ticket:read", "subscription:suspend"}),
-    )
+            permission_keys=frozenset({"support:ticket:read", "subscription:pause"}),
+        )
 
-    assert conditions == []
-    assert actions[0]["action_key"] == action.key
+    assert exc_info.value.code.endswith(".action_retired")
     assert EventType.support_ticket_sla_breached in HANDLED_EVENT_TYPES
     assert not runtime_registry_errors()
 
@@ -250,3 +256,41 @@ def test_priority_action_uses_typed_ticket_owner_command(monkeypatch) -> None:
     assert outcome.outcome_code == "support_ticket_priority_set"
     assert observed["command"].priority is TicketPriority.high
     assert observed["command"].step_index == 0
+
+
+def test_historical_sla_suspend_key_executes_canonical_pause(monkeypatch) -> None:
+    observed = {}
+
+    def capture(_db, command):
+        observed["command"] = command
+        return SimpleNamespace(replayed=False)
+
+    monkeypatch.setattr(
+        ticket_sla_service_automation,
+        "pause_unique_active_service_for_ticket_sla_breach",
+        capture,
+    )
+    command = automation_actions.ExecuteAutomationActionCommand(
+        tenant_id=UUID("182a8f9e-52aa-4eb0-9912-85f830002a94"),
+        event_id=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+        rule_id=UUID("98ce8c4d-71ca-42fa-9bb0-6a76d35c95e1"),
+        rule_version_id=UUID("53c2d409-5f53-4c74-9b8c-2af4284bd731"),
+        step_index=1,
+        target=automation_actions.AutomationTargetReference(
+            entity_type="support.ticket",
+            entity_id=UUID("d7fac8aa-dce2-4447-91d8-94d46ab3c976"),
+        ),
+        inputs=(),
+        context=SimpleNamespace(),
+    )
+
+    outcome = automation_actions.action_executor(
+        "support.ticket.suspend_unique_active_service"
+    )(SimpleNamespace(), command)
+
+    pause_command = observed["command"]
+    assert outcome.outcome_code == "support_ticket_service_paused"
+    assert pause_command.selection_policy.value == "unique_active_subscription"
+    assert pause_command.resume_policy.value == "manual_after_ticket_resolution"
+    assert pause_command.billing_policy.value == "extend_by_effective_pause_duration"
+    assert pause_command.step_index == 1

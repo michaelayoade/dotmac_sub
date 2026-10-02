@@ -16,7 +16,9 @@ from app.services import billing_settings
     "status, collectible, live",
     [
         (SubscriptionStatus.active, True, True),
-        (SubscriptionStatus.suspended, True, True),
+        # Suspension stops new recurring billing, but recorded debt remains
+        # collectible. It is not a live service for automatic service charging.
+        (SubscriptionStatus.suspended, True, False),
         (SubscriptionStatus.pending, True, True),
         # The fix: blocked is collectible but NOT "live".
         (SubscriptionStatus.blocked, True, False),
@@ -48,6 +50,8 @@ def test_collectible_vs_live_gate(
 def test_blocked_in_collectible_not_in_live_constant():
     assert SubscriptionStatus.blocked in billing_settings.COLLECTIBLE_SERVICE_STATUSES
     assert SubscriptionStatus.blocked not in billing_settings.LIVE_SERVICE_STATUSES
+    assert SubscriptionStatus.suspended in billing_settings.COLLECTIBLE_SERVICE_STATUSES
+    assert SubscriptionStatus.suspended not in billing_settings.LIVE_SERVICE_STATUSES
     # Truly-terminal stay out of the collectible set.
     for terminal in (
         SubscriptionStatus.disabled,

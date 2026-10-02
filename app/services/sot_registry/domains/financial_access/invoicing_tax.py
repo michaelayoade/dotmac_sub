@@ -2616,7 +2616,10 @@ SERVICES: tuple[SOTService, ...] = (
             "Classifies the complete current administrative service scope as "
             "billable, confirmed non-billable, review-required, or no-current-"
             "service. Missing or contradictory pricing is visible review work "
-            "and never becomes authority to suppress customer billing."
+            "and never becomes authority to suppress customer billing. This is "
+            "commercial price/treatment classification, not recurring-run "
+            "eligibility: access.subscription_lifecycle excludes suspended, "
+            "paused, stopped, and disabled services from future billing."
         ),
         contract=ServiceContract(
             concerns=(

@@ -1481,7 +1481,7 @@ def admin_resume_vacation_hold_redirect(
 ) -> str:
     """Admin action to resume a customer vacation hold and return redirect URL."""
     from app.models.audit import AuditActorType
-    from app.models.enforcement_lock import EnforcementLock
+    from app.models.subscription_pause import SubscriptionPauseCause
     from app.services.subscription_lifecycle import (
         SubscriptionCommandKind,
         SubscriptionEffectiveTiming,
@@ -1503,10 +1503,10 @@ def admin_resume_vacation_hold_redirect(
             subscription,
             command_kind=SubscriptionCommandKind.vacation_resume,
         )
-        if not decision.eligible or decision.active_lock_id is None:
+        if not decision.eligible or decision.active_cause_id is None:
             raise ValueError("No active vacation hold exists")
-        lock = db.get(EnforcementLock, coerce_uuid(decision.active_lock_id))
-        if lock is None:
+        cause = db.get(SubscriptionPauseCause, coerce_uuid(decision.active_cause_id))
+        if cause is None:
             raise ValueError("Vacation-hold evidence is missing")
         snapshot = resolve_subscription_lifecycle(db, subscription_id)
         outcome = execute_subscription_command(
@@ -1518,7 +1518,7 @@ def admin_resume_vacation_hold_redirect(
                 effective_timing=SubscriptionEffectiveTiming.immediate,
                 reason="Administrator resumed customer vacation hold",
                 expected_head=snapshot.head,
-                idempotency_key=f"admin-vacation-resume:{lock.id}",
+                idempotency_key=f"admin-vacation-resume:{cause.id}",
             ),
             actor_id=actor_id,
             actor_type=AuditActorType.user,

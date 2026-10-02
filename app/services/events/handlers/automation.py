@@ -305,9 +305,9 @@ class AutomationEventHandler:
         for step_index, request in enumerate(requests):
             try:
                 action = automation_capabilities.action_capability(request.action_key)
-                if not action.runtime_enabled:
+                if not action.authoring_enabled or not action.runtime_enabled:
                     raise _handler_error(
-                        f"Server script action {action.key!r} is not runtime-enabled.",
+                        f"Server script action {action.key!r} is not available.",
                         retryable=False,
                     )
                 if action.entity_type != script.target_type:

@@ -853,6 +853,45 @@ class TestRunInvoiceCycle:
         )
         assert final_invoices > initial_invoices
 
+    def test_does_not_invoice_suspended_subscription(
+        self, db_session, subscription, subscriber_account
+    ):
+        """Suspension stops future recurring postpaid billing."""
+        from app.models.billing import Invoice
+        from app.models.catalog import (
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        run_at = datetime(2026, 10, 2, 12)
+        due_at = run_at - timedelta(days=1)
+        subscription.status = SubscriptionStatus.suspended
+        subscriber_account.status = AccountStatus.suspended
+        subscription.start_at = run_at - timedelta(days=30)
+        subscription.next_billing_at = due_at
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        initial_invoices = db_session.query(Invoice).count()
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        db_session.refresh(subscription)
+        assert summary["invoices_created"] == 0
+        assert db_session.query(Invoice).count() == initial_invoices
+        assert subscription.next_billing_at == due_at
+
     def test_creates_invoice_for_active_subscription_on_blocked_account(
         self, db_session, subscription, subscriber_account
     ):

@@ -34,6 +34,12 @@ from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
+from app.models.subscription_pause import (
+    SubscriptionPauseCause,
+    SubscriptionPauseCauseStatus,
+    SubscriptionPauseEpisode,
+    SubscriptionPauseReason,
+)
 from app.services.access_resolution import resolve_customer_access
 from app.services.common import coerce_uuid, round_money
 from app.services.subscription_lifecycle_policy import (
@@ -68,6 +74,8 @@ class SubscriptionLifecycleHeadConflict(SubscriptionLifecycleError):
 class SubscriptionCommandKind(str, enum.Enum):
     activate = "activate"
     suspend = "suspend"
+    pause = "pause"
+    resume_pause = "resume_pause"
     disable = "disable"
     restore = "restore"
     renew = "renew"
@@ -386,8 +394,9 @@ class VacationHoldPolicyDecision:
     holds_this_year: int
     last_hold_at: datetime | None
     days_since_last: int | None
-    active_lock_id: str | None
-    active_lock_resume_at: datetime | None
+    active_cause_id: str | None
+    active_episode_id: str | None
+    scheduled_resume_at: datetime | None
 
 
 def resolve_vacation_hold_policy(
@@ -413,7 +422,22 @@ def resolve_vacation_hold_policy(
     max_holds = _setting_int("max_suspend_holds_per_year", 0)
     cooldown_days = _setting_int("suspend_cooldown_days", 0)
     year_start = datetime(effective_now.year, 1, 1, tzinfo=UTC)
-    holds = list(
+    causes = list(
+        db.scalars(
+            select(SubscriptionPauseCause)
+            .join(
+                SubscriptionPauseEpisode,
+                SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
+            )
+            .where(
+                SubscriptionPauseEpisode.subscription_id == subscription.id,
+                SubscriptionPauseCause.reason_code
+                == SubscriptionPauseReason.customer_vacation_hold.value,
+            )
+            .order_by(SubscriptionPauseCause.activated_at.desc())
+        ).all()
+    )
+    legacy_holds = list(
         db.scalars(
             select(EnforcementLock)
             .where(
@@ -425,16 +449,31 @@ def resolve_vacation_hold_policy(
     )
     holds_this_year = sum(
         1
-        for lock in holds
+        for cause in causes
+        if (_aware_utc(cause.activated_at) or effective_now) >= year_start
+    ) + sum(
+        1
+        for lock in legacy_holds
         if (_aware_utc(lock.created_at) or effective_now) >= year_start
     )
-    last_hold_at = _aware_utc(holds[0].created_at) if holds else None
+    hold_instants = [
+        *(_aware_utc(cause.activated_at) for cause in causes),
+        *(_aware_utc(lock.created_at) for lock in legacy_holds),
+    ]
+    last_hold_at = max((value for value in hold_instants if value), default=None)
     days_since_last = (
         max(0, (effective_now - last_hold_at).days)
         if last_hold_at is not None
         else None
     )
-    active = next((lock for lock in holds if lock.is_active), None)
+    active = next(
+        (
+            cause
+            for cause in causes
+            if cause.status == SubscriptionPauseCauseStatus.active.value
+        ),
+        None,
+    )
     reasons: list[str] = []
     if command_kind == SubscriptionCommandKind.vacation_hold:
         if subscription.status != SubscriptionStatus.active:
@@ -450,8 +489,8 @@ def resolve_vacation_hold_policy(
         ):
             reasons.append("vacation_hold_cooldown_active")
     elif command_kind == SubscriptionCommandKind.vacation_resume:
-        if subscription.status != SubscriptionStatus.suspended:
-            reasons.append("vacation_resume_requires_suspended_subscription")
+        if subscription.status != SubscriptionStatus.paused:
+            reasons.append("vacation_resume_requires_paused_subscription")
         if active is None:
             reasons.append("active_customer_hold_missing")
     else:
@@ -465,10 +504,13 @@ def resolve_vacation_hold_policy(
         holds_this_year=holds_this_year,
         last_hold_at=last_hold_at,
         days_since_last=days_since_last,
-        active_lock_id=str(active.id) if active is not None else None,
-        active_lock_resume_at=_aware_utc(active.resume_at)
-        if active is not None
-        else None,
+        active_cause_id=str(active.id) if active is not None else None,
+        active_episode_id=(
+            str(active.pause_episode_id) if active is not None else None
+        ),
+        scheduled_resume_at=(
+            _aware_utc(active.scheduled_resume_at) if active is not None else None
+        ),
     )
 
 
@@ -845,6 +887,8 @@ def _eligibility_reasons(
             SubscriptionStatus.suspended,
             SubscriptionStatus.stopped,
         },
+        SubscriptionCommandKind.pause: {SubscriptionStatus.active},
+        SubscriptionCommandKind.resume_pause: {SubscriptionStatus.paused},
         SubscriptionCommandKind.disable: set(SubscriptionStatus)
         - set(TERMINAL_SERVICE_STATUSES)
         - {SubscriptionStatus.disabled},
@@ -852,7 +896,6 @@ def _eligibility_reasons(
         SubscriptionCommandKind.renew: {
             SubscriptionStatus.active,
             SubscriptionStatus.blocked,
-            SubscriptionStatus.suspended,
         },
         SubscriptionCommandKind.cancel: set(SubscriptionStatus)
         - set(TERMINAL_SERVICE_STATUSES),
@@ -864,7 +907,7 @@ def _eligibility_reasons(
             SubscriptionStatus.suspended,
         },
         SubscriptionCommandKind.vacation_hold: {SubscriptionStatus.active},
-        SubscriptionCommandKind.vacation_resume: {SubscriptionStatus.suspended},
+        SubscriptionCommandKind.vacation_resume: {SubscriptionStatus.paused},
     }
     if status not in allowed_statuses[command.kind]:
         reasons.append(f"status_{status.value}_not_eligible_for_{command.kind.value}")
@@ -882,6 +925,24 @@ def _eligibility_reasons(
         )
         if unresolved_prepaid_lock is not None:
             reasons.append("prepaid_financial_reconciliation_required")
+    if command.kind == SubscriptionCommandKind.resume_pause:
+        administrative_cause = db.scalar(
+            select(SubscriptionPauseCause.id)
+            .join(
+                SubscriptionPauseEpisode,
+                SubscriptionPauseEpisode.id == SubscriptionPauseCause.pause_episode_id,
+            )
+            .where(
+                SubscriptionPauseEpisode.subscription_id == subscription.id,
+                SubscriptionPauseCause.reason_code
+                == SubscriptionPauseReason.administrative.value,
+                SubscriptionPauseCause.status
+                == SubscriptionPauseCauseStatus.active.value,
+            )
+            .limit(1)
+        )
+        if administrative_cause is None:
+            reasons.append("active_administrative_pause_missing")
     if (
         command.effective_timing == SubscriptionEffectiveTiming.scheduled
         and command.effective_at is not None
@@ -1083,13 +1144,17 @@ def _billing_impact(
         )
     action = {
         SubscriptionCommandKind.activate: "start_or_resume_collection",
-        SubscriptionCommandKind.suspend: "continue_collection_while_held",
+        SubscriptionCommandKind.suspend: "stop_collection_without_preserving_period",
+        SubscriptionCommandKind.pause: "pause_collection_and_preserve_period",
+        SubscriptionCommandKind.resume_pause: (
+            "resume_collection_after_anchor_extension"
+        ),
         SubscriptionCommandKind.disable: "stop_collection",
         SubscriptionCommandKind.restore: "collection_unchanged",
         SubscriptionCommandKind.cancel: "stop_collection",
         SubscriptionCommandKind.expire: "stop_collection",
-        SubscriptionCommandKind.vacation_hold: "continue_collection_while_held",
-        SubscriptionCommandKind.vacation_resume: "collection_unchanged",
+        SubscriptionCommandKind.vacation_hold: "pause_collection_and_preserve_period",
+        SubscriptionCommandKind.vacation_resume: "resume_collection_after_anchor_extension",
     }.get(command.kind, "collection_unchanged")
     return (
         SubscriptionBillingImpact(
@@ -1153,18 +1218,20 @@ def _proposed_status(
     current: SubscriptionStatus, kind: SubscriptionCommandKind
 ) -> SubscriptionStatus:
     if (
-        kind in {SubscriptionCommandKind.suspend, SubscriptionCommandKind.vacation_hold}
+        kind == SubscriptionCommandKind.suspend
         and current in _SUSPENDED_EQUIVALENT_STATUSES
     ):
         return current
     return {
         SubscriptionCommandKind.activate: SubscriptionStatus.active,
         SubscriptionCommandKind.suspend: SubscriptionStatus.suspended,
+        SubscriptionCommandKind.pause: SubscriptionStatus.paused,
+        SubscriptionCommandKind.resume_pause: SubscriptionStatus.active,
         SubscriptionCommandKind.disable: SubscriptionStatus.disabled,
         SubscriptionCommandKind.restore: SubscriptionStatus.active,
         SubscriptionCommandKind.cancel: SubscriptionStatus.canceled,
         SubscriptionCommandKind.expire: SubscriptionStatus.expired,
-        SubscriptionCommandKind.vacation_hold: SubscriptionStatus.suspended,
+        SubscriptionCommandKind.vacation_hold: SubscriptionStatus.paused,
         SubscriptionCommandKind.vacation_resume: SubscriptionStatus.active,
     }.get(kind, current)
 
@@ -1173,7 +1240,9 @@ def _session_action(kind: SubscriptionCommandKind) -> SubscriptionSessionAction:
     return {
         SubscriptionCommandKind.activate: SubscriptionSessionAction.authorize,
         SubscriptionCommandKind.restore: SubscriptionSessionAction.authorize,
+        SubscriptionCommandKind.resume_pause: SubscriptionSessionAction.authorize,
         SubscriptionCommandKind.suspend: SubscriptionSessionAction.disconnect,
+        SubscriptionCommandKind.pause: SubscriptionSessionAction.disconnect,
         SubscriptionCommandKind.disable: SubscriptionSessionAction.disconnect,
         SubscriptionCommandKind.cancel: SubscriptionSessionAction.deprovision,
         SubscriptionCommandKind.expire: SubscriptionSessionAction.deprovision,
