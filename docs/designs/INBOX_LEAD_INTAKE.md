@@ -33,9 +33,11 @@ When `ai.intake` persists a final, no-follow-up `new_connection` or
 Instagram DM message with a known individual/organization type, it stages
 `ai.intake_lead_candidate_classified` in the same transaction. The event uses a
 message-derived deterministic ID and contains only the typed classification,
-message/conversation IDs, provider/model labels, and allowlisted PII-free Meta
-referral fields. Meta referral data is acquisition evidence, not a standalone
-Lead decision.
+operator tenant ID, message/conversation IDs, provider/model labels, and
+allowlisted PII-free Meta referral fields. The Sales handler validates the
+tenant before entering its owner; a cross-tenant event is a permanent,
+reviewable refusal. Meta referral data is acquisition evidence, not a
+standalone Lead decision.
 
 The durable Sales handler enters `sales.lead_intake` once. At the configured AI
 confidence threshold (or the conservative default when no channel config is

@@ -98,6 +98,7 @@ from app.services.integrations.connectors.whatsapp_runtime import WHATSAPP_PROVI
 from app.services.integrations.meta_social_installation import (
     get_meta_social_installation_projection,
 )
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -252,6 +253,7 @@ def _stage_lead_candidate_classified(
         return
     event_id = uuid5(inbound.id, "ai-intake-lead-candidate-classified-v1")
     payload = AiLeadCandidateClassifiedEvent(
+        tenant_id=OPERATOR_TENANT_ID,
         conversation_id=conversation.id,
         message_id=inbound.id,
         classification=AiLeadIntakeClassification(

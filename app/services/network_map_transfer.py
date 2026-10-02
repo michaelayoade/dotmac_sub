@@ -48,7 +48,7 @@ OWNER = "network.map_kmz_transfer"
 IMPORT_PERMISSION = "network:fiber:import"
 EXPORT_PERMISSION = "network:map:export"
 CUSTOMER_PERMISSION = "customer:read"
-IMPORT_CONCERN = "administrative KMZ source admission and staging coordination"
+IMPORT_CONCERN = "administrative KML/KMZ source admission and staging coordination"
 EXPORT_CONCERN = "permission-scoped Network Map KMZ export"
 MAX_UPLOAD_BYTES = fiber_topology_staging.MAX_KMZ_BYTES
 MAX_PREVIEW_FEATURES = 5_000
@@ -208,7 +208,7 @@ def stage_network_map_kmz(
     except IntegrityError as exc:
         raise _error(
             "idempotency_conflict",
-            "This KMZ import conflicts with an existing import command.",
+            "This map import conflicts with an existing import command.",
         ) from exc
 
 
@@ -224,18 +224,21 @@ def _stage_network_map_kmz(
     if not command.context.reason.strip():
         raise _error("reason_required", "An import reason is required.")
     if not command.content:
-        raise _error("empty_file", "Choose a KMZ file to import.")
+        raise _error("empty_file", "Choose a KML or KMZ file to import.")
     if len(command.content) > MAX_UPLOAD_BYTES:
         raise _error(
             "file_too_large",
-            "The KMZ file exceeds the 25 MB upload limit.",
+            "The map file exceeds the 25 MB upload limit.",
             maximum_bytes=MAX_UPLOAD_BYTES,
         )
     filename = Path(command.filename).name.strip()
-    if not filename or Path(filename).suffix.casefold() != ".kmz":
-        raise _error("invalid_file_type", "Network Map imports must be KMZ files.")
+    suffix = Path(filename).suffix.casefold()
+    if not filename or suffix not in {".kml", ".kmz"}:
+        raise _error(
+            "invalid_file_type", "Network Map imports must be KML or KMZ files."
+        )
     if len(filename) > 255:
-        filename = f"{Path(filename).stem[:251]}.kmz"
+        filename = f"{Path(filename).stem[: 255 - len(suffix)]}{suffix}"
     command_key_sha256 = _hash_text(command.context.idempotency_key)
     fingerprint = _fingerprint(command, filename)
     try:

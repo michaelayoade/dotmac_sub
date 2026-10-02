@@ -46,6 +46,7 @@ class AiLeadCandidateClassifiedEvent(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
     schema_version: Literal[1] = 1
+    tenant_id: UUID
     conversation_id: UUID
     message_id: UUID
     classification: AiLeadIntakeClassification

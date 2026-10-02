@@ -467,10 +467,6 @@ def comprehensive_network_map(
             auth, db, network_map_transfer.CUSTOMER_PERMISSION
         ),
         "max_upload_bytes": network_map_transfer.MAX_UPLOAD_BYTES,
-        "profiles": [
-            {"value": profile.value, "label": profile.label}
-            for profile in NetworkMapImportProfile
-        ],
     }
     return templates.TemplateResponse("admin/network/map.html", context)
 
@@ -502,7 +498,9 @@ def _network_map_transfer_error_response(error: DomainError) -> JSONResponse:
 )
 async def import_network_map_kmz(
     file: UploadFile = File(...),
-    profile: NetworkMapImportProfile = Form(...),
+    profile: NetworkMapImportProfile = Form(
+        default=NetworkMapImportProfile.mixed_network_map
+    ),
     reason: str = Form(..., min_length=1, max_length=500),
     idempotency_key: UUID = Form(...),
     db: Session = Depends(get_db),
@@ -510,7 +508,7 @@ async def import_network_map_kmz(
         require_permission(network_map_transfer.IMPORT_PERMISSION)
     ),
 ) -> dict[str, object] | JSONResponse:
-    """Stage an uploaded KMZ as immutable, non-canonical map evidence."""
+    """Stage an uploaded KML or KMZ as immutable map evidence."""
 
     actor = _network_map_actor(auth)
     if actor is None:
@@ -527,7 +525,7 @@ async def import_network_map_kmz(
                 status_code=413,
                 content={
                     "error": "file_too_large",
-                    "message": "The KMZ file exceeds the 25 MB upload limit.",
+                    "message": "The map file exceeds the 25 MB upload limit.",
                 },
             )
         chunks.append(chunk)

@@ -26,6 +26,7 @@ class NetworkMapImportProfile(StrEnum):
     osp_splice_info = "osp_splice_info"
     osp_buildings = "osp_buildings"
     osp_air_fiber = "osp_air_fiber"
+    mixed_network_map = "mixed_network_map"
 
     @property
     def label(self) -> str:
@@ -36,6 +37,7 @@ class NetworkMapImportProfile(StrEnum):
             NetworkMapImportProfile.osp_splice_info: "Splice closures",
             NetworkMapImportProfile.osp_buildings: "Service buildings",
             NetworkMapImportProfile.osp_air_fiber: "Support structures",
+            NetworkMapImportProfile.mixed_network_map: "Mixed network map",
         }[self]
 
 

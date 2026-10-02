@@ -185,6 +185,206 @@ def test_stage_is_idempotent_and_never_creates_canonical_assets(db_session, tmp_
     assert db_session.query(FiberAccessPoint).count() == 0
 
 
+def test_mixed_network_map_stages_supported_assets_and_geometry_types(
+    db_session, tmp_path
+):
+    path = _write_kmz(
+        tmp_path,
+        "network-map.kmz",
+        [
+            _placemark(
+                name="Route 1",
+                properties={
+                    "dotmac_asset_type": "fiber_segment",
+                    "dotmac_asset_id": "SEG-1",
+                },
+                geometry_type="LineString",
+                coordinates="7.1,9.0 7.2,9.1",
+            ),
+            _placemark(
+                name="Cabinet 1",
+                properties={
+                    "dotmac_asset_type": "fdh_cabinet",
+                    "dotmac_asset_id": "CAB-1",
+                },
+                geometry_type="Point",
+                coordinates="7.3,9.2",
+            ),
+            _placemark(
+                name="Access point 1",
+                properties={
+                    "dotmac_asset_type": "access_point",
+                    "dotmac_asset_id": "AP-1",
+                },
+                geometry_type="Polygon",
+                coordinates=_polygon(4),
+            ),
+        ],
+    )
+
+    preview = preview_fiber_source(db_session, path, "mixed_network_map")
+    staged = stage_fiber_source(
+        db_session, path, "mixed_network_map", created_by="pytest"
+    )
+    features = (
+        db_session.query(FiberTopologyStagedFeature)
+        .order_by(FiberTopologyStagedFeature.row_number)
+        .all()
+    )
+
+    assert preview.profile.asset_type == "mixed_network_map"
+    assert preview.blocker_count == 0
+    assert staged.status == "staged"
+    assert [(feature.asset_type, feature.geometry_type) for feature in features] == [
+        ("fiber_segment", "LineString"),
+        ("fdh_cabinet", "Point"),
+        ("fiber_access_point", "Polygon"),
+    ]
+    assert [feature.external_id for feature in features] == [
+        "SEG-1",
+        "CAB-1",
+        "AP-1",
+    ]
+    assert db_session.query(FdhCabinet).count() == 0
+    assert db_session.query(FiberAccessPoint).count() == 0
+
+
+def test_mixed_kml_stages_features_without_profile_specific_ids(db_session, tmp_path):
+    path = tmp_path / "network-map.kml"
+    path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+        + _placemark(
+            name="Unnumbered path",
+            properties={"dotmac_asset_type": "fiber_segment"},
+            geometry_type="LineString",
+            coordinates="7.1,9.0 7.2,9.1",
+        )
+        + _placemark(
+            name="Unnumbered cabinet",
+            properties={"dotmac_asset_type": "fdh_cabinet"},
+            geometry_type="Point",
+            coordinates="7.3,9.2",
+        )
+        + "</Document></kml>",
+        encoding="utf-8",
+    )
+
+    preview = preview_fiber_source(db_session, path, "mixed_network_map")
+    staged = stage_fiber_source(
+        db_session, path, "mixed_network_map", created_by="pytest"
+    )
+    features = (
+        db_session.query(FiberTopologyStagedFeature)
+        .order_by(FiberTopologyStagedFeature.row_number)
+        .all()
+    )
+
+    assert preview.blocker_count == 0
+    assert staged.status == "staged"
+    assert [feature.external_id for feature in features] == [None, None]
+    assert [feature.geometry_type for feature in features] == ["LineString", "Point"]
+
+
+def test_mixed_network_map_blocks_unsupported_types_without_storing_private_fields(
+    db_session, tmp_path
+):
+    path = _write_kmz(
+        tmp_path,
+        "mixed-map.kmz",
+        [
+            _placemark(
+                name="Private customer name",
+                properties={
+                    "dotmac_asset_type": "customer",
+                    "dotmac_asset_id": "CUSTOMER-1",
+                    "address": "Private customer address",
+                    "name": "Private customer name",
+                },
+                geometry_type="Point",
+                coordinates="7.3,9.2",
+            )
+        ],
+    )
+
+    staged = stage_fiber_source(
+        db_session, path, "mixed_network_map", created_by="pytest"
+    )
+    feature = db_session.query(FiberTopologyStagedFeature).one()
+
+    assert staged.status == "blocked"
+    assert staged.blocker_count == 1
+    assert feature.blocker_codes == ["unsupported_asset_type"]
+    assert feature.asset_type == "unsupported"
+    assert feature.display_name is None
+    assert feature.external_id is None
+    assert feature.source_properties == {}
+    assert feature.geometry_type == "Unknown"
+    assert feature.geometry_geojson == {"type": "GeometryCollection", "geometries": []}
+
+
+def test_mixed_network_map_blocks_geometry_that_does_not_match_asset_type(
+    db_session, tmp_path
+):
+    path = _write_kmz(
+        tmp_path,
+        "mixed-map.kmz",
+        [
+            _placemark(
+                name="Fiber path with point geometry",
+                properties={
+                    "dotmac_asset_type": "fiber_segment",
+                    "dotmac_asset_id": "SEG-1",
+                },
+                geometry_type="Point",
+                coordinates="7.3,9.2",
+            )
+        ],
+    )
+
+    staged = stage_fiber_source(
+        db_session, path, "mixed_network_map", created_by="pytest"
+    )
+    feature = db_session.query(FiberTopologyStagedFeature).one()
+
+    assert staged.status == "blocked"
+    assert feature.blocker_codes == ["unexpected_geometry_type"]
+    assert feature.asset_type == "fiber_segment"
+
+
+def test_mixed_network_map_suggests_exact_match_by_exported_asset_id(
+    db_session, tmp_path
+):
+    canonical = FdhCabinet(
+        name="Canonical cabinet",
+        code="CANON-CAB-1",
+        latitude=9.0,
+        longitude=7.1,
+    )
+    db_session.add(canonical)
+    db_session.commit()
+    path = _write_kmz(
+        tmp_path,
+        "network-map.kmz",
+        [
+            _placemark(
+                name="Different display name",
+                properties={
+                    "dotmac_asset_type": "fdh_cabinet",
+                    "dotmac_asset_id": str(canonical.id),
+                },
+                geometry_type="Point",
+                coordinates="7.3,9.2",
+            )
+        ],
+    )
+
+    preview = preview_fiber_source(db_session, path, "mixed_network_map")
+
+    assert preview.features[0].match_status == "exact_external"
+    assert preview.features[0].canonical_asset_id == canonical.id
+
+
 def test_repackaged_identical_manifest_is_idempotent(db_session, tmp_path):
     feature = _placemark(
         name="FAT-1",

@@ -127,7 +127,8 @@ class FiberTopologyStagedFeature(Base):
             name="ck_fiber_topology_staged_feature_match_status",
         ),
         CheckConstraint(
-            "external_id IS NOT NULL OR match_status = 'blocked'",
+            "external_id IS NOT NULL OR display_name IS NOT NULL "
+            "OR match_status = 'blocked'",
             name="ck_fiber_topology_staged_feature_identity",
         ),
         CheckConstraint(

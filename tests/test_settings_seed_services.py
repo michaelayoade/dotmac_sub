@@ -365,6 +365,22 @@ class TestSeedNotificationTemplates:
         assert template is not None
         assert template.channel == NotificationChannel.email
 
+    def test_repeated_seed_reports_no_duplicate_changes(self, db_session):
+        first_changed = settings_seed._seed_missing_notification_templates(db_session)
+        second_changed = settings_seed._seed_missing_notification_templates(db_session)
+
+        assert first_changed > 0
+        assert second_changed == 0
+        assert (
+            db_session.query(NotificationTemplate)
+            .filter(
+                NotificationTemplate.code == "subscription_paused",
+                NotificationTemplate.channel == NotificationChannel.email,
+            )
+            .count()
+            == 1
+        )
+
     def test_seeds_sms_notification_templates(self, db_session):
         settings_seed.seed_notification_templates(db_session)
 

@@ -30,8 +30,10 @@ from app.schemas.lead_intake import (
     ResolvedLeadIntakeAddress,
 )
 from app.services import lead_intake_ai
+from app.services.domain_errors import DomainError
 from app.services.events.handlers import lead_intake as lead_intake_event_handler
 from app.services.events.types import Event, EventType
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import CommandContext
 from app.services.sales import lead_intake
 from app.services.settings_cache import SettingsCache
@@ -551,6 +553,7 @@ def test_classified_candidate_event_invokes_typed_sales_handoff(
         event_type=EventType.ai_intake_lead_candidate_classified,
         payload={
             "schema_version": 1,
+            "tenant_id": str(OPERATOR_TENANT_ID),
             "conversation_id": str(conversation_id),
             "message_id": str(message_id),
             "classification": {
@@ -572,6 +575,45 @@ def test_classified_candidate_event_invokes_typed_sales_handoff(
     assert captured["message_id"] == message_id
     assert captured["classification"].intent.value == "new_connection"
     assert captured["attribution"].external_ad_id == "ig-ad-1"
+
+
+def test_classified_candidate_event_refuses_another_tenant(db_session, monkeypatch):
+    monkeypatch.setattr(
+        lead_intake_event_handler, "finish_read_transaction", lambda _db: None
+    )
+    applied = False
+
+    def _apply(_db, **_kwargs):
+        nonlocal applied
+        applied = True
+
+    monkeypatch.setattr(lead_intake_ai, "apply_shared_classification", _apply)
+    event = Event(
+        event_type=EventType.ai_intake_lead_candidate_classified,
+        payload={
+            "schema_version": 1,
+            "tenant_id": str(uuid4()),
+            "conversation_id": str(uuid4()),
+            "message_id": str(uuid4()),
+            "classification": {
+                "intent": "new_connection",
+                "intent_confidence": 0.96,
+                "party_type": "individual",
+                "party_type_confidence": 0.94,
+                "clarification_question": None,
+            },
+            "provider_label": "pytest",
+            "model_label": "classifier",
+            "attribution": {},
+        },
+    )
+
+    with pytest.raises(DomainError) as captured:
+        lead_intake_event_handler.LeadIntakeHandler().handle(db_session, event)
+
+    assert captured.value.code == "sales.lead_intake.event_tenant_mismatch"
+    assert captured.value.retryable is False
+    assert applied is False
 
 
 def test_shared_metadata_handoff_runs_only_for_classified_sales(

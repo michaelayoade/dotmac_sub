@@ -125,21 +125,23 @@ SERVICES: tuple[SOTService, ...] = (
         name="network.fiber_source_staging",
         module="app.services.network.fiber_topology_staging",
         owns=(
-            "immutable fiber source manifests",
-            "normalized staged fiber source facts",
+            "immutable fiber source and mixed network-map manifests",
+            "normalized staged fiber plant source facts",
             "non-authoritative duplicate and canonical-match suggestions",
         ),
         depends_on=("gis.spatial_sync", "network.crm_map_source"),
         notes=(
-            "Staged map rows are observations with provenance. Match "
-            "suggestions never mutate or retire canonical assets."
+            "Staged map rows are observations with provenance. The mixed KML/KMZ "
+            "profile accepts supported fiber plant feature types in one batch, "
+            "with per-type identity and geometry validation. Match suggestions "
+            "never mutate or retire canonical assets."
         ),
     ),
     SOTService(
         name="network.map_kmz_transfer",
         module="app.services.network_map_transfer",
         owns=(
-            "administrative KMZ source admission and staging coordination",
+            "administrative KML/KMZ source admission and staging coordination",
             "permission-scoped Network Map KMZ export",
         ),
         depends_on=(
@@ -149,8 +151,9 @@ SERVICES: tuple[SOTService, ...] = (
             "observability.audit_log",
         ),
         notes=(
-            "Browser uploads become immutable non-authoritative staging evidence. "
-            "They never write canonical plant or infer connectivity. KMZ export "
+            "Browser uploads become immutable non-authoritative staging evidence, "
+            "including heterogeneous supported fiber plant features. They never "
+            "write canonical plant or infer connectivity. KMZ export "
             "serializes an allowlisted, permission-scoped map projection and does "
             "not expose management addresses, credentials, notes, or raw telemetry."
         ),
@@ -158,11 +161,11 @@ SERVICES: tuple[SOTService, ...] = (
             concerns=(
                 ConcernContract(
                     name=(
-                        "administrative KMZ source admission and staging coordination"
+                        "administrative KML/KMZ source admission and staging coordination"
                     ),
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
-                        "authenticated KMZ import intent",
+                        "authenticated KML/KMZ import intent",
                         "normalized fiber source staging protocol",
                     ),
                 ),
@@ -177,7 +180,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             authoritative_inputs=(
                 AuthorityInput(
-                    name="authenticated KMZ import intent",
+                    name="authenticated KML/KMZ import intent",
                     owner="auth.permission_gate",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(

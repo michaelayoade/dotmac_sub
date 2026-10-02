@@ -136,6 +136,30 @@ def test_staging_owner_cannot_construct_or_delete_canonical_assets() -> None:
 
     assert "FiberTopologySourceBatch(" in source
     assert "FiberTopologyStagedFeature(" in source
+    assert '"mixed_network_map": FiberSourceProfile(' in source
+    assert "_MIXED_GEOMETRY_TYPES" in source
+    assert "_MIXED_SAFE_PROPERTY_KEYS" in source
+
+
+def test_mixed_network_map_import_is_staging_evidence_only() -> None:
+    source = STAGING_OWNER.read_text(encoding="utf-8")
+    transfer = (
+        PROJECT_ROOT / "app" / "services" / "network_map_transfer.py"
+    ).read_text(encoding="utf-8")
+
+    assert "preview_uploaded_fiber_source(" in transfer
+    assert "persist_fiber_preview(" in transfer
+    assert "_stage_network_map_kmz" in transfer
+    assert 'suffix not in {".kml", ".kmz"}' in transfer
+    for constructor in (
+        "FdhCabinet(",
+        "FiberAccessPoint(",
+        "FiberSegment(",
+        "FiberSpliceClosure(",
+        "ServiceBuilding(",
+    ):
+        assert constructor not in source
+        assert constructor not in transfer
 
 
 def test_identity_owner_projects_creates_through_fiber_change_requests() -> None:

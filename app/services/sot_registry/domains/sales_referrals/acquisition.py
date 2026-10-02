@@ -581,7 +581,8 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "durable ai.intake_lead_candidate_classified event carrying "
                         "a final new-connection or coverage classification, customer "
-                        "type, message identity, and allowlisted Meta attribution"
+                        "type, operator tenant identity, message identity, and "
+                        "allowlisted Meta attribution"
                     ),
                 ),
                 AuthorityInput(

@@ -114,7 +114,7 @@
         dialog.querySelectorAll('[data-close-import]').forEach(function (button) {
             button.addEventListener('click', function () { dialog.close(); });
         });
-        ['network-map-kmz-file', 'network-map-import-profile', 'network-map-import-reason'].forEach(function (id) {
+        ['network-map-kmz-file', 'network-map-import-reason'].forEach(function (id) {
             root.document.getElementById(id)?.addEventListener('change', function () {
                 key.value = commandKey();
             });
@@ -122,7 +122,7 @@
         form.addEventListener('submit', async function (event) {
             event.preventDefault();
             submit.disabled = true;
-            setStatus(status, 'Validating and staging the KMZ file…', 'progress');
+            setStatus(status, 'Validating and staging the map file…', 'progress');
             resultHost.classList.add('hidden');
             try {
                 const response = await root.fetch('/admin/network/map/imports', {
@@ -150,7 +150,7 @@
                 );
                 key.value = commandKey();
             } catch (error) {
-                setStatus(status, error.message || 'The KMZ import failed.', 'error');
+                setStatus(status, error.message || 'The map import failed.', 'error');
             } finally {
                 submit.disabled = false;
             }
