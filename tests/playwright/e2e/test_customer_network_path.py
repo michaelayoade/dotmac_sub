@@ -88,6 +88,23 @@ def _ensure_subscription_login(e2e_db, test_identities: dict) -> None:
 
 
 class TestCustomerNetworkPath:
+    @pytest.mark.parametrize("width", (375, 425, 645))
+    def test_mobile_customer_detail_has_no_page_horizontal_overflow(
+        self,
+        admin_page: Page,
+        settings,
+        test_identities: dict,
+        width: int,
+    ) -> None:
+        _mark_admin_tour_seen(admin_page)
+        admin_page.set_viewport_size({"width": width, "height": 844})
+        admin_page.goto(f"{settings.base_url}{_detail_path(test_identities)}")
+
+        overflow = admin_page.evaluate(
+            "() => document.documentElement.scrollWidth - window.innerWidth"
+        )
+        assert overflow <= 1
+
     def test_desktop_card_renders_owner_presentation(
         self,
         admin_page: Page,
