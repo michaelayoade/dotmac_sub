@@ -330,6 +330,7 @@ class EventType(enum.Enum):
     network_map_asset_change_applied = "network_map_asset_change.applied"
     network_map_asset_change_rejected = "network_map_asset_change.rejected"
     network_map_kmz_import_staged = "network_map.kmz_import_staged"
+    network_map_kmz_classification_reviewed = "network_map.kmz_classification_reviewed"
 
     # OLT events (3)
     olt_created = "olt.created"

@@ -243,9 +243,8 @@ Migration `333_fiber_topology_staging` adds two evidence tables:
   `(source_system, profile, manifest_sha256)` and it records the raw file hash,
   row counts, blockers, candidates, actor, and normalization metadata. Archive
   metadata or feature ordering cannot create a duplicate normalized batch.
-- `fiber_topology_staged_features` stores each normalized source fact, an
-  external ID when present, a display-name fallback when a mixed map omits its
-  source ID, source properties, GeoJSON, content/geometry hashes, lineage to a
+- `fiber_topology_staged_features` stores each normalized source fact, stable
+  external ID, source properties, GeoJSON, content/geometry hashes, lineage to a
   prior source fact, and a non-authoritative match suggestion.
 
 `network.fiber_source_staging` is the sole writer. Its match states are:
@@ -256,10 +255,8 @@ Migration `333_fiber_topology_staging` adds two evidence tables:
 - `candidate`: content changed, a normalized-name candidate exists, or the
   source has a possible duplicate name/geometry;
 - `ambiguous`: more than one canonical candidate exists;
-- `blocked`: a profile-required identity, valid expected geometry, or valid
-  Nigerian coordinates is missing, or an external ID is duplicated inside the
-  batch. Mixed browser-map rows may use a display name as evidence when their
-  source ID is absent; this never approves a canonical asset change.
+- `blocked`: the source row lacks stable identity, valid expected geometry, or
+  valid Nigerian coordinates, or duplicates an external ID inside the batch.
 
 These states are review evidence, not asset decisions. The staging service only
 constructs `FiberTopologySourceBatch` and `FiberTopologyStagedFeature` rows.
@@ -284,12 +281,23 @@ Authorized staff can stage normalized KML or KMZ evidence from
 requires `network:fiber:import`, the typed mixed profile, reason, actor, and
 idempotency key. In addition to the one-type OSP profiles, **Mixed network
 map** stages fiber segments, access points, cabinets, splice closures, service
-buildings, and support structures in one immutable batch. It resolves each
-feature's type independently and validates geometry against that type. Source
-IDs are optional and help match known assets when present. Unknown map-layer
-types remain blocked; customer fields and placemark
-names are removed from those blocked observations. A mixed batch with no
-structural blockers is accepted as staged evidence, not as a canonical write.
+buildings, and support structures in one immutable batch. It reads placemark
+names, IDs, descriptions, styles, ExtendedData, and point, line, and polygon
+geometry. Type and known source-ID fields help match supported assets. Missing
+types remain unclassified; ambiguous points and polygons are never guessed.
+Unsupported rows retain their name and geometry for operator review while
+customer/device identifiers and private ExtendedData are removed. HTTPS icon
+URLs are stored as references but never fetched by the server or preview;
+unsafe references are reported and replaced with default symbols. KML
+NetworkLinks are never expanded; local placemarks retain a warning, while a
+link-only document must be downloaded separately. A mixed batch with
+blockers is still staged evidence, not a canonical write.
+Operators may record feature classification choices as append-only reviewed
+revisions. These revisions do not edit the checksum-bound source observations.
+The explicit browser handoff submits only eligible new point assets to the
+existing independently reviewed asset proposal workflow. Matched assets,
+buildings, unsupported features, and routes remain staged; route connectivity
+requires its own reviewed endpoint workflow.
 The transfer delegates persistence to `network.fiber_source_staging` inside
 the transfer owner's transaction. The returned overlay is preview evidence
 only; it never joins `ui.network_map_projection` and never bypasses identity,

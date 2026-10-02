@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Network Map import example</name>
+    <Placemark id="sample-cable-001">
+      <name>Sample feeder route</name>
+      <description>Example fiber segment with a stable source ID.</description>
+      <ExtendedData>
+        <Data name="dotmac_asset_type"><value>fiber_segment</value></Data>
+        <Data name="dotmac_asset_id"><value>SAMPLE-SEGMENT-001</value></Data>
+      </ExtendedData>
+      <LineString><tessellate>1</tessellate><coordinates>7.10,9.00 7.12,9.02</coordinates></LineString>
+    </Placemark>
+    <Placemark id="sample-cabinet-001">
+      <name>Sample cabinet</name>
+      <ExtendedData>
+        <Data name="dotmac_asset_type"><value>fdh_cabinet</value></Data>
+        <Data name="fibermngrid"><value>SAMPLE-FDH-001</value></Data>
+      </ExtendedData>
+      <Point><coordinates>7.11,9.01</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Unclassified sample point</name>
+      <Point><coordinates>7.13,9.03</coordinates></Point>
+    </Placemark>
+  </Document>
+</kml>

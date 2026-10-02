@@ -475,7 +475,7 @@
             <div class="flex items-start justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
                 <div>
                     <h2 id="network-map-import-title" class="text-lg font-semibold">Import KML or KMZ</h2>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Upload geometry as staged evidence for review. This does not change canonical plant.</p>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Upload KML or KMZ geometry as staged evidence. Staging never changes the live map; eligible changes continue through the existing independent review workflows.</p>
                 </div>
                 <button type="button" data-close-import class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:hover:bg-slate-700" aria-label="Close import dialog">&times;</button>
             </div>
@@ -483,7 +483,15 @@
                 <div>
                     <label for="network-map-kmz-file" class="mb-1 block text-sm font-medium">KML or KMZ file</label>
                     <input id="network-map-kmz-file" name="file" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" required class="block w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-600 dark:bg-slate-800">
-                    <p class="mt-1 text-xs text-slate-500">Maximum {{ (network_map_transfer.max_upload_bytes / 1024 / 1024) | int }} MB. KMZ files must contain one KML document. Asset IDs such as spanid are optional; available IDs help suggest matches.</p>
+                    <div class="mt-2 space-y-1 text-xs text-slate-500">
+                        <p>Accepts .kml or .kmz (one KML document per KMZ), up to {{ (network_map_transfer.max_upload_bytes / 1024 / 1024) | int }} MB. KML NetworkLinks are not expanded; upload the linked KML directly.</p>
+                        <p>Supported plant types: fiber segment (LineString), access point, FDH cabinet, splice closure and service building (Point or Polygon), and support structure (Point). Use <code>dotmac_asset_type</code> plus a stable ID such as <code>dotmac_asset_id</code>, <code>spanid</code>, <code>access_pointid</code>, <code>fibermngrid</code>, <code>enclosureid</code>, <code>buildingid</code>, or <code>poleid</code> to improve matching. Names and IDs help review; they do not create identity or connectivity.</p>
+                        <p>No asset ID or type is required just to stage geometry. The import reason is required. Resolve an asset type before a feature can enter an asset review; a stable source ID is recommended for matching.</p>
+                        <p>Coordinates must be WGS84 longitude/latitude in the supported Nigeria coverage area. Correct invalid or out-of-area coordinates in the source file before review.</p>
+                        <p>Point and polygon features without a clear type stay Unclassified until reviewed. Unsupported types and invalid geometry remain visible as blocked evidence. HTTPS icons are recorded as references only; this import does not fetch them and uses default preview symbols.</p>
+                        <p>Review each type in the preview or bulk-set unclassified features, then save the classification audit. A separate action can submit eligible new cabinet, access point, splice closure or support structure points as proposals for users with <code>network:fiber:write</code>. Matched features, buildings, unsupported types and routes stay staged; a separate reviewer must approve proposals and routes need their own endpoint/connectivity review.</p>
+                        <a class="font-medium text-accent-700 underline dark:text-accent-300" href="/static/samples/network-map-import-sample.kml" download>Download sample KML</a>
+                    </div>
                 </div>
                 <input name="profile" type="hidden" value="mixed_network_map">
                 <div>
@@ -494,7 +502,27 @@
                 <div id="network-map-import-status" class="hidden rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700" role="status" aria-live="polite"></div>
                 <div id="network-map-import-result" class="hidden space-y-3">
                     <div class="map-transfer-preview-label text-sm font-medium">Imported preview — not canonical topology</div>
-                    <dl id="network-map-import-counts" class="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4"></dl>
+                    <dl id="network-map-import-counts" class="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3 xl:grid-cols-5"></dl>
+                    <div class="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <label class="text-xs">Set all unclassified features to
+                            <select id="network-map-import-bulk-type" class="ml-1 rounded border-slate-300 text-xs dark:bg-slate-900">
+                                <option value="">Choose a type</option>
+                                <option value="fiber_access_point">Access point</option>
+                                <option value="fdh_cabinet">FDH cabinet</option>
+                                <option value="splice_closure">Splice closure</option>
+                                <option value="service_building">Service building</option>
+                                <option value="support_structure">Support structure</option>
+                                <option value="fiber_segment">Fiber segment</option>
+                            </select>
+                        </label>
+                        <button id="network-map-import-bulk-apply" type="button" class="rounded border px-2 py-1 text-xs">Set unclassified</button>
+                        <button id="network-map-import-accept-suggestions" type="button" class="rounded border px-2 py-1 text-xs">Accept shown suggestions</button>
+                        <button id="network-map-import-save-classifications" type="button" class="rounded bg-blue-600 px-2 py-1 text-xs text-white">Save type review</button>
+                        {% if network_map_transfer.can_propose %}
+                        <button id="network-map-import-apply" type="button" class="rounded bg-emerald-700 px-2 py-1 text-xs text-white">Submit eligible points for review</button>
+                        {% endif %}
+                    </div>
+                    <div id="network-map-import-features" class="max-h-72 space-y-2 overflow-y-auto" aria-label="Imported feature review"></div>
                 </div>
             </div>
             <div class="flex justify-end gap-3 border-t border-slate-200 px-5 py-4 dark:border-slate-700">

@@ -34,7 +34,7 @@ the commercial price snapshot. Existing issued invoice lines remain immutable.
 
 ## Migration and repair
 
-Migration `634_catalog_price_tax_application` adds non-null columns and
+Migration `640_catalog_price_tax_application` adds non-null columns and
 backfills `exclusive`. That is the only safe automatic classification because
 it preserves pre-migration behavior. Amount arithmetic is not authoritative
 evidence of commercial intent, so the migration does not guess that values

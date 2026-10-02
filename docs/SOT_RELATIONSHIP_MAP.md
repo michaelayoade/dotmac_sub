@@ -21,29 +21,6 @@ The manifest has one canonical graph. Domain, capability/module, and journey
 hierarchies are derived navigation views; they do not own parallel dependency
 lists or service declarations.
 
-## Payment email template adoption (expand phase)
-
-`communications.payment_template_adoption` coordinates one explicit backfill
-and read-only parity report for the two payment email templates. It maps the
-operator tenant's legacy `payment_received` and `invoice_paid` EMAIL identities
-to Studio's fixed `payment-received/email` and `invoice-paid/email` identities.
-The command keeps legacy UUIDs, conditions, active flags, purpose, and live
-content untouched. Purpose remains Sub's policy input for manual sends and is
-included in the adoption fingerprint and parity evidence. Ambiguous legacy
-rows or changed Studio content are refused; an exact replay is a no-op. Studio
-versions and provenance metadata are the durable evidence. The command emits
-no event or integration delivery. The guarded admin adapter invokes it;
-no task, scheduler, or handler does.
-
-On PostgreSQL, parity and adoption inspect the actual `current_user` and refuse
-`SUPERUSER` or `BYPASSRLS` before any legacy content read or Studio access.
-The adoption check runs inside its owner transaction. SQLite tests prove
-content behavior only; they do not prove database isolation.
-
-Sub's legacy notification owner remains the live writer and renderer for
-payment email and SMS in this phase. Studio's published versions are shadow
-data until parity and a separate sealed owner switch are reviewed.
-
 ## Lead creation-date query ownership
 
 `sales.service` owns `LeadListDateRange` and `normalize_lead_date_range`.
@@ -672,6 +649,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `network.crm_map_source` | isolated CRM Network Map archive schema validation | `resolver` | CRM Network Map archive observation ← `external:dotmac_crm` | `read_only` | `native` | network operations | `docs/runbooks/CRM_NETWORK_MAP_MIGRATION.md`<br>`tests/test_crm_network_map_source.py`<br>`tests/architecture/test_fiber_kmz_import_boundary.py` |
 | `network.crm_map_source` | deterministic CRM Network Map extraction and conflict evidence | `resolver` | CRM Network Map archive observation ← `external:dotmac_crm` | `read_only` | `native` | network operations | `docs/runbooks/CRM_NETWORK_MAP_MIGRATION.md`<br>`tests/test_crm_network_map_source.py`<br>`tests/architecture/test_fiber_kmz_import_boundary.py` |
 | `network.map_kmz_transfer` | administrative KML/KMZ source admission and staging coordination | `application_coordinator` | authenticated KML/KMZ import intent ← `auth.permission_gate`<br>normalized fiber source staging protocol ← `network.fiber_source_staging` | `coordinator_managed` | `native` | network operations | `docs/designs/NETWORK_MAP_KMZ_IMPORT_EXPORT.md`<br>`docs/designs/FIBER_TOPOLOGY_SOT.md`<br>`tests/architecture/test_fiber_kmz_import_boundary.py`<br>`tests/architecture/test_network_map_projection_boundary.py` |
+| `network.map_kmz_transfer` | administrative staged map feature classification review | `application_coordinator` | authenticated feature classification review intent ← `auth.permission_gate`<br>immutable staged map feature observations ← `network.fiber_source_staging` | `coordinator_managed` | `native` | network operations | `docs/designs/NETWORK_MAP_KMZ_IMPORT_EXPORT.md`<br>`docs/designs/FIBER_TOPOLOGY_SOT.md`<br>`tests/architecture/test_fiber_kmz_import_boundary.py`<br>`tests/architecture/test_network_map_projection_boundary.py` |
 | `network.map_kmz_transfer` | permission-scoped Network Map KMZ export | `resolver` | authorized Network Map export scope ← `auth.permission_gate`<br>authoritative Network Map projection ← `ui.network_map_projection` | `coordinator_managed` | `native` | network operations | `docs/designs/NETWORK_MAP_KMZ_IMPORT_EXPORT.md`<br>`docs/designs/FIBER_TOPOLOGY_SOT.md`<br>`tests/architecture/test_fiber_kmz_import_boundary.py`<br>`tests/architecture/test_network_map_projection_boundary.py` |
 | `network.fiber_cost_items` | fiber drop-cost components and their prices | `command_writer` | operator-priced fiber cost components ← `network.fiber_cost_items` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_fiber_cost_items.py`<br>`tests/architecture/test_fiber_cost_items_boundary.py` |
 | `network.fiber_cost_items` | whether a drop estimate can be produced, and what it totals | `resolver` | operator-priced fiber cost components ← `network.fiber_cost_items` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_fiber_cost_items.py`<br>`tests/architecture/test_fiber_cost_items_boundary.py` |
@@ -2395,15 +2373,6 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   Mutable billing anchors, canceled extensions, and reversed extensions are not
   coverage evidence. Payment participants consume the typed result and never
   infer or add an extension delta from `next_billing_at`.
-- Reviewed sequence calendar boundary: `financial.prepaid_service_renewals`
-  resolves typed reviewed dates at Lagos midnight by default. Explicit
-  documentary continuation preserves the exact recorded anniversary clock;
-  `financial.prepaid_draft_reconciliation` must prove the first linked invoice
-  interval, its reviewed Lagos dates and an exactly matching expected initial
-  anchor. Preview fingerprints and reports those UTC/local intervals; apply
-  consumes the locked result instead of rounding dates independently. Earlier
-  paid invoices and expired-period access are unchanged. Paid-period calendar
-  correction remains with `financial.prepaid_billing_calendar_reconciliation`.
 - Billing-anchor writer boundary: `Subscription.next_billing_at` is a projection
   of exact lifecycle, billing-period, entitlement, and grant evidence.
   `access.subscription_lifecycle.stage_subscription_billing_anchor` is the only
@@ -3075,10 +3044,7 @@ network summary composition.
    repair remains owned by `access.subscription_lifecycle`.
 8. `customer.usage_summary` owns customer usage windows, headline totals, and
    total provenance. An authoritative zero is a valid value, not a missing-data
-   sentinel. Operator-selected custom ranges are inclusive calendar-day windows.
-   The Customer 360 Stats Records table, chart, pagination, and CSV export consume
-   the same typed range; export covers the complete filtered result rather than
-   only the visible page.
+   sentinel.
 9. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
    the reseller-scoped impact preview for deactivate, restore, and disable. It
    evaluates current subscription state, active enforcement locks, duplicate-

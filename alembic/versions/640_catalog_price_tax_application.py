@@ -1,7 +1,7 @@
 """Add explicit VAT treatment to catalog prices.
 
-Revision ID: 634_catalog_price_tax_application
-Revises: 633_retire_system_admin_main_reseller_membership
+Revision ID: 640_catalog_price_tax_application
+Revises: 639_machine_attribution
 Create Date: 2026-10-02
 
 Existing prices are backfilled as exclusive because that exactly preserves the
@@ -19,8 +19,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "634_catalog_price_tax_application"
-down_revision: str | None = "633_retire_system_admin_main_reseller_membership"
+revision: str = "640_catalog_price_tax_application"
+down_revision: str | None = "639_machine_attribution"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

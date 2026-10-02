@@ -397,6 +397,7 @@ from app.models.fiber_topology_identity import (  # noqa: F401
     FiberTopologyIdentityProposalBatch,
 )
 from app.models.fiber_topology_staging import (  # noqa: F401
+    FiberTopologyFeatureClassificationReview,
     FiberTopologySourceBatch,
     FiberTopologyStagedFeature,
 )

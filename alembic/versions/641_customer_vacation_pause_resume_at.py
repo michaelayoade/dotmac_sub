@@ -1,7 +1,7 @@
 """Add a durable scheduled-resume instant to subscription pause causes.
 
-Revision ID: 637_customer_vacation_pause_resume_at
-Revises: 636_allow_name_identified_fiber_topology_features
+Revision ID: 641_customer_vacation_pause_resume_at
+Revises: 640_catalog_price_tax_application
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "637_customer_vacation_pause_resume_at"
-down_revision: str | None = "636_allow_name_identified_fiber_topology_features"
+revision: str = "641_customer_vacation_pause_resume_at"
+down_revision: str | None = "640_catalog_price_tax_application"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

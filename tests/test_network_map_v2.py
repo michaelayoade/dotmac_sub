@@ -19,7 +19,7 @@ from app.web.templates import templates
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REVIEWED_BASE_MAP_NORMALIZED_SHA256 = (
-    "42291d7e013696893e5717f9a6f06fb4dca9ab38bdacefa79afb293b1c5f599e"
+    "09b2f0d7bf138336dcbb4097bed022f66595e07f321e07996ba71fbbaa55b14f"
 )
 
 
@@ -108,6 +108,45 @@ def test_network_map_v2_extends_the_reviewed_base_template():
     normalized = original.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
     assert hashlib.sha256(normalized).hexdigest() == REVIEWED_BASE_MAP_NORMALIZED_SHA256
+
+
+def test_network_map_import_help_explains_staging_and_supported_kml_types():
+    template = (PROJECT_ROOT / "templates/admin/network/map.html").read_text(
+        encoding="utf-8"
+    )
+    sample = (PROJECT_ROOT / "static/samples/network-map-import-sample.kml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "No asset ID or type is required just to stage geometry" in template
+    assert "Staging never changes the live map" in template
+    assert "NetworkLinks are not expanded" in template
+    assert 'href="/static/samples/network-map-import-sample.kml"' in template
+    assert "dotmac_asset_type" in sample
+    assert "LineString" in sample
+    assert "Point" in sample
+
+
+def test_network_map_import_exposes_audited_classification_and_proposal_handoff():
+    template = (PROJECT_ROOT / "templates/admin/network/map.html").read_text(
+        encoding="utf-8"
+    )
+    transfer = (PROJECT_ROOT / "static/js/admin/network_map_transfer.js").read_text(
+        encoding="utf-8"
+    )
+    route = next(
+        item
+        for item in web_network.router.routes
+        if isinstance(item, APIRoute)
+        and item.path == "/network/map/imports/{batch_id}/classifications"
+    )
+
+    assert "network-map-import-save-classifications" in template
+    assert "network-map-import-apply" in template
+    assert "Classification review recorded" in transfer
+    assert "proposal_eligibility === 'eligible'" in transfer
+    assert "network/map-v2/proposals" in transfer
+    assert "POST" in route.methods
 
 
 def test_nearby_unrelated_endpoints_are_not_inferred_as_connected():

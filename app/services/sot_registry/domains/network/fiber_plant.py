@@ -142,6 +142,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.network_map_transfer",
         owns=(
             "administrative KML/KMZ source admission and staging coordination",
+            "administrative staged map feature classification review",
             "permission-scoped Network Map KMZ export",
         ),
         depends_on=(
@@ -153,7 +154,18 @@ SERVICES: tuple[SOTService, ...] = (
         notes=(
             "Browser uploads become immutable non-authoritative staging evidence, "
             "including heterogeneous supported fiber plant features. They never "
-            "write canonical plant or infer connectivity. KMZ export "
+            "write canonical plant or infer connectivity. Classification reviews "
+            "are append-only annotations and never alter the staged observations. "
+            "Eligible new point assets may be submitted to the separate asset "
+            "proposal owner, with per-feature eligibility projected by this service; "
+            "route connectivity remains a separate reviewed workflow. "
+            "Unclassified and "
+            "unsupported placemarks retain reviewable names and geometry while "
+            "private identifiers are excluded. Safe-looking HTTPS icon references "
+            "are metadata only: no DNS lookup or remote fetch occurs; document "
+            "NetworkLinks are never fetched, and local placemarks are retained "
+            "with a warning when one is present. Link-only documents are refused. "
+            "KMZ export "
             "serializes an allowlisted, permission-scoped map projection and does "
             "not expose management addresses, credentials, notes, or raw telemetry."
         ),
@@ -167,6 +179,14 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "authenticated KML/KMZ import intent",
                         "normalized fiber source staging protocol",
+                    ),
+                ),
+                ConcernContract(
+                    name="administrative staged map feature classification review",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "authenticated feature classification review intent",
+                        "immutable staged map feature observations",
                     ),
                 ),
                 ConcernContract(
@@ -198,6 +218,24 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="authenticated feature classification review intent",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "network:fiber:import permission, actor, bounded reason, "
+                        "batch ID, feature IDs, supported asset types, and command key"
+                    ),
+                ),
+                AuthorityInput(
+                    name="immutable staged map feature observations",
+                    owner="network.fiber_source_staging",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "staged batch manifest and normalized feature rows; review "
+                        "decisions are appended separately and projected at read time"
+                    ),
+                ),
+                AuthorityInput(
                     name="authorized Network Map export scope",
                     owner="auth.permission_gate",
                     kind=AuthorityKind.CONTROL_INPUT,
@@ -219,17 +257,22 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.COORDINATOR_MANAGED,
                 boundary=(
-                    "stage_network_map_kmz enters execute_owner_command once on a "
-                    "transaction-free session. Staging rows, audit, and outbox event "
-                    "commit atomically. Export uses a read-only request session."
+                    "Each stage or classification-review command enters "
+                    "execute_owner_command once on a transaction-free session. "
+                    "Staging evidence or append-only review rows, audit, and outbox "
+                    "event commit atomically. Export uses a read-only request session."
                 ),
                 locking=(
-                    "Import uniqueness is arbitrated by the manifest and command-key "
-                    "constraints; canonical plant rows are never locked or mutated."
+                    "Import uniqueness is arbitrated by manifest and command-key "
+                    "constraints. Classification review locks the batch and staged "
+                    "features in stable order; revision and command-key constraints "
+                    "protect the append-only review history. Canonical plant rows "
+                    "are never locked or mutated by these commands."
                 ),
                 idempotency=(
-                    "The command key is bound to actor, filename, file digest, profile, "
-                    "and reason. Exact file/profile manifests replay the existing batch."
+                    "Import keys bind actor, filename, digest, profile, and reason. "
+                    "Classification keys bind actor, batch, feature/type edits, and "
+                    "reason. Exact requests replay existing evidence."
                 ),
                 retries=(
                     "Malformed archives and changed command fingerprints fail closed. "
@@ -249,6 +292,12 @@ SERVICES: tuple[SOTService, ...] = (
                     "network.map_kmz_transfer.invalid_file_type",
                     "network.map_kmz_transfer.invalid_archive",
                     "network.map_kmz_transfer.staging_failed",
+                    "network.map_kmz_transfer.review_idempotency_conflict",
+                    "network.map_kmz_transfer.review_size_invalid",
+                    "network.map_kmz_transfer.review_duplicate_feature",
+                    "network.map_kmz_transfer.review_asset_type_invalid",
+                    "network.map_kmz_transfer.batch_not_found",
+                    "network.map_kmz_transfer.review_feature_not_found",
                     "network.map_kmz_transfer.empty_export",
                 ),
                 mapping_owner="app.web.admin.network",
@@ -260,7 +309,10 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             events=EventContract(
-                event_types=("network_map.kmz_import_staged",),
+                event_types=(
+                    "network_map.kmz_import_staged",
+                    "network_map.kmz_classification_reviewed",
+                ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
@@ -270,7 +322,8 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 replay=(
                     "Consumers treat batch_id plus manifest_sha256 as immutable "
-                    "evidence. Replaying the signal never creates canonical assets."
+                    "evidence and classification events as append-only review signals. "
+                    "Replaying either signal never creates canonical assets."
                 ),
             ),
             migration=MigrationContract(

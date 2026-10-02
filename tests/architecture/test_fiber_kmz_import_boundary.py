@@ -151,6 +151,16 @@ def test_mixed_network_map_import_is_staging_evidence_only() -> None:
     assert "persist_fiber_preview(" in transfer
     assert "_stage_network_map_kmz" in transfer
     assert 'suffix not in {".kml", ".kmz"}' in transfer
+    assert "_external_icon_url" in source
+    assert "urlsplit(" in source
+    for network_fetch in (
+        "requests.get(",
+        "httpx.get(",
+        "urlopen(",
+        "create_connection(",
+        "getaddrinfo(",
+    ):
+        assert network_fetch not in source
     for constructor in (
         "FdhCabinet(",
         "FiberAccessPoint(",
@@ -160,6 +170,30 @@ def test_mixed_network_map_import_is_staging_evidence_only() -> None:
     ):
         assert constructor not in source
         assert constructor not in transfer
+
+
+def test_import_classification_is_append_only_and_handoff_uses_review_api() -> None:
+    model = (PROJECT_ROOT / "app" / "models" / "fiber_topology_staging.py").read_text(
+        encoding="utf-8"
+    )
+    migration = (
+        PROJECT_ROOT
+        / "alembic"
+        / "versions"
+        / "642_network_map_import_feature_classification.py"
+    ).read_text(encoding="utf-8")
+    transfer_ui = (
+        PROJECT_ROOT / "static" / "js" / "admin" / "network_map_transfer.js"
+    ).read_text(encoding="utf-8")
+
+    assert "class FiberTopologyFeatureClassificationReview" in model
+    assert "fiber_topology_feature_classification_reviews" in migration
+    assert "BEFORE UPDATE OR DELETE" in migration
+    assert "network-map-import-apply" in transfer_ui
+    assert "network/map-v2/proposals" in transfer_ui
+    assert "geometry?.type === 'Point'" in transfer_ui
+    assert "properties.match_status === 'new'" in transfer_ui
+    assert "currentFeatures" in transfer_ui
 
 
 def test_identity_owner_projects_creates_through_fiber_change_requests() -> None:

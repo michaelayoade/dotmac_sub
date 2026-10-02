@@ -343,6 +343,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "For a shared outage, open Network → Outages and select Create infrastructure ticket on the open outage row before issuing field work.",
         "The infrastructure ticket has no subscriber and is linked to the outage; use the linked ticket and the outage row Resolve action for canonical follow-up.",
         "On Network Map, use Import Map to stage a KML or KMZ file for review, or Export Map to download the permitted layers; staging does not change the canonical map.",
+        "Review each staged feature's name, geometry, suggested asset type, and blocker; correct classifications before submission.",
+        "Submit eligible new point assets into the existing proposal review. Route geometry and other blocked features stay staged until their separate review is complete.",
         notes=(
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",
             "Map imports accept optional asset IDs when available and keep unsupported or sensitive features blocked for review.",
@@ -1184,6 +1186,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="support:ticket:create",
         ),
         _action("transfer-network-map", "Import or export a Network Map file", 4),
+        _action(
+            "review-network-map-import",
+            "Review staged map features",
+            5,
+            permission="network:fiber:import",
+        ),
+        _action(
+            "submit-network-map-import",
+            "Submit eligible point proposals",
+            6,
+            permission="network:fiber:import",
+        ),
     ),
     "olt-operational-health": (
         _action("compare-olts", "Compare OLT health", 0),

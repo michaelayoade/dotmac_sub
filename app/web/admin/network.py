@@ -32,8 +32,11 @@ from app.schemas.network_map_transfer import (
     NetworkMapBounds,
     NetworkMapExportLayer,
     NetworkMapExportScope,
+    NetworkMapImportFeatureClassification,
     NetworkMapImportProfile,
     NetworkMapKmzExportQuery,
+    ReviewNetworkMapImportFeaturesCommand,
+    ReviewNetworkMapImportFeaturesRequest,
     StageNetworkMapKmzCommand,
 )
 from app.services import (
@@ -462,6 +465,9 @@ def comprehensive_network_map(
     context.update(projection.to_template_context())
     context["network_map_transfer"] = {
         "can_import": has_permission(auth, db, network_map_transfer.IMPORT_PERMISSION),
+        "can_propose": has_permission(
+            auth, db, network_map_asset_changes.PROPOSE_PERMISSION
+        ),
         "can_export": has_permission(auth, db, network_map_transfer.EXPORT_PERMISSION),
         "can_export_customers": has_permission(
             auth, db, network_map_transfer.CUSTOMER_PERMISSION
@@ -475,9 +481,11 @@ def _network_map_transfer_error_response(error: DomainError) -> JSONResponse:
     suffix = error.code.rsplit(".", 1)[-1]
     if suffix in {"invalid_actor", "invalid_scope"}:
         status_code = 403
+    elif suffix in {"batch_not_found"}:
+        status_code = 404
     elif suffix == "file_too_large":
         status_code = 413
-    elif suffix == "idempotency_conflict":
+    elif suffix in {"idempotency_conflict", "review_idempotency_conflict"}:
         status_code = 409
     else:
         status_code = 422
@@ -547,6 +555,57 @@ async def import_network_map_kmz(
     try:
         db_session_adapter.release_read_transaction(db)
         outcome = network_map_transfer.stage_network_map_kmz(db=db, command=command)
+    except DomainError as error:
+        return _network_map_transfer_error_response(error)
+    return outcome.to_transport()
+
+
+@router.post(
+    "/map/imports/{batch_id}/classifications",
+    response_model=None,
+    dependencies=[Depends(require_permission(network_map_transfer.IMPORT_PERMISSION))],
+)
+def review_network_map_kmz_classifications(
+    batch_id: UUID,
+    payload: ReviewNetworkMapImportFeaturesRequest,
+    db: Session = Depends(get_db),
+    auth: dict[str, object] = Depends(
+        require_permission(network_map_transfer.IMPORT_PERMISSION)
+    ),
+) -> dict[str, object] | JSONResponse:
+    """Record typed, append-only classification decisions for staged features."""
+    actor = _network_map_actor(auth)
+    if actor is None:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "invalid_actor", "message": "A valid actor is required."},
+        )
+    actor_id, actor_type, actor_label = actor
+    command = ReviewNetworkMapImportFeaturesCommand(
+        context=_network_map_transfer_context(
+            actor_id=actor_id,
+            actor_type=actor_type,
+            reason=payload.reason,
+            idempotency_key=payload.command_key,
+        ),
+        batch_id=batch_id,
+        actor_id=actor_id,
+        actor_type=actor_type,
+        actor_label=actor_label,
+        edits=tuple(
+            NetworkMapImportFeatureClassification(
+                staged_feature_id=edit.staged_feature_id,
+                asset_type=edit.asset_type,
+            )
+            for edit in payload.features
+        ),
+    )
+    try:
+        db_session_adapter.release_read_transaction(db)
+        outcome = network_map_transfer.review_network_map_import_features(
+            db=db,
+            command=command,
+        )
     except DomainError as error:
         return _network_map_transfer_error_response(error)
     return outcome.to_transport()
@@ -670,18 +729,6 @@ def comprehensive_network_map_v2(
         base_projection=base_projection,
     )
     context.update(base_projection.to_template_context())
-    context["network_map_transfer"] = {
-        "can_import": has_permission(auth, db, network_map_transfer.IMPORT_PERMISSION),
-        "can_export": has_permission(auth, db, network_map_transfer.EXPORT_PERMISSION),
-        "can_export_customers": has_permission(
-            auth, db, network_map_transfer.CUSTOMER_PERMISSION
-        ),
-        "max_upload_bytes": network_map_transfer.MAX_UPLOAD_BYTES,
-        "profiles": [
-            {"value": profile.value, "label": profile.label}
-            for profile in NetworkMapImportProfile
-        ],
-    }
     context["network_map_v2"] = v2_projection.to_transport()
     proposals = network_map_asset_changes.list_proposals(db, limit=100)
     context["network_map_v2_governance"] = {

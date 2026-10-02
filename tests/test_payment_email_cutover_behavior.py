@@ -1,5 +1,6 @@
 """Operator/channel/settlement behavior; SQLite is not migration/RLS proof."""
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -8,7 +9,15 @@ from dotmac_template_studio import service as studio
 from dotmac_template_studio.models import Template, TemplateVersion
 from fastapi import HTTPException
 
-from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    Payment,
+    PaymentStatus,
+    ServiceEntitlement,
+)
+from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.event_store import EventStore
 from app.models.notification import (
@@ -279,6 +288,76 @@ def test_real_settlement_paid_consequence_and_activation_gate(
             .count()
             == 1
         )
+
+
+@pytest.mark.parametrize("explicit_allocation", (True, False))
+def test_activated_historical_debt_settlement_does_not_compose_current_renewal(
+    db_session, subscriber, subscription, adopted, explicit_allocation
+):
+    _activate(db_session, adopted)
+    anchor = datetime(2026, 10, 1, tzinfo=UTC)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.suspended
+    subscription.next_billing_at = anchor
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number=f"INV-{uuid4()}",
+        status=InvoiceStatus.issued,
+        subtotal=Decimal("100"),
+        total=Decimal("100"),
+        balance_due=Decimal("100"),
+        currency="NGN",
+        billing_period_start=datetime(2025, 10, 1, tzinfo=UTC),
+        billing_period_end=datetime(2025, 11, 1, tzinfo=UTC),
+        metadata_={"payment_finalization_mode": "historical_debt"},
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Historical prepaid debt",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100"),
+            amount=Decimal("100"),
+            metadata_={"kind": "base_subscription"},
+        )
+    )
+    db_session.commit()
+    original_anchor = subscription.next_billing_at
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            account_id=subscriber.id,
+            amount=Decimal("100"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            allocations=(
+                [{"invoice_id": invoice.id, "amount": Decimal("100")}]
+                if explicit_allocation
+                else []
+            ),
+        ),
+    )
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0")
+    assert payment.allocations[0].invoice_id == invoice.id
+    assert subscription.status is SubscriptionStatus.suspended
+    assert subscription.next_billing_at == original_anchor
+    assert db_session.query(ServiceEntitlement).count() == 0
+    assert (
+        db_session.query(EventStore)
+        .filter_by(event_type=EventType.invoice_paid.value)
+        .count()
+        == 0
+    )
+    receipt = (
+        db_session.query(EventStore)
+        .filter_by(event_type=EventType.payment_received.value)
+        .one()
+    )
+    assert receipt.payload["access_consequence"] == "historical_debt_settlement_only"
 
 
 def test_activation_parity_failure_does_not_seal_either_legacy_row(db_session, adopted):

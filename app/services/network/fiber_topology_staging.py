@@ -7,6 +7,7 @@ updates, merges, retires, or deletes canonical network/GIS assets.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 import re
@@ -15,9 +16,11 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
+from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import SplitResult, urlsplit
 from uuid import UUID
 
 from defusedxml import ElementTree as ET
@@ -39,7 +42,7 @@ from app.models.network import (
 
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
 SOURCE_SYSTEM = "dotmac_osp_kmz"
-NORMALIZATION_VERSION = 1
+NORMALIZATION_VERSION = 2
 MAX_KML_BYTES = 100 * 1024 * 1024
 MAX_KMZ_BYTES = 25 * 1024 * 1024
 MAX_KMZ_ENTRIES = 64
@@ -209,9 +212,20 @@ _MIXED_GEOMETRY_TYPES: dict[FiberAssetType, frozenset[str]] = {
     FiberAssetType.splice_closure: frozenset({"Point", "Polygon"}),
     FiberAssetType.service_building: frozenset({"Point", "Polygon"}),
 }
+
+
+def mixed_geometry_compatible(asset_type: FiberAssetType, geometry_type: str) -> bool:
+    """Return whether a mixed-profile feature may use this geometry."""
+
+    return geometry_type in _MIXED_GEOMETRY_TYPES.get(asset_type, frozenset())
+
+
 _MIXED_SAFE_PROPERTY_KEYS = frozenset(
     {
         "dotmac_asset_type",
+        "asset_type",
+        "feature_type",
+        "type",
         "dotmac_asset_id",
         "spanid",
         "access_pointid",
@@ -224,6 +238,15 @@ _MIXED_SAFE_PROPERTY_KEYS = frozenset(
         "name",
         "code",
         "display_name",
+        "description",
+        "kml_placemark_id",
+        "icon_href",
+        "icon_color",
+        "icon_scale",
+        "line_color",
+        "line_width",
+        "polygon_color",
+        "resource_warnings",
     }
 )
 
@@ -240,6 +263,7 @@ class ParsedFiberFeature:
     content_sha256: str
     geometry_sha256: str
     blocker_codes: tuple[str, ...]
+    suggested_asset_type: FiberAssetType | None = None
 
 
 @dataclass(frozen=True)
@@ -372,38 +396,63 @@ def _read_kml_bytes(raw: bytes, source_name: str) -> tuple[bytes, bytes, str]:
     suffix = Path(source_name).suffix.casefold()
     if suffix == ".kml":
         if len(raw) > MAX_KML_BYTES:
-            raise ValueError("KML source exceeds the staging size limit")
+            raise ValueError(
+                "KML document is larger than the supported 100 MB limit. "
+                "Reduce its size or split the map into smaller files."
+            )
         return raw, raw, Path(source_name).name
     if suffix != ".kmz":
-        raise ValueError("Fiber topology sources must be KMZ or KML files")
+        raise ValueError(
+            "Choose a .kml or .kmz file. Other map formats are not supported."
+        )
     if len(raw) > MAX_KMZ_BYTES:
-        raise ValueError("KMZ source exceeds the staging size limit")
+        raise ValueError(
+            "KMZ archive is larger than the supported 25 MB upload limit. "
+            "Reduce its size or export fewer map layers."
+        )
 
     try:
         with zipfile.ZipFile(BytesIO(raw)) as archive:
             entries_all = archive.infolist()
             if len(entries_all) > MAX_KMZ_ENTRIES:
-                raise ValueError("KMZ source contains too many archive entries")
+                raise ValueError(
+                    "KMZ archive contains more than 64 files. Re-export it with "
+                    "one KML document and only the resources it needs."
+                )
             entries = [
                 info
                 for info in entries_all
                 if not info.is_dir() and info.filename.casefold().endswith(".kml")
             ]
             if len(entries) != 1:
-                raise ValueError("KMZ source must contain exactly one KML document")
+                raise ValueError(
+                    "KMZ archive must contain exactly one .kml document. "
+                    "Choose a KML file or re-export the KMZ with one map document."
+                )
             entry = entries[0]
             if entry.file_size > MAX_KML_BYTES:
-                raise ValueError("KMZ KML document exceeds the staging size limit")
+                raise ValueError(
+                    "KML document inside the KMZ exceeds 100 MB. Split the map "
+                    "into smaller files and export again."
+                )
             if entry.compress_size == 0 and entry.file_size > 0:
-                raise ValueError("KMZ KML document has an invalid compressed size")
+                raise ValueError(
+                    "KMZ KML entry has invalid compressed-size metadata. "
+                    "Re-export the archive from the map application."
+                )
             if (
                 entry.compress_size > 0
                 and entry.file_size / entry.compress_size > MAX_KMZ_COMPRESSION_RATIO
             ):
-                raise ValueError("KMZ KML document exceeds the compression ratio limit")
+                raise ValueError(
+                    "KMZ KML document expands beyond the permitted compression "
+                    "ratio. Re-export it with normal ZIP compression."
+                )
             return raw, archive.read(entry), entry.filename
     except zipfile.BadZipFile as exc:
-        raise ValueError("Invalid KMZ archive") from exc
+        raise ValueError(
+            "KMZ archive is not a valid ZIP file. Re-export the map as KML or KMZ."
+        ) from exc
 
 
 def _read_kml(path: Path) -> tuple[bytes, bytes, str]:
@@ -461,42 +510,176 @@ def _coordinates(text: str) -> tuple[list[list[float]], list[str]]:
     return coordinates, list(dict.fromkeys(blockers))
 
 
-def _geometry(placemark: ET.Element) -> tuple[str, dict, tuple[str, ...]]:
-    for geometry_type in ("Point", "LineString", "Polygon"):
-        element = placemark.find(f".//kml:{geometry_type}", KML_NS)
-        if element is None:
-            continue
-        text = element.findtext(".//kml:coordinates", default="", namespaces=KML_NS)
-        coordinates, blockers = _coordinates(text)
-        if geometry_type == "Point":
-            if len(coordinates) != 1:
-                blockers.append("invalid_point_geometry")
-            geojson = {
-                "type": "Point",
-                "coordinates": coordinates[0] if coordinates else [],
-            }
-        elif geometry_type == "LineString":
-            if len(coordinates) < 2:
-                blockers.append("invalid_linestring_geometry")
-            geojson = {"type": "LineString", "coordinates": coordinates}
-        else:
-            if coordinates and coordinates[0] != coordinates[-1]:
-                coordinates.append(coordinates[0])
-            if len(coordinates) < 4:
-                blockers.append("invalid_polygon_geometry")
-            geojson = {"type": "Polygon", "coordinates": [coordinates]}
-        return geometry_type, geojson, tuple(dict.fromkeys(blockers))
-    return (
-        "Unknown",
-        {"type": "GeometryCollection", "geometries": []},
-        ("missing_supported_geometry",),
+class _PlainTextDescription(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        value = " ".join(data.split())
+        if value:
+            self.parts.append(value)
+
+
+def _description(placemark: ET.Element) -> str | None:
+    raw = placemark.findtext("kml:description", default="", namespaces=KML_NS)
+    if not raw:
+        return None
+    parser = _PlainTextDescription()
+    parser.feed(raw[:16_384])
+    normalized = " ".join(" ".join(parser.parts).split())
+    return normalized[:4_000] or None
+
+
+def _suggested_asset_type(
+    geometry_type: str,
+    placemark_name: str | None,
+    description: str | None,
+) -> FiberAssetType | None:
+    if geometry_type == "LineString":
+        return FiberAssetType.fiber_segment
+    label = _normalized_key(f"{placemark_name or ''} {description or ''}")
+    hints: tuple[tuple[FiberAssetType, tuple[str, ...]], ...] = (
+        (FiberAssetType.fdh_cabinet, ("fdhcabinet", "cabinet")),
+        (
+            FiberAssetType.fiber_access_point,
+            ("fiberaccesspoint", "accesspoint", "fat", "fap"),
+        ),
+        (FiberAssetType.splice_closure, ("spliceclosure", "closure")),
+        (FiberAssetType.service_building, ("servicebuilding",)),
+        (
+            FiberAssetType.support_structure,
+            ("supportstructure", "supportpole", "pole"),
+        ),
     )
+    matches = {
+        asset_type
+        for asset_type, terms in hints
+        if any(term in label for term in terms)
+    }
+    if len(matches) == 1:
+        suggestion = next(iter(matches))
+        if mixed_geometry_compatible(suggestion, geometry_type):
+            return suggestion
+    return None
+
+
+def _external_icon_url(value: str) -> tuple[str | None, str | None]:
+    """Classify an HTTPS reference without DNS lookup or network access."""
+
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        if (
+            parsed.scheme.casefold() != "https"
+            or not host
+            or any(character.isspace() for character in host)
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return None, "icon_reference_not_https"
+        port = parsed.port
+        if port is not None and not 1 <= port <= 65_535:
+            return None, "icon_reference_malformed"
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            normalized_host = host.casefold().rstrip(".")
+            if normalized_host in {
+                "localhost",
+                "local",
+                "internal",
+                "intranet",
+            } or normalized_host.endswith(
+                (".localhost", ".local", ".internal", ".lan", ".home")
+            ):
+                return None, "icon_reference_internal_host"
+        else:
+            if (
+                address.is_private
+                or address.is_loopback
+                or address.is_link_local
+                or address.is_multicast
+                or address.is_reserved
+                or address.is_unspecified
+            ):
+                return None, "icon_reference_internal_address"
+        return value[:2_048], None
+    except ValueError:
+        return None, "icon_reference_malformed"
+
+
+def _geometry(placemark: ET.Element) -> tuple[str, dict, tuple[str, ...]]:
+    parsed: list[tuple[str, dict, list[str]]] = []
+    for geometry_type in ("Point", "LineString", "Polygon"):
+        for element in placemark.findall(f".//kml:{geometry_type}", KML_NS):
+            blockers: list[str] = []
+            geojson: dict[str, object]
+            if geometry_type == "Polygon":
+                rings = element.findall(".//kml:LinearRing/kml:coordinates", KML_NS)
+                if not rings:
+                    blockers.append("missing_polygon_coordinates")
+                parsed_rings: list[list[list[float]]] = []
+                for ring in rings:
+                    coordinates, ring_blockers = _coordinates(ring.text or "")
+                    blockers.extend(ring_blockers)
+                    if coordinates and coordinates[0] != coordinates[-1]:
+                        coordinates.append(coordinates[0])
+                    if len(coordinates) < 4:
+                        blockers.append("invalid_polygon_geometry")
+                    parsed_rings.append(coordinates)
+                geojson = {"type": "Polygon", "coordinates": parsed_rings}
+            else:
+                text = element.findtext(
+                    "kml:coordinates", default="", namespaces=KML_NS
+                )
+                coordinates, blockers = _coordinates(text)
+                if geometry_type == "Point":
+                    if len(coordinates) != 1:
+                        blockers.append("invalid_point_geometry")
+                    geojson = {
+                        "type": "Point",
+                        "coordinates": coordinates[0] if coordinates else [],
+                    }
+                else:
+                    if len(coordinates) < 2:
+                        blockers.append("invalid_linestring_geometry")
+                    geojson = {"type": "LineString", "coordinates": coordinates}
+            parsed.append((geometry_type, geojson, blockers))
+    if not parsed:
+        return (
+            "Unknown",
+            {"type": "GeometryCollection", "geometries": []},
+            ("missing_supported_geometry",),
+        )
+    if len(parsed) > 1:
+        return (
+            "GeometryCollection",
+            {"type": "GeometryCollection", "geometries": [item[1] for item in parsed]},
+            tuple(
+                dict.fromkeys(
+                    [
+                        "multiple_geometry_components",
+                        *[code for item in parsed for code in item[2]],
+                    ]
+                )
+            ),
+        )
+    geometry_type, geojson, blockers = parsed[0]
+    return geometry_type, geojson, tuple(dict.fromkeys(blockers))
 
 
 def _mixed_asset_type(
     properties: dict[str, str | None],
 ) -> tuple[FiberAssetType, str | None]:
-    declared = _property(properties, "dotmac_asset_type")
+    declared = next(
+        (
+            value
+            for key in ("dotmac_asset_type", "asset_type", "feature_type", "type")
+            if (value := _property(properties, key))
+        ),
+        None,
+    )
     if declared:
         normalized = _normalized_key(declared)
         return _MIXED_TYPE_ALIASES.get(normalized, FiberAssetType.unsupported), declared
@@ -504,6 +687,103 @@ def _mixed_asset_type(
         if any(_property(properties, key) for key in keys):
             return asset_type, None
     return FiberAssetType.unclassified, None
+
+
+def _style_properties(
+    root: ET.Element, placemark: ET.Element
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Read local KML style values and record HTTPS icon references without fetching."""
+
+    style = placemark.find("kml:Style", KML_NS)
+    style_url = placemark.findtext("kml:styleUrl", default="", namespaces=KML_NS)
+    if style is None and style_url.startswith("#"):
+        style_id = style_url[1:]
+        style = next(
+            (
+                candidate
+                for candidate in root.findall(".//kml:Style", KML_NS)
+                if candidate.attrib.get("id") == style_id
+            ),
+            None,
+        )
+        if style is None:
+            style_map = next(
+                (
+                    candidate
+                    for candidate in root.findall(".//kml:StyleMap", KML_NS)
+                    if candidate.attrib.get("id") == style_id
+                ),
+                None,
+            )
+            if style_map is not None:
+                normal = next(
+                    (
+                        pair.findtext("kml:styleUrl", default="", namespaces=KML_NS)
+                        for pair in style_map.findall("kml:Pair", KML_NS)
+                        if pair.findtext("kml:key", default="", namespaces=KML_NS)
+                        == "normal"
+                    ),
+                    "",
+                )
+                if normal.startswith("#"):
+                    normal_id = normal[1:]
+                    style = next(
+                        (
+                            candidate
+                            for candidate in root.findall(".//kml:Style", KML_NS)
+                            if candidate.attrib.get("id") == normal_id
+                        ),
+                        None,
+                    )
+    values: dict[str, str] = {}
+    warnings: list[str] = []
+    if style is not None:
+        for source_name, target_name in (
+            ("kml:IconStyle/kml:color", "icon_color"),
+            ("kml:IconStyle/kml:scale", "icon_scale"),
+            ("kml:LineStyle/kml:color", "line_color"),
+            ("kml:LineStyle/kml:width", "line_width"),
+            ("kml:PolyStyle/kml:color", "polygon_color"),
+        ):
+            value = style.findtext(source_name, default="", namespaces=KML_NS).strip()
+            if value:
+                values[target_name] = value[:80]
+        href = style.findtext(
+            "kml:IconStyle/kml:Icon/kml:href", default="", namespaces=KML_NS
+        ).strip()
+    else:
+        href = ""
+    inline = placemark.find("kml:Style/kml:IconStyle/kml:Icon/kml:href", KML_NS)
+    if inline is not None and (inline.text or "").strip():
+        href = (inline.text or "").strip()
+    if href:
+        safe_href, warning_code = _external_icon_url(href)
+        if safe_href:
+            # This is metadata only. The server and preview do not fetch it.
+            values["icon_href"] = safe_href
+            parsed = urlsplit(safe_href)
+            warnings.append(
+                f"remote_icon_not_checked:{parsed.hostname or ''}{parsed.path[:160]}"
+            )
+        else:
+            try:
+                parsed = urlsplit(href)
+            except ValueError:
+                parsed = SplitResult("", "", href[:200], "", "")
+            resource = f"{parsed.scheme or 'relative'}:{parsed.hostname or ''}{parsed.path[:160]}"
+            warnings.append(f"{warning_code or 'icon_not_loaded'}:{resource}")
+    if style_url and not style_url.startswith("#"):
+        try:
+            parsed_style = urlsplit(style_url)
+        except ValueError:
+            parsed_style = SplitResult("", "", style_url[:200], "", "")
+        warnings.append(
+            f"external_style_not_loaded:{parsed_style.scheme or 'relative'}:"
+            f"{parsed_style.path[:200]}"
+        )
+    if warnings:
+        values["resource_warnings"] = "|".join(dict.fromkeys(warnings))
+    return values, tuple(dict.fromkeys(warnings))
 
 
 def _mixed_external_id(
@@ -531,21 +811,46 @@ def _parse_features(
     try:
         root = ET.fromstring(kml)
     except ET.ParseError as exc:
-        raise ValueError("Invalid KML document") from exc
-    if root.find(".//kml:NetworkLink", KML_NS) is not None:
-        raise ValueError("KML NetworkLink elements are not accepted")
-    for href in root.findall(".//kml:href", KML_NS):
-        value = (href.text or "").strip().casefold()
-        if value.startswith(("http://", "https://", "ftp://")):
-            raise ValueError("KML remote resources are not accepted")
+        line, column = exc.position
+        raise ValueError(
+            f"KML is malformed near line {line}, column {column}. Check the file "
+            "is a complete KML document and try exporting it again."
+        ) from exc
+    network_link = root.find(".//kml:NetworkLink", KML_NS)
+    network_link_name: str | None = None
+    if network_link is not None:
+        network_link_name = (
+            network_link.findtext(
+                "kml:name", default="NetworkLink", namespaces=KML_NS
+            ).strip()
+            or "NetworkLink"
+        )
+        if not root.findall(".//kml:Placemark", KML_NS):
+            name = network_link_name
+            raise ValueError(
+                f"KML document link '{name}' is not expanded. Download the linked "
+                "KML separately and upload it directly."
+            )
 
     parsed: list[ParsedFiberFeature] = []
     for row_number, placemark in enumerate(
         root.findall(".//kml:Placemark", KML_NS), start=1
     ):
         properties = _properties(placemark)
+        suggested_asset_type: FiberAssetType | None = None
         if profile.name == "mixed_network_map":
             asset_type, declared_asset_type = _mixed_asset_type(properties)
+            placemark_name = (
+                placemark.findtext("kml:name", default="", namespaces=KML_NS).strip()
+                or None
+            )
+            geometry_type, geojson, geometry_blockers = _geometry(placemark)
+            if asset_type is FiberAssetType.unclassified:
+                suggested_asset_type = _suggested_asset_type(
+                    geometry_type,
+                    placemark_name,
+                    _description(placemark),
+                )
             external_id = _mixed_external_id(
                 properties, asset_type=asset_type, placemark=placemark
             )
@@ -557,46 +862,55 @@ def _parse_features(
         else:
             asset_type = profile.asset_type
             declared_asset_type = None
+            placemark_name = (
+                placemark.findtext("kml:name", default="", namespaces=KML_NS).strip()
+                or None
+            )
             external_id = _property(properties, profile.external_id_key)
-        placemark_name = (
-            placemark.findtext("kml:name", default="", namespaces=KML_NS).strip()
-            or None
-        )
-        display_name = next(
+            if not external_id:
+                external_id = (placemark.attrib.get("id") or "").strip() or None
+            geometry_type, geojson, geometry_blockers = _geometry(placemark)
+        description = _description(placemark)
+        styles, _resource_warnings = _style_properties(root, placemark)
+        if network_link_name is not None:
+            _resource_warnings = (
+                *_resource_warnings,
+                f"network_link_not_expanded:{network_link_name[:160]}",
+            )
+            styles["resource_warnings"] = "|".join(dict.fromkeys(_resource_warnings))
+        display_name = placemark_name or next(
             (
                 value
                 for key in profile.display_name_keys
                 if (value := _property(properties, key))
             ),
-            placemark_name,
+            None,
         )
-        if profile.name == "mixed_network_map" and asset_type in {
-            FiberAssetType.unclassified,
-            FiberAssetType.unsupported,
-        }:
-            display_name = None
-        geometry_type, geojson, geometry_blockers = _geometry(placemark)
         blockers = list(geometry_blockers)
         if asset_type is FiberAssetType.unclassified:
             blockers.append("missing_asset_type")
         elif asset_type is FiberAssetType.unsupported:
             blockers.append("unsupported_asset_type")
-        if profile.name == "mixed_network_map" and asset_type in {
-            FiberAssetType.unclassified,
-            FiberAssetType.unsupported,
-        }:
-            external_id = None
-            display_name = None
-            properties = {}
-            geometry_type = "Unknown"
-            geojson = {"type": "GeometryCollection", "geometries": []}
+        if profile.name == "mixed_network_map":
+            if asset_type is FiberAssetType.unsupported:
+                external_id = None
+                properties = {}
+            if asset_type is not FiberAssetType.unsupported and placemark.attrib.get(
+                "id"
+            ):
+                properties["kml_placemark_id"] = placemark.attrib["id"][:255]
+            if description:
+                properties["description"] = description
+            properties.update(styles)
+            if suggested_asset_type is not None:
+                properties["suggested_asset_type"] = suggested_asset_type.value
         if not external_id and profile.name != "mixed_network_map":
             blockers.append("missing_external_id")
         if profile.name == "mixed_network_map" and asset_type not in {
             FiberAssetType.unclassified,
             FiberAssetType.unsupported,
         }:
-            if geometry_type not in _MIXED_GEOMETRY_TYPES.get(asset_type, frozenset()):
+            if not mixed_geometry_compatible(asset_type, geometry_type):
                 blockers.append("unexpected_geometry_type")
         elif (
             profile.name != "mixed_network_map"
@@ -610,6 +924,7 @@ def _parse_features(
             "declared_asset_type": declared_asset_type,
             "external_id": external_id,
             "display_name": display_name,
+            "description": description,
             "geometry": geojson,
             "properties": properties,
         }
@@ -625,6 +940,7 @@ def _parse_features(
                 content_sha256=_sha256_json(normalized),
                 geometry_sha256=geometry_sha256,
                 blocker_codes=tuple(dict.fromkeys(blockers)),
+                suggested_asset_type=suggested_asset_type,
             )
         )
     if not parsed:
@@ -860,6 +1176,15 @@ def _plan_features(
             )
         )
     return tuple(plans)
+
+
+def revalidate_mixed_features(
+    db: Session,
+    features: tuple[ParsedFiberFeature, ...],
+) -> tuple[FiberFeatureMatchPlan, ...]:
+    """Recompute matching and blockers for effective reviewed feature values."""
+
+    return _plan_features(db, SOURCE_PROFILES["mixed_network_map"], list(features))
 
 
 def preview_fiber_source(
@@ -1167,6 +1492,8 @@ __all__ = [
     "FiberSourcePreview",
     "FiberSourceProfile",
     "FiberSourceStageResult",
+    "mixed_geometry_compatible",
+    "revalidate_mixed_features",
     "SOURCE_PROFILES",
     "preview_fiber_source",
     "preview_uploaded_fiber_source",

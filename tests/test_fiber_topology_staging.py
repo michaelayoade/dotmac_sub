@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import socket
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -11,14 +13,133 @@ from app.models.fiber_topology_staging import (
     FiberTopologyStagedFeature,
 )
 from app.models.network import FdhCabinet, FiberAccessPoint
+from app.schemas.network_map_transfer import (
+    NetworkMapImportAssetType,
+    NetworkMapImportProposalEligibility,
+)
 from app.services.network.fiber_topology_staging import (
     SOURCE_PROFILES,
+    FiberAssetType,
+    FiberFeatureMatchPlan,
+    ParsedFiberFeature,
     preview_fiber_source,
+    preview_uploaded_fiber_source,
     stage_fiber_preview_batch,
     stage_fiber_source,
 )
+from app.services.network_map_transfer import (
+    _imported_geometry,
+    _proposal_eligibility,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_import_review_asset_types_match_the_fiber_domain_vocabulary():
+    supported = {
+        FiberAssetType.fiber_segment,
+        FiberAssetType.fiber_access_point,
+        FiberAssetType.fdh_cabinet,
+        FiberAssetType.splice_closure,
+        FiberAssetType.service_building,
+        FiberAssetType.support_structure,
+        FiberAssetType.unclassified,
+        FiberAssetType.unsupported,
+    }
+    assert {
+        FiberAssetType(value.value) for value in NetworkMapImportAssetType
+    } == supported
+
+
+def test_proposal_eligibility_is_projected_by_the_import_owner():
+    def plan(
+        *,
+        asset_type: FiberAssetType,
+        geometry_type: str,
+        match_status: str = "new",
+        external_id: str | None = "source-1",
+        blockers: tuple[str, ...] = (),
+    ) -> FiberFeatureMatchPlan:
+        feature = ParsedFiberFeature(
+            row_number=1,
+            asset_type=asset_type,
+            external_id=external_id,
+            display_name="Imported asset",
+            geometry_type=geometry_type,
+            geometry_geojson={"type": geometry_type, "coordinates": []},
+            source_properties={},
+            content_sha256="a" * 64,
+            geometry_sha256="b" * 64,
+            blocker_codes=blockers,
+        )
+        return FiberFeatureMatchPlan(
+            feature=feature,
+            match_status=match_status,
+            match_reasons=(),
+            candidate_asset_ids=(),
+            canonical_asset_type=None,
+            canonical_asset_id=None,
+            prior_feature_id=None,
+        )
+
+    assert (
+        _proposal_eligibility(
+            plan(asset_type=FiberAssetType.fdh_cabinet, geometry_type="Point")
+        )
+        is NetworkMapImportProposalEligibility.eligible
+    )
+    assert (
+        _proposal_eligibility(
+            plan(
+                asset_type=FiberAssetType.fdh_cabinet,
+                geometry_type="Point",
+                match_status="candidate",
+            )
+        )
+        is NetworkMapImportProposalEligibility.matched
+    )
+    assert (
+        _proposal_eligibility(
+            plan(asset_type=FiberAssetType.fiber_segment, geometry_type="LineString")
+        )
+        is NetworkMapImportProposalEligibility.unsupported_asset_type
+    )
+    assert (
+        _proposal_eligibility(
+            plan(asset_type=FiberAssetType.fdh_cabinet, geometry_type="Polygon")
+        )
+        is NetworkMapImportProposalEligibility.non_point_geometry
+    )
+    assert (
+        _proposal_eligibility(
+            plan(
+                asset_type=FiberAssetType.support_structure,
+                geometry_type="Point",
+                external_id=None,
+            )
+        )
+        is NetworkMapImportProposalEligibility.source_id_required
+    )
+    assert (
+        _proposal_eligibility(
+            plan(
+                asset_type=FiberAssetType.support_structure,
+                geometry_type="Point",
+                external_id="x" * 81,
+            )
+        )
+        is NetworkMapImportProposalEligibility.source_id_too_long
+    )
+    assert (
+        _proposal_eligibility(
+            plan(
+                asset_type=FiberAssetType.fdh_cabinet,
+                geometry_type="Point",
+                blockers=("invalid_coordinate",),
+            )
+        )
+        is NetworkMapImportProposalEligibility.blocked
+    )
 
 
 def _geometry_xml(geometry_type: str, coordinates: str) -> str:
@@ -39,14 +160,20 @@ def _placemark(
     properties: dict[str, str],
     geometry_type: str,
     coordinates: str,
+    placemark_id: str | None = None,
+    description: str | None = None,
+    style_xml: str = "",
 ) -> str:
     simple_data = "".join(
         f'<SimpleData name="{escape(key)}">{escape(value)}</SimpleData>'
         for key, value in properties.items()
     )
+    id_attribute = f' id="{escape(placemark_id)}"' if placemark_id else ""
     return (
-        "<Placemark>"
+        f"<Placemark{id_attribute}>"
         f"<name>{escape(name)}</name>"
+        f"<description>{escape(description or '')}</description>"
+        f"{style_xml}"
         "<ExtendedData><SchemaData>"
         f"{simple_data}"
         "</SchemaData></ExtendedData>"
@@ -86,13 +213,13 @@ def test_preview_is_deterministic_and_flags_source_collisions(db_session, tmp_pa
         "cabinets.kmz",
         [
             _placemark(
-                name="Cabinet A",
+                name="Same cabinet",
                 properties={"fibermngrid": "CAB-1", "name": "Same cabinet"},
                 geometry_type="Polygon",
                 coordinates=_polygon(1),
             ),
             _placemark(
-                name="Cabinet B",
+                name="Same cabinet",
                 properties={"fibermngrid": "CAB-2", "name": "Same cabinet"},
                 geometry_type="Polygon",
                 coordinates=_polygon(1),
@@ -286,7 +413,7 @@ def test_mixed_kml_stages_features_without_profile_specific_ids(db_session, tmp_
     assert [feature.geometry_type for feature in features] == ["LineString", "Point"]
 
 
-def test_mixed_network_map_blocks_unsupported_types_without_storing_private_fields(
+def test_mixed_network_map_preserves_unsupported_feature_geometry_for_review(
     db_session, tmp_path
 ):
     path = _write_kmz(
@@ -316,11 +443,205 @@ def test_mixed_network_map_blocks_unsupported_types_without_storing_private_fiel
     assert staged.blocker_count == 1
     assert feature.blocker_codes == ["unsupported_asset_type"]
     assert feature.asset_type == "unsupported"
-    assert feature.display_name is None
+    assert feature.display_name == "Private customer name"
     assert feature.external_id is None
     assert feature.source_properties == {}
-    assert feature.geometry_type == "Unknown"
-    assert feature.geometry_geojson == {"type": "GeometryCollection", "geometries": []}
+    assert feature.geometry_type == "Point"
+    assert feature.geometry_geojson == {"type": "Point", "coordinates": [7.3, 9.2]}
+
+
+def test_mixed_kml_preserves_standard_metadata_geometry_and_safe_icon_refs(
+    db_session, monkeypatch
+):
+    def fail_network(*_args, **_kwargs):
+        raise AssertionError("KML import must never fetch remote resources")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fail_network)
+    monkeypatch.setattr(socket, "create_connection", fail_network)
+    kml = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+      <Style id="google-pin"><IconStyle><scale>1.2</scale><Icon>
+        <href>https://maps.google.com/mapfiles/kml/paddle/red-circle.png</href>
+      </Icon></IconStyle></Style>
+      <Placemark id="KML-FDH-1"><name>Cabinet by park</name>
+        <description><![CDATA[<b>Checked</b> by survey]]></description>
+        <styleUrl>#google-pin</styleUrl><ExtendedData>
+          <Data name="asset_type"><value>fdh_cabinet</value></Data>
+          <Data name="dotmac_asset_id"><value>FDH-KML-1</value></Data>
+          <Data name="code"><value>FDH-KML-1</value></Data>
+        </ExtendedData><Point><coordinates>7.1,9.0</coordinates></Point>
+      </Placemark>
+      <Placemark><name>Fiber line</name><ExtendedData>
+        <Data name="type"><value>fiber_segment</value></Data>
+        <Data name="spanid"><value>SPAN-KML-1</value></Data>
+      </ExtendedData><LineString><coordinates>7.1,9.0 7.2,9.1</coordinates></LineString>
+      </Placemark>
+      <Placemark><name>Access area</name><ExtendedData>
+        <Data name="feature_type"><value>access_point</value></Data>
+        <Data name="access_pointid"><value>AP-KML-1</value></Data>
+      </ExtendedData><Polygon><outerBoundaryIs><LinearRing><coordinates>
+        7.0,9.0 7.4,9.0 7.4,9.4 7.0,9.0
+      </coordinates></LinearRing></outerBoundaryIs><innerBoundaryIs><LinearRing><coordinates>
+        7.1,9.1 7.2,9.1 7.2,9.2 7.1,9.1
+      </coordinates></LinearRing></innerBoundaryIs></Polygon>
+      </Placemark>
+      <Placemark><name>Unclassified survey point</name>
+        <Style><IconStyle><Icon><href>https://127.0.0.1/icon.png</href>
+        </Icon></IconStyle></Style><Point><coordinates>7.3,9.3</coordinates></Point>
+      </Placemark>
+      <Placemark><name>Remote icon unavailable or redirected</name>
+        <Style><IconStyle><Icon><href>https://icons.example.invalid/redirect</href>
+        </Icon></IconStyle></Style><Point><coordinates>7.5,9.5</coordinates></Point>
+      </Placemark>
+      <Placemark><name>Unspecified fiber route</name>
+        <LineString><coordinates>7.4,9.4 7.6,9.6</coordinates></LineString>
+      </Placemark>
+    </Document></kml>"""
+
+    preview = preview_uploaded_fiber_source(
+        db_session,
+        content=kml,
+        source_name="standard-map.kml",
+        profile_name="mixed_network_map",
+    )
+    features = [plan.feature for plan in preview.features]
+
+    assert [feature.display_name for feature in features] == [
+        "Cabinet by park",
+        "Fiber line",
+        "Access area",
+        "Unclassified survey point",
+        "Remote icon unavailable or redirected",
+        "Unspecified fiber route",
+    ]
+    assert features[0].external_id == "FDH-KML-1"
+    assert features[0].source_properties["kml_placemark_id"] == "KML-FDH-1"
+    assert features[0].source_properties["description"] == "Checked by survey"
+    assert (
+        features[0]
+        .source_properties["icon_href"]
+        .startswith("https://maps.google.com/")
+    )
+    assert features[0].source_properties["icon_scale"] == "1.2"
+    assert features[1].asset_type.value == "fiber_segment"
+    assert features[2].geometry_geojson["type"] == "Polygon"
+    assert len(features[2].geometry_geojson["coordinates"]) == 2
+    assert features[3].asset_type.value == "unclassified"
+    assert features[3].geometry_geojson["type"] == "Point"
+    assert features[3].blocker_codes == ("missing_asset_type",)
+    assert "icon_href" not in features[3].source_properties
+    assert (
+        "icon_reference_internal_address"
+        in features[3].source_properties["resource_warnings"]
+    )
+    # This unverified host is preserved as metadata and is never fetched. The
+    # preview keeps the point geometry and falls back to its default symbol.
+    assert features[4].source_properties["icon_href"].endswith("/redirect")
+    assert features[4].geometry_geojson["type"] == "Point"
+    assert features[5].asset_type.value == "unclassified"
+    assert features[5].suggested_asset_type.value == "fiber_segment"
+    assert "missing_asset_type" in features[5].blocker_codes
+
+
+def test_network_links_are_reported_and_not_expanded(db_session):
+    kml = b"""<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+      <NetworkLink><name>Remote map layer</name><Link>
+        <href>https://maps.example.invalid/remote.kml</href>
+      </Link></NetworkLink>
+      <Placemark><name>Local cabinet</name><ExtendedData>
+        <Data name="asset_type"><value>fdh_cabinet</value></Data>
+      </ExtendedData><Point><coordinates>7.2,9.1</coordinates></Point></Placemark>
+      </Document></kml>"""
+    preview = preview_uploaded_fiber_source(
+        db_session,
+        content=kml,
+        source_name="network-link-with-local.kml",
+        profile_name="mixed_network_map",
+    )
+    assert len(preview.features) == 1
+    assert preview.features[0].feature.display_name == "Local cabinet"
+    assert preview.features[0].feature.geometry_geojson["type"] == "Point"
+    assert any(
+        "network_link_not_expanded:Remote map layer" in warning
+        for warning in preview.features[0]
+        .feature.source_properties["resource_warnings"]
+        .split("|")
+    )
+
+    link_only = b"""<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+      <NetworkLink><name>Remote map layer</name><Link>
+        <href>https://maps.example.invalid/remote.kml</href>
+      </Link></NetworkLink></Document></kml>"""
+    with pytest.raises(ValueError, match="Remote map layer.*upload it directly"):
+        preview_uploaded_fiber_source(
+            db_session,
+            content=link_only,
+            source_name="network-link.kml",
+            profile_name="mixed_network_map",
+        )
+
+
+def test_kml_error_and_kmz_archive_limits_explain_how_to_fix(db_session):
+    with pytest.raises(ValueError, match="line 1, column"):
+        preview_uploaded_fiber_source(
+            db_session,
+            content=b"<kml><Document><Placemark>",
+            source_name="broken.kml",
+            profile_name="mixed_network_map",
+        )
+
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
+        zipped.writestr("doc.kml", b" " * 300_000)
+    with pytest.raises(ValueError, match="compression ratio.*Re-export"):
+        preview_uploaded_fiber_source(
+            db_session,
+            content=archive.getvalue(),
+            source_name="compressed.kmz",
+            profile_name="mixed_network_map",
+        )
+
+    too_many_entries = BytesIO()
+    with zipfile.ZipFile(
+        too_many_entries, "w", compression=zipfile.ZIP_STORED
+    ) as zipped:
+        zipped.writestr("doc.kml", b"<kml/>")
+        for index in range(64):
+            zipped.writestr(f"icons/{index}.png", b"x")
+    with pytest.raises(ValueError, match="more than 64 files"):
+        preview_uploaded_fiber_source(
+            db_session,
+            content=too_many_entries.getvalue(),
+            source_name="too-many-entries.kmz",
+            profile_name="mixed_network_map",
+        )
+
+    with pytest.raises(ValueError, match="25 MB upload limit"):
+        preview_uploaded_fiber_source(
+            db_session,
+            content=b"x" * (25 * 1024 * 1024 + 1),
+            source_name="too-large.kmz",
+            profile_name="mixed_network_map",
+        )
+
+
+def test_preview_geometry_serialization_preserves_polygon_rings_and_components():
+    polygon = {
+        "type": "Polygon",
+        "coordinates": [
+            [[7.0, 9.0], [7.1, 9.0], [7.1, 9.1], [7.0, 9.0]],
+            [[7.02, 9.02], [7.03, 9.02], [7.03, 9.03], [7.02, 9.02]],
+        ],
+    }
+    collection = {
+        "type": "GeometryCollection",
+        "geometries": [
+            {"type": "Point", "coordinates": [7.0, 9.0]},
+            {"type": "LineString", "coordinates": [[7.0, 9.0], [7.1, 9.1]]},
+        ],
+    }
+    assert _imported_geometry(polygon).to_transport() == polygon
+    assert _imported_geometry(collection).to_transport() == collection
 
 
 def test_mixed_network_map_blocks_geometry_that_does_not_match_asset_type(
