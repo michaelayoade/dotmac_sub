@@ -57,6 +57,7 @@ from app.services.billing_settings import (
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.billing_tax_resolution import (
     BillingTaxResolution,
+    resolve_catalog_price_tax,
     resolve_subscription_tax,
 )
 from app.services.common import coerce_uuid, round_money
@@ -143,6 +144,8 @@ class PostpaidChargeComponentPreview:
     net_amount: Decimal
     tax_amount: Decimal
     gross_amount: Decimal
+    tax_application: TaxApplication
+    tax_rate_id: UUID | None
     subscription_add_on_id: UUID | None = None
     add_on_id: UUID | None = None
 
@@ -185,6 +188,7 @@ class PostpaidChargePreview:
 class _RecurringAddonPrice:
     amount: Decimal
     currency: str
+    tax_application: TaxApplication
     multiple_active_prices: bool
 
 
@@ -196,6 +200,15 @@ class _RecurringAddonCharge:
     quantity: Decimal
     unit_price: Decimal
     amount: Decimal
+    tax_application: TaxApplication
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedRecurringPrice:
+    amount: Decimal
+    currency: str
+    billing_cycle: BillingCycle | None
+    tax_application: TaxApplication
 
 
 def _postpaid_preview_error(
@@ -355,7 +368,9 @@ def _period_end(start: datetime, cycle: BillingCycle) -> datetime:
     return _add_months(start, 1)
 
 
-def _resolve_price(db: Session, subscription: Subscription):
+def _resolve_price_detail(
+    db: Session, subscription: Subscription
+) -> _ResolvedRecurringPrice | None:
     if subscription.offer_version_id:
         version_prices = (
             db.query(OfferVersionPrice)
@@ -375,11 +390,14 @@ def _resolve_price(db: Session, subscription: Subscription):
             )
         if version_prices:
             version_price = version_prices[0]
-            return (
-                version_price.amount,
-                version_price.currency,
-                # SOT: subscription-owned cadence wins; price cadence is fallback.
-                subscription.billing_cycle or version_price.billing_cycle,
+            return _ResolvedRecurringPrice(
+                amount=version_price.amount,
+                currency=version_price.currency,
+                billing_cycle=(
+                    # SOT: subscription-owned cadence wins; price cadence is fallback.
+                    subscription.billing_cycle or version_price.billing_cycle
+                ),
+                tax_application=version_price.tax_application,
             )
     offer_prices = (
         db.query(OfferPrice)
@@ -399,14 +417,26 @@ def _resolve_price(db: Session, subscription: Subscription):
         )
     if offer_prices:
         offer_price = offer_prices[0]
-        return (
-            offer_price.amount,
-            offer_price.currency,
-            # SOT: subscription-owned cadence wins; price cadence is fallback.
-            subscription.billing_cycle or offer_price.billing_cycle,
+        return _ResolvedRecurringPrice(
+            amount=offer_price.amount,
+            currency=offer_price.currency,
+            billing_cycle=(
+                # SOT: subscription-owned cadence wins; price cadence is fallback.
+                subscription.billing_cycle or offer_price.billing_cycle
+            ),
+            tax_application=offer_price.tax_application,
         )
     # No price => no charge; cadence is irrelevant with nothing to bill.
-    return None, None, None
+    return None
+
+
+def _resolve_price(db: Session, subscription: Subscription):
+    """Compatibility tuple adapter over the typed recurring-price result."""
+
+    price = _resolve_price_detail(db, subscription)
+    if price is None:
+        return None, None, None
+    return price.amount, price.currency, price.billing_cycle
 
 
 def _effective_unit_price(
@@ -581,15 +611,15 @@ def preview_postpaid_recurring_charge(
             subscription_id=subscription_id,
         )
 
-    catalog_amount, currency, cycle = _resolve_price(db, subscription)
-    if catalog_amount is None:
+    price = _resolve_price_detail(db, subscription)
+    if price is None:
         raise _postpaid_preview_error(
             "missing_price",
             "The current postpaid owner cannot resolve a recurring price.",
             subscription_id=subscription_id,
         )
-    amount = _effective_unit_price(subscription, catalog_amount, effective_at)
-    effective_cycle = cycle or BillingCycle.monthly
+    amount = _effective_unit_price(subscription, price.amount, effective_at)
+    effective_cycle = price.billing_cycle or BillingCycle.monthly
     period_start = _as_utc(
         subscription.next_billing_at or subscription.start_at or effective_at
     )
@@ -623,7 +653,8 @@ def preview_postpaid_recurring_charge(
             subscription_id=subscription_id,
         )
 
-    tax_resolution = _resolve_tax(db, subscription)
+    subscription_tax = _resolve_tax(db, subscription)
+    tax_resolution = resolve_catalog_price_tax(subscription_tax, price.tax_application)
     tax_application = tax_resolution.tax_application
     tax_rate_percent = tax_resolution.tax_rate_percent or Decimal("0")
     base_net, base_tax, base_gross = _line_amounts(
@@ -640,6 +671,8 @@ def preview_postpaid_recurring_charge(
             net_amount=base_net,
             tax_amount=base_tax,
             gross_amount=base_gross,
+            tax_application=tax_application,
+            tax_rate_id=tax_resolution.tax_rate_id,
         )
     ]
     addon_charges, issues = _resolve_recurring_addon_charges(
@@ -649,13 +682,14 @@ def preview_postpaid_recurring_charge(
         period_end=period_end,
         usage_start=covered_start,
         usage_end=covered_end,
-        invoice_currency=str(currency or "NGN"),
+        invoice_currency=str(price.currency or "NGN"),
     )
     for charge in addon_charges:
+        addon_tax = resolve_catalog_price_tax(subscription_tax, charge.tax_application)
         net_amount, tax_amount, gross_amount = _line_amounts(
             charge.amount,
-            tax_rate_percent=tax_rate_percent,
-            tax_application=tax_application,
+            tax_rate_percent=addon_tax.tax_rate_percent or Decimal("0"),
+            tax_application=addon_tax.tax_application,
         )
         components.append(
             PostpaidChargeComponentPreview(
@@ -666,6 +700,8 @@ def preview_postpaid_recurring_charge(
                 net_amount=net_amount,
                 tax_amount=tax_amount,
                 gross_amount=gross_amount,
+                tax_application=addon_tax.tax_application,
+                tax_rate_id=addon_tax.tax_rate_id,
                 subscription_add_on_id=charge.subscription_add_on_id,
                 add_on_id=charge.add_on_id,
             )
@@ -676,7 +712,7 @@ def preview_postpaid_recurring_charge(
         account_id=subscription.subscriber_id,
         period_start=period_start,
         period_end=period_end,
-        currency=str(currency or "NGN").upper(),
+        currency=str(price.currency or "NGN").upper(),
         net_amount=sum(
             (component.net_amount for component in components),
             start=Decimal("0.00"),
@@ -716,6 +752,7 @@ def _addon_recurring_price(db: Session, add_on_id: UUID) -> _RecurringAddonPrice
     return _RecurringAddonPrice(
         amount=round_money(price.amount or 0),
         currency=str(price.currency or "NGN"),
+        tax_application=price.tax_application,
         multiple_active_prices=len(prices) > 1,
     )
 
@@ -877,6 +914,7 @@ def _resolve_recurring_addon_charges(
                 quantity=qty,
                 unit_price=unit,
                 amount=amount,
+                tax_application=priced.tax_application,
             )
         )
     return tuple(charges), tuple(issues)
@@ -890,8 +928,7 @@ def _bill_recurring_addons(
     period_end: datetime,
     usage_start: datetime,
     usage_end: datetime,
-    tax_rate_id,
-    tax_application: TaxApplication,
+    tax_resolution: BillingTaxResolution,
 ) -> int:
     """Stage the recurring add-on lines resolved by the current owner formula."""
 
@@ -918,6 +955,7 @@ def _bill_recurring_addons(
         )
     added = 0
     for charge in charges:
+        charge_tax = resolve_catalog_price_tax(tax_resolution, charge.tax_application)
         billing_line_key = _billing_line_key(
             subscription.id,
             period_start,
@@ -945,8 +983,8 @@ def _bill_recurring_addons(
                 quantity=charge.quantity,
                 unit_price=charge.unit_price,
                 amount=charge.amount,
-                tax_rate_id=tax_rate_id,
-                tax_application=tax_application,
+                tax_rate_id=charge_tax.tax_rate_id,
+                tax_application=charge_tax.tax_application,
                 metadata_={
                     "kind": "recurring_addon",
                     "subscription_add_on_id": str(charge.subscription_add_on_id),
@@ -1590,12 +1628,13 @@ def run_invoice_cycle(
 
     for subscription in subscriptions:
         is_pending = subscription.status == SubscriptionStatus.pending
-        amount, currency, cycle = _resolve_price(db, subscription)
-        if amount is None:
+        price = _resolve_price_detail(db, subscription)
+        if price is None:
             summary["skipped"] += 1
             continue
-        amount = _effective_unit_price(subscription, amount, run_at)
-        effective_cycle = cycle or BillingCycle.monthly
+        amount = _effective_unit_price(subscription, price.amount, run_at)
+        currency = price.currency
+        effective_cycle = price.billing_cycle or BillingCycle.monthly
         if billing_cycle and effective_cycle != billing_cycle:
             continue
 
@@ -1982,7 +2021,10 @@ def run_invoice_cycle(
             summary["skipped"] += 1
             continue
 
-        tax_resolution = _resolve_tax(db, subscription)
+        subscription_tax = _resolve_tax(db, subscription)
+        tax_resolution = resolve_catalog_price_tax(
+            subscription_tax, price.tax_application
+        )
         InvoiceLines.stage_system_line(
             db,
             SystemInvoiceLineCreate(
@@ -2014,8 +2056,7 @@ def run_invoice_cycle(
             period_end,
             usage_start,
             usage_end,
-            tax_resolution.tax_rate_id,
-            tax_resolution.tax_application,
+            subscription_tax,
         )
         if subscription.billing_mode != BillingMode.prepaid:
             stage_subscription_billing_anchor(
@@ -2250,15 +2291,15 @@ def generate_prorated_invoice(
     activation_date = _as_utc(activation_date) or datetime.now(UTC)
 
     # Get price info
-    amount, currency, cycle = _resolve_price(db, subscription)
-    if amount is None:
+    price = _resolve_price_detail(db, subscription)
+    if price is None:
         logger.warning(
             "No price found for subscription %s, skipping proration", subscription.id
         )
         return None
-    amount = _effective_unit_price(subscription, amount, activation_date)
+    amount = _effective_unit_price(subscription, price.amount, activation_date)
 
-    effective_cycle = cycle or BillingCycle.monthly
+    effective_cycle = price.billing_cycle or BillingCycle.monthly
 
     # Calculate billing period start based on activation date
     # Use the activation date as the period start for proration
@@ -2318,7 +2359,7 @@ def generate_prorated_invoice(
             account_id=subscription.subscriber_id,
             invoice_number=next_invoice_number(db),
             status=InvoiceStatus.issued,
-            currency=currency or "NGN",
+            currency=price.currency or "NGN",
             # Store the day-floored period_start so the dedupe above is stable
             # across re-activations on the same day (issued_at keeps the exact
             # instant).
@@ -2333,7 +2374,9 @@ def generate_prorated_invoice(
         reason="prorated_subscription_activation",
     )
 
-    tax_resolution = _resolve_tax(db, subscription)
+    tax_resolution = resolve_catalog_price_tax(
+        _resolve_tax(db, subscription), price.tax_application
+    )
     offer_name = (
         subscription.offer.name
         if subscription.offer
@@ -2383,7 +2426,7 @@ def generate_prorated_invoice(
         invoice.id,
         subscription.id,
         line_amount,
-        currency,
+        price.currency,
     )
 
     return invoice

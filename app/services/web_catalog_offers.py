@@ -13,6 +13,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, joinedload
 from starlette.datastructures import FormData
 
+from app.models.billing import TaxApplication
 from app.models.catalog import (
     PLAN_FAMILY_VALUES,
     AccessType,
@@ -219,6 +220,7 @@ def default_offer_form(db: Session | None = None) -> dict[str, object]:
         "price_id": "",
         "price_type": "recurring",
         "price_amount": "",
+        "price_tax_application": TaxApplication.exclusive.value,
         "price_currency": "NGN",
         "price_billing_cycle": BillingCycle.monthly.value,
         "price_unit": PriceUnit.month.value,
@@ -277,6 +279,9 @@ def parse_offer_form(form: FormData) -> dict[str, object]:
         "price_id": _form_str(form, "price_id").strip(),
         "price_type": _form_str(form, "price_type").strip() or "recurring",
         "price_amount": _form_str(form, "price_amount").strip(),
+        "price_tax_application": _form_str(
+            form, "price_tax_application", TaxApplication.exclusive.value
+        ).strip(),
         "price_currency": _form_str(form, "price_currency", "NGN").strip(),
         "price_billing_cycle": _form_str(form, "price_billing_cycle").strip(),
         "price_unit": _form_str(form, "price_unit").strip(),
@@ -300,6 +305,10 @@ def validate_offer_form(offer: dict[str, object]) -> str | None:
         return "Price type is invalid."
     if not offer.get("price_amount"):
         return "Price amount is required."
+    try:
+        TaxApplication(str(offer.get("price_tax_application") or ""))
+    except ValueError:
+        return "VAT treatment is invalid."
     return None
 
 
@@ -576,6 +585,9 @@ def create_recurring_price(
         "offer_id": offer_id,
         "price_type": str(offer.get("price_type") or "recurring"),
         "amount": offer["price_amount"],
+        "tax_application": str(
+            offer.get("price_tax_application") or TaxApplication.exclusive.value
+        ),
         "currency": offer["price_currency"],
     }
     if offer.get("price_billing_cycle"):
@@ -606,6 +618,9 @@ def upsert_recurring_price(
     price_payload = {
         "price_type": str(offer.get("price_type") or "recurring"),
         "amount": offer["price_amount"],
+        "tax_application": str(
+            offer.get("price_tax_application") or TaxApplication.exclusive.value
+        ),
         "currency": offer["price_currency"],
     }
     if offer.get("price_billing_cycle"):
@@ -715,6 +730,11 @@ def offer_edit_form_data(
         if price and price.price_type
         else "recurring",
         "price_amount": price.amount if price else "",
+        "price_tax_application": (
+            price.tax_application.value
+            if price and price.tax_application
+            else TaxApplication.exclusive.value
+        ),
         "price_currency": price.currency if price else "NGN",
         "price_billing_cycle": price.billing_cycle.value
         if price and price.billing_cycle
@@ -978,6 +998,7 @@ def offer_form_context(
         "offer_statuses": [item.value for item in OfferStatus],
         "price_units": [item.value for item in PriceUnit],
         "price_types": ["recurring", "one_time"],
+        "tax_applications": [item.value for item in TaxApplication],
         "guaranteed_speed_types": [item.value for item in GuaranteedSpeedType],
         "plan_categories": [item.value for item in PlanCategory],
         "plan_kinds": PLAN_KINDS,
@@ -1512,6 +1533,12 @@ def update_offer_with_audit(
             candidate_price = {
                 "price_type": str(offer_data.get("price_type") or "recurring"),
                 "amount": offer_data["price_amount"],
+                "tax_application": TaxApplication(
+                    str(
+                        offer_data.get("price_tax_application")
+                        or TaxApplication.exclusive.value
+                    )
+                ),
                 "currency": offer_data["price_currency"],
                 "billing_cycle": offer_data.get("price_billing_cycle"),
                 # The edit form represents an unset optional unit as "" while

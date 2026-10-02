@@ -137,6 +137,8 @@ def test_advance_invoice_uses_future_boundary_and_replays(
                 net_amount=Decimal("1000.00"),
                 tax_amount=Decimal("0.00"),
                 gross_amount=Decimal("1000.00"),
+                tax_application=TaxApplication.exempt,
+                tax_rate_id=None,
             ),
         ),
         issues=(),

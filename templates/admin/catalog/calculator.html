@@ -343,7 +343,7 @@ function pricingCalculator() {
 
         // Monthly (steady-state) taxable base: recurring + estimated overage.
         get subtotal() {
-            return this.recurringSubtotal + this.overageCharge;
+            return this.monthlyLines.reduce((sum, line) => sum + this._net(line), 0);
         },
 
         get vatRate() {
@@ -352,15 +352,49 @@ function pricingCalculator() {
         },
 
         get vatAmount() {
-            if (this.taxApplication === 'inclusive') {
-                return this.subtotal - (this.subtotal / (1 + this.vatRate));
-            }
-            return this.subtotal * this.vatRate;
+            return this.monthlyLines.reduce((sum, line) => sum + this._tax(line), 0);
         },
 
         get monthlyTotal() {
-            if (this.taxApplication === 'inclusive') return this.subtotal;
-            return this.subtotal + this.vatAmount;
+            return this.monthlyLines.reduce((sum, line) => sum + this._gross(line), 0);
+        },
+
+        get monthlyLines() {
+            const lines = [];
+            if (this.selectedOffer) {
+                lines.push(...this.selectedOffer.prices
+                    .filter(p => p.price_type === 'recurring')
+                    .map(p => ({ amount: p.amount, tax_application: p.tax_application })));
+            }
+            this.selectedAddOns.forEach(addon => {
+                lines.push(...addon.prices
+                    .filter(p => p.price_type === 'recurring')
+                    .map(p => ({ amount: p.amount, tax_application: p.tax_application })));
+            });
+            if (this.overageCharge > 0) {
+                const base = this.selectedOffer?.prices?.find(p => p.price_type === 'recurring');
+                lines.push({
+                    amount: this.overageCharge,
+                    tax_application: base?.tax_application || 'exclusive'
+                });
+            }
+            return lines;
+        },
+
+        _tax(line) {
+            if (!this.selectedOffer?.with_vat || line.tax_application === 'exempt') return 0;
+            if (line.tax_application === 'inclusive') {
+                return line.amount - (line.amount / (1 + this.vatRate));
+            }
+            return line.amount * this.vatRate;
+        },
+
+        _net(line) {
+            return line.tax_application === 'inclusive' ? line.amount - this._tax(line) : line.amount;
+        },
+
+        _gross(line) {
+            return line.tax_application === 'exclusive' ? line.amount + this._tax(line) : line.amount;
         },
 
         // --- First bill (mirrors app.services.web_catalog_calculator) ---
@@ -424,19 +458,43 @@ function pricingCalculator() {
         },
 
         get firstBillTaxableBase() {
-            return this.proratedRecurring + this.overageCharge + this.oneTimeTotal;
+            return this.firstBillLines.reduce((sum, line) => sum + this._net(line), 0);
         },
 
         get firstBillVat() {
-            if (this.taxApplication === 'inclusive') {
-                return this.firstBillTaxableBase - (this.firstBillTaxableBase / (1 + this.vatRate));
-            }
-            return this.firstBillTaxableBase * this.vatRate;
+            return this.firstBillLines.reduce((sum, line) => sum + this._tax(line), 0);
         },
 
         get firstBillTotal() {
-            if (this.taxApplication === 'inclusive') return this.firstBillTaxableBase;
-            return this.firstBillTaxableBase + this.firstBillVat;
+            return this.firstBillLines.reduce((sum, line) => sum + this._gross(line), 0);
+        },
+
+        get firstBillLines() {
+            const lines = [];
+            if (this.selectedOffer) {
+                lines.push(...this.selectedOffer.prices.map(p => ({
+                    amount: p.price_type === 'recurring'
+                        ? p.amount * this.firstBillProrationRatio
+                        : p.amount,
+                    tax_application: p.tax_application
+                })));
+            }
+            this.selectedAddOns.forEach(addon => {
+                lines.push(...addon.prices.map(p => ({
+                    amount: p.price_type === 'recurring'
+                        ? p.amount * this.firstBillProrationRatio
+                        : p.amount,
+                    tax_application: p.tax_application
+                })));
+            });
+            if (this.overageCharge > 0) {
+                const base = this.selectedOffer?.prices?.find(p => p.price_type === 'recurring');
+                lines.push({
+                    amount: this.overageCharge,
+                    tax_application: base?.tax_application || 'exclusive'
+                });
+            }
+            return lines;
         },
 
         get validationChecks() {

@@ -63,10 +63,11 @@ Its precedence, in order (`app/services/billing_tax_resolution.py:158-206`):
 | 6 | catalog offer exempt | neither flag set | `billing_tax_resolution.py:204-205` |
 | 7 | configured default | `billing.default_tax_rate_id` setting | `billing_tax_resolution.py:52-65,182-187` |
 
-Inclusive/exclusive/exempt treatment is a single tenant-wide setting,
-`billing.default_tax_application` (`billing_tax_resolution.py:68-76`), applied
-uniformly to whatever rate the precedence selected
-(`billing_tax_resolution.py:212-214`).
+Inclusive/exclusive/exempt treatment is explicit on each `OfferPrice`,
+`OfferVersionPrice`, and `AddOnPrice`; `resolve_catalog_price_tax` combines it
+with the subscription rate/exemption result. The tenant-wide
+`billing.default_tax_application` remains only as a compatibility input before
+a catalog price basis is applied. See `docs/designs/CATALOG_PRICE_TAX_BASIS.md`.
 
 ### 2.2 The three reader paths
 
@@ -347,17 +348,16 @@ the original invoice's determination.
 `dotmac_kernel.money.currency()` and **rejects** any code absent from that
 registry rather than assuming two decimals.
 
-### 6.8 Inclusive/exclusive moves from a tenant switch to a rule version
+### 6.8 Inclusive/exclusive moves from a catalog price to a rule version
 
-Today one setting, `billing.default_tax_application`, flips inclusive/exclusive
-for the whole tenant (`billing_tax_resolution.py:68-76`). In the contract,
+Today each catalog price explicitly records inclusive/exclusive/exempt treatment
+(`docs/designs/CATALOG_PRICE_TAX_BASIS.md`). In the target contract,
 `inclusive` is a property of a published `TaxRule` version
 (`contracts.py:51`; `models.py` `TaxRule.inclusive`), and an inclusive rule
 may not be combined with any other component
 (`service.py:718-722`). After cutover, changing inclusive treatment is a new
-rule version with its own effective date — the tenant-wide toggle disappears,
-and any operator workflow that relies on flipping it must be retired in the same
-slice.
+rule version with its own effective date; catalog price treatment becomes
+historical compatibility evidence rather than a second live tax decision.
 
 ## 7. Backfilling `CustomerTaxPolicy` into classifications
 

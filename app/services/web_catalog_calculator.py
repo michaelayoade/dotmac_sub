@@ -209,6 +209,7 @@ def calculator_page_data(db) -> dict[str, object]:
                     {
                         "price_type": p.price_type.value if p.price_type else "",
                         "amount": float(p.amount) if p.amount else 0,
+                        "tax_application": p.tax_application.value,
                         "currency": p.currency or "NGN",
                         "billing_cycle": p.billing_cycle.value
                         if p.billing_cycle
@@ -239,6 +240,7 @@ def calculator_page_data(db) -> dict[str, object]:
                     {
                         "price_type": p.price_type.value if p.price_type else "",
                         "amount": float(p.amount) if p.amount else 0,
+                        "tax_application": p.tax_application.value,
                         "currency": p.currency or "NGN",
                         "billing_cycle": p.billing_cycle.value
                         if p.billing_cycle

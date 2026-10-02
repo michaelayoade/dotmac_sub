@@ -15,6 +15,7 @@ from typing import Any, cast
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.billing import TaxApplication
 from app.models.catalog import (
     AddOn,
     AddOnType,
@@ -745,6 +746,7 @@ def add_on_form_options() -> dict[str, list[str]]:
         "price_types": [item.value for item in PriceType],
         "billing_cycles": [item.value for item in BillingCycle],
         "price_units": [item.value for item in PriceUnit],
+        "tax_applications": [item.value for item in TaxApplication],
     }
 
 
@@ -786,6 +788,7 @@ def add_on_form_context(
                     "id": str(price.id),
                     "price_type": price.price_type.value,
                     "amount": str(price.amount),
+                    "tax_application": price.tax_application.value,
                     "currency": price.currency,
                     "billing_cycle": price.billing_cycle.value
                     if price.billing_cycle
@@ -819,6 +822,10 @@ def parse_add_on_prices_form(form, *, include_ids: bool) -> list[dict[str, str]]
         billing_cycle = form_str(f"prices[{index}][billing_cycle]").strip()
         unit = form_str(f"prices[{index}][unit]").strip()
         description = form_str(f"prices[{index}][description]").strip()
+        tax_application = form_str(
+            f"prices[{index}][tax_application]",
+            TaxApplication.exclusive.value,
+        ).strip()
         if amount.strip() and price_type:
             price = {
                 "price_type": price_type,
@@ -827,6 +834,7 @@ def parse_add_on_prices_form(form, *, include_ids: bool) -> list[dict[str, str]]
                 "billing_cycle": billing_cycle,
                 "unit": unit,
                 "description": description,
+                "tax_application": tax_application,
             }
             if include_ids:
                 price["id"] = form_str(f"prices[{index}][id]").strip()
@@ -1210,6 +1218,7 @@ def create_addon_prices(
             add_on_id=addon_uuid,
             price_type=PriceType(price["price_type"]),
             amount=Decimal(price["amount"]),
+            tax_application=TaxApplication(price["tax_application"]),
             currency=price["currency"] or "NGN",
             billing_cycle=BillingCycle(price["billing_cycle"])
             if price["billing_cycle"]
@@ -1270,6 +1279,7 @@ def sync_addon_prices(
         candidate = {
             "price_type": PriceType(price["price_type"]),
             "amount": Decimal(price["amount"]),
+            "tax_application": TaxApplication(price["tax_application"]),
             "currency": price["currency"] or "NGN",
             "billing_cycle": BillingCycle(price["billing_cycle"])
             if price["billing_cycle"]
@@ -1308,6 +1318,7 @@ def sync_addon_prices(
                 payload=AddOnPriceUpdate(
                     price_type=PriceType(price["price_type"]),
                     amount=Decimal(price["amount"]),
+                    tax_application=TaxApplication(price["tax_application"]),
                     currency=price["currency"] or "NGN",
                     billing_cycle=BillingCycle(price["billing_cycle"])
                     if price["billing_cycle"]
@@ -1325,6 +1336,7 @@ def sync_addon_prices(
                     add_on_id=coerce_uuid(addon_id),
                     price_type=PriceType(price["price_type"]),
                     amount=Decimal(price["amount"]),
+                    tax_application=TaxApplication(price["tax_application"]),
                     currency=price["currency"] or "NGN",
                     billing_cycle=BillingCycle(price["billing_cycle"])
                     if price["billing_cycle"]

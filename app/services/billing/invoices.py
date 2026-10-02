@@ -47,9 +47,10 @@ from app.schemas.billing import (
     LedgerEntryCreate,
     SystemInvoiceLineCreate,
 )
-from app.services import customer_tax_policies, numbering, settings_spec
+from app.services import numbering, settings_spec
 from app.services.audit import AuditEvents
 from app.services.billing._common import (
+    _calculate_tax_amount,
     _recalculate_invoice_totals,
     _resolve_tax_rate,
     _validate_account,
@@ -60,6 +61,10 @@ from app.services.billing._common import (
     resolve_invoice_settlement_amounts,
 )
 from app.services.billing.ledger import LedgerEntries
+from app.services.billing_tax_resolution import (
+    resolve_catalog_price_tax,
+    resolve_subscription_tax,
+)
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -3263,25 +3268,25 @@ class Invoices(ListResponseMixin):
         amount = Decimal(str(offer_price.amount))
         currency = offer_price.currency or "NGN"
 
-        # Resolve tax
-        tax_rate_id = getattr(subscriber, "tax_rate_id", None)
-        vat_policy = customer_tax_policies.get_customer_vat_exemption_policy(
-            db,
-            account_id=subscriber.id,
+        tax_resolution = resolve_catalog_price_tax(
+            resolve_subscription_tax(db, subscription),
+            offer_price.tax_application,
         )
-        if vat_policy.vat_exempt:
-            tax_rate_id = None
-        tax_total = Decimal("0")
-        if tax_rate_id:
-            from app.models.billing import TaxRate
-
-            tax_rate = db.get(TaxRate, tax_rate_id)
-            if tax_rate and tax_rate.rate:
-                tax_total = (
-                    amount * Decimal(str(tax_rate.rate)) / Decimal("100")
-                ).quantize(Decimal("0.01"))
-
-        total = amount + tax_total
+        tax_total = _calculate_tax_amount(
+            amount,
+            tax_resolution.tax_rate_percent or Decimal("0"),
+            tax_resolution.tax_application,
+        )
+        subtotal = (
+            round_money(amount - tax_total)
+            if tax_resolution.tax_application is TaxApplication.inclusive
+            else round_money(amount)
+        )
+        total = (
+            round_money(amount)
+            if tax_resolution.tax_application is TaxApplication.inclusive
+            else round_money(subtotal + tax_total)
+        )
 
         # Create invoice
         invoice_number = numbering.generate_required_number(
@@ -3310,7 +3315,7 @@ class Invoices(ListResponseMixin):
                 account_id=coerce_uuid(subscriber_id),
                 invoice_number=invoice_number,
                 currency=currency,
-                subtotal=amount,
+                subtotal=subtotal,
                 tax_total=tax_total,
                 total=total,
                 balance_due=total,
@@ -3333,8 +3338,8 @@ class Invoices(ListResponseMixin):
                     quantity=Decimal("1"),
                     unit_price=amount,
                     amount=amount,
-                    tax_rate_id=tax_rate_id,
-                    tax_application=TaxApplication.exclusive,
+                    tax_rate_id=tax_resolution.tax_rate_id,
+                    tax_application=tax_resolution.tax_application,
                     is_active=True,
                 ),
             ),

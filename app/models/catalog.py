@@ -22,6 +22,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.billing import TaxApplication
 
 
 class ServiceType(enum.Enum):
@@ -828,6 +829,12 @@ class OfferVersionPrice(Base):
         Enum(PriceType), default=PriceType.recurring
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    tax_application: Mapped[TaxApplication] = mapped_column(
+        Enum(TaxApplication, name="taxapplication"),
+        nullable=False,
+        default=TaxApplication.exclusive,
+        server_default=TaxApplication.exclusive.value,
+    )
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     billing_cycle: Mapped[BillingCycle | None] = mapped_column(Enum(BillingCycle))
     unit: Mapped[PriceUnit | None] = mapped_column(Enum(PriceUnit))
@@ -879,6 +886,12 @@ class OfferPrice(Base):
         Enum(PriceType), default=PriceType.recurring
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    tax_application: Mapped[TaxApplication] = mapped_column(
+        Enum(TaxApplication, name="taxapplication"),
+        nullable=False,
+        default=TaxApplication.exclusive,
+        server_default=TaxApplication.exclusive.value,
+    )
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     billing_cycle: Mapped[BillingCycle | None] = mapped_column(Enum(BillingCycle))
     unit: Mapped[PriceUnit | None] = mapped_column(Enum(PriceUnit))
@@ -910,6 +923,12 @@ class AddOnPrice(Base):
         Enum(PriceType), default=PriceType.recurring
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    tax_application: Mapped[TaxApplication] = mapped_column(
+        Enum(TaxApplication, name="taxapplication"),
+        nullable=False,
+        default=TaxApplication.exclusive,
+        server_default=TaxApplication.exclusive.value,
+    )
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     billing_cycle: Mapped[BillingCycle | None] = mapped_column(Enum(BillingCycle))
     unit: Mapped[PriceUnit | None] = mapped_column(Enum(PriceUnit))

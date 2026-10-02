@@ -3,17 +3,54 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import uuid4
 
 from app.models.billing import TaxApplication, TaxRate
 from app.models.customer_tax_policy import CustomerTaxPolicy
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services.billing_tax_resolution import (
+    BillingTaxResolution,
     BillingTaxSource,
     resolve_active_tax_rate_id_for_percent,
+    resolve_catalog_price_tax,
     resolve_subscription_tax,
     resolve_subscription_taxes,
 )
+
+
+def test_catalog_price_basis_overrides_tenant_application_but_not_exemption():
+    rate_id = uuid4()
+    tenant_resolution = BillingTaxResolution(
+        subscription_id=uuid4(),
+        tax_rate_id=rate_id,
+        tax_rate_percent=Decimal("7.5000"),
+        tax_application=TaxApplication.exclusive,
+        source=BillingTaxSource.account_tax_rate,
+        customer_tax_policy_version=3,
+    )
+
+    inclusive = resolve_catalog_price_tax(tenant_resolution, TaxApplication.inclusive)
+    exempt = resolve_catalog_price_tax(tenant_resolution, TaxApplication.exempt)
+    already_exempt = resolve_catalog_price_tax(
+        BillingTaxResolution(
+            subscription_id=tenant_resolution.subscription_id,
+            tax_rate_id=None,
+            tax_rate_percent=None,
+            tax_application=TaxApplication.exempt,
+            source=BillingTaxSource.customer_vat_exemption,
+            customer_tax_policy_version=4,
+        ),
+        TaxApplication.inclusive,
+    )
+
+    assert inclusive.tax_application is TaxApplication.inclusive
+    assert inclusive.tax_rate_id == rate_id
+    assert exempt.tax_application is TaxApplication.exempt
+    assert exempt.tax_rate_id is None
+    assert exempt.tax_rate_percent is None
+    assert already_exempt.tax_application is TaxApplication.exempt
+    assert already_exempt.tax_rate_id is None
 
 
 def test_percent_lookup_requires_one_unambiguous_active_rate(db_session):

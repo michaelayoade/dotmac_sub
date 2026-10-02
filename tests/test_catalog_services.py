@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from starlette.datastructures import FormData
 
+from app.models.billing import TaxApplication
 from app.models.catalog import (
     AccessType,
     BillingCycle,
@@ -28,6 +29,7 @@ from app.schemas.settings import DomainSettingUpdate
 from app.services import catalog as catalog_service
 from app.services import settings_api
 from app.services import web_catalog_offers as web_catalog_offers_service
+from app.services import web_catalog_settings as web_catalog_settings_service
 from app.services.catalog.ip_block_choices import (
     IpBlockPrefix,
     active_catalog_ip_block_choices,
@@ -615,6 +617,43 @@ def test_offer_form_context_exposes_full_billing_cycle_set(db_session):
     )
 
     assert context["billing_cycles"] == [item.value for item in BillingCycle]
+
+
+def test_catalog_price_forms_expose_and_parse_vat_treatment(db_session):
+    offer_context = web_catalog_offers_service.offer_form_context(
+        db_session,
+        web_catalog_offers_service.default_offer_form(),
+    )
+
+    assert offer_context["tax_applications"] == [item.value for item in TaxApplication]
+    assert offer_context["offer"]["price_tax_application"] == "exclusive"
+
+    offer = web_catalog_offers_service.parse_offer_form(
+        FormData([("price_tax_application", "inclusive")])
+    )
+    assert offer["price_tax_application"] == "inclusive"
+
+    prices = web_catalog_settings_service.parse_add_on_prices_form(
+        FormData(
+            [
+                ("prices[0][price_type]", "recurring"),
+                ("prices[0][amount]", "10750.00"),
+                ("prices[0][tax_application]", "inclusive"),
+            ]
+        ),
+        include_ids=False,
+    )
+    assert prices == [
+        {
+            "price_type": "recurring",
+            "amount": "10750.00",
+            "currency": "NGN",
+            "billing_cycle": "",
+            "unit": "",
+            "description": "",
+            "tax_application": "inclusive",
+        }
+    ]
 
 
 def test_overview_page_data_filters_plan_family(db_session):

@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.models.billing import LedgerEntryType, LedgerSource
+from app.models.billing import LedgerEntryType, LedgerSource, TaxApplication
 from app.models.catalog import (
     AccessRequirement,
     AccessType,
@@ -239,6 +239,7 @@ class OfferPriceRead(BaseModel):
     id: UUID
     price_type: PriceType
     amount: Decimal
+    tax_application: TaxApplication
     currency: str
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -275,6 +276,7 @@ class OfferPriceCreate(BaseModel):
     offer_id: UUID
     price_type: PriceType = PriceType.recurring
     amount: Decimal = Field(gt=0, lt=100_000_000)
+    tax_application: TaxApplication = TaxApplication.exclusive
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -286,6 +288,7 @@ class OfferPriceUpdate(BaseModel):
     offer_id: UUID | None = None
     price_type: PriceType | None = None
     amount: Decimal | None = Field(default=None, gt=0, lt=100_000_000)
+    tax_application: TaxApplication | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -299,6 +302,7 @@ class AddOnPriceRead(BaseModel):
     id: UUID
     price_type: PriceType
     amount: Decimal
+    tax_application: TaxApplication
     currency: str
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -312,6 +316,7 @@ class AddOnPriceCreate(BaseModel):
     add_on_id: UUID
     price_type: PriceType = PriceType.recurring
     amount: Decimal = Field(gt=0, lt=100_000_000)
+    tax_application: TaxApplication = TaxApplication.exclusive
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -323,6 +328,7 @@ class AddOnPriceUpdate(BaseModel):
     add_on_id: UUID | None = None
     price_type: PriceType | None = None
     amount: Decimal | None = Field(default=None, gt=0, lt=100_000_000)
+    tax_application: TaxApplication | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -747,6 +753,7 @@ class OfferVersionPriceBase(BaseModel):
     offer_version_id: UUID
     price_type: PriceType = PriceType.recurring
     amount: Decimal
+    tax_application: TaxApplication = TaxApplication.exclusive
     currency: str = Field(default="NGN", max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None
@@ -762,6 +769,7 @@ class OfferVersionPriceUpdate(BaseModel):
     offer_version_id: UUID | None = None
     price_type: PriceType | None = None
     amount: Decimal | None = None
+    tax_application: TaxApplication | None = None
     currency: str | None = Field(default=None, max_length=3)
     billing_cycle: BillingCycle | None = None
     unit: PriceUnit | None = None

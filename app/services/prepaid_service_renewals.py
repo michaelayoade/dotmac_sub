@@ -105,7 +105,10 @@ from app.services.billing.invoices import (
     InvoiceOwnerError,
     Invoices,
 )
-from app.services.billing_tax_resolution import resolve_subscription_taxes
+from app.services.billing_tax_resolution import (
+    resolve_catalog_price_tax,
+    resolve_subscription_taxes,
+)
 from app.services.common import coerce_uuid, round_money
 from app.services.customer_financial_position import get_customer_financial_position
 from app.services.domain_errors import DomainError
@@ -1207,7 +1210,9 @@ def _resolve_prepaid_monthly_charge_details(
         if cycle != BillingCycle.monthly:
             continue
         base = _effective_unit_price(subscription, price.amount, effective_at)
-        tax_resolution = tax_resolutions[subscription.id]
+        tax_resolution = resolve_catalog_price_tax(
+            tax_resolutions[subscription.id], price.tax_application
+        )
         tax_rate_percent = tax_resolution.tax_rate_percent
         tax_application = tax_resolution.tax_application
         if (

@@ -18,7 +18,12 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from starlette.datastructures import FormData
 
 from app.models.audit import AuditActorType
-from app.models.billing import InvoiceDueDateBasis, InvoiceStatus, TaxRate
+from app.models.billing import (
+    InvoiceDueDateBasis,
+    InvoiceStatus,
+    TaxApplication,
+    TaxRate,
+)
 from app.models.catalog import (
     AccessCredential,
     AddOn,
@@ -84,7 +89,10 @@ from app.services.billing_adapter import (
     billing_adapter,
 )
 from app.services.billing_settings import resolve_payment_due_days
-from app.services.billing_tax_resolution import resolve_subscription_tax
+from app.services.billing_tax_resolution import (
+    resolve_catalog_price_tax,
+    resolve_subscription_tax,
+)
 from app.services.credential_crypto import decrypt_credential
 from app.services.ip_assignment_lifecycle import (
     IPv4ServedProjectionDecision,
@@ -3296,13 +3304,17 @@ def create_invoice_for_subscription(db: Session, created: Subscription) -> None:
     offer = catalog_service.offers.get(db=db, offer_id=str(created.offer_id))
     line_amount = Decimal("0.00")
     line_description = "Subscription"
+    price_tax_application = TaxApplication.exclusive
     if offer:
         line_description = offer.name
         if offer.prices:
             line_amount = offer.prices[0].amount or Decimal("0.00")
+            price_tax_application = offer.prices[0].tax_application
 
     subscriber = db.get(Subscriber, created.subscriber_id)
-    tax_resolution = resolve_subscription_tax(db, created)
+    tax_resolution = resolve_catalog_price_tax(
+        resolve_subscription_tax(db, created), price_tax_application
+    )
     issued_at = datetime.now(UTC)
     due_days = resolve_payment_due_days(db, subscriber=subscriber)
     billing_adapter.create_invoice_with_lines(

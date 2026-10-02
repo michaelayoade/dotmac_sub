@@ -1453,6 +1453,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "compatibility subscription VAT treatment policy",
             "bounded subscription VAT treatment resolution",
+            "catalog-price VAT-basis application",
             "recorded-percent active tax-rate identity resolution",
         ),
         depends_on=(
@@ -1469,7 +1470,9 @@ SERVICES: tuple[SOTService, ...] = (
             "VAT precedence while dotmac-tax adoption is "
             "in progress. Customer exemption wins before address, account, catalog, "
             "or configured defaults. Rate identity, percentage, and application "
-            "come only from owned records and settings; no VAT code or percentage "
+            "come only from owned records and settings. Each catalog price then "
+            "supplies its explicit inclusive, exclusive, or exempt amount basis; "
+            "customer exemption and a missing rate still win. No VAT code or percentage "
             "is built into a caller. It owns neither statutory tax policy nor "
             "custom-tax determination and is retired when dotmac-tax cuts over."
             " Its recorded-percent adapter returns an identity only when exactly "
@@ -1485,6 +1488,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical customer VAT exemption policy",
                         "active legacy tax-rate records",
                         "catalog compatibility VAT fields",
+                        "canonical catalog price VAT basis",
                         "configured compatibility VAT defaults",
                     ),
                 ),
@@ -1496,7 +1500,16 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical customer VAT exemption policy",
                         "active legacy tax-rate records",
                         "catalog compatibility VAT fields",
+                        "canonical catalog price VAT basis",
                         "configured compatibility VAT defaults",
+                    ),
+                ),
+                ConcernContract(
+                    name="catalog-price VAT-basis application",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "resolved subscription VAT treatment",
+                        "canonical catalog price VAT basis",
                     ),
                 ),
                 ConcernContract(
@@ -1543,6 +1556,25 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="canonical catalog price VAT basis",
+                    owner="service_intent.catalog_policy",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "non-null OfferPrice, OfferVersionPrice, or AddOnPrice "
+                        "tax_application declaring whether the stored amount is "
+                        "exclusive, inclusive, or exempt"
+                    ),
+                ),
+                AuthorityInput(
+                    name="resolved subscription VAT treatment",
+                    owner="financial.billing_tax_resolution",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "typed BillingTaxResolution derived from canonical customer, "
+                        "rate, catalog-taxability, and compatibility-setting inputs"
+                    ),
+                ),
+                AuthorityInput(
                     name="configured compatibility VAT defaults",
                     owner="control.settings_spec",
                     kind=AuthorityKind.CONTROL_INPUT,
@@ -1567,7 +1599,8 @@ SERVICES: tuple[SOTService, ...] = (
                 idempotency=(
                     "The same visible subscription scope, customer policy, active "
                     "rates, catalog compatibility values, and settings produce the "
-                    "same typed result and provenance."
+                    "same typed result and provenance; applying the same catalog "
+                    "price basis produces the same effective line treatment."
                 ),
                 retries=(
                     "Transient database reads may be retried; missing or inactive "
@@ -1608,10 +1641,13 @@ SERVICES: tuple[SOTService, ...] = (
             design_refs=(
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/PLAN_FAMILY_ARCHITECTURE.md",
+                "docs/designs/CATALOG_PRICE_TAX_BASIS.md",
             ),
             test_refs=(
                 "tests/test_billing_tax_resolution.py",
                 "tests/test_billing_automation_services.py",
+                "tests/test_invoice_issued_at_invariant.py",
+                "tests/test_prepaid_service_renewals.py",
                 "tests/test_prepaid_threshold_resolver.py",
                 "tests/test_web_catalog_subscriptions.py",
                 "tests/architecture/test_billing_tax_resolution_boundary.py",

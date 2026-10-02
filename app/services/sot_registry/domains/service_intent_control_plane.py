@@ -29,7 +29,11 @@ DOMAIN = DomainSOT(
         SOTService(
             name="service_intent.catalog_policy",
             module="app.services.catalog.policies",
-            owns=("catalog policy lookup", "offer policy interpretation"),
+            owns=(
+                "catalog policy lookup",
+                "offer policy interpretation",
+                "catalog price VAT basis",
+            ),
         ),
         SOTService(
             name="service_intent.offer_access_requirement",
@@ -584,6 +588,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "billing-critical catalog mutation policy",
                 "live catalog cadence immutability",
+                "live catalog price VAT-basis immutability",
                 "base offer-price propagation to future subscription renewals",
                 "billing catalog audit and operator alerting",
             ),

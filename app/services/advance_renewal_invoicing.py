@@ -350,8 +350,8 @@ def generate_advance_renewal_invoice(
                     component.kind.value,
                     component.quantity,
                     component.unit_price,
-                    postpaid_preview.tax_application,
-                    postpaid_preview.tax_rate_id,
+                    component.tax_application,
+                    component.tax_rate_id,
                 )
                 for component in postpaid_preview.components
             )

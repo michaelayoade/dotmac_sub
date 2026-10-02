@@ -1366,6 +1366,97 @@ class TestRunInvoiceCycle:
         # base plan + add-on are both on the bill
         assert sum(Decimal(str(line.amount)) for line in lines) == Decimal("125.00")
 
+    def test_mixed_exclusive_plan_and_inclusive_addon_do_not_double_charge_vat(
+        self, db_session, subscription, subscriber_account
+    ):
+        from app.models.billing import Invoice, InvoiceLine, TaxApplication, TaxRate
+        from app.models.catalog import (
+            AddOn,
+            AddOnPrice,
+            AddOnType,
+            BillingCycle,
+            OfferPrice,
+            PriceType,
+            SubscriptionAddOn,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import AccountStatus
+
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        subscription.status = SubscriptionStatus.active
+        subscriber_account.status = AccountStatus.active
+        subscription.start_at = now_naive - timedelta(days=30)
+        subscription.next_billing_at = now_naive - timedelta(days=1)
+        rate = TaxRate(
+            name="Mixed catalog VAT",
+            code="MIXED-CATALOG-VAT",
+            rate=Decimal("7.5000"),
+            is_active=True,
+        )
+        db_session.add(rate)
+        db_session.flush()
+        subscriber_account.tax_rate_id = rate.id
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("100.00"),
+                tax_application=TaxApplication.exclusive,
+                currency="USD",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        add_on = AddOn(
+            name="Inclusive IP", addon_type=AddOnType.extra_ip, is_active=True
+        )
+        db_session.add(add_on)
+        db_session.flush()
+        db_session.add_all(
+            [
+                AddOnPrice(
+                    add_on_id=add_on.id,
+                    price_type=PriceType.recurring,
+                    amount=Decimal("107.50"),
+                    tax_application=TaxApplication.inclusive,
+                    currency="USD",
+                    billing_cycle=BillingCycle.monthly,
+                    is_active=True,
+                ),
+                SubscriptionAddOn(
+                    subscription_id=subscription.id,
+                    add_on_id=add_on.id,
+                    quantity=1,
+                    start_at=now_naive - timedelta(days=30),
+                ),
+            ]
+        )
+        db_session.commit()
+
+        billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
+
+        invoice = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .one()
+        )
+        lines = (
+            db_session.query(InvoiceLine)
+            .filter(InvoiceLine.invoice_id == invoice.id)
+            .all()
+        )
+        base_line = next(
+            line for line in lines if line.tax_application is TaxApplication.exclusive
+        )
+        addon_line = next(
+            line for line in lines if line.tax_application is TaxApplication.inclusive
+        )
+        assert base_line.amount == Decimal("100.00")
+        assert addon_line.amount == Decimal("107.50")
+        assert invoice.subtotal == Decimal("200.00")
+        assert invoice.tax_total == Decimal("15.00")
+        assert invoice.total == Decimal("215.00")
+
     def test_recurring_addon_starting_after_period_is_not_billed(
         self, db_session, subscription, subscriber_account
     ):

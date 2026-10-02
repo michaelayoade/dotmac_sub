@@ -161,7 +161,7 @@
                         <div class="flex items-center justify-between rounded-lg border border-slate-200 p-4 dark:border-slate-700">
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ price.price_type.value | title }}</p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ price.description or (price.billing_cycle.value | title if price.billing_cycle else 'One-time') }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ price.description or (price.billing_cycle.value | title if price.billing_cycle else 'One-time') }} · VAT {{ price.tax_application.value | title }}</p>
                             </div>
                             <p class="text-lg font-semibold text-slate-900 dark:text-white">{{ price.currency }} {{ "%.2f" | format(price.amount) }}</p>
                         </div>

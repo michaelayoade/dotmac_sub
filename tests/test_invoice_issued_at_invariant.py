@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus, TaxApplication, TaxRate
 from app.models.catalog import (
     BillingCycle,
     BillingMode,
@@ -78,6 +78,44 @@ def test_create_for_subscription_issues_with_both_dates(
     # Without a due date the invoice can never age or go overdue.
     assert invoice.due_at is not None
     assert invoice.due_at > invoice.issued_at
+
+
+def test_create_for_subscription_extracts_inclusive_catalog_vat(
+    db_session, subscription, subscriber_account
+):
+    vat = TaxRate(
+        name="VAT 7.5%",
+        code="VAT75-INCLUSIVE-INVOICE",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    price = OfferPrice(
+        offer_id=subscription.offer_id,
+        price_type=PriceType.recurring,
+        amount=Decimal("10750.00"),
+        tax_application=TaxApplication.inclusive,
+        currency="NGN",
+        billing_cycle=BillingCycle.monthly,
+        is_active=True,
+    )
+    db_session.add_all([vat, price])
+    db_session.flush()
+    subscriber_account.tax_rate_id = vat.id
+    subscription.status = SubscriptionStatus.active
+    subscription.billing_mode = BillingMode.postpaid
+    subscriber_account.status = AccountStatus.active
+    db_session.commit()
+
+    invoice = Invoices.create_for_subscription(
+        db_session, str(subscriber_account.id), str(subscription.id)
+    )
+
+    assert invoice.subtotal == Decimal("10000.00")
+    assert invoice.tax_total == Decimal("750.00")
+    assert invoice.total == Decimal("10750.00")
+    assert len(invoice.lines) == 1
+    assert invoice.lines[0].amount == Decimal("10750.00")
+    assert invoice.lines[0].tax_application is TaxApplication.inclusive
 
 
 def test_health_counts_an_invoice_that_left_draft_without_an_issue_date(

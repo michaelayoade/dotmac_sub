@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from uuid import UUID
 
@@ -47,6 +47,34 @@ class BillingTaxResolution:
     tax_application: TaxApplication
     source: BillingTaxSource
     customer_tax_policy_version: int
+
+
+def resolve_catalog_price_tax(
+    resolution: BillingTaxResolution,
+    price_tax_application: TaxApplication,
+) -> BillingTaxResolution:
+    """Apply one catalog price's declared VAT basis to a subscription result.
+
+    The subscription resolver owns whether VAT applies and which rate applies.
+    The catalog price owns whether its stored amount is net (exclusive), gross
+    (inclusive), or outside VAT (exempt). Customer/catalog exemption and a
+    missing rate always win; an exempt price deliberately drops rate identity
+    so the persisted invoice line cannot imply tax was charged.
+    """
+
+    if (
+        resolution.tax_rate_id is None
+        or resolution.tax_rate_percent is None
+        or resolution.tax_application is TaxApplication.exempt
+        or price_tax_application is TaxApplication.exempt
+    ):
+        return replace(
+            resolution,
+            tax_rate_id=None,
+            tax_rate_percent=None,
+            tax_application=TaxApplication.exempt,
+        )
+    return replace(resolution, tax_application=price_tax_application)
 
 
 def resolve_default_tax_rate_id(db: Session) -> UUID | None:
@@ -245,6 +273,7 @@ __all__ = [
     "BillingTaxResolution",
     "BillingTaxSource",
     "resolve_active_tax_rate_id_for_percent",
+    "resolve_catalog_price_tax",
     "resolve_default_tax_application",
     "resolve_default_tax_rate_id",
     "resolve_subscription_tax",

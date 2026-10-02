@@ -106,6 +106,15 @@
                                            class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 </div>
                                 <div>
+                                    <label class="block text-xs font-medium text-slate-600 dark:text-slate-400">VAT Treatment</label>
+                                    <select :name="'prices[' + index + '][tax_application]'" x-model="price.tax_application" required
+                                            class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                        {% for application in tax_applications %}
+                                        <option value="{{ application }}">{{ application | title }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div>
                                     <label class="block text-xs font-medium text-slate-600 dark:text-slate-400">Billing Cycle</label>
                                     <select :name="'prices[' + index + '][billing_cycle]'" x-model="price.billing_cycle"
                                             class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -157,7 +166,7 @@ function addOnForm() {
     return {
         prices: {{ addon.prices | tojson if addon.prices else '[]' }},
         addPrice() {
-            this.prices.push({ price_type: 'recurring', amount: '', currency: 'NGN', billing_cycle: 'monthly', unit: 'month', description: '' });
+            this.prices.push({ price_type: 'recurring', amount: '', currency: 'NGN', tax_application: 'exclusive', billing_cycle: 'monthly', unit: 'month', description: '' });
         },
         removePrice(index) {
             this.prices.splice(index, 1);

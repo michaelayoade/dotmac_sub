@@ -694,6 +694,93 @@ def test_first_subscription_invoice_applies_offer_vat(
     assert invoice.total == Decimal("18812.50")
 
 
+def test_first_subscription_invoice_extracts_vat_from_inclusive_catalog_price(
+    db_session,
+    subscriber,
+    subscription,
+    catalog_offer,
+):
+    vat = TaxRate(
+        name="Inclusive first invoice VAT",
+        code="INCLUSIVE-FIRST-INVOICE-VAT",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    price = OfferPrice(
+        offer_id=catalog_offer.id,
+        price_type=PriceType.recurring,
+        amount=Decimal("10750.00"),
+        tax_application=TaxApplication.inclusive,
+        currency="NGN",
+        billing_cycle=BillingCycle.monthly,
+        is_active=True,
+    )
+    db_session.add_all([vat, price])
+    catalog_offer.with_vat = True
+    catalog_offer.vat_percent = Decimal("7.5000")
+    db_session.commit()
+
+    web_catalog_subscriptions_service.create_invoice_for_subscription(
+        db_session,
+        subscription,
+    )
+
+    invoice = (
+        db_session.query(Invoice).filter(Invoice.account_id == subscriber.id).one()
+    )
+    line = (
+        db_session.query(InvoiceLine).filter(InvoiceLine.invoice_id == invoice.id).one()
+    )
+    assert line.tax_application is TaxApplication.inclusive
+    assert invoice.subtotal == Decimal("10000.00")
+    assert invoice.tax_total == Decimal("750.00")
+    assert invoice.total == Decimal("10750.00")
+
+
+def test_first_subscription_invoice_honors_exempt_catalog_price(
+    db_session,
+    subscriber,
+    subscription,
+    catalog_offer,
+):
+    vat = TaxRate(
+        name="Exempt price VAT",
+        code="EXEMPT-PRICE-VAT",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    price = OfferPrice(
+        offer_id=catalog_offer.id,
+        price_type=PriceType.recurring,
+        amount=Decimal("10000.00"),
+        tax_application=TaxApplication.exempt,
+        currency="NGN",
+        billing_cycle=BillingCycle.monthly,
+        is_active=True,
+    )
+    db_session.add_all([vat, price])
+    catalog_offer.with_vat = True
+    catalog_offer.vat_percent = Decimal("7.5000")
+    db_session.commit()
+
+    web_catalog_subscriptions_service.create_invoice_for_subscription(
+        db_session,
+        subscription,
+    )
+
+    invoice = (
+        db_session.query(Invoice).filter(Invoice.account_id == subscriber.id).one()
+    )
+    line = (
+        db_session.query(InvoiceLine).filter(InvoiceLine.invoice_id == invoice.id).one()
+    )
+    assert line.tax_application is TaxApplication.exempt
+    assert line.tax_rate_id is None
+    assert invoice.subtotal == Decimal("10000.00")
+    assert invoice.tax_total == Decimal("0.00")
+    assert invoice.total == Decimal("10000.00")
+
+
 def test_subscription_create_activates_through_canonical_lifecycle(
     db_session,
     subscriber,
