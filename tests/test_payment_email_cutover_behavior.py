@@ -292,7 +292,7 @@ def test_real_settlement_paid_consequence_and_activation_gate(
 
 @pytest.mark.parametrize("explicit_allocation", (True, False))
 def test_activated_historical_debt_settlement_does_not_compose_current_renewal(
-    db_session, subscriber, subscription, adopted, explicit_allocation
+    db_session, subscriber, adopted, subscription, explicit_allocation
 ):
     _activate(db_session, adopted)
     anchor = datetime(2026, 10, 1, tzinfo=UTC)

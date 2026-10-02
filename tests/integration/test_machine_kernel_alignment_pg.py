@@ -15,6 +15,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from scripts.ci.migrated_test_database import repository_heads
+
 
 @contextmanager
 def _rollback_connection(engine: Engine) -> Iterator[sa.Connection]:
@@ -75,10 +77,13 @@ def test_migrated_machine_schema_rls_authentication_and_constraints(
 
     # Reuse the root fixture's Alembic-migrated engine. All writes roll back.
     with _rollback_connection(engine) as connection:
-        assert connection.scalar(
-            sa.text(
-                "SELECT EXISTS (SELECT 1 FROM alembic_version WHERE version_num = '639_machine_attribution')"
+        assert (
+            frozenset(
+                connection.execute(
+                    sa.text("SELECT version_num FROM public.alembic_version")
+                ).scalars()
             )
+            == repository_heads()
         )
         columns = dict(
             connection.execute(
