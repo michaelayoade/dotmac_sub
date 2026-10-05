@@ -86,6 +86,13 @@ slot cannot emit the same work again. Target facts come from the declared
 module providers. Rule conditions and actions then use the same execution
 owner as event-driven rules.
 
+The scheduled-run command owns the slot claim and durable event transaction;
+the task closes the session only after that command commits. Target events
+carry the claimed rule-version UUID so two scheduled rules on the same entity
+cannot execute each other's slot emissions. Multi-hour intervals use their
+full interval bucket rather than an hourly bucket. Failure to stage an event
+rolls back the claim so the same slot remains retryable.
+
 All Project and Material Request triggers, including expanded and scheduled
 capabilities, reuse their canonical module permissions. Action failures retain
 the owning domain error's retryable classification through the execution

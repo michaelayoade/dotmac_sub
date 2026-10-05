@@ -11,14 +11,19 @@ from app.services.events.types import Event, EventType
 from app.services.operator_tenant import OPERATOR_TENANT_ID
 
 
-def test_custom_event_uses_registered_name_for_runtime_trigger(monkeypatch):
-    event_name = "work_order.created"
+@pytest.mark.parametrize("scheduled", (False, True))
+def test_custom_event_uses_registered_name_for_runtime_trigger(monkeypatch, scheduled):
+    event_name = (
+        "operations.work_order.scheduled" if scheduled else "work_order.created"
+    )
+    version_id = uuid4()
     event = Event(
         event_type=EventType.custom,
         payload={
             "name": event_name,
             "tenant_id": str(OPERATOR_TENANT_ID),
             "work_order_id": str(uuid4()),
+            "automation_rule_version_id": str(version_id),
         },
     )
     trigger = SimpleNamespace(
@@ -27,6 +32,7 @@ def test_custom_event_uses_registered_name_for_runtime_trigger(monkeypatch):
         entity_type="operations.work_order",
         tenant_id_field="tenant_id",
         entity_id_field="work_order_id",
+        scheduled=scheduled,
     )
     prepared_commands = []
 
@@ -54,6 +60,9 @@ def test_custom_event_uses_registered_name_for_runtime_trigger(monkeypatch):
 
     assert len(prepared_commands) == 1
     assert prepared_commands[0].event.event_type == event_name
+    assert prepared_commands[0].event.scheduled_rule_version_id == (
+        version_id if scheduled else None
+    )
 
 
 def test_execute_prepared_run_preserves_non_retryable_action_failure(monkeypatch):

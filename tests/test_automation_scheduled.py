@@ -14,7 +14,7 @@ from app.models.automation import (
     AutomationRuleVersion,
     AutomationScheduledRun,
 )
-from app.services import automation_scheduled
+from app.services import automation_runtime, automation_scheduled
 from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import CommandContext
 
@@ -149,3 +149,30 @@ def test_two_hour_interval_does_not_turn_into_an_hourly_schedule() -> None:
     assert automation_scheduled._slot_for(
         schedule, NOW
     ) != automation_scheduled._slot_for(schedule, NOW + timedelta(hours=2))
+
+
+def test_scheduled_event_prepares_only_its_claimed_rule_version(
+    db_session: Session,
+) -> None:
+    intended_version_id = _published_rule(db_session)
+    _published_rule(db_session)
+    target_id = uuid4()
+    runs = automation_runtime.prepare_event_runs(
+        db_session,
+        automation_runtime.PrepareAutomationEventCommand(
+            event=automation_runtime.AutomationEventEnvelope(
+                event_id=uuid4(),
+                event_type="operations.project.scheduled",
+                trigger_key="operations.project.scheduled",
+                tenant_id=OPERATOR_TENANT_ID,
+                target_type="operations.project",
+                target_id=target_id,
+                occurred_at=NOW,
+                payload={"project_id": str(target_id), "status": "open"},
+                scheduled_rule_version_id=intended_version_id,
+            ),
+            context=_command().context,
+        ),
+    )
+    assert len(runs) == 1
+    assert runs[0].rule_version_id == intended_version_id

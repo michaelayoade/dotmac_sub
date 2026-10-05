@@ -156,7 +156,7 @@ def leads(db: Session) -> list[ScheduledAutomationTarget]:
 def quotes(db: Session) -> list[ScheduledAutomationTarget]:
     return [
         _target(
-            row,
+            row.id,
             "quote_id",
             status=row.status,
             payment_review_status=row.payment_review_status,
