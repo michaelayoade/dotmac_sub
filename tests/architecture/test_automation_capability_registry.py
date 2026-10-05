@@ -63,6 +63,60 @@ def test_requested_business_targets_are_declared_for_rule_or_script_authoring() 
     } <= targets
 
 
+def test_automation_permissions_match_canonical_module_rbac_contracts() -> None:
+    """Keep the shared client-script gate aligned with the owning form routes."""
+    manifests = automation_capabilities.all_module_manifests()
+    targets = {
+        target.entity_type: target
+        for manifest in manifests
+        for target in manifest.script_targets
+    }
+    expected_target_permissions = {
+        "customer.account": ("customer:read", "customer:update"),
+        "support.ticket": ("support:ticket:read", "support:ticket:update"),
+        "operations.project": ("project:read", "project:update"),
+        "operations.work_order": (
+            "operations:dispatch:read",
+            "operations:dispatch:write",
+        ),
+        "operations.material_request": (
+            "operations:material_request:read",
+            "operations:material_request:write",
+        ),
+        "operations.vendor": ("vendor:read", "vendor:write"),
+        "sales.lead": ("crm:lead:read", "crm:lead:write"),
+        "sales.quote": ("crm:quote:read", "crm:quote:write"),
+        "sales.sales_order": ("crm:sales_order:read", "crm:sales_order:write"),
+    }
+
+    assert {
+        entity_type: (
+            targets[entity_type].read_permission,
+            targets[entity_type].write_permission,
+        )
+        for entity_type in expected_target_permissions
+    } == expected_target_permissions
+
+    triggers = {
+        trigger.key: trigger for manifest in manifests for trigger in manifest.triggers
+    }
+    actions = {
+        action.key: action for manifest in manifests for action in manifest.actions
+    }
+    assert triggers["operations.project.created"].author_permission == "project:read"
+    assert (
+        triggers["operations.material_request.cancellation_requested"].author_permission
+        == "operations:material_request:read"
+    )
+    assert (
+        actions["operations.project.set_status"].author_permission == "project:update"
+    )
+    assert (
+        actions["operations.material_request.enqueue_cancellation"].author_permission
+        == "operations:material_request:write"
+    )
+
+
 def test_script_targets_declare_event_identity_for_independent_server_dispatch() -> (
     None
 ):

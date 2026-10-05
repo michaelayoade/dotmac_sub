@@ -156,6 +156,11 @@ permissions as the owning staff workspace. Automation declarations must not
 invent a parallel material permission namespace that the RBAC catalogue cannot
 assign.
 
+Each script target must reuse the canonical read/write permissions owned by its
+module's form and command routes. The registry architecture test covers every
+automation-enabled admin target so a stale permission cannot turn the shared
+client-script validation gate into a form-specific submission failure.
+
 The admin shell is available at `/admin/automation`. The hub is a directory
 that links to focused `/workflows`, `/client-scripts/manage`,
 `/server-scripts`, and `/runs` workspaces. Opening the hub requires
