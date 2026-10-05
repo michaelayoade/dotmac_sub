@@ -151,9 +151,15 @@ for date of birth, gender, and NIN. If any value is missing or invalid, the
 portal returns to the location page with a blocking biodata dialog and a button
 to `/portal/profile`.
 The profile owner validates the values server-side: DOB must be a valid
-non-future date, gender cannot be unknown, and NIN must contain exactly 11
-ASCII digits. Business, government, and NGO subscriber categories are not
-subject to this individual biodata gate.
+non-future date for a customer who meets the operator-controlled minimum age,
+gender cannot be unknown, and NIN must contain exactly 11 ASCII digits. The
+database-authoritative subscriber setting `customer_minimum_age_years` owns the
+minimum-age input, defaults to 13, and is editable from the Subscriber system
+settings page. The profile owner supplies the same effective age and latest
+allowed DOB to the customer form; browser constraints are guidance and the
+owner revalidates the exact date on every write. Business, government, and NGO
+subscriber categories are not subject to the individual biodata completion
+gate, but any DOB they submit still must satisfy the minimum-age policy.
 
 ## Customer profile contact-address capture
 

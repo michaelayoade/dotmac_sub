@@ -1609,6 +1609,7 @@ def _profile_context(
     elif saved:
         success = "Profile updated successfully"
     profile_completion = _profile_completion(subscriber) if subscriber else None
+    minimum_age_policy = portal_profile_commands.resolve_customer_minimum_age_policy(db)
     location_catalog = customer_profile_location.location_catalog()
     stored_country_code = (
         str(subscriber.country_code or "") if subscriber is not None else ""
@@ -1642,6 +1643,10 @@ def _profile_context(
         "error": error,
         "verify_sent": verify_sent,
         "profile_completion": profile_completion,
+        "customer_minimum_age_years": minimum_age_policy.minimum_age_years,
+        "latest_allowed_date_of_birth": (
+            minimum_age_policy.latest_allowed_date_of_birth.isoformat()
+        ),
         "profile_address_form": address_form,
         "profile_location_catalog": location_catalog.as_template_value(),
     }

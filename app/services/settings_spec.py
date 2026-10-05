@@ -2712,6 +2712,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
+        key="customer_minimum_age_years",
+        env_var="CUSTOMER_MINIMUM_AGE_YEARS",
+        value_type=SettingValueType.integer,
+        default=13,
+        min_value=0,
+        max_value=120,
+        label="Minimum customer age",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
         key="default_country_code",
         env_var="DEFAULT_COUNTRY_CODE",
         value_type=SettingValueType.string,

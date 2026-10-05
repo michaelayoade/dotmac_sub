@@ -358,23 +358,28 @@ implementation.
 
 ## OLT Operational Health Contract
 
-## Customer Portal Contact Address Contract
+## Customer Portal Profile Contract
 
-- Audience and task: an authenticated customer maintains the contact address
-  used for correspondence and account notices from `/portal/profile`.
-- Authority: `customer.profile_commands` accepts one typed update;
+- Audience and task: an authenticated customer maintains identity, biodata, and
+  the contact address used for correspondence and account notices from
+  `/portal/profile`.
+- Authority: `customer.portal_profile_commands` accepts one typed update and
+  owns the minimum-customer-age interpretation;
   `app.services.customer_profile_location` supplies the ISO country and Nigerian
   subdivision option projection; `app.services.ncc_location` validates and
   canonicalizes Nigerian state/LGA pairs. The route, template, and browser
   script are adapters.
-- Field behavior: Country is a searchable list of ISO countries. Nigeria enables
+- Field behavior: Date of birth shows the effective minimum age and constrains
+  the date picker to the latest eligible DOB supplied by the owner. Country is
+  a searchable list of ISO countries. Nigeria enables
   a searchable list of the 36 states plus the FCT, and a state selection enables
   only that state's LGAs. Changing country or state clears an incompatible LGA.
   A non-Nigerian country retains free-text Region and disables LGA.
-- Validation and state: server validation rejects unknown country codes,
-  unknown Nigerian states, and mismatched state/LGA pairs. A rejected submission
-  keeps the customer's submitted contact-address values and displays the owner
-  error. Existing Address Line, City, and Postal Code semantics remain unchanged.
+- Validation and state: server validation rejects future and underage DOBs,
+  unknown country codes, unknown Nigerian states, and mismatched state/LGA
+  pairs. A rejected submission keeps the customer's submitted contact-address
+  values and displays the owner error. Existing Address Line, City, and Postal
+  Code semantics remain unchanged.
 - Accessibility and responsive behavior: controls have programmatic labels,
   keyboard-searchable native option lists, help text for dependent state, and a
   single-column layout on small screens.
