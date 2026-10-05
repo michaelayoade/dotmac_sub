@@ -348,7 +348,7 @@ def test_coverage_delivery_replay_preserves_reference_and_result(
     assert db_session.query(InboxProviderObservation).count() == 1
 
 
-def test_coverage_without_coordinates_still_creates_lead(
+def test_coverage_without_coordinates_returns_manual_review_and_creates_lead(
     db_session, monkeypatch
 ) -> None:
     binding = _binding(db_session, monkeypatch)
@@ -360,8 +360,56 @@ def test_coverage_without_coordinates_still_creates_lead(
         "fiber-coverage-manual-survey",
     )
 
-    assert response.coverage is None
+    assert response.coverage is not None
+    assert response.coverage.status == "manual_review"
+    assert "review the installation address" in response.coverage.summary
     assert response.reference.startswith("FBR-")
+    assert db_session.query(Lead).count() == 1
+
+
+def test_coverage_accepts_missing_optional_email_area_and_plan(
+    db_session, monkeypatch
+) -> None:
+    binding = _binding(db_session, monkeypatch)
+    payload = _coverage_payload(email=None)
+    payload["location"].pop("area")
+    payload.pop("selected_plan")
+
+    response = _post(
+        db_session,
+        binding.id,
+        payload,
+        "fiber-coverage-minimum-fields",
+    )
+
+    assert response.reference.startswith("FBR-")
+    assert response.coverage is not None
+    assert response.coverage.status in {"out_of_area", "survey_required", "covered"}
+    assert db_session.query(Lead).count() == 1
+
+
+def test_coverage_failure_returns_technical_error_without_losing_lead(
+    db_session, monkeypatch
+) -> None:
+    binding = _binding(db_session, monkeypatch)
+
+    def fail_coverage(*_args):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(
+        "app.services.team_inbox_receive.compute_feasibility", fail_coverage
+    )
+
+    response = _post(
+        db_session,
+        binding.id,
+        _coverage_payload(),
+        "fiber-coverage-technical-error",
+    )
+
+    assert response.coverage is not None
+    assert response.coverage.status == "technical_error"
+    assert "automated coverage check" in response.coverage.summary
     assert db_session.query(Lead).count() == 1
 
 
