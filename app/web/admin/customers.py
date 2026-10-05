@@ -92,6 +92,9 @@ register_customer_portal_filters(templates)
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
 
 _NOTIFICATION_QUEUE_TASK = "app.tasks.notifications.deliver_notification_queue"
+_BULK_MESSAGE_MATERIALIZE_TASK = (
+    "app.tasks.notifications.materialize_customer_bulk_message"
+)
 
 
 def _reseller_form_context(
@@ -3293,12 +3296,44 @@ def bulk_send_customer_message(
 ):
     """Queue a bulk notification for selected or filtered customers."""
     try:
-        result = web_customer_actions_service.queue_bulk_message_from_payload(
-            db=db, payload=data
+        if bool(data.get("preview_only")):
+            return web_customer_actions_service.queue_bulk_message_from_payload(
+                db=db,
+                payload=data,
+            )
+
+        prepared = (
+            web_customer_actions_service.prepare_bulk_message_dispatch_from_payload(
+                db=db,
+                payload=data,
+            )
         )
-        if result.get("preview") is True:
-            return result
-        return _kick_notification_delivery(result)
+        dispatch = enqueue_task(
+            _BULK_MESSAGE_MATERIALIZE_TASK,
+            args=(prepared.payload_json,),
+            queue="celery",
+            correlation_id=str(data.get("expected_impact_token") or "") or None,
+            source="admin_customers_bulk_send",
+            actor_id=_get_actor_id(request),
+        )
+        if not dispatch.queued:
+            logger.error(
+                "Failed to enqueue customer bulk message materialization: %s",
+                dispatch.error,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The bulk message could not be queued for processing. "
+                    "Please try again."
+                ),
+            )
+        result = prepared.accepted_response()
+        result["materialization_dispatch"] = {
+            "queued": True,
+            "task_id": dispatch.task_id,
+        }
+        return JSONResponse(status_code=202, content=result)
     except HTTPException:
         raise
     except Exception as e:

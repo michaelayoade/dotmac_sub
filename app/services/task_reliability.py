@@ -468,6 +468,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "idempotency key, failed lookups are logged, and the next scheduled "
         "sweep retries unresolved emails.",
     ),
+    "app.tasks.notifications.materialize_customer_bulk_message": _c(
+        "notifications",
+        NONE,
+        GUARDED,
+        LOG,
+        "Admin bulk-message materialization is atomic and uses deterministic "
+        "per-customer communication-intent dedupe keys. A replay either returns "
+        "the existing deliveries or fails closed when the impact token drifted.",
+    ),
     "app.tasks.oauth.check_token_health": _c("integrations", SWEEP, IDEMP, HEALTH),
     "app.tasks.oauth.refresh_expiring_tokens": _c(
         "integrations", STATE, GUARDED, STATUS

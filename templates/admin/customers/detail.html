@@ -3310,6 +3310,15 @@ function customerDetail(config = {}) {
 
                 if (response.ok) {
                     const result = await response.json();
+                    if (result.accepted) {
+                        this.closeSendMessageModal();
+                        const matched = result.matched_count || 0;
+                        const planned = result.planned_queued_count || 0;
+                        const skipped = result.skipped_count || 0;
+                        const suppressed = result.planned_suppressed_count || 0;
+                        alert(`Bulk send accepted for ${matched} customer(s). ${planned} delivery request(s) are being queued in the background.${skipped ? ` ${skipped} skipped due to missing contact details.` : ''}${suppressed ? ` ${suppressed} suppressed by preferences, dedupe, or template conditions.` : ''}`);
+                        return;
+                    }
                     const dispatch = result.delivery_dispatch || {};
                     const deliveryMessage = dispatch.queued
                         ? ' Delivery has been started.'
