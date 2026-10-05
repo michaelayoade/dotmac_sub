@@ -351,8 +351,8 @@ def _meta_comment_target_validation_error(
 # status commit, so re-sending risks a duplicate). We have no provider-side
 # idempotency key yet, so the policy is content-driven:
 #   - at_most_once: noisy/low-value bulk (a duplicate blast harms sender
-#     reputation and the message is disposable) — do NOT re-send a stuck one.
-#   - at_least_once: everything else — critical transactional notices
+#     reputation and the message is disposable) â€” do NOT re-send a stuck one.
+#   - at_least_once: everything else â€” critical transactional notices
 #     (billing/service/account/auth) where silently losing one is worse than a
 #     rare duplicate; re-send, but bounded by MAX_RETRIES.
 # A duplicate is the lesser evil for criticals; loss is the lesser evil for
@@ -580,14 +580,14 @@ def _deliver_notification_queue_stats(
             continue
         channel_counts[notification.channel] = current_count + 1
         # Reclaim handling: a notification still in "sending" was stuck past the
-        # timeout — the worker likely crashed mid-send, possibly AFTER the
+        # timeout â€” the worker likely crashed mid-send, possibly AFTER the
         # provider was already called. Apply the per-channel reclaim policy
         # before re-handing it to the provider.
         if notification.status == NotificationStatus.sending:
             notification.retry_count = (notification.retry_count or 0) + 1
             if _reclaim_policy(notification) == "at_most_once":
                 # No provider-side dedupe for bulk; a duplicate blast is worse
-                # than dropping a disposable message — do not re-send.
+                # than dropping a disposable message â€” do not re-send.
                 notification.status = NotificationStatus.failed
                 notification.last_error = "stuck_sending_not_resent (at-most-once)"
                 stuck_dropped += 1
@@ -726,7 +726,7 @@ def _deliver_notification_queue_stats(
                     sender_key = rendered.sender_key
                     activity = rendered.activity
                 else:
-                    # Queue bodies are usually plain text — wrap them in the
+                    # Queue bodies are usually plain text â€” wrap them in the
                     # branded template and keep the text as the text/plain part.
                     resolved_brand = None
                     if notification.subscriber_id:
@@ -1473,7 +1473,7 @@ def _deliver_notification_queue_stats(
                     notification.last_error,
                 )
             else:
-                # Schedule for retry — set back to failed, will be picked up next run
+                # Schedule for retry â€” set back to failed, will be picked up next run
                 notification.status = NotificationStatus.failed
                 notification.send_at = now + timedelta(
                     minutes=_retry_backoff_minutes(db, notification.retry_count)
@@ -1653,11 +1653,11 @@ def materialize_customer_bulk_message(payload_json: str) -> dict[str, object]:
         source="admin_customers_bulk_send_materialized",
     )
     return {
-        "matched_count": int(result.get("matched_count") or 0),
-        "created_count": int(result.get("created_count") or 0),
-        "queued_count": int(result.get("queued_count") or 0),
-        "suppressed_count": int(result.get("suppressed_count") or 0),
-        "skipped_count": int(result.get("skipped_count") or 0),
+        "matched_count": int(str(result.get("matched_count") or 0)),
+        "created_count": int(str(result.get("created_count") or 0)),
+        "queued_count": int(str(result.get("queued_count") or 0)),
+        "suppressed_count": int(str(result.get("suppressed_count") or 0)),
+        "skipped_count": int(str(result.get("skipped_count") or 0)),
         "delivery_dispatch_queued": dispatch.queued,
         "delivery_dispatch_task_id": dispatch.task_id,
         "delivery_dispatch_error": dispatch.error,
