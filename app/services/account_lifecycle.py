@@ -44,6 +44,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
 from app.models.catalog import (
     BillingMode,
     Subscription,
@@ -343,6 +344,8 @@ class ResumePausedSubscriptionCauseCommand:
     actor: str
     reason: str
     context: CommandContext
+    reconciled_renewal_period_start: datetime | None = None
+    reconciled_renewal_period_end: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1896,7 +1899,12 @@ def release_pause_cause_and_resume_subscription(
         )
     previous_anchor = _aware_utc(subscription.next_billing_at)
     recorded_anchor = _aware_utc(episode.previous_next_billing_at)
-    if previous_anchor != recorded_anchor:
+    anchor_reconciled = (
+        previous_anchor != recorded_anchor
+        and command.reconciled_renewal_period_start is not None
+        and command.reconciled_renewal_period_end is not None
+    )
+    if previous_anchor != recorded_anchor and not anchor_reconciled:
         raise BillingAnchorProjectionError(
             "Billing anchor changed while the subscription was paused"
         )
@@ -1904,7 +1912,40 @@ def release_pause_cause_and_resume_subscription(
         raise BillingAnchorProjectionError(
             "A paused subscription requires an existing billing anchor"
         )
-    target_anchor = previous_anchor + timedelta(seconds=paused_seconds)
+    compensation_anchor = previous_anchor
+    if previous_anchor != recorded_anchor:
+        renewal_start = _aware_utc(command.reconciled_renewal_period_start)
+        renewal_end = _aware_utc(command.reconciled_renewal_period_end)
+        if renewal_start != recorded_anchor or renewal_end != previous_anchor:
+            raise BillingAnchorProjectionError(
+                "Reconciled prepaid renewal does not match the paused episode evidence"
+            )
+        exact_renewal = tuple(
+            db.scalars(
+                select(ServiceEntitlement)
+                .where(
+                    ServiceEntitlement.subscription_id == subscription.id,
+                    ServiceEntitlement.account_id == subscription.subscriber_id,
+                    ServiceEntitlement.status == ServiceEntitlementStatus.active,
+                    ServiceEntitlement.starts_at == recorded_anchor,
+                    ServiceEntitlement.ends_at == previous_anchor,
+                    ServiceEntitlement.amount_funded > 0,
+                )
+                .with_for_update()
+            ).all()
+        )
+        if len(exact_renewal) != 1:
+            raise BillingAnchorProjectionError(
+                "Reconciled prepaid renewal coverage is incomplete"
+            )
+    elif (
+        command.reconciled_renewal_period_start is not None
+        or command.reconciled_renewal_period_end is not None
+    ):
+        raise BillingAnchorProjectionError(
+            "Unexpected reconciled prepaid renewal evidence"
+        )
+    target_anchor = compensation_anchor + timedelta(seconds=paused_seconds)
     if subscription.billing_mode == BillingMode.prepaid:
         grant_pause_compensation_entitlement(
             db,
@@ -1913,7 +1954,7 @@ def release_pause_cause_and_resume_subscription(
                 subscription_id=subscription.id,
                 account_id=subscription.subscriber_id,
                 pause_effective_at=effective_at,
-                starts_at=previous_anchor,
+                starts_at=compensation_anchor,
                 ends_at=target_anchor,
             ),
         )

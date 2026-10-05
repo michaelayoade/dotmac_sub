@@ -1310,6 +1310,7 @@ class PrepaidRenewalEligibilityContext(enum.StrEnum):
 
     recurring = "recurring"
     funding_recovery = "funding_recovery"
+    ticket_pause_reconciliation = "ticket_pause_reconciliation"
 
 
 @dataclass(frozen=True)
@@ -1378,6 +1379,9 @@ class ExecuteReviewedPrepaidServiceRenewalCommand:
     currency: str
     expected_preview_fingerprint: str
     evidence_ref: str
+    eligibility_context: PrepaidRenewalEligibilityContext = (
+        PrepaidRenewalEligibilityContext.recurring
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2125,11 +2129,17 @@ def _subscription_for_request(
             "ineligible_billing_mode",
             "Only a prepaid subscription can receive a funded service cycle.",
         )
-    eligible_statuses = (
-        PREPAID_SERVICE_FUNDING_RECOVERY_STATUSES
-        if eligibility_context is PrepaidRenewalEligibilityContext.funding_recovery
-        else PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES
-    )
+    if eligibility_context is PrepaidRenewalEligibilityContext.funding_recovery:
+        eligible_statuses = PREPAID_SERVICE_FUNDING_RECOVERY_STATUSES
+    elif (
+        eligibility_context
+        is PrepaidRenewalEligibilityContext.ticket_pause_reconciliation
+    ):
+        eligible_statuses = PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES | {
+            SubscriptionStatus.paused
+        }
+    else:
+        eligible_statuses = PREPAID_SERVICE_RENEWAL_ELIGIBLE_STATUSES
     if subscription.status not in eligible_statuses:
         _error(
             "ineligible_status",
@@ -3078,6 +3088,15 @@ def execute_reviewed_prepaid_service_renewal(
     )
 
 
+def execute_reviewed_prepaid_service_renewal_in_coordinator(
+    db: Session,
+    command: ExecuteReviewedPrepaidServiceRenewalCommand,
+) -> ReviewedPrepaidServiceRenewalResult:
+    """Run the reviewed renewal participant inside an application coordinator."""
+
+    return _execute_reviewed_prepaid_service_renewal(db, command)
+
+
 def _execute_reviewed_prepaid_service_renewal(
     db: Session,
     command: ExecuteReviewedPrepaidServiceRenewalCommand,
@@ -3102,6 +3121,7 @@ def _execute_reviewed_prepaid_service_renewal(
         ends_at=command.ends_at,
         amount=command.amount,
         currency=command.currency,
+        eligibility_context=command.eligibility_context,
     )
     if preview.fingerprint != expected:
         _error(
@@ -6123,6 +6143,7 @@ __all__ = [
     "evaluate_prepaid_service_after_settlement",
     "execute_due_prepaid_service_renewals",
     "execute_reviewed_prepaid_service_renewal",
+    "execute_reviewed_prepaid_service_renewal_in_coordinator",
     "execute_prepaid_service_after_settlement",
     "preview_prepaid_service_renewal",
     "preview_legacy_prepaid_renewal_tax_invoice_correction",

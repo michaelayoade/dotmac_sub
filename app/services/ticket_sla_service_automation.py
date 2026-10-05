@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
@@ -113,6 +114,41 @@ class TicketServicePauseResumePreview:
 class TicketServicePauseResumePreviewQuery:
     subscription_id: UUID
     proposed_resumed_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TicketPausedPrepaidReconciliationPreview:
+    resume_preview: TicketServicePauseResumePreview
+    renewal_starts_at: datetime
+    renewal_ends_at: datetime
+    renewal_amount: Decimal
+    renewal_currency: str
+    renewal_preview_fingerprint: str
+    eligible: bool
+    blocking_reasons: tuple[str, ...]
+    fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileTicketPausedPrepaidServiceCommand:
+    subscription_id: UUID
+    cause_id: UUID
+    preview_fingerprint: str
+    resumed_at: datetime
+    actor: str
+    reason: str
+    evidence_ref: str
+    context: CommandContext
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileTicketPausedPrepaidServiceOutcome:
+    resume: ResumeTicketPausedServiceOutcome
+    renewal_entitlement_id: UUID
+    renewal_invoice_id: UUID | None
+    renewal_ledger_entry_id: UUID | None
+    renewal_amount: Decimal
+    renewal_currency: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,6 +528,240 @@ def preview_ticket_service_resume_for_subscription(
     )
 
 
+def preview_ticket_paused_prepaid_reconciliation(
+    db: Session,
+    query: TicketServicePauseResumePreviewQuery,
+) -> TicketPausedPrepaidReconciliationPreview:
+    """Preview a missed funded renewal that caused a pause-resume deadlock."""
+
+    resume_preview = preview_ticket_service_resume_for_subscription(db, query)
+    if resume_preview is None:
+        raise _error(
+            "pause_cause_not_found",
+            "No active ticket-linked pause was found for the subscription.",
+        )
+    blocking = [
+        reason
+        for reason in resume_preview.blocking_reasons
+        if reason
+        not in {
+            "prepaid_pause_coverage_ambiguous",
+            "prepaid_pause_anchor_mismatch",
+        }
+    ]
+    starts_at = resume_preview.previous_next_billing_at
+    if starts_at is None:
+        blocking.append("billing_anchor_missing")
+        starts_at = resume_preview.effective_at
+
+    from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
+    from app.services.billing_automation import _period_end
+    from app.services.prepaid_service_renewals import (
+        PrepaidRenewalEligibilityContext,
+        preview_prepaid_service_renewal,
+        resolve_prepaid_monthly_charge,
+    )
+
+    subscription = db.get(Subscription, resume_preview.subscription_id)
+    if subscription is None or subscription.billing_mode != BillingMode.prepaid:
+        blocking.append("subscription_not_prepaid")
+        amount = Decimal("0.00")
+        currency = "NGN"
+        ends_at = starts_at
+        renewal_fingerprint = ""
+    else:
+        charge = resolve_prepaid_monthly_charge(db, subscription, starts_at)
+        if charge is None:
+            blocking.append("prepaid_renewal_terms_missing")
+            amount = Decimal("0.00")
+            currency = "NGN"
+            ends_at = starts_at
+            renewal_fingerprint = ""
+        else:
+            amount, currency, cycle = charge
+            ends_at = _period_end(starts_at, cycle)
+            renewal = preview_prepaid_service_renewal(
+                db,
+                subscription_id=subscription.id,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                amount=amount,
+                currency=currency,
+                eligibility_context=(
+                    PrepaidRenewalEligibilityContext.ticket_pause_reconciliation
+                ),
+            )
+            renewal_fingerprint = renewal.fingerprint
+            if not renewal.allowed:
+                blocking.append("prepaid_reconciliation_insufficient_funding")
+
+            entitlements = tuple(
+                db.scalars(
+                    select(ServiceEntitlement).where(
+                        ServiceEntitlement.subscription_id == subscription.id,
+                        ServiceEntitlement.account_id == subscription.subscriber_id,
+                        ServiceEntitlement.status == ServiceEntitlementStatus.active,
+                    )
+                ).all()
+            )
+            exact_prior_coverage = tuple(
+                item for item in entitlements if item.ends_at == starts_at
+            )
+            if len(exact_prior_coverage) != 1:
+                blocking.append("prepaid_reconciliation_anchor_evidence_ambiguous")
+            if starts_at >= resume_preview.effective_at:
+                blocking.append("prepaid_reconciliation_period_invalid")
+
+    fingerprint = _resume_preview_fingerprint(
+        {
+            "resume": resume_preview.fingerprint,
+            "renewal_starts_at": starts_at,
+            "renewal_ends_at": ends_at,
+            "renewal_amount": amount,
+            "renewal_currency": currency,
+            "renewal_preview_fingerprint": renewal_fingerprint,
+        }
+    )
+    return TicketPausedPrepaidReconciliationPreview(
+        resume_preview=resume_preview,
+        renewal_starts_at=starts_at,
+        renewal_ends_at=ends_at,
+        renewal_amount=amount,
+        renewal_currency=currency,
+        renewal_preview_fingerprint=renewal_fingerprint,
+        eligible=not blocking,
+        blocking_reasons=tuple(blocking),
+        fingerprint=fingerprint,
+    )
+
+
+def reconcile_ticket_paused_prepaid_service(
+    db: Session,
+    command: ReconcileTicketPausedPrepaidServiceCommand,
+) -> ReconcileTicketPausedPrepaidServiceOutcome:
+    """Settle one reviewed missed cycle and resume its ticket-linked pause."""
+
+    def operation() -> ReconcileTicketPausedPrepaidServiceOutcome:
+        if not command.reason.strip():
+            raise _error(
+                "resume_reason_required",
+                "An operational reason is required for reconciliation.",
+            )
+        if not command.evidence_ref.strip():
+            raise _error(
+                "pause_evidence_incomplete",
+                "A reviewed renewal evidence reference is required.",
+            )
+        cause = db.scalar(
+            select(SubscriptionPauseCause)
+            .where(SubscriptionPauseCause.id == command.cause_id)
+            .with_for_update()
+        )
+        if cause is None or cause.ticket_id is None:
+            raise _error("pause_cause_not_found", "Ticket pause cause was not found.")
+        db.scalar(select(Ticket).where(Ticket.id == cause.ticket_id).with_for_update())
+        episode = db.scalar(
+            select(SubscriptionPauseEpisode)
+            .where(SubscriptionPauseEpisode.id == cause.pause_episode_id)
+            .with_for_update()
+        )
+        if episode is None or episode.subscription_id != command.subscription_id:
+            raise _error(
+                "pause_subscription_mismatch",
+                "The pause cause does not belong to the requested subscription.",
+            )
+        db.scalar(
+            select(Subscription)
+            .where(Subscription.id == command.subscription_id)
+            .with_for_update()
+        )
+        preview = preview_ticket_paused_prepaid_reconciliation(
+            db,
+            TicketServicePauseResumePreviewQuery(
+                subscription_id=command.subscription_id,
+                proposed_resumed_at=command.resumed_at,
+            ),
+        )
+        if preview.fingerprint != command.preview_fingerprint:
+            raise _error(
+                "stale_resume_preview",
+                "Pause or billing evidence changed after the reconciliation preview.",
+            )
+        if not preview.eligible:
+            raise _error(
+                "resume_ineligible",
+                "The paused prepaid service is not eligible for reconciliation.",
+                blocking_reasons=preview.blocking_reasons,
+            )
+        from app.services.prepaid_service_renewals import (
+            ExecuteReviewedPrepaidServiceRenewalCommand,
+            PrepaidRenewalEligibilityContext,
+            execute_reviewed_prepaid_service_renewal_in_coordinator,
+        )
+
+        renewal = execute_reviewed_prepaid_service_renewal_in_coordinator(
+            db,
+            ExecuteReviewedPrepaidServiceRenewalCommand(
+                context=command.context,
+                subscription_id=command.subscription_id,
+                starts_at=preview.renewal_starts_at,
+                ends_at=preview.renewal_ends_at,
+                amount=preview.renewal_amount,
+                currency=preview.renewal_currency,
+                expected_preview_fingerprint=preview.renewal_preview_fingerprint,
+                evidence_ref=command.evidence_ref,
+                eligibility_context=(
+                    PrepaidRenewalEligibilityContext.ticket_pause_reconciliation
+                ),
+            ),
+        )
+        outcome = account_lifecycle.release_pause_cause_and_resume_subscription(
+            db,
+            account_lifecycle.ResumePausedSubscriptionCauseCommand(
+                cause_id=command.cause_id,
+                preview_fingerprint=preview.fingerprint,
+                resumed_at=command.resumed_at,
+                actor=command.actor,
+                reason=command.reason,
+                context=command.context,
+                reconciled_renewal_period_start=preview.renewal_starts_at,
+                reconciled_renewal_period_end=preview.renewal_ends_at,
+            ),
+        )
+        return ReconcileTicketPausedPrepaidServiceOutcome(
+            resume=ResumeTicketPausedServiceOutcome(
+                ticket_id=preview.resume_preview.ticket_id,
+                subscription_id=outcome.subscription_id,
+                pause_episode_id=outcome.episode_id,
+                pause_cause_id=outcome.cause_id,
+                resulting_status=outcome.resulting_status,
+                paused_seconds=outcome.paused_seconds,
+                previous_next_billing_at=outcome.previous_next_billing_at,
+                resulting_next_billing_at=outcome.resulting_next_billing_at,
+                access_restored=outcome.resulting_status == SubscriptionStatus.active,
+                replayed=outcome.replayed,
+            ),
+            renewal_entitlement_id=renewal.renewal.entitlement.id,
+            renewal_invoice_id=(
+                renewal.renewal.invoice.id if renewal.renewal.invoice else None
+            ),
+            renewal_ledger_entry_id=(
+                renewal.renewal.ledger_entry.id
+                if renewal.renewal.ledger_entry
+                else None
+            ),
+            renewal_amount=renewal.renewal.preview.amount,
+            renewal_currency=renewal.renewal.preview.currency,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_RESUME,
+        context=command.context,
+        operation=operation,
+    )
+
+
 def resume_ticket_paused_service(
     db: Session,
     command: ResumeTicketPausedServiceCommand,
@@ -641,8 +911,11 @@ def resume_ticket_paused_service(
 __all__ = [
     "PauseTicketServiceForSlaBreachCommand",
     "PauseTicketServiceForSlaBreachOutcome",
+    "ReconcileTicketPausedPrepaidServiceCommand",
+    "ReconcileTicketPausedPrepaidServiceOutcome",
     "ResumeTicketPausedServiceCommand",
     "ResumeTicketPausedServiceOutcome",
+    "TicketPausedPrepaidReconciliationPreview",
     "TicketServicePauseResumePreview",
     "TicketServicePauseResumePreviewQuery",
     "TicketSlaServiceSelectionPolicy",
@@ -650,5 +923,7 @@ __all__ = [
     "pause_unique_active_service_for_ticket_sla_breach",
     "preview_ticket_service_resume",
     "preview_ticket_service_resume_for_subscription",
+    "preview_ticket_paused_prepaid_reconciliation",
+    "reconcile_ticket_paused_prepaid_service",
     "resume_ticket_paused_service",
 ]
