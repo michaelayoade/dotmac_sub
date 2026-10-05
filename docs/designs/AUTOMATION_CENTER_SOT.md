@@ -55,20 +55,42 @@ the UI.
 
 ## Rule shape
 
-The first contract is deliberately bounded:
+Rules remain bounded by the closed capability registry:
 
-1. one versioned domain event trigger;
-2. a typed conjunction of declared conditions;
-3. an ordered list of declared typed actions.
+1. one or more compatible versioned triggers for the same target type;
+2. declared condition fields combined with nested AND, OR, and NOT groups;
+3. an ordered list of declared typed actions;
+4. an interval or five-field cron schedule and time zone when every selected
+   trigger declares scheduled execution support.
 
-Loops, arbitrary scripts, arbitrary HTTP requests, delays, schedules, and a
-general workflow DAG are not part of the first cut. Each can be introduced by
-a later capability contract without weakening the closed registry.
+Event-driven and scheduled triggers cannot be mixed in one rule. Existing
+single-trigger rules and flat conjunctions remain valid. Publication validates
+each selected trigger's schema version, common condition fields, action target
+compatibility, and authoritative permissions. Ticket-status conditions allow
+SLA rules to exclude statuses such as Waiting on Customer.
+
+Loops, arbitrary HTTP requests, delays, and a general workflow DAG remain
+outside the native rule contract. Governed scripts use the separate script
+contract below.
 
 Published rule versions are immutable. A change creates a new draft version
 and publication atomically changes the active version. Runtime execution pins
 the exact rule version, trigger schema version, action schema versions and
 event identity used for the decision.
+
+Scheduled rules require migrations `643_automation_multi_trigger_conditions`
+and `644_automation_scheduled_rules` plus the registered
+`app.tasks.automation.run_scheduled_automation_rules` task. The scheduler claims
+a rule-version/slot identity before emitting target events; replay of the same
+slot cannot emit the same work again. Target facts come from the declared
+module providers. Rule conditions and actions then use the same execution
+owner as event-driven rules.
+
+All Project and Material Request triggers, including expanded and scheduled
+capabilities, reuse their canonical module permissions. Action failures retain
+the owning domain error's retryable classification through the execution
+outcome and event handler, including runs using multiple triggers or grouped
+conditions.
 
 ## Script shape
 

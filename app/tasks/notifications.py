@@ -1640,7 +1640,7 @@ def materialize_customer_bulk_message(payload_json: str) -> dict[str, object]:
     from app.services import web_customer_actions
     from app.services.queue_adapter import enqueue_task
 
-    with db_session_adapter.session() as session:
+    with db_session_adapter.owner_command_session() as session:
         result = web_customer_actions.queue_bulk_message_from_payload(
             session,
             payload,

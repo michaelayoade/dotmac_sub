@@ -117,6 +117,68 @@ def test_automation_permissions_match_canonical_module_rbac_contracts() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("entity_type", "required_triggers"),
+    (
+        (
+            "operations.project",
+            (
+                "operations.project.created",
+                "operations.project.updated",
+                "operations.project.completed",
+                "operations.project.canceled",
+                "operations.project.scheduled",
+            ),
+        ),
+        (
+            "operations.material_request",
+            (
+                "operations.material_request.cancellation_requested",
+                "operations.material_request.approved",
+                "operations.material_request.fulfilled",
+            ),
+        ),
+    ),
+)
+def test_expanded_operations_triggers_preserve_submission_permissions(
+    entity_type: str, required_triggers: tuple[str, ...]
+) -> None:
+    """Expanded rule authoring must retain the form-submission RBAC repair."""
+    manifests = automation_capabilities.all_module_manifests()
+    target = next(
+        target
+        for manifest in manifests
+        for target in manifest.script_targets
+        if target.entity_type == entity_type
+    )
+    triggers = {
+        trigger.key: trigger
+        for manifest in manifests
+        for trigger in manifest.triggers
+        if trigger.entity_type == entity_type
+    }
+    assert set(required_triggers) <= triggers.keys()
+    assert all(
+        trigger.author_permission == target.read_permission and trigger.runtime_enabled
+        for trigger in triggers.values()
+    )
+    if entity_type == "operations.project":
+        assert "project_type" in {
+            field.key for field in triggers["operations.project.created"].fields
+        }
+        assert "status" in {
+            field.key for field in triggers["operations.project.updated"].fields
+        }
+        assert triggers["operations.project.scheduled"].scheduled
+    else:
+        assert "reason" in {
+            field.key
+            for field in triggers[
+                "operations.material_request.cancellation_requested"
+            ].fields
+        }
+
+
 def test_script_targets_declare_event_identity_for_independent_server_dispatch() -> (
     None
 ):

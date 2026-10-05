@@ -254,6 +254,11 @@ class AutomationEventHandler:
                 target_id=target_id,
                 occurred_at=event.occurred_at,
                 payload=payload,
+                scheduled_rule_version_id=(
+                    _required_uuid(payload, "automation_rule_version_id")
+                    if getattr(trigger, "scheduled", False)
+                    else None
+                ),
             )
             with owner_session(db) as command_db:
                 runs = automation_runtime.prepare_event_runs(

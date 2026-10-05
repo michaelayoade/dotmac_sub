@@ -111,6 +111,7 @@ class AutomationEventEnvelope:
     target_id: UUID
     occurred_at: datetime
     payload: Mapping[str, object]
+    scheduled_rule_version_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -562,6 +563,11 @@ def prepare_event_runs(
                 "trigger_target_mismatch",
                 "The event target does not match the declared trigger.",
             )
+        if trigger.scheduled and command.event.scheduled_rule_version_id is None:
+            raise _error(
+                "trigger_event_mismatch",
+                "A scheduled event must name its claimed rule version.",
+            )
         statement = (
             select(AutomationRule, AutomationRuleVersion)
             .join(
@@ -576,6 +582,11 @@ def prepare_event_runs(
         )
         prepared: list[PreparedAutomationRun] = []
         for rule, version in db.execute(statement).tuples():
+            if (
+                command.event.scheduled_rule_version_id is not None
+                and version.id != command.event.scheduled_rule_version_id
+            ):
+                continue
             trigger_keys = tuple(
                 getattr(rule, "trigger_keys", None) or [rule.trigger_key]
             )
