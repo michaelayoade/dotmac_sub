@@ -305,7 +305,6 @@ BASELINE: dict[str, str] = {
     "app/tasks/team_inbox.py::repair_whatsapp_locations": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/team_inbox.py::retry_failed_outbound_messages": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/team_inbox.py::send_queue_position_notifications": "adapter-owned session lifecycle (task/runner)",
-    "app/tasks/team_inbox.py::send_reply_reminders": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/team_inbox.py::wake_due_snoozed_conversations": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/topology_outage.py::reconcile_detected_outages": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/topology_sync.py::warm_topology_status": "adapter-owned session lifecycle (task/runner)",

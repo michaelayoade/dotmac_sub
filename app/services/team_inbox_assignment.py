@@ -29,7 +29,6 @@ from app.models.team_inbox import (
     InboxConversationStatus,
     InboxConversationTeam,
     InboxQueueEntryStatus,
-    InboxReplyReminder,
     InboxRoutingDecisionMode,
     InboxRoutingEvent,
     InboxRoutingEventType,
@@ -1325,16 +1324,6 @@ def release_expired_whatsapp_conversation(
             decision_mode=InboxRoutingDecisionMode.system,
             decision_evidence=None,
         )
-        reminders = (
-            db.query(InboxReplyReminder)
-            .filter(InboxReplyReminder.assignment_id == assignment.id)
-            .filter(InboxReplyReminder.is_active.is_(True))
-            .with_for_update()
-            .all()
-        )
-        for reminder in reminders:
-            reminder.is_active = False
-            reminder.resolved_at = command.occurred_at
         schedule_queue_promotion_after_commit(
             db,
             reason="whatsapp_window_expired_opened_capacity",

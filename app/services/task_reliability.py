@@ -753,14 +753,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "notice has a database dedupe key and failed deliveries retry the same "
         "ledger row.",
     ),
-    "app.tasks.team_inbox.send_reply_reminders": _c(
-        "support",
-        SWEEP,
-        IDEMP,
-        STATUS,
-        "A durable assignment reminder row owns the next due time and repeat count; "
-        "an agent reply settles it and re-runs before next_due_at are no-ops.",
-    ),
     "app.tasks.team_inbox.recover_stale_ai_intake": _c(
         "support",
         SWEEP,

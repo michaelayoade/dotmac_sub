@@ -134,7 +134,7 @@ adopting Sub's domain?* If not, it is not shared behaviour.
 | Ticket handoff | `support_tickets.origin_conversation_id` | **Sub satellite** — the FK is on the ticket, so nothing changes. The one part that DOES enter the module is `resolved_to_ticket` as a declared status **reason**, which is the mechanism ADR-0052 built for exactly this |
 | Field-job linkage | conversation `channel_type='field_job'` + `external_thread_id=work_order.public_id` + `metadata_` | **Sub**, and currently **unadoptable** — see § 2.2 |
 | AI intake | `ai_intake_sessions` (FK) + `conversation.metadata_['ai_handling']` | **Sub satellite.** Already correctly shaped; the metadata key is a Sub-owned column |
-| Participants, contact links, labels, macros, templates, media, comments, saved filters, reply reminders, campaign links, provider observations, delivery receipts | their own Sub tables | **Sub.** Every one either names a Sub identity or rebuilds a transport owner |
+| Participants, contact links, labels, macros, templates, media, comments, saved filters, campaign links, provider observations, delivery receipts | their own Sub tables | **Sub.** Every one either names a Sub identity or rebuilds a transport owner |
 | Queues, routing, presence, assignment, round-robin | Sub tables | **Out of scope** — `dotmac-inbox-operations`, separate decision |
 | `portal_messages`, `field_job_chat_messages` | dead tables, zero writers | **Neither.** Do not absorb a table nothing writes |
 

@@ -3892,24 +3892,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     # than re-pointed. Migration 569 deletes any surviving row.
     SettingSpec(
         domain=SettingDomain.comms,
-        key="inbox_reply_reminder_delay_minutes",
-        env_var="INBOX_REPLY_REMINDER_DELAY_MINUTES",
-        value_type=SettingValueType.integer,
-        default=15,
-        min_value=1,
-        label="Team Inbox first reply reminder delay (minutes)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="inbox_reply_reminder_repeat_minutes",
-        env_var="INBOX_REPLY_REMINDER_REPEAT_MINUTES",
-        value_type=SettingValueType.integer,
-        default=15,
-        min_value=1,
-        label="Team Inbox reply reminder repeat interval (minutes)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
         key="campaign_processing_enabled",
         env_var="CAMPAIGN_PROCESSING_ENABLED",
         value_type=SettingValueType.boolean,
