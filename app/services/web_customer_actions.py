@@ -1218,7 +1218,7 @@ def _format_money_ngn(value: Decimal | int | float | str | None) -> str:
         amount = Decimal(str(value or "0"))
     except (InvalidOperation, ValueError):
         amount = Decimal("0")
-    return f"â‚¦{amount:,.2f}"
+    return f"₦{amount:,.2f}"
 
 
 def _billing_template_variables(db: Session, subscriber: Subscriber) -> dict[str, str]:
@@ -2505,7 +2505,7 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
         email = (data.get("email") or "").strip()
         if not email:
             raise ValueError("email is required")
-        # Email is contact info, not an identity â€” duplicates are valid
+        # Email is contact info, not an identity — duplicates are valid
         # (customers under one reseller often share a contact address).
         person = _create_subscriber(
             db=db,
@@ -2603,7 +2603,7 @@ def create_customer_from_form(
             managed_by_reseller=bool(form_data.get("managed_by_reseller")),
             reseller_id=str(form_data.get("reseller_id") or ""),
         )
-        # Email is contact info, not an identity â€” duplicates are valid.
+        # Email is contact info, not an identity — duplicates are valid.
         customer = _create_subscriber(
             db=db,
             payload={
@@ -2826,7 +2826,7 @@ def update_person_customer(
             reseller_id=reseller_id,
         )
     )
-    # Email is contact info, not an identity â€” duplicates across customers are
+    # Email is contact info, not an identity — duplicates across customers are
     # valid, so editing one to match another's address is allowed.
     normalized_email = _normalize_optional(email)
     billing_payload = _billing_override_payload(

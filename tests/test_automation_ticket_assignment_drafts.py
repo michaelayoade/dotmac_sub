@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 
+from app.models.automation import AutomationRule, AutomationRuleVersion
 from app.models.support import TicketPriority
 from app.services import (
     automation_actions,
@@ -171,9 +172,14 @@ def test_ticket_assignment_rejects_an_inactive_selected_customer(monkeypatch) ->
         "get_customer_match",
         lambda *_args, **_kwargs: None,
     )
-    rule = SimpleNamespace(trigger_key="support.ticket.created")
-    version = SimpleNamespace(
+    rule = AutomationRule(
+        trigger_key="support.ticket.created",
+        trigger_keys=["support.ticket.created"],
+    )
+    version = AutomationRuleVersion(
         trigger_schema_version=4,
+        trigger_schema_versions={"support.ticket.created": 4},
+        schedule=None,
         conditions=[
             {
                 "field_key": "customer_id",

@@ -374,6 +374,12 @@ def test_coverage_accepts_missing_optional_email_area_and_plan(
     payload = _coverage_payload(email=None)
     payload["location"].pop("area")
     payload.pop("selected_plan")
+    # This unit case checks optional-field acceptance and receipt persistence;
+    # Spatial SQL calculation is outside this unit database's contract.
+    monkeypatch.setattr(
+        "app.services.team_inbox_receive.compute_feasibility",
+        lambda db, latitude, longitude: {"coverage": "covered"},
+    )
 
     response = _post(
         db_session,
@@ -384,7 +390,7 @@ def test_coverage_accepts_missing_optional_email_area_and_plan(
 
     assert response.reference.startswith("FBR-")
     assert response.coverage is not None
-    assert response.coverage.status in {"out_of_area", "survey_required", "covered"}
+    assert response.coverage.status == "covered"
     assert db_session.query(Lead).count() == 1
 
 

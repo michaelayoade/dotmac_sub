@@ -345,7 +345,7 @@ def test_every_help_guide_has_complete_action_sections() -> None:
         assert all(action.title and action.steps for action in actions)
 
 
-def test_help_navigation_matches_sidebar_destinations_without_adding_icons() -> None:
+def test_help_navigation_matches_sidebar_destinations_and_contextual_lookup() -> None:
     labels = {section.label for section in HELP_NAVIGATION}
     sidebar = Path("templates/components/navigation/admin_sidebar.html").read_text(
         encoding="utf-8"
@@ -360,8 +360,13 @@ def test_help_navigation_matches_sidebar_destinations_without_adding_icons() -> 
         guide_id for section in HELP_NAVIGATION for guide_id in section.guide_ids
     }
     assert navigation_guide_ids == guide_ids
-    assert guidance_for_path("/admin/workqueue") is None
-    assert guidance_for_path("/admin/surveys") is None
+    for path, guide_id in (
+        ("/admin/workqueue", "workqueue"),
+        ("/admin/surveys", "surveys"),
+    ):
+        guide = guidance_for_path(path)
+        assert guide is not None
+        assert guide.id == guide_id
 
 
 def test_help_center_uses_sidebar_sections_and_action_anchors() -> None:
