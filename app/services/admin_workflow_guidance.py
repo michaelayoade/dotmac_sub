@@ -800,9 +800,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
 )
 
 
-# These guides complete the Help Center's Admin-sidebar inventory. They are not
-# matched by ``guidance_for_path``, so adding Help content never adds a new
-# contextual question-mark control to a page.
+# These guides complete the Help Center's Admin-sidebar inventory. They are
+# also available to contextual path lookup when they describe a concrete page.
 HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
     _guide(
         "workqueue",
@@ -944,13 +943,19 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
     _guide(
         "vendor-routes",
         "Vendors",
-        "Review vendor routes",
+        "Review and propose map routes and assets",
         "Network and fiber reviewers",
-        "Review proposed vendor routes before accepting them into network work.",
+        "Review vendor submissions and create staff-owned map proposals before accepting network work.",
         ("/admin/vendors/routes",),
-        "Filter the route queue and open the exact proposal.",
-        "Review geometry, endpoints, project scope, evidence, and existing network conflicts.",
-        "Approve or reject the route with a clear reason, then verify the resulting project state.",
+        "Filter the route queue or open Fiber Plant Map, then choose the exact route or asset proposal.",
+        "Review geometry, endpoints, project or work-order links when present, evidence, and existing network conflicts.",
+        "When creating a staff proposal, choose Propose Route or Asset; project and work order links are optional, and no vendor quote is required.",
+        "Approve or reject the pending proposal with a clear reason, then verify the resulting network or project state.",
+        route_templates=("/admin/network/fiber", "/admin/vendors/routes/new"),
+        notes=(
+            "Staff-owned proposals remain separate from vendor quote submissions and stay pending until an authorized reviewer decides.",
+            "If a work order already belongs to an installation project, linking the work order can populate that project association; otherwise the proposal may remain unscoped.",
+        ),
     ),
     _guide(
         "reports-overview",
@@ -1686,12 +1691,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("verify-vendor-review", "Verify the review result", 3),
     ),
     "vendor-routes": (
-        _action("find-vendor-route", "Find a vendor route", 0),
-        _action("review-vendor-route", "Review route evidence", 1),
+        _action("find-vendor-route", "Find a route or asset proposal", 0),
+        _action("review-vendor-route", "Review route or asset evidence", 1),
+        _action(
+            "create-admin-map-proposal",
+            "Create a staff map proposal",
+            2,
+            permission="network:fiber:write",
+        ),
         _action(
             "decide-vendor-route",
             "Approve or reject a route",
-            2,
+            3,
             permission="network:fiber:write",
         ),
     ),
@@ -1998,7 +2009,7 @@ def guidance_for_path(path: str) -> AdminWorkflowGuidance | None:
     """Return the most-specific guide for an Admin page path."""
     matches = (
         (specificity, guide)
-        for guide in WORKFLOW_GUIDANCE
+        for guide in all_guidance()
         if (specificity := guide.match_specificity(path)) is not None
     )
     return max(matches, key=lambda match: match[0], default=(0, None))[1]

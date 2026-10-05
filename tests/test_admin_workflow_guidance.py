@@ -237,6 +237,20 @@ def test_project_infrastructure_guide_is_linked_and_searchable() -> None:
     }
 
 
+def test_vendor_route_guidance_covers_optional_admin_proposals() -> None:
+    guide = guidance_for_path("/admin/vendors/routes/new")
+    fiber_map_guide = guidance_for_path("/admin/network/fiber")
+
+    assert guide is not None
+    assert guide.id == "vendor-routes"
+    assert fiber_map_guide is not None
+    assert fiber_map_guide.id == "vendor-routes"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "project and work order links are optional" in content
+    assert "no vendor quote is required" in content
+    assert "staff-owned proposals remain separate" in content
+
+
 def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
     guide = guidance_for_path("/admin/support/tickets/123")
 

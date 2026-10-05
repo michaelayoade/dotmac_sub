@@ -33,6 +33,7 @@
         var plantFilterButtons = elementsForSelector(config.plantFilterSelector);
         var plantViewElement = document.getElementById(config.plantViewId);
         var map = window.L.map(mapElement).setView([9.0820, 8.6753], 6);
+        window.AdminRouteAuthoringMap = map;
         var contextLayers = {};
         var contextLayerEntries = [];
         var networkPlantLayerEntries = [];
@@ -58,6 +59,7 @@
                 return (
                     properties.kind === "as_built" ||
                     properties.kind === "closure_proposal" ||
+                    (config.adminMode && properties.kind === "admin_route_proposal") ||
                     String(properties.quote_id || "") === String(config.quoteId)
                 );
             },
@@ -402,6 +404,24 @@
                                 popup.appendChild(document.createTextNode("Review note: " + properties.review_notes));
                             }
                             layer.bindPopup(popup);
+                            return;
+                        }
+                        if (properties.kind === "admin_route_proposal") {
+                            var routePopup = document.createElement("div");
+                            var routeHeading = document.createElement("strong");
+                            routeHeading.textContent = properties.name || "Suggested route";
+                            routePopup.appendChild(routeHeading);
+                            routePopup.appendChild(document.createElement("br"));
+                            routePopup.appendChild(
+                                document.createTextNode(
+                                    "Status: " + String(properties.status || "pending").replaceAll("_", " "),
+                                ),
+                            );
+                            if (properties.review_notes) {
+                                routePopup.appendChild(document.createElement("br"));
+                                routePopup.appendChild(document.createTextNode("Review note: " + properties.review_notes));
+                            }
+                            layer.bindPopup(routePopup);
                         }
                     },
                 },

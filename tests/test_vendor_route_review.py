@@ -225,6 +225,10 @@ def test_review_queue_routes_templates_and_sot_are_explicit():
     routes = (root / "app/web/admin/vendor_operations.py").read_text()
     map_routes = (root / "app/web/admin/vendor_routes.py").read_text()
     route_template = (root / "templates/admin/vendors/route_view.html").read_text()
+    authoring_template = (
+        root / "templates/admin/vendors/route_authoring.html"
+    ).read_text()
+    fiber_map_template = (root / "templates/admin/network/fiber/map.html").read_text()
     queue = (root / "templates/admin/vendors/operations.html").read_text()
     sot = (root / "docs/SOT_RELATIONSHIP_MAP.md").read_text()
     migration = (
@@ -235,7 +239,23 @@ def test_review_queue_routes_templates_and_sot_are_explicit():
     assert "vendor_route_review_proposals.confirm_review(" in routes
     assert "transition_route_revision_review(" not in routes
     assert "list_route_revisions_for_project(" in map_routes
+    assert '"/routes/{project_id}/suggested-route"' in map_routes
+    assert '"/routes/suggested-route"' in map_routes
+    assert 'require_permission("network:fiber:write")' in map_routes
+    assert '"/routes/{project_id}/asset-proposals"' in map_routes
+    assert '"/routes/asset-proposals"' in map_routes
+    assert 'asset_type="fiber_segment"' in map_routes
+    assert "requested_by_person_id=_requester_person_id(request)" in map_routes
+    assert "ProjectQuote" not in map_routes
     assert "action_permitted(request, revision.accept_action)" in route_template
+    assert 'id="admin-route-author-map"' in route_template
+    assert 'id="asset-pin-toggle"' in route_template
+    assert 'name="quote_id"' not in route_template
+    assert "separate from vendor quotes" in route_template
+    assert 'value="">No project</option>' in authoring_template
+    assert 'value="">No work order</option>' in authoring_template
+    assert 'href="/admin/vendors/routes/new"' in fiber_map_template
+    assert "can_write_routes" in route_template
     assert "revision.detail_url" in queue
     assert "operations.vendor_route_review_confirmation" in sot
     assert "vendor_route_revision.accepted" in sot
