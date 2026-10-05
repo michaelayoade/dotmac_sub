@@ -15,31 +15,51 @@
         <input type="hidden" name="command_token" value="{{ command_token }}">
         <input type="hidden" id="conditions-json" name="conditions_json">
         <input type="hidden" id="actions-json" name="actions_json">
+        <input type="hidden" id="trigger-keys-json" name="trigger_keys_json">
+        <input type="hidden" id="schedule-json" name="schedule_json">
         <div class="space-y-2">
             <label for="name" class="block text-sm font-medium text-slate-800 dark:text-slate-200">Workflow name</label>
             {% if rule_id %}<p class="font-semibold text-slate-950 dark:text-white">{{ name }}</p><input type="hidden" name="name" value="{{ name }}">
-            {% else %}<input id="name" name="name" value="{{ name }}" required maxlength="160" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white" placeholder="Urgent tickets to Escalation Team">{% endif %}
+            {% else %}<input id="name" name="name" value="{{ name }}" required maxlength="160" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-indigo-400" placeholder="Urgent tickets to Escalation Team">{% endif %}
         </div>
 
         <section class="space-y-2" aria-labelledby="trigger-heading">
             <h2 id="trigger-heading" class="text-base font-semibold text-slate-950 dark:text-white">When this happens</h2>
             <label for="module-key" class="block text-sm font-medium text-slate-800 dark:text-slate-200">Module</label>
-            <select id="module-key" {% if rule_id %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+            <select id="module-key" {% if rule_id %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-indigo-400">
                 {% for module in module_options %}<option value="{{ module.key }}" data-trigger-keys="{{ module.trigger_keys|join(',') }}">{{ module.label }}</option>{% endfor %}
             </select>
             <p class="text-xs text-slate-500 dark:text-slate-400">The module determines which event triggers, condition fields, and owner actions can be combined.</p>
             <details class="rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700"><summary class="cursor-pointer font-semibold text-indigo-700 dark:text-indigo-300">What do module and event mean?</summary><p class="mt-2 leading-6 text-slate-600 dark:text-slate-400">A module is the source-of-truth area that owns the record. An event is a lifecycle fact emitted by that owner, such as “ticket status changed” or “customer account reactivated.” Events are added by a reviewed code declaration and cannot be invented in this form.</p></details>
-            <label for="trigger-key" class="block text-sm font-medium text-slate-800 dark:text-slate-200">Event trigger</label>
-            <select id="trigger-key" {% if rule_id %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
-                {% for trigger in triggers %}<option value="{{ trigger.key }}" {% if trigger.key == trigger_key %}selected{% endif %}>{{ trigger.label }}</option>{% endfor %}
+            <label id="trigger-label" for="trigger-key" class="block text-sm font-medium text-slate-800 dark:text-slate-200">Triggers</label>
+            <select id="trigger-key" multiple size="6" aria-hidden="true" tabindex="-1" {% if rule_id %}disabled{% endif %} class="sr-only">
+                {% for trigger in triggers %}<option value="{{ trigger.key }}" {% if trigger.key in trigger_keys %}selected{% endif %}>{{ trigger.label }}</option>{% endfor %}
             </select>
+            <div id="trigger-picker" class="grid gap-2 sm:grid-cols-2" role="group" aria-labelledby="trigger-label" aria-describedby="trigger-help trigger-summary"></div>
+            <p id="trigger-summary" class="text-xs font-medium text-slate-600 dark:text-slate-300" aria-live="polite"></p>
+            <p id="trigger-help" class="text-xs text-slate-500 dark:text-slate-400">Choose one or more lifecycle events. Conditions are evaluated against the record that triggered the rule.</p>
+            <p id="trigger-compatibility" class="hidden rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200" role="alert" tabindex="-1">Scheduled triggers must be selected together. Remove the event-driven trigger before saving this recurring rule.</p>
             {% if rule_id %}<input type="hidden" name="trigger_key" value="{{ trigger_key }}">{% else %}<input type="hidden" id="trigger-key-value" name="trigger_key" value="{{ trigger_key }}">{% endif %}
         </section>
 
+        <section id="schedule-section" class="hidden space-y-3 rounded-lg border border-indigo-200 bg-indigo-50/50 p-4 dark:border-indigo-900 dark:bg-indigo-950/20" aria-labelledby="schedule-heading">
+            <div>
+                <h2 id="schedule-heading" class="text-base font-semibold text-slate-950 dark:text-white">Run schedule</h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Repeat this rule while an active record still matches its conditions.</p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-3">
+                <label class="space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200"><span class="block">Schedule type</span><select id="schedule-type" class="min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400"><option value="interval">Every interval</option><option value="crontab">Cron expression</option></select></label>
+                <label id="schedule-interval-wrap" class="space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200"><span class="block">Interval</span><select id="schedule-interval" class="min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400"><option value="86400">Every day</option><option value="3600">Every hour</option><option value="604800">Every week</option><option value="900">Every 15 minutes</option></select></label>
+                <label id="schedule-cron-wrap" class="hidden space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200"><span class="block">Cron expression</span><input id="schedule-cron" class="min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400" placeholder="0 9 * * *" inputmode="text"><span class="block text-xs font-normal text-slate-500">minute hour day-of-month month day-of-week</span></label>
+                <label class="space-y-1 text-sm font-medium text-slate-800 dark:text-slate-200"><span class="block">Time zone</span><input id="schedule-timezone" value="Africa/Lagos" class="min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400" placeholder="Africa/Lagos" inputmode="text"></label>
+            </div>
+            <p id="schedule-availability" class="text-xs text-indigo-800 dark:text-indigo-200" aria-live="polite"></p>
+        </section>
+
         <section class="space-y-3" aria-labelledby="conditions-heading">
-            <div class="flex items-center justify-between gap-3"><h2 id="conditions-heading" class="text-base font-semibold text-slate-950 dark:text-white">Only when</h2><button id="add-condition" type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-slate-800 dark:disabled:border-slate-800 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">Add condition</button></div>
+            <div class="flex items-center justify-between gap-3"><h2 id="conditions-heading" class="text-base font-semibold text-slate-950 dark:text-white">Only when</h2><div class="flex gap-2"><button id="add-condition" type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-slate-800 dark:disabled:border-slate-800 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">Add condition</button><button id="add-group" type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-slate-800 dark:disabled:border-slate-800 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">Add group</button></div></div>
             <div id="conditions-container" class="space-y-3"></div>
-            <p id="conditions-help" class="text-xs text-slate-500 dark:text-slate-400">All conditions must match. Leave this section empty to match every event of the selected trigger.</p>
+            <p id="conditions-help" class="text-xs text-slate-500 dark:text-slate-400">Use AND, OR, and NOT groups to express exceptions such as “status is not Waiting on Customer.” Leave this section empty to match every selected event.</p>
             <p id="conditions-availability" class="text-xs text-amber-700 dark:text-amber-300" aria-live="polite"></p>
         </section>
 
@@ -49,20 +69,20 @@
             <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700"><input type="radio" name="customer_scope" value="company" {% if customer_scope == "company" %}checked{% endif %} class="mt-1 text-indigo-700 focus:ring-indigo-500"><span><span class="block text-sm font-medium text-slate-900 dark:text-white">All customers</span></span></label>
             <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 dark:border-slate-700"><input type="radio" name="customer_scope" value="selected" {% if customer_scope == "selected" %}checked{% endif %} class="mt-1 text-indigo-700 focus:ring-indigo-500"><span><span class="block text-sm font-medium text-slate-900 dark:text-white">Selected customers</span><span class="block text-xs text-slate-500 dark:text-slate-400">Choose up to 100.</span></span></label>
             <div id="customer-picker" class="space-y-3 {% if customer_scope != 'selected' %}hidden{% endif %}">
-                <div class="flex flex-col gap-2 sm:flex-row"><label class="sr-only" for="customer-search">Search customers</label><input id="customer-search" type="search" minlength="2" maxlength="120" class="min-h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white" placeholder="Search by name, email, or account number"><button id="customer-search-button" type="button" class="min-h-10 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Search</button></div>
+                <div class="flex flex-col gap-2 sm:flex-row"><label class="sr-only" for="customer-search">Search customers</label><input id="customer-search" type="search" minlength="2" maxlength="120" class="min-h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-indigo-400" placeholder="Search by name, email, or account number"><button id="customer-search-button" type="button" class="min-h-10 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Search</button></div>
                 <p id="customer-search-message" class="text-sm text-slate-500 dark:text-slate-400" aria-live="polite">Search for a customer, then add them.</p><ul id="customer-search-results" class="divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-700"></ul>
                 <div><h3 class="text-sm font-medium text-slate-800 dark:text-slate-200">Selected customers</h3><ul id="selected-customers" class="mt-2 flex flex-wrap gap-2">{% for customer in selected_customers %}<li class="selected-customer inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-sm text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100" data-customer-id="{{ customer.id }}"><span>{{ customer.label }}</span><input type="hidden" name="customer_ids" value="{{ customer.id }}"><button type="button" class="remove-customer rounded-full px-1 font-bold" aria-label="Remove {{ customer.label }}">×</button></li>{% endfor %}</ul></div>
             </div>
         </fieldset>{% endif %}
 
         <section class="space-y-3" aria-labelledby="actions-heading">
-            <div class="flex items-center justify-between gap-3"><h2 id="actions-heading" class="text-base font-semibold text-slate-950 dark:text-white">Then do this</h2><button id="add-action" type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-slate-800 dark:disabled:border-slate-800 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">Add action</button></div>
+            <div class="flex items-center justify-between gap-3"><h2 id="actions-heading" class="text-base font-semibold text-slate-950 dark:text-white">Then do this</h2><button id="add-action" type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-700 dark:text-indigo-300 dark:hover:bg-slate-800 dark:disabled:border-slate-800 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">Add action</button></div>
             <div id="actions-container" class="space-y-3"></div>
             <p id="actions-availability" class="text-xs text-amber-700 dark:text-amber-300" aria-live="polite"></p>
         </section>
 
         <div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">Saving creates a draft only. It starts running only after an admin activates it. Conflicting active rules can prevent activation.</div>
-        <div class="flex justify-end gap-3"><a href="/admin/automation" class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</a><button type="submit" class="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800">{{ "Save draft revision" if rule_id else "Save draft" }}</button></div>
+        <div class="flex justify-end gap-3"><a href="/admin/automation" class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</a><button type="submit" class="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">{{ "Save draft revision" if rule_id else "Save draft" }}</button></div>
     </form>
 </div>
 
@@ -77,25 +97,93 @@
     const actionButton = document.getElementById("add-action");
     const conditionAvailability = document.getElementById("conditions-availability");
     const actionAvailability = document.getElementById("actions-availability");
+    const triggerPicker = document.getElementById("trigger-picker");
+    const triggerSummary = document.getElementById("trigger-summary");
+    const triggerCompatibility = document.getElementById("trigger-compatibility");
+    const scheduleSection = document.getElementById("schedule-section");
+    const scheduleType = document.getElementById("schedule-type");
+    const scheduleInterval = document.getElementById("schedule-interval");
+    const scheduleCron = document.getElementById("schedule-cron");
+    const scheduleTimezone = document.getElementById("schedule-timezone");
+    const scheduleAvailability = document.getElementById("schedule-availability");
     if (!form || !trigger || !conditionsBox || !actionsBox) return;
     const capabilities = {{ builder_options|tojson }};
     const moduleOptions = {{ module_options|tojson }};
     const teams = {{ service_teams|tojson }};
     const initialConditions = {{ initial_conditions|tojson }};
     const initialActions = {{ initial_actions|tojson }};
-    const config = () => capabilities[trigger.value] || {fields: [], actions: []};
+    const initialSchedule = {{ initial_schedule|tojson }};
+    const selectedTriggerKeys = () => [...trigger.selectedOptions].map((option) => option.value);
+    const config = () => {
+        const fields = new Map(), actions = new Map();
+        for (const key of selectedTriggerKeys()) {
+            const current = capabilities[key] || {fields: [], actions: []};
+            for (const field of current.fields || []) if (!fields.has(field.key)) fields.set(field.key, field);
+            for (const action of current.actions || []) if (!actions.has(action.key)) actions.set(action.key, action);
+        }
+        const selected = selectedTriggerKeys();
+        const scheduledCount = selected.filter((key) => capabilities[key]?.scheduled).length;
+        return {fields: [...fields.values()], actions: [...actions.values()], supports_customer_scope: selected.some((key) => capabilities[key]?.supports_customer_scope), scheduled: scheduledCount > 0, scheduleCompatible: scheduledCount === 0 || scheduledCount === selected.length};
+    };
+    const updateSchedule = () => {
+        const current = config();
+        const available = Boolean(current.scheduled && current.scheduleCompatible);
+        scheduleSection?.classList.toggle("hidden", !available);
+        if (triggerCompatibility) triggerCompatibility.classList.toggle("hidden", !current.scheduled || current.scheduleCompatible);
+        if (scheduleAvailability) scheduleAvailability.textContent = current.scheduled ? (current.scheduleCompatible ? "One evaluation is created per matching record on each cadence." : "Remove event-driven triggers to configure a recurring cadence.") : "Select a scheduled trigger to configure a recurring cadence.";
+        const cron = scheduleType?.value === "crontab";
+        document.getElementById("schedule-interval-wrap")?.classList.toggle("hidden", cron);
+        document.getElementById("schedule-cron-wrap")?.classList.toggle("hidden", !cron);
+    };
+    const renderTriggerPicker = () => {
+        if (!triggerPicker) return;
+        triggerPicker.replaceChildren();
+        const visible = [...trigger.options].filter((option) => !option.hidden);
+        for (const option of visible) {
+            const label = make("label", "flex min-h-11 items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 transition-colors hover:border-indigo-300 hover:bg-indigo-50 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/30");
+            const checkbox = make("input", "mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-indigo-700 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-900");
+            checkbox.type = "checkbox";
+            checkbox.checked = option.selected;
+            checkbox.disabled = trigger.disabled;
+            checkbox.dataset.triggerKey = option.value;
+            const syncCard = () => {
+                label.classList.toggle("border-indigo-500", checkbox.checked);
+                label.classList.toggle("bg-indigo-50", checkbox.checked);
+                label.classList.toggle("dark:border-indigo-500", checkbox.checked);
+                label.classList.toggle("dark:bg-indigo-950/30", checkbox.checked);
+            };
+            checkbox.addEventListener("change", () => {
+                option.selected = checkbox.checked;
+                const submittedTrigger = document.getElementById("trigger-key-value");
+                if (submittedTrigger) submittedTrigger.value = selectedTriggerKeys()[0] || "";
+                syncCard();
+                updateTriggerSummary();
+                renderAll([], []);
+                updateCustomerScope();
+                updateSchedule();
+            });
+            syncCard();
+            label.append(checkbox, make("span", "leading-5", option.textContent));
+            triggerPicker.append(label);
+        }
+        updateTriggerSummary();
+    };
+    const updateTriggerSummary = () => {
+        const selected = [...trigger.selectedOptions];
+        if (triggerSummary) triggerSummary.textContent = selected.length ? `${selected.length} trigger${selected.length === 1 ? "" : "s"} selected` : "Choose at least one trigger.";
+    };
     const updateBuilderAvailability = () => {
         const current = config();
         const conditionsAvailable = current.fields.length > 0;
         const actionsAvailable = current.actions.length > 0;
         if (conditionButton) {
             conditionButton.disabled = !conditionsAvailable;
-            conditionButton.title = conditionsAvailable ? "Add another condition" : "This event has no condition fields.";
+            conditionButton.title = conditionsAvailable ? "Add a condition" : "The selected events have no condition fields.";
         }
         if (conditionAvailability) {
             conditionAvailability.textContent = conditionsAvailable
-                ? "This event exposes fields you can use to narrow the workflow."
-                : "This event has no condition fields. The workflow will match every occurrence; choose another event if you need to narrow it.";
+                ? "Fields are combined across the selected events. Use groups when the rule needs OR or NOT logic."
+                : "This event has no condition fields. The selected events will match every occurrence.";
         }
         if (actionButton) {
             actionButton.disabled = !actionsAvailable;
@@ -103,7 +191,7 @@
         }
         if (actionAvailability) {
             actionAvailability.textContent = actionsAvailable
-                ? "Actions run in the order shown. Remove any action you do not need."
+                ? "Actions run in the order shown. An action must support every selected event target."
                 : "This event has no executable actions registered yet, so a workflow cannot be saved for it.";
         }
     };
@@ -111,41 +199,66 @@
         const selected = moduleOptions.find((item) => item.key === module.value);
         const allowed = new Set(selected?.trigger_keys || []);
         for (const option of trigger.options) option.hidden = !allowed.has(option.value);
-        if (!allowed.has(trigger.value)) {
-            const first = [...trigger.options].find((option) => allowed.has(option.value));
-            if (first) trigger.value = first.value;
-        }
+        const visible = [...trigger.options].filter((option) => allowed.has(option.value));
+        if (!selectedTriggerKeys().some((key) => allowed.has(key)) && visible[0]) visible[0].selected = true;
+        for (const option of trigger.options) if (!allowed.has(option.value)) option.selected = false;
     };
     const make = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
-    const selectFor = (items, value, label) => { const select = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); select.setAttribute("aria-label", label); for (const item of items) { const option = make("option", "", item.label); option.value = item.key; select.append(option); } if (value) select.value = value; return select; };
-    const removeButton = (row) => { const button = make("button", "rounded-lg px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/30", "Remove"); button.type = "button"; button.addEventListener("click", () => row.remove()); return button; };
-    const renderCondition = (initial = {}) => {
-        const fields = config().fields; if (!fields.length) { updateBuilderAvailability(); return; }
-        const row = make("div", "grid gap-2 rounded-xl border border-slate-200 p-3 sm:grid-cols-[1fr_1fr_1fr_auto] dark:border-slate-700");
-        const field = selectFor(fields, initial.field_key || fields[0].key, "Condition field");
-        const operator = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); operator.setAttribute("aria-label", "Condition operator");
+    const selectFor = (items, value, label) => { const select = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400"); select.setAttribute("aria-label", label); for (const item of items) { const option = make("option", "", item.label); option.value = item.key; select.append(option); } if (value) select.value = value; return select; };
+    const removeButton = (row, label = "item") => { const button = make("button", "min-h-10 rounded-lg px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:text-red-300 dark:hover:bg-red-950/30", `Remove ${label}`); button.type = "button"; button.setAttribute("aria-label", `Remove ${label}`); button.addEventListener("click", () => row.remove()); return button; };
+    const renderCondition = (parent, initial = {}) => {
+        const fields = config().fields; if (!fields.length) return;
+        const row = make("div", "grid gap-2 rounded-xl border border-slate-200 p-3 sm:grid-cols-[1fr_1fr_1fr_auto] dark:border-slate-700"); row.dataset.condition = "true";
+        const field = selectFor(fields, initial.field_key || fields[0].key, "Condition field"); field.dataset.field = "true";
+        const operator = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400"); operator.setAttribute("aria-label", "Condition operator");
         const valueWrap = make("div", "");
-        const refresh = () => { const selected = fields.find((item) => item.key === field.value) || fields[0]; operator.replaceChildren(); for (const key of selected.operators) { const option = make("option", "", key.replaceAll("_", " ")); option.value = key; operator.append(option); } if (initial.operator) operator.value = initial.operator; valueWrap.replaceChildren(); if (!["is_empty", "is_not_empty"].includes(operator.value)) { let input; if (selected.enum_values?.length) { input = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); input.append(new Option("Choose a value", "")); for (const item of selected.enum_values) { const option = make("option", "", item); option.value = item; input.append(option); } } else { input = make("input", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); input.type = selected.value_type === "integer" || selected.value_type === "decimal" ? "number" : selected.value_type === "date" ? "date" : "text"; if (input.type === "number" && selected.value_type === "decimal") input.step = "any"; if (["in", "not_in"].includes(operator.value)) input.placeholder = "Separate values with commas"; } input.dataset.value = "true"; input.setAttribute("aria-label", "Condition value"); if (initial.value !== undefined && initial.value !== null) input.value = initial.value; valueWrap.append(input); } };
-        field.addEventListener("change", () => { initial.operator = ""; initial.value = ""; refresh(); }); operator.addEventListener("change", refresh); refresh(); row.append(field, operator, valueWrap, removeButton(row)); conditionsBox.append(row);
+        const refresh = () => { const selected = fields.find((item) => item.key === field.value) || fields[0]; operator.replaceChildren(); for (const key of selected.operators) { const option = make("option", "", key.replaceAll("_", " ")); option.value = key; operator.append(option); } if (initial.operator) operator.value = initial.operator; valueWrap.replaceChildren(); if (!["is_empty", "is_not_empty"].includes(operator.value)) { let input; if (selected.enum_values?.length) { input = make("select", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400"); input.append(new Option("Choose a value", "")); for (const item of selected.enum_values) { const option = make("option", "", item); option.value = item; input.append(option); } } else { input = make("input", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400"); input.type = selected.value_type === "integer" || selected.value_type === "decimal" ? "number" : selected.value_type === "date" ? "date" : "text"; if (input.type === "number" && selected.value_type === "decimal") input.step = "any"; if (["in", "not_in"].includes(operator.value)) input.placeholder = "Separate values with commas"; } input.dataset.value = "true"; input.setAttribute("aria-label", "Condition value"); if (initial.value !== undefined && initial.value !== null) input.value = Array.isArray(initial.value) ? initial.value.join(", ") : initial.value; valueWrap.append(input); } };
+        field.addEventListener("change", () => { initial.operator = ""; initial.value = ""; refresh(); }); operator.addEventListener("change", refresh); refresh(); row.append(field, operator, valueWrap, removeButton(row, "condition")); parent.append(row);
     };
+    const renderGroup = (initial = {group: "and", children: []}, root = false) => {
+        const group = make("div", root ? "space-y-3" : "space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 dark:border-indigo-950 dark:bg-indigo-950/20"); group.dataset.group = "true";
+        const toolbar = make("div", "flex flex-wrap items-center gap-2"); const label = make("span", "text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400", root ? "Conditions" : "Group");
+        const operator = selectFor([{key: "and", label: "AND — all must match"}, {key: "or", label: "OR — any may match"}, {key: "not", label: "NOT — must not match"}], initial.group || "and", "Condition group operator"); operator.dataset.operator = "true";
+        const children = make("div", "condition-group-children space-y-3");
+        const addLeaf = make("button", "rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-indigo-700 dark:border-slate-700 dark:text-indigo-300", "Add condition"); addLeaf.type = "button"; addLeaf.addEventListener("click", () => renderCondition(children));
+        const addNested = make("button", "rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-indigo-700 dark:border-slate-700 dark:text-indigo-300", "Add group"); addNested.type = "button"; addNested.addEventListener("click", () => children.append(renderGroup({group: "or", children: []}, false)));
+        const remove = removeButton(group, "group"); remove.classList.add("ml-auto"); remove.hidden = root;
+        toolbar.append(label, operator, addLeaf, addNested, remove); group.append(toolbar, children);
+        const seed = Array.isArray(initial.children) ? initial.children : [];
+        for (const child of seed) child.group ? children.append(renderGroup(child, false)) : renderCondition(children, child);
+        return group;
+    };
+    const appendGroup = (initial, root) => { const group = renderGroup(initial, root); conditionsBox.append(group); return group; };
     const renderAction = (initial = {}) => {
         const options = config().actions; if (!options.length) { updateBuilderAvailability(); return; }
         const row = make("div", "rounded-xl border border-slate-200 p-3 dark:border-slate-700");
         const top = make("div", "grid gap-2 sm:grid-cols-[1fr_auto]"); const action = selectFor(options, initial.action_key || options[0].key, "Action"); const inputs = make("div", "mt-3 grid gap-3 sm:grid-cols-2");
-        const refresh = () => { const selected = options.find((item) => item.key === action.value) || options[0]; inputs.replaceChildren(); for (const definition of selected.inputs) { const wrap = make("label", "space-y-1 text-sm font-medium text-slate-700 dark:text-slate-200"); wrap.append(make("span", "block", definition.label)); let input; if (definition.key === "service_team_id") { input = selectFor(teams, initial.inputs?.[definition.key] || "", definition.label); input.prepend(new Option("Choose a team", "")); } else if (definition.enum_values?.length) { input = selectFor(definition.enum_values.map((item) => ({key: item, label: item})), initial.inputs?.[definition.key] || "", definition.label); input.prepend(new Option("Choose a value", "")); } else { input = make("input", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"); input.type = definition.value_type === "integer" || definition.value_type === "decimal" ? "number" : "text"; input.value = initial.inputs?.[definition.key] ?? ""; } input.dataset.inputKey = definition.key; input.required = definition.required; wrap.append(input); inputs.append(wrap); } };
-        action.addEventListener("change", () => { initial.inputs = {}; refresh(); }); refresh(); top.append(action, removeButton(row)); row.append(top, inputs); actionsBox.append(row);
+        const refresh = () => { const selected = options.find((item) => item.key === action.value) || options[0]; inputs.replaceChildren(); for (const definition of selected.inputs) { const wrap = make("label", "space-y-1 text-sm font-medium text-slate-700 dark:text-slate-200"); wrap.append(make("span", "block", definition.label)); let input; if (definition.key === "service_team_id") { input = selectFor(teams, initial.inputs?.[definition.key] || "", definition.label); input.prepend(new Option("Choose a team", "")); } else if (definition.enum_values?.length) { input = selectFor(definition.enum_values.map((item) => ({key: item, label: item})), initial.inputs?.[definition.key] || "", definition.label); input.prepend(new Option("Choose a value", "")); } else if (definition.key === "body") { input = make("textarea", "min-h-32 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400"); input.rows = 7; input.placeholder = "Plain text or HTML email body"; input.value = initial.inputs?.[definition.key] ?? ""; } else { input = make("input", "min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-950 dark:focus:border-indigo-400"); input.type = definition.value_type === "integer" || definition.value_type === "decimal" ? "number" : "text"; input.value = initial.inputs?.[definition.key] ?? ""; } input.dataset.inputKey = definition.key; input.required = definition.required; wrap.append(input); inputs.append(wrap); } };
+        action.addEventListener("change", () => { initial.inputs = {}; refresh(); }); refresh(); top.append(action, removeButton(row, "action")); row.append(top, inputs); actionsBox.append(row);
     };
-    const renderAll = (conditions, actions) => { conditionsBox.replaceChildren(); actionsBox.replaceChildren(); conditions.forEach(renderCondition); actions.forEach(renderAction); if (!conditions.length && config().fields.length) renderCondition(); if (!actions.length && config().actions.length) renderAction(); updateBuilderAvailability(); };
-    conditionButton?.addEventListener("click", () => { if (!conditionButton.disabled) renderCondition(); });
+    const renderAll = (conditions, actions) => { conditionsBox.replaceChildren(); actionsBox.replaceChildren(); const root = Array.isArray(conditions) ? {group: "and", children: conditions} : (conditions?.group ? conditions : {group: "and", children: []}); appendGroup(root, true); actions.forEach(renderAction); if (!actions.length && config().actions.length) renderAction(); updateBuilderAvailability(); };
+    conditionButton?.addEventListener("click", () => { if (!conditionButton.disabled) conditionsBox.querySelector(".condition-group-children") && renderCondition(conditionsBox.querySelector(".condition-group-children")); });
+    document.getElementById("add-group")?.addEventListener("click", () => { const rootChildren = conditionsBox.querySelector(".condition-group-children"); if (rootChildren) { const nested = renderGroup({group: "or", children: []}, false); rootChildren.append(nested); } });
     actionButton?.addEventListener("click", () => { if (!actionButton.disabled) renderAction(); });
     const updateCustomerScope = () => { const section = document.getElementById("customer-scope-section"); const supported = Boolean(config().supports_customer_scope); section?.classList.toggle("hidden", !supported); if (!supported) { const company = document.querySelector('input[name="customer_scope"][value="company"]'); if (company) company.checked = true; document.getElementById("selected-customers")?.replaceChildren(); } };
-    trigger.addEventListener("change", () => { const submittedTrigger = document.getElementById("trigger-key-value"); if (submittedTrigger) submittedTrigger.value = trigger.value; renderAll([], []); updateCustomerScope(); });
+    trigger.addEventListener("change", () => { const submittedTrigger = document.getElementById("trigger-key-value"); if (submittedTrigger) submittedTrigger.value = selectedTriggerKeys()[0] || ""; renderTriggerPicker(); renderAll([], []); updateCustomerScope(); updateSchedule(); });
     module.addEventListener("change", () => { syncModules(); trigger.dispatchEvent(new Event("change")); });
-    form.addEventListener("submit", () => {
-        const conditions = [...conditionsBox.children].map((row) => { const selects = row.querySelectorAll("select"); const op = selects[1].value; return {field_key: selects[0].value, operator: op, value: ["is_empty", "is_not_empty"].includes(op) ? null : (row.querySelector("[data-value]")?.value ?? "")}; });
+    form.addEventListener("submit", (event) => {
+        const current = config();
+        if (!current.scheduleCompatible) {
+            event.preventDefault();
+            triggerCompatibility?.focus();
+            return;
+        }
+        const serializeNode = (node) => { if (node.dataset.condition) { const field = node.querySelector("[data-field]").value; const op = node.querySelector("select:not([data-field])").value; const raw = node.querySelector("[data-value]")?.value ?? ""; return {field_key: field, operator: op, value: ["is_empty", "is_not_empty"].includes(op) ? null : raw}; } return {group: node.querySelector(":scope > .flex select")?.value || "and", children: [...node.querySelector(":scope > .condition-group-children").children].map(serializeNode)}; };
+        const root = conditionsBox.querySelector("[data-group]");
+        const conditions = root ? serializeNode(root) : {group: "and", children: []};
         const actions = [...actionsBox.children].map((row) => ({action_key: row.querySelector("select").value, inputs: Object.fromEntries([...row.querySelectorAll("[data-input-key]")].map((input) => [input.dataset.inputKey, input.value]))}));
         document.getElementById("conditions-json").value = JSON.stringify(conditions);
         document.getElementById("actions-json").value = JSON.stringify(actions);
+        document.getElementById("trigger-keys-json").value = JSON.stringify(selectedTriggerKeys());
+        const schedule = current.scheduled && current.scheduleCompatible ? {type: scheduleType.value, interval_seconds: Number(scheduleInterval.value), cron_expr: scheduleCron.value.trim(), timezone: scheduleTimezone.value} : {};
+        document.getElementById("schedule-json").value = JSON.stringify(schedule);
     });
     const picker = document.getElementById("customer-picker"), searchInput = document.getElementById("customer-search"), searchButton = document.getElementById("customer-search-button"), message = document.getElementById("customer-search-message"), results = document.getElementById("customer-search-results"), selected = document.getElementById("selected-customers");
     const updateScope = () => picker?.classList.toggle("hidden", document.querySelector('input[name="customer_scope"]:checked')?.value !== "selected");
@@ -153,9 +266,14 @@
     selected?.addEventListener("click", (event) => { if (event.target instanceof HTMLElement && event.target.closest(".remove-customer")) event.target.closest(".selected-customer")?.remove(); });
     searchButton?.addEventListener("click", async () => { const term = searchInput.value.trim(); results.replaceChildren(); if (term.length < 2) { message.textContent = "Enter at least two characters to search."; return; } message.textContent = "Searching…"; searchButton.disabled = true; try { const response = await fetch(`/admin/automation/customers/search?q=${encodeURIComponent(term)}`, {headers: {"Accept": "application/json"}}); if (!response.ok) throw new Error("Customer search is unavailable. Please try again."); const data = await response.json(); for (const customer of data.items || []) { const item = make("li", "flex items-center justify-between gap-3 px-3 py-2 text-sm"); const label = make("span", "min-w-0 truncate", customer.label); const add = make("button", "rounded-md px-3 py-1 font-semibold text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300", "Add"); add.type = "button"; add.addEventListener("click", () => { if (selected.querySelector(`[data-customer-id="${CSS.escape(customer.id)}"]`)) return; if (selected.querySelectorAll(".selected-customer").length >= 100) { message.textContent = "A rule can include up to 100 customers."; return; } const pill = make("li", "selected-customer inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-sm", ""); pill.dataset.customerId = customer.id; pill.append(label.cloneNode(true)); const hidden = make("input"); hidden.type = "hidden"; hidden.name = "customer_ids"; hidden.value = customer.id; const remove = make("button", "remove-customer px-1", "×"); remove.type = "button"; pill.append(hidden, remove); selected.append(pill); }); item.append(label, add); results.append(item); } message.textContent = data.items?.length ? "Choose a customer to add it." : "No matching active customers found."; } catch (error) { message.textContent = error instanceof Error ? error.message : "Customer search is unavailable."; } finally { searchButton.disabled = false; } });
     searchInput?.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); searchButton.click(); } });
-    const initialModule = moduleOptions.find((item) => item.trigger_keys.includes(trigger.value));
+    const initialModule = moduleOptions.find((item) => selectedTriggerKeys().some((key) => item.trigger_keys.includes(key)));
     if (initialModule) module.value = initialModule.key;
-    syncModules(); renderAll(initialConditions, initialActions); updateScope(); updateCustomerScope();
+    if (initialSchedule?.type) scheduleType.value = initialSchedule.type;
+    if (initialSchedule?.interval_seconds) scheduleInterval.value = String(initialSchedule.interval_seconds);
+    if (initialSchedule?.cron_expr) scheduleCron.value = initialSchedule.cron_expr;
+    if (initialSchedule?.timezone) scheduleTimezone.value = initialSchedule.timezone;
+    scheduleType?.addEventListener("change", updateSchedule);
+    syncModules(); renderTriggerPicker(); renderAll(initialConditions, initialActions); updateScope(); updateCustomerScope(); updateSchedule();
 })();
 </script>
 {% endblock %}

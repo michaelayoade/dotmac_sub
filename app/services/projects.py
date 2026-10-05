@@ -2508,6 +2508,7 @@ def complete_from_verified_installation(
             "project_canceled",
             "Canceled project cannot receive implementation verification",
         )
+    previous_status = project.status
     project.status = ProjectStatus.completed.value
     project.completed_at = datetime.now(UTC)
     metadata = dict(project.metadata_ or {})
@@ -2520,6 +2521,8 @@ def complete_from_verified_installation(
         project,
         {
             "project_id": str(project.id),
+            "from_status": previous_status,
+            "to_status": project.status,
             "sales_order_id": str(project.sales_order_id)
             if project.sales_order_id
             else None,

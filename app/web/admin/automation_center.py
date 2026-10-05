@@ -160,10 +160,12 @@ def _generic_form_context(
     error: str | None = None,
     name: str = "",
     trigger_key: str = _DEFAULT_TRIGGER,
+    trigger_keys: tuple[str, ...] = (),
     customer_scope: str = "company",
     customer_ids: tuple[UUID, ...] = (),
-    conditions: tuple[Mapping[str, object], ...] = (),
+    conditions: Mapping[str, object] | tuple[Mapping[str, object], ...] = (),
     actions: tuple[Mapping[str, object], ...] = (),
+    schedule: Mapping[str, object] | None = None,
     rule_id: UUID | None = None,
     permission_keys: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
@@ -194,22 +196,36 @@ def _generic_form_context(
             for trigger in manifest.triggers
         )
     )
+    selected_keys = tuple(dict.fromkeys(trigger_keys or (trigger_key,)))
+    selected_triggers = tuple(item for item in triggers if item.key in selected_keys)
     selected_trigger = next(
-        (item for item in triggers if item.key == trigger_key),
+        (item for item in selected_triggers if item.key == trigger_key),
         triggers[0] if triggers else None,
     )
+    selected_keys = tuple(item.key for item in selected_triggers) or (
+        (selected_trigger.key,) if selected_trigger else ()
+    )
+    union_fields = {
+        field.key: field
+        for item in selected_triggers
+        for field in item.fields
+        if field.key != "customer_id"
+    }
     builder_options: dict[str, object] = {}
     for item in triggers:
         compatible_actions = tuple(
             action
             for manifest in manifests
             for action in manifest.actions
-            if action.entity_type == item.entity_type
+            if automation_capabilities.action_applies_to_entity(
+                action, item.entity_type
+            )
             and action.authoring_enabled
             and action.runtime_enabled
             and (authorized or action.author_permission in permission_keys)
         )
         builder_options[item.key] = {
+            "scheduled": item.scheduled,
             "supports_customer_scope": any(
                 field.key == "customer_id" for field in item.fields
             ),
@@ -251,16 +267,16 @@ def _generic_form_context(
         "error": error,
         "name": name,
         "trigger_key": selected_trigger.key if selected_trigger else trigger_key,
+        "trigger_keys": selected_keys,
         "triggers": triggers,
         "module_options": module_options,
-        "condition_fields": tuple(
-            item
-            for item in (selected_trigger.fields if selected_trigger else ())
-            if item.key != "customer_id"
-        ),
+        "condition_fields": tuple(union_fields.values()),
         "supports_customer_scope": bool(
-            selected_trigger
-            and any(field.key == "customer_id" for field in selected_trigger.fields)
+            any(
+                field.key == "customer_id"
+                for item in selected_triggers
+                for field in item.fields
+            )
         ),
         "service_teams": team_options,
         "builder_options": builder_options,
@@ -273,6 +289,7 @@ def _generic_form_context(
         ),
         "initial_conditions": jsonable_encoder(conditions),
         "initial_actions": jsonable_encoder(actions),
+        "initial_schedule": jsonable_encoder(schedule or {}),
         "rule_id": rule_id,
         "command_token": str(uuid4()),
     }
@@ -345,10 +362,11 @@ def _script_form_context(
         )
     )
     selected_target = target_type or (str(targets[0]["entity_type"]) if targets else "")
-    selected_events = next(
-        (item["events"] for item in targets if item["entity_type"] == selected_target),
-        [],
-    )
+    selected_events: list[object] = []
+    for item in targets:
+        if item["entity_type"] == selected_target and isinstance(item["events"], list):
+            selected_events = item["events"]
+            break
     selected_event = event_name or (str(selected_events[0]) if selected_events else "")
     return {
         **_base_context(request, db),
@@ -415,25 +433,50 @@ def _form_scalar(
 def _form_definition(
     *,
     trigger_key: str,
+    trigger_keys: tuple[str, ...] = (),
     conditions_json: str,
     actions_json: str,
     customer_ids: tuple[UUID, ...],
 ) -> tuple[
-    tuple[automation_rules.AutomationCondition, ...],
+    tuple[automation_rules.AutomationCondition, ...]
+    | automation_rules.AutomationConditionGroup,
     tuple[automation_rules.AutomationActionStep, ...],
 ]:
     raw_conditions = json.loads(conditions_json)
     raw_actions = json.loads(actions_json)
-    if not isinstance(raw_conditions, list) or not isinstance(raw_actions, list):
+    if not isinstance(raw_conditions, (list, dict)) or not isinstance(
+        raw_actions, list
+    ):
         raise ValueError("Review the conditions and actions and try again.")
-    trigger = automation_capabilities.trigger_capability(trigger_key)
-    fields = {item.key: item for item in trigger.fields}
+    selected_keys = tuple(dict.fromkeys((trigger_key, *trigger_keys)))
+    triggers = tuple(
+        automation_capabilities.trigger_capability(key) for key in selected_keys
+    )
+    fields = {item.key: item for trigger in triggers for item in trigger.fields}
     if customer_ids and "customer_id" not in fields:
         raise ValueError("This trigger does not support selecting customers.")
-    conditions: list[automation_rules.AutomationCondition] = []
-    for item in raw_conditions:
+
+    def parse_condition(
+        item: object,
+    ) -> (
+        automation_rules.AutomationCondition | automation_rules.AutomationConditionGroup
+    ):
         if not isinstance(item, dict):
             raise ValueError("A condition is not valid.")
+        if "field_key" not in item:
+            try:
+                group = automation_rules.AutomationConditionGroupOperator(
+                    str(item.get("group") or "")
+                )
+            except ValueError as exc:
+                raise ValueError("Choose a valid condition group.") from exc
+            children = item.get("children")
+            if not isinstance(children, list):
+                raise ValueError("A condition group is not valid.")
+            return automation_rules.AutomationConditionGroup(
+                operator=group,
+                children=tuple(parse_condition(child) for child in children),
+            )
         field = fields.get(str(item.get("field_key") or ""))
         if field is None or field.key == "customer_id":
             raise ValueError("Choose a condition field provided by the app.")
@@ -464,17 +507,52 @@ def _form_definition(
             value = tuple(_form_scalar(field, part.strip()) for part in raw_values)
         else:
             value = _form_scalar(field, raw_value)
-        conditions.append(
-            automation_rules.AutomationCondition(field.key, operator, value)
-        )
-    if customer_ids:
-        conditions.append(
-            automation_rules.AutomationCondition(
-                field_key="customer_id",
-                operator=AutomationOperator.in_values,
-                value=customer_ids,
+        return automation_rules.AutomationCondition(field.key, operator, value)
+
+    if isinstance(raw_conditions, list):
+        parsed_conditions = tuple(parse_condition(item) for item in raw_conditions)
+        if not all(
+            isinstance(item, automation_rules.AutomationCondition)
+            for item in parsed_conditions
+        ):
+            raise ValueError(
+                "A top-level condition list must contain field conditions."
             )
+        conditions: (
+            tuple[automation_rules.AutomationCondition, ...]
+            | automation_rules.AutomationConditionGroup
+        ) = tuple(
+            item
+            for item in parsed_conditions
+            if isinstance(item, automation_rules.AutomationCondition)
         )
+    else:
+        parsed_root = parse_condition(raw_conditions)
+        if not isinstance(parsed_root, automation_rules.AutomationConditionGroup):
+            raise ValueError("The root condition must be a group.")
+        conditions = parsed_root
+    if customer_ids:
+        customer_condition = automation_rules.AutomationCondition(
+            field_key="customer_id",
+            operator=AutomationOperator.in_values,
+            value=customer_ids,
+        )
+        if isinstance(conditions, tuple):
+            conditions = (*conditions, customer_condition)
+        elif (
+            conditions.operator
+            is automation_rules.AutomationConditionGroupOperator.and_
+            and not conditions.children
+        ):
+            conditions = automation_rules.AutomationConditionGroup(
+                operator=automation_rules.AutomationConditionGroupOperator.and_,
+                children=(customer_condition,),
+            )
+        else:
+            conditions = automation_rules.AutomationConditionGroup(
+                operator=automation_rules.AutomationConditionGroupOperator.and_,
+                children=(conditions, customer_condition),
+            )
     actions: list[automation_rules.AutomationActionStep] = []
     for item in raw_actions:
         if not isinstance(item, dict) or not isinstance(item.get("inputs"), dict):
@@ -508,7 +586,7 @@ def _form_definition(
             )
         values = tuple(parsed_values)
         actions.append(automation_rules.AutomationActionStep(capability.key, values))
-    return tuple(conditions), tuple(actions)
+    return conditions, tuple(actions)
 
 
 def _safe_json_list(raw: str) -> tuple[Mapping[str, object], ...]:
@@ -519,6 +597,76 @@ def _safe_json_list(raw: str) -> tuple[Mapping[str, object], ...]:
     if not isinstance(value, list):
         return ()
     return tuple(item for item in value if isinstance(item, Mapping))
+
+
+def _safe_json_value(raw: str) -> object:
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+
+
+def _safe_json_conditions(raw: str) -> tuple[Mapping[str, object], ...]:
+    value = _safe_json_value(raw)
+    if isinstance(value, Mapping):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(item for item in value if isinstance(item, Mapping))
+    return ()
+
+
+def _safe_json_schedule(raw: str) -> Mapping[str, object] | None:
+    value = _safe_json_value(raw)
+    return value if isinstance(value, Mapping) else None
+
+
+def _form_schedule(raw: str) -> dict[str, object] | None:
+    value = _safe_json_value(raw)
+    if value in (None, {}, []):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Review the schedule and try again.")
+    return {str(key): item for key, item in value.items()}
+
+
+def _form_trigger_keys(primary: str, raw: str) -> tuple[str, ...]:
+    value = _safe_json_value(raw)
+    if not isinstance(value, list):
+        return (primary,)
+    keys = tuple(
+        dict.fromkeys(str(item).strip() for item in value if str(item).strip())
+    )
+    return keys or (primary,)
+
+
+def _editor_condition_value(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, automation_rules.AutomationCondition):
+        if value.field_key == "customer_id":
+            return None
+        return {
+            "field_key": value.field_key,
+            "operator": value.operator.value,
+            "value": value.value,
+        }
+    if isinstance(value, automation_rules.AutomationConditionGroup):
+        return {
+            "group": value.operator.value,
+            "children": [
+                child_value
+                for child in value.children
+                if (child_value := _editor_condition_value(child)) is not None
+            ],
+        }
+    if isinstance(value, tuple):
+        return {
+            "group": "and",
+            "children": [
+                child_value
+                for child in value
+                if (child_value := _editor_condition_value(child)) is not None
+            ],
+        }
+    return None
 
 
 @router.get("", response_class=HTMLResponse)
@@ -1451,8 +1599,10 @@ def create_automation_rule_draft(
     request: Request,
     name: str = Form(...),
     trigger_key: str = Form(...),
+    trigger_keys_json: str = Form(default="[]"),
     conditions_json: str = Form(default="[]"),
     actions_json: str = Form(default="[]"),
+    schedule_json: str = Form(default="{}"),
     customer_scope: str = Form(default="company"),
     customer_ids: list[str] = Form(default=[]),
     db: Session = Depends(get_db),
@@ -1460,6 +1610,7 @@ def create_automation_rule_draft(
 ):
     """Save an app-approved combination of conditions and actions as a draft."""
 
+    selected_trigger_keys = _form_trigger_keys(trigger_key, trigger_keys_json)
     try:
         selected_customer_ids = _customer_selection(
             db, customer_scope=customer_scope, customer_ids=customer_ids
@@ -1472,6 +1623,8 @@ def create_automation_rule_draft(
                 db,
                 error=str(exc),
                 name=name,
+                trigger_key=trigger_key,
+                trigger_keys=selected_trigger_keys,
                 customer_scope=customer_scope,
                 customer_ids=_preserved_customer_ids(customer_ids),
                 permission_keys=frozenset(auth.get("permission_keys") or ()),
@@ -1482,10 +1635,12 @@ def create_automation_rule_draft(
     try:
         conditions, actions = _form_definition(
             trigger_key=trigger_key,
+            trigger_keys=selected_trigger_keys,
             conditions_json=conditions_json,
             actions_json=actions_json,
             customer_ids=selected_customer_ids,
         )
+        schedule = _form_schedule(schedule_json)
         key = "automation.rule." + _KEY_WORDS.sub("_", name.strip().casefold()).strip(
             "_"
         )[:104].rstrip("_")
@@ -1500,8 +1655,10 @@ def create_automation_rule_draft(
                 name=name,
                 description=None,
                 trigger_key=trigger_key,
+                trigger_keys=selected_trigger_keys,
                 conditions=conditions,
                 actions=actions,
+                schedule=schedule,
                 permission_keys=frozenset(auth.get("permission_keys") or ()),
                 context=CommandContext.system(
                     actor=_actor(request),
@@ -1520,10 +1677,12 @@ def create_automation_rule_draft(
                 error=str(exc),
                 name=name,
                 trigger_key=trigger_key,
+                trigger_keys=selected_trigger_keys,
                 customer_scope=customer_scope,
                 customer_ids=selected_customer_ids,
-                conditions=_safe_json_list(conditions_json),
+                conditions=_safe_json_conditions(conditions_json),
                 actions=_safe_json_list(actions_json),
+                schedule=_safe_json_schedule(schedule_json),
                 permission_keys=frozenset(auth.get("permission_keys") or ()),
             ),
             status_code=400,
@@ -1559,27 +1718,20 @@ def edit_automation_rule_draft(
         return _automation_redirect(error="This rule cannot be edited from this form.")
     permission_keys = frozenset(auth.get("permission_keys") or ())
     required_permissions = {
-        automation_capabilities.trigger_capability(state.trigger_key).author_permission,
-        *(
-            automation_capabilities.action_capability(item.action_key).author_permission
-            for item in state.actions
-        ),
+        automation_capabilities.trigger_capability(trigger_key).author_permission
+        for trigger_key in state.trigger_keys
     }
+    required_permissions.update(
+        automation_capabilities.action_capability(item.action_key).author_permission
+        for item in state.actions
+    )
     if "*" not in permission_keys and not required_permissions.issubset(
         permission_keys
     ):
         return _automation_redirect(
             error="Your account is missing a permission required to edit this rule."
         )
-    conditions = tuple(
-        {
-            "field_key": item.field_key,
-            "operator": item.operator.value,
-            "value": item.value,
-        }
-        for item in state.conditions
-        if item.field_key != "customer_id"
-    )
+    conditions = _editor_condition_value(state.conditions) or ()
     actions = tuple(
         {
             "action_key": step.action_key,
@@ -1594,10 +1746,12 @@ def edit_automation_rule_draft(
             db,
             name=state.name,
             trigger_key=state.trigger_key,
+            trigger_keys=state.trigger_keys,
             customer_scope="selected" if state.customer_ids else "company",
             customer_ids=state.customer_ids,
             conditions=conditions,
             actions=actions,
+            schedule=state.schedule,
             rule_id=rule_id,
             permission_keys=permission_keys,
         ),
@@ -1615,24 +1769,29 @@ def replace_automation_rule_draft(
     rule_id: UUID,
     request: Request,
     trigger_key: str = Form(...),
+    trigger_keys_json: str = Form(default="[]"),
     conditions_json: str = Form(default="[]"),
     actions_json: str = Form(default="[]"),
+    schedule_json: str = Form(default="{}"),
     customer_scope: str = Form(default="company"),
     customer_ids: list[str] = Form(default=[]),
     command_token: str = Form(...),
     db: Session = Depends(get_db),
     auth: dict = Depends(require_permission(RULE_UPDATE_PERMISSION)),
 ):
+    selected_trigger_keys = _form_trigger_keys(trigger_key, trigger_keys_json)
     try:
         selected_customer_ids = _customer_selection(
             db, customer_scope=customer_scope, customer_ids=customer_ids
         )
         conditions, actions = _form_definition(
             trigger_key=trigger_key,
+            trigger_keys=selected_trigger_keys,
             conditions_json=conditions_json,
             actions_json=actions_json,
             customer_ids=selected_customer_ids,
         )
+        schedule = _form_schedule(schedule_json)
         token = UUID(command_token)
     except (ValueError, TypeError) as exc:
         return templates.TemplateResponse(
@@ -1642,8 +1801,10 @@ def replace_automation_rule_draft(
                 db,
                 error=str(exc) or "The form is no longer valid. Reload and try again.",
                 trigger_key=trigger_key,
+                trigger_keys=selected_trigger_keys,
                 customer_scope=customer_scope,
                 customer_ids=_preserved_customer_ids(customer_ids),
+                schedule=_safe_json_schedule(schedule_json),
                 rule_id=rule_id,
                 permission_keys=frozenset(auth.get("permission_keys") or ()),
             ),
@@ -1656,8 +1817,10 @@ def replace_automation_rule_draft(
             automation_rules.ReplaceAutomationRuleDraftCommand(
                 tenant_id=web_automation_center.OPERATOR_TENANT_ID,
                 rule_id=rule_id,
+                trigger_keys=selected_trigger_keys,
                 conditions=conditions,
                 actions=actions,
+                schedule=schedule,
                 permission_keys=frozenset(auth.get("permission_keys") or ()),
                 context=CommandContext.system(
                     actor=_actor(request),
@@ -1675,10 +1838,12 @@ def replace_automation_rule_draft(
                 db,
                 error=str(exc),
                 trigger_key=trigger_key,
+                trigger_keys=selected_trigger_keys,
                 customer_scope=customer_scope,
                 customer_ids=selected_customer_ids,
-                conditions=_safe_json_list(conditions_json),
+                conditions=_safe_json_conditions(conditions_json),
                 actions=_safe_json_list(actions_json),
+                schedule=_safe_json_schedule(schedule_json),
                 rule_id=rule_id,
                 permission_keys=frozenset(auth.get("permission_keys") or ()),
             ),

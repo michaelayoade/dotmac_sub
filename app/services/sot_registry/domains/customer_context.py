@@ -45,10 +45,41 @@ _CUSTOMER_STATUS_FIELD = AutomationConditionField(
         "active",
         "blocked",
         "suspended",
+        "paused",
         "disabled",
         "canceled",
         "delinquent",
     ),
+)
+
+_CUSTOMER_PREVIOUS_STATUS_FIELD = AutomationConditionField(
+    key="previous_status",
+    label="Previous account status",
+    value_type=AutomationValueType.enum,
+    operators=(
+        AutomationOperator.equals,
+        AutomationOperator.not_equals,
+        AutomationOperator.in_values,
+        AutomationOperator.not_in_values,
+    ),
+    enum_values=(
+        "new",
+        "active",
+        "blocked",
+        "suspended",
+        "paused",
+        "disabled",
+        "canceled",
+        "delinquent",
+    ),
+)
+
+_CUSTOMER_ACTION_FIELD = AutomationConditionField(
+    key="action",
+    label="Status action",
+    value_type=AutomationValueType.enum,
+    operators=(AutomationOperator.equals, AutomationOperator.not_equals),
+    enum_values=("activate", "unsuspend", "suspend", "block", "disable"),
 )
 
 DOMAIN = DomainSOT(
@@ -3171,7 +3202,11 @@ DOMAIN = DomainSOT(
                 entity_type="customer.account",
                 tenant_id_field="tenant_id",
                 entity_id_field="subscriber_id",
-                fields=(_CUSTOMER_STATUS_FIELD,),
+                fields=(
+                    _CUSTOMER_STATUS_FIELD,
+                    _CUSTOMER_PREVIOUS_STATUS_FIELD,
+                    _CUSTOMER_ACTION_FIELD,
+                ),
                 author_permission="customer:read",
                 runtime_enabled=True,
             ),
@@ -3222,6 +3257,20 @@ DOMAIN = DomainSOT(
                 fields=(),
                 author_permission="customer:read",
                 runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="customer.account.scheduled",
+                label="Customer account scheduled evaluation",
+                event_type="customer.account.scheduled",
+                event_schema_version=1,
+                entity_type="customer.account",
+                tenant_id_field="tenant_id",
+                entity_id_field="subscriber_id",
+                fields=(_CUSTOMER_STATUS_FIELD,),
+                author_permission="customer:read",
+                runtime_enabled=True,
+                scheduled=True,
+                schedule_adapter_key="customer.account",
             ),
         ),
         actions=(

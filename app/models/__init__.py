@@ -45,6 +45,7 @@ from app.models.automation import (  # noqa: F401
     AutomationRunRetry,
     AutomationRunRetryStatus,
     AutomationRunStatus,
+    AutomationScheduledRun,
     AutomationStepRun,
     AutomationStepStatus,
 )

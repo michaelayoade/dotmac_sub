@@ -439,11 +439,22 @@ def _sync_billing_health_snapshot_schedule(session) -> None:
     )
 
 
+def _sync_automation_scheduled_rules_schedule(session) -> None:
+    _sync_scheduled_task(
+        session,
+        name="automation_scheduled_rule_runner",
+        task_name="app.tasks.automation.run_scheduled_automation_rules",
+        enabled=True,
+        interval_seconds=60,
+    )
+
+
 def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
     session = SessionLocal()
     try:
         _sync_billing_health_snapshot_schedule(session)
+        _sync_automation_scheduled_rules_schedule(session)
         enabled = control_registry.is_enabled(session, "gis.sync")
         interval_minutes = resolve_integer(
             session, SettingDomain.gis, "sync_interval_minutes"

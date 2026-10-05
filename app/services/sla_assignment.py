@@ -410,6 +410,7 @@ def check_sla_breaches(db: Session, ticket_id) -> list[SlaClock]:
                 "ticket_id": str(ticket.id),
                 "sla_clock_id": str(clock.id),
                 "breached_at": due_at.isoformat(),
+                "status": str(ticket.status or "").strip().lower(),
                 "priority": str(ticket.priority or "").strip().lower(),
                 "ticket_type": str(ticket.ticket_type or "").strip(),
             },

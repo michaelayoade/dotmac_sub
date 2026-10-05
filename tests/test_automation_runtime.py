@@ -101,6 +101,47 @@ def test_undeclared_field_or_operator_fails_closed(declared_trigger: None) -> No
     )
 
 
+def test_rule_conditions_support_nested_or_and_not_groups(
+    declared_trigger: None,
+) -> None:
+    conditions = {
+        "group": "and",
+        "children": [
+            {
+                "group": "or",
+                "children": [
+                    {"field_key": "priority", "operator": "equals", "value": "urgent"},
+                    {
+                        "group": "not",
+                        "children": [
+                            {
+                                "field_key": "priority",
+                                "operator": "equals",
+                                "value": "normal",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    assert automation_runtime._rule_matches(
+        trigger_key="test.ticket.created",
+        conditions=conditions,
+        payload={"priority": "urgent"},
+    )
+    assert automation_runtime._rule_matches(
+        trigger_key="test.ticket.created",
+        conditions=conditions,
+        payload={"priority": "low"},
+    )
+    assert not automation_runtime._rule_matches(
+        trigger_key="test.ticket.created",
+        conditions=conditions,
+        payload={"priority": "normal"},
+    )
+
+
 def test_retry_preparation_skips_steps_that_already_succeeded() -> None:
     run_id = uuid4()
     run = AutomationRun(id=run_id)

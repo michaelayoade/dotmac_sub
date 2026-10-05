@@ -120,6 +120,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.alert_evaluation.evaluate_alert_rules": _c(
         "monitoring", SWEEP, IDEMP, STATUS
     ),
+    "app.tasks.automation.run_scheduled_automation_rules": _c(
+        "automation",
+        SWEEP,
+        GUARDED,
+        STATUS,
+        "Each rule/version slot is claimed transactionally before events are emitted; a later sweep retries unclaimed work.",
+    ),
     "app.tasks.arrangements.check_overdue_arrangements": _c(
         "billing", SWEEP, GUARDED, HEALTH
     ),

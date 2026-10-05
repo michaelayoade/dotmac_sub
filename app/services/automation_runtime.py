@@ -458,21 +458,41 @@ def _matches_condition(
 def _rule_matches(
     *,
     trigger_key: str,
-    conditions: list[dict[str, object]],
+    conditions: object,
     payload: Mapping[str, object],
 ) -> bool:
     trigger = automation_capabilities.trigger_capability(trigger_key)
     fields = {field.key: field for field in trigger.fields}
-    for condition in conditions:
-        field_key = str(condition.get("field_key") or "")
-        field = fields.get(field_key)
-        if field is None or not _matches_condition(
-            field=field,
-            condition=condition,
-            observed=_path_value(payload, field_key),
-        ):
+
+    def evaluate(node: object) -> bool:
+        if isinstance(node, list):
+            return all(evaluate(child) for child in node)
+        if not isinstance(node, Mapping):
             return False
-    return True
+        if "field_key" in node:
+            field_key = str(node.get("field_key") or "")
+            field = fields.get(field_key)
+            return bool(
+                field is not None
+                and _matches_condition(
+                    field=field,
+                    condition=node,
+                    observed=_path_value(payload, field_key),
+                )
+            )
+        group = str(node.get("group") or "and")
+        children = node.get("children")
+        if not isinstance(children, list):
+            return False
+        if group == "and":
+            return all(evaluate(child) for child in children)
+        if group == "or":
+            return bool(children) and any(evaluate(child) for child in children)
+        if group == "not":
+            return len(children) == 1 and not evaluate(children[0])
+        return False
+
+    return evaluate(conditions)
 
 
 def _prepared_steps(
@@ -550,13 +570,17 @@ def prepare_event_runs(
             )
             .where(
                 AutomationRule.tenant_id == command.event.tenant_id,
-                AutomationRule.trigger_key == command.event.trigger_key,
                 AutomationRule.status == AutomationRuleStatus.published.value,
             )
             .order_by(AutomationRule.id)
         )
         prepared: list[PreparedAutomationRun] = []
         for rule, version in db.execute(statement).tuples():
+            trigger_keys = tuple(
+                getattr(rule, "trigger_keys", None) or [rule.trigger_key]
+            )
+            if command.event.trigger_key not in trigger_keys:
+                continue
             existing = db.scalar(
                 select(AutomationRun)
                 .where(
@@ -590,7 +614,7 @@ def prepare_event_runs(
                 )
                 continue
             matched = _rule_matches(
-                trigger_key=rule.trigger_key,
+                trigger_key=command.event.trigger_key,
                 conditions=version.conditions,
                 payload=command.event.payload,
             )
@@ -1059,8 +1083,18 @@ def start_run_retry(
         if rule is None:
             raise _error("run_rule_not_found", "The rule for this run is unavailable.")
         try:
-            trigger = automation_capabilities.trigger_capability(rule.trigger_key)
-        except automation_capabilities.AutomationCapabilityError as exc:
+            trigger = next(
+                candidate
+                for key in (rule.trigger_keys or [rule.trigger_key])
+                if (
+                    candidate := automation_capabilities.trigger_capability(key)
+                ).event_type
+                == command.event.event_type.value
+            )
+        except (
+            automation_capabilities.AutomationCapabilityError,
+            StopIteration,
+        ) as exc:
             raise _error(
                 "retry_trigger_unavailable",
                 "The trigger for this run is no longer available.",

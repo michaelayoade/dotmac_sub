@@ -2,6 +2,7 @@ from app.tasks.admin_alerts import evaluate_infrastructure_alerts
 from app.tasks.ai_operations import expire_stale_insights
 from app.tasks.alert_evaluation import evaluate_alert_rules
 from app.tasks.arrangements import check_overdue_arrangements
+from app.tasks.automation import run_scheduled_automation_rules
 from app.tasks.autopay import charge_due_invoices
 from app.tasks.bandwidth import (
     aggregate_to_metrics as aggregate_bandwidth_to_metrics,
@@ -390,6 +391,7 @@ __all__ = [
     "authorize_ont_task",
     "evaluate_alert_rules",
     "evaluate_infrastructure_alerts",
+    "run_scheduled_automation_rules",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",
     "sync_inventory_devices_to_monitoring",

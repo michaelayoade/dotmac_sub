@@ -208,16 +208,21 @@ def test_rule_actions_report_typed_adapter_readiness_by_module() -> None:
         assert actions[key].runtime_enabled is True
     assert actions["operations.work_order.set_status"].runtime_enabled is True
     assert actions["operations.vendor.set_status"].runtime_enabled is True
+    assert actions["communications.send_notification"].runtime_enabled is True
+    assert actions["communications.send_notification"].target_types == ("*",)
     assert actions["sales.lead.set_status"].inputs[0].enum_values
     assert actions["sales.quote.set_status"].inputs[0].enum_values == (
         "draft",
         "sent",
+        "accepted",
         "rejected",
         "expired",
     )
     assert actions["sales.sales_order.set_status"].inputs[0].enum_values == (
         "draft",
         "confirmed",
+        "paid",
+        "fulfilled",
         "cancelled",
     )
 
@@ -286,6 +291,9 @@ def test_customer_and_support_workflows_expose_owner_produced_events() -> None:
         field.key == "status"
         for field in triggers["customer.account.status_changed"].fields
     )
+    assert {
+        field.key for field in triggers["customer.account.status_changed"].fields
+    } >= {"status", "previous_status", "action"}
     assert any(
         field.key == "status"
         for field in triggers["support.ticket.status_changed"].fields

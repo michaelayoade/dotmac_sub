@@ -310,7 +310,9 @@ class AutomationEventHandler:
                         f"Server script action {action.key!r} is not available.",
                         retryable=False,
                     )
-                if action.entity_type != script.target_type:
+                if not automation_capabilities.action_applies_to_entity(
+                    action, script.target_type
+                ):
                     raise _handler_error(
                         f"Server script action {action.key!r} targets "
                         f"{action.entity_type!r}, not {script.target_type!r}."

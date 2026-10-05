@@ -2255,20 +2255,7 @@ DOMAIN = DomainSOT(
                 tenant_id_field="tenant_id",
                 entity_id_field="ticket_id",
                 fields=(
-                    AutomationConditionField(
-                        key="priority",
-                        label="Priority",
-                        value_type=AutomationValueType.enum,
-                        operators=(AutomationOperator.equals,),
-                        enum_values=(
-                            "lower",
-                            "low",
-                            "medium",
-                            "normal",
-                            "high",
-                            "urgent",
-                        ),
-                    ),
+                    *_SUPPORT_WORKFLOW_FIELDS,
                     AutomationConditionField(
                         key="ticket_type",
                         label="Ticket type",
@@ -2278,6 +2265,40 @@ DOMAIN = DomainSOT(
                 ),
                 author_permission="support:ticket:read",
                 runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="support.ticket.scheduled",
+                label="Support ticket scheduled evaluation",
+                event_type="support.ticket.scheduled",
+                event_schema_version=1,
+                entity_type="support.ticket",
+                tenant_id_field="tenant_id",
+                entity_id_field="ticket_id",
+                fields=(
+                    *_SUPPORT_WORKFLOW_FIELDS,
+                    AutomationConditionField(
+                        key="ticket_type",
+                        label="Ticket type",
+                        value_type=AutomationValueType.string,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                        ),
+                    ),
+                    AutomationConditionField(
+                        key="region",
+                        label="Region",
+                        value_type=AutomationValueType.string,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                        ),
+                    ),
+                ),
+                author_permission="support:ticket:read",
+                runtime_enabled=True,
+                scheduled=True,
+                schedule_adapter_key="support.ticket",
             ),
         ),
         actions=(

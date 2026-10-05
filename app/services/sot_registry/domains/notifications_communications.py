@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from app.services.automation_contracts import (
+    AutomationActionCapability,
+    AutomationActionInput,
     AutomationCatalogItem,
     AutomationCatalogState,
     AutomationDomainCapabilities,
+    AutomationValueType,
 )
 from app.services.sot_manifest import (
     AuthorityInput,
@@ -5169,6 +5172,58 @@ DOMAIN = DomainSOT(
     "and response writes to communications.surveys. Admin inbox mutation "
     "routes delegate to the committed team-inbox command boundary.",
     automation=AutomationDomainCapabilities(
+        target_types=("automation.shared",),
+        actions=(
+            AutomationActionCapability(
+                key="communications.send_notification",
+                label="Send notification",
+                entity_type="automation.shared",
+                target_types=("*",),
+                command_owner="communications.notification_service",
+                command_name="queue_automation_notification",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="channel",
+                        label="Channel",
+                        value_type=AutomationValueType.enum,
+                        enum_values=("email", "in_app"),
+                    ),
+                    AutomationActionInput(
+                        key="recipient",
+                        label="Recipient",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="subject",
+                        label="Subject",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="body",
+                        label="Message body",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="body_format",
+                        label="Email body format",
+                        value_type=AutomationValueType.enum,
+                        required=False,
+                        enum_values=("plain_text", "html"),
+                    ),
+                    AutomationActionInput(
+                        key="target_url",
+                        label="In-app target URL",
+                        value_type=AutomationValueType.string,
+                        required=False,
+                    ),
+                ),
+                author_permission="notification:write",
+                runtime_scope="one automation notification",
+                idempotency="tenant/event/rule/version/step/recipient",
+                runtime_enabled=True,
+            ),
+        ),
         catalog_items=(
             AutomationCatalogItem(
                 key="communications.event_notifications",
