@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from app.services import automation_capabilities
@@ -88,6 +91,50 @@ def test_script_targets_declare_event_identity_for_independent_server_dispatch()
         for target in targets.values()
         if target.entity_type in expected_identity
     )
+
+
+def test_material_request_automation_uses_assignable_owner_permissions() -> None:
+    manifests = automation_capabilities.all_module_manifests()
+    targets = {
+        target.entity_type: target
+        for manifest in manifests
+        for target in manifest.script_targets
+    }
+    triggers = {
+        trigger.key: trigger for manifest in manifests for trigger in manifest.triggers
+    }
+    actions = {
+        action.key: action for manifest in manifests for action in manifest.actions
+    }
+    seed_path = Path(__file__).resolve().parents[2] / "scripts/seed/seed_rbac.py"
+    seed_tree = ast.parse(
+        seed_path.read_text(encoding="utf-8"), filename=str(seed_path)
+    )
+    seed_assignment = next(
+        node
+        for node in seed_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "DEFAULT_PERMISSIONS"
+            for target in node.targets
+        )
+    )
+    seeded_permissions = {
+        key for key, _description in ast.literal_eval(seed_assignment.value)
+    }
+
+    target = targets["operations.material_request"]
+    assert target.read_permission == "operations:material_request:read"
+    assert target.write_permission == "operations:material_request:write"
+    assert (
+        triggers["operations.material_request.cancellation_requested"].author_permission
+        == target.read_permission
+    )
+    assert (
+        actions["operations.material_request.enqueue_cancellation"].author_permission
+        == target.write_permission
+    )
+    assert {target.read_permission, target.write_permission} <= seeded_permissions
 
 
 def test_rule_actions_report_typed_adapter_readiness_by_module() -> None:

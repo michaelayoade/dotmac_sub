@@ -4920,7 +4920,10 @@ Dependency order:
    It never posts stock or selects backoffice inventory. Backoffice
    unavailability never reverses a valid Sub approval. After the per-flow
    cutover, the old local issue/fulfil actions fail closed. The integration
-   boundary is `docs/BACKOFFICE_INTEGRATION_BOUNDARY.md`.
+   boundary is `docs/BACKOFFICE_INTEGRATION_BOUNDARY.md`. Its Automation Center
+   trigger, action, and script-target capabilities use the assignable
+   `operations:material_request:read` and `operations:material_request:write`
+   permissions owned by the same staff workflow.
 8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
 8b. `operations.installation_scope` has two entry points onto one root. A sold

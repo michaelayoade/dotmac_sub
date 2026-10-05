@@ -150,6 +150,12 @@ Script publication repeats target permissions and runtime readiness checks.
 The Center never grants a script arbitrary ORM access, imports, process access,
 network access, dynamic code evaluation, or a generic database writer.
 
+Material Request triggers, actions, and script delivery use the same
+`operations:material_request:read` and `operations:material_request:write`
+permissions as the owning staff workspace. Automation declarations must not
+invent a parallel material permission namespace that the RBAC catalogue cannot
+assign.
+
 The admin shell is available at `/admin/automation`. The hub is a directory
 that links to focused `/workflows`, `/client-scripts/manage`,
 `/server-scripts`, and `/runs` workspaces. Opening the hub requires
