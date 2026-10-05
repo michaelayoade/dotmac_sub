@@ -472,7 +472,8 @@ class AutomationEventHandler:
             )
         if outcome.error_code:
             raise _handler_error(
-                f"Automation run {run.run_id} stopped with {outcome.error_code}."
+                f"Automation run {run.run_id} stopped with {outcome.error_code}.",
+                retryable=outcome.retryable,
             )
 
 

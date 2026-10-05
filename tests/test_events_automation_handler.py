@@ -4,6 +4,8 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.services.events.handlers import automation
 from app.services.events.types import Event, EventType
 from app.services.operator_tenant import OPERATOR_TENANT_ID
@@ -52,3 +54,29 @@ def test_custom_event_uses_registered_name_for_runtime_trigger(monkeypatch):
 
     assert len(prepared_commands) == 1
     assert prepared_commands[0].event.event_type == event_name
+
+
+def test_execute_prepared_run_preserves_non_retryable_action_failure(monkeypatch):
+    event = Event(event_type=EventType.custom, payload={})
+    run = SimpleNamespace(run_id=uuid4())
+
+    monkeypatch.setattr(automation, "owner_session", lambda db: nullcontext(db))
+    monkeypatch.setattr(
+        automation.automation_runtime,
+        "execute_prepared_run",
+        lambda db, command: SimpleNamespace(
+            error_code="support.ticket_sla_service_consequence.customer_account_missing",
+            retryable=False,
+        ),
+    )
+
+    with pytest.raises(automation.AutomationEventHandlerError) as exc_info:
+        automation.AutomationEventHandler().execute_prepared_run(
+            object(),
+            event=event,
+            run=run,
+            tenant_id=OPERATOR_TENANT_ID,
+        )
+
+    assert exc_info.value.retryable is False
+    assert exc_info.value.code == "automation.execution.event_handler_failed"

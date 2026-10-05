@@ -291,6 +291,7 @@ class AutomationRunExecutionOutcome:
     status: AutomationRunStatus
     error_code: str | None
     error_message: str | None
+    retryable: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -1275,6 +1276,7 @@ def execute_prepared_run(
                 error_message=(
                     "Another worker is already processing this action step."
                 ),
+                retryable=True,
             )
         action = automation_capabilities.action_capability(step.action_key)
         executor = automation_actions.action_executor(step.action_key)
@@ -1285,6 +1287,7 @@ def execute_prepared_run(
         succeeded = False
         error_code: str | None = None
         error_message: str | None = None
+        retryable = True
         try:
             executor(
                 db,
@@ -1311,6 +1314,7 @@ def execute_prepared_run(
         except DomainError as exc:
             error_code = exc.code
             error_message = exc.message
+            retryable = exc.retryable
         except Exception:
             error_code = "automation.execution.action_failed"
             error_message = (
@@ -1343,12 +1347,14 @@ def execute_prepared_run(
                 status=outcome.run_status,
                 error_code=error_code,
                 error_message=error_message,
+                retryable=retryable,
             )
     return AutomationRunExecutionOutcome(
         run_id=command.run.run_id,
         status=AutomationRunStatus.succeeded,
         error_code=None,
         error_message=None,
+        retryable=True,
     )
 
 
@@ -1407,6 +1413,7 @@ def retry_failed_run(
             status=AutomationRunStatus.failed,
             error_code=exc.code,
             error_message=exc.message,
+            retryable=exc.retryable,
         )
     except Exception:
         logger.exception(
@@ -1420,6 +1427,7 @@ def retry_failed_run(
             error_message=(
                 "The retry stopped before all steps completed. Review the step details."
             ),
+            retryable=True,
         )
     finish_context = CommandContext.system(
         actor=command.context.actor,
