@@ -30,6 +30,10 @@ causes, account projection, the typed prepaid pause-compensation entitlement,
 billing-anchor adjustment, lifecycle evidence, and events.
 `support.ticket_sla_service_consequence` owns revalidating Ticket/SLA evidence
 and coordinating the SLA cause, including typed resume eligibility previews.
+`financial.prepaid_service_coverage` owns the exact coverage decision consumed
+by those previews and by the lifecycle participant; it treats funded
+entitlements and applied service-extension grant intervals as the same
+authoritative coverage union without rewriting either source.
 Automation adapters, routes, event handlers,
 and templates do not write lifecycle or billing state.
 
@@ -63,8 +67,11 @@ instead of treating these labels as interchangeable.
    For prepaid service, the same transaction creates one zero-value
    `ServiceEntitlement` linked uniquely to the pause episode for
    `[previous_next_billing_at, resulting_next_billing_at)`. The original paid
-   entitlement and invoice period remain immutable. Missing, overlapping, or
-   anchor-inconsistent prepaid entitlement evidence fails closed.
+   entitlement, applied extension, and invoice period remain immutable. The
+   complete interval from pause effective time through the captured anchor must
+   be proved by the canonical union of funded entitlement and applied
+   service-extension intervals. Missing, discontinuous, or anchor-inconsistent
+   prepaid coverage evidence fails closed.
 
 ## Customer vacation workflow
 

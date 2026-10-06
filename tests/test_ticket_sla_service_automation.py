@@ -5,7 +5,16 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
+from app.models.catalog import BillingMode
 from app.models.event_store import EventStore
+from app.models.service_extension import (
+    ServiceExtension,
+    ServiceExtensionAnchorBasis,
+    ServiceExtensionEntry,
+    ServiceExtensionScope,
+    ServiceExtensionStatus,
+)
 from app.models.subscription_pause import (
     SubscriptionPauseBillingPolicy,
     SubscriptionPauseResumePolicy,
@@ -211,3 +220,106 @@ def test_resolved_ticket_is_not_paused(
 
     assert exc_info.value.code.endswith(".ticket_already_resolved")
     assert not called
+
+
+def test_resume_accepts_applied_extension_as_prepaid_coverage(
+    db_session, subscriber, active_subscription
+):
+    now = datetime.now(UTC)
+    entitlement_end = now - timedelta(days=3)
+    captured_anchor = now + timedelta(days=6)
+    active_subscription.billing_mode = BillingMode.prepaid
+    active_subscription.next_billing_at = captured_anchor
+    entitlement = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=active_subscription.id,
+        starts_at=entitlement_end - timedelta(days=30),
+        ends_at=entitlement_end,
+        amount_funded=active_subscription.unit_price or 0,
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+        metadata_={"source": "test_funded_prepaid_renewal"},
+    )
+    extension = ServiceExtension(
+        reason="reviewed cabinet outage compensation",
+        window_start=now - timedelta(days=20),
+        window_end=now - timedelta(days=9),
+        days=9,
+        scope_type=ServiceExtensionScope.subscribers,
+        scope_subscriber_ids=[str(subscriber.id)],
+        status=ServiceExtensionStatus.applied,
+        applied_at=now - timedelta(days=8),
+    )
+    ticket = Ticket(
+        title="Resolution SLA breached during extension grant",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add_all((entitlement, extension, ticket))
+    db_session.flush()
+    db_session.add(
+        ServiceExtensionEntry(
+            extension_id=extension.id,
+            subscription_id=active_subscription.id,
+            subscriber_id=subscriber.id,
+            previous_next_billing_at=entitlement_end,
+            grant_starts_at=entitlement_end,
+            grant_ends_at=captured_anchor,
+            anchor_basis=ServiceExtensionAnchorBasis.existing_billing_anchor,
+            new_next_billing_at=captured_anchor,
+        )
+    )
+    ticket_id = ticket.id
+    db_session.commit()
+
+    pause_command = _pause_command(ticket_id)
+    _seed_authoritative_breach(
+        db_session,
+        ticket_id=ticket_id,
+        command=pause_command,
+    )
+    paused = (
+        ticket_sla_service_automation.pause_unique_active_service_for_ticket_sla_breach(
+            db_session,
+            pause_command,
+        )
+    )
+    ticket = db_session.get(Ticket, ticket_id)
+    assert ticket is not None
+    ticket.status = TicketStatus.closed.value
+    ticket.closed_at = now
+    db_session.commit()
+
+    resumed_at = datetime.now(UTC) + timedelta(days=1)
+    preview = ticket_sla_service_automation.preview_ticket_service_resume(
+        db_session,
+        cause_id=paused.pause_cause_id,
+        proposed_resumed_at=resumed_at,
+    )
+
+    assert preview.eligible
+    assert preview.blocking_reasons == ()
+    subscription_id = active_subscription.id
+    pause_cause_id = paused.pause_cause_id
+    context = CommandContext.system(
+        actor="support-reviewer",
+        scope=f"subscription:{subscription_id}",
+        reason="linked ticket resolved and extension coverage reviewed",
+        idempotency_key=f"ticket-pause-extension-resume:{pause_cause_id}",
+    )
+    db_session.rollback()
+    outcome = ticket_sla_service_automation.resume_ticket_paused_service(
+        db_session,
+        ticket_sla_service_automation.ResumeTicketPausedServiceCommand(
+            subscription_id=subscription_id,
+            cause_id=pause_cause_id,
+            preview_fingerprint=preview.fingerprint,
+            resumed_at=resumed_at,
+            actor=context.actor,
+            reason=context.reason,
+            context=context,
+        ),
+    )
+
+    assert outcome.access_restored

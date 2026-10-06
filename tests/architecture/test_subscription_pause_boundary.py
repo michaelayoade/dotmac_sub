@@ -37,6 +37,17 @@ def test_automation_pause_action_delegates_to_registered_coordinator() -> None:
     assert "Subscriber.status" not in adapter_source
 
 
+def test_ticket_pause_resume_consumes_canonical_prepaid_coverage() -> None:
+    owner = service_relationship("support.ticket_sla_service_consequence")
+    source = (ROOT / "app/services/ticket_sla_service_automation.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "financial.prepaid_service_coverage" in owner.depends_on
+    assert "resolve_prepaid_pause_compensation_coverage" in source
+    assert "preview_pause_compensation_entitlement" not in source
+
+
 def test_sla_suspend_action_is_retired_from_authoring() -> None:
     pause = automation_capabilities.action_capability(
         "support.ticket.pause_unique_active_service"

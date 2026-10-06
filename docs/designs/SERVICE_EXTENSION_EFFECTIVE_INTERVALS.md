@@ -39,6 +39,7 @@ The following consumers use the same half-open interval
 `[grant_starts_at, grant_ends_at)`:
 
 - prepaid service-coverage resolution;
+- prepaid pause-compensation eligibility and evidence fingerprinting;
 - prepaid coverage reconciliation;
 - billing-enforcement shielding;
 - customer events and notifications;

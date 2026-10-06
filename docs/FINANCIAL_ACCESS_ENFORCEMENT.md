@@ -668,9 +668,15 @@ The initial billing treatment is selected by the immutable Automation rule as
 `extend_by_effective_pause_duration`. Pause records the canonical billing
 anchor but does not move it. Authorized manual resume after Ticket resolution
 computes `[effective_at, resumed_at)` in exact seconds and moves the anchor by
-that duration through the existing compare-and-set billing-anchor writer.
-Changed or missing anchor evidence fails closed. Event replay returns the
-existing cause, and resume replay never moves the anchor twice.
+that duration through the existing compare-and-set billing-anchor writer. For
+prepaid service, resume consumes the typed
+`financial.prepaid_service_coverage` decision: funded entitlements and applied
+`financial.service_extensions` grant intervals may form one continuous
+coverage union through the captured anchor. The zero-value pause-compensation
+entitlement records the exact coverage fingerprint and never duplicates or
+rewrites an extension grant. Changed, discontinuous, or missing anchor evidence
+fails closed. Event replay returns the existing cause, and resume replay never
+moves the anchor twice.
 
 Independent enforcement locks can be added while paused. Releasing the Ticket
 cause closes the episode only when no other pause cause remains; an outstanding
