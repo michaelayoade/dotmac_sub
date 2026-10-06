@@ -24,6 +24,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -3418,46 +3419,112 @@ def bulk_send_customer_message(
                 payload=data,
             )
 
-        prepared = (
-            web_customer_actions_service.prepare_bulk_message_dispatch_from_payload(
-                db=db,
-                payload=data,
-            )
+        from app.services import customer_bulk_messages
+        from app.services.customer_bulk_message_contracts import BulkMessageSpec
+
+        actor_id = UUID(_get_actor_id(request) or "")
+        request_id = UUID(str(data.get("request_id") or ""))
+        spec = BulkMessageSpec.model_validate(
+            {key: value for key, value in data.items() if key != "request_id"}
         )
-        dispatch = enqueue_task(
-            _BULK_MESSAGE_MATERIALIZE_TASK,
-            args=(prepared.payload_json,),
-            queue="celery",
-            correlation_id=str(data.get("expected_impact_token") or "") or None,
-            source="admin_customers_bulk_send",
-            actor_id=_get_actor_id(request),
-        )
-        if not dispatch.queued:
-            logger.error(
-                "Failed to enqueue customer bulk message materialization: %s",
-                dispatch.error,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "The bulk message could not be queued for processing. "
-                    "Please try again."
+        db_session_adapter.release_read_transaction(db)
+        receipt = customer_bulk_messages.accept(
+            db=db,
+            command=customer_bulk_messages.AcceptBulkMessageCommand(
+                context=CommandContext.system(
+                    actor=str(actor_id),
+                    scope=str(request_id),
+                    reason="confirmed customer bulk message",
+                    command_id=request_id,
+                    idempotency_key=str(request_id),
                 ),
+                request_id=request_id,
+                actor_id=actor_id,
+                spec=spec,
+            ),
+        )
+        # The receipt is durable before this best-effort wakeup. The permanent
+        # outbox drain recovers a broker outage without another operator send.
+        try:
+            dispatch = enqueue_task(
+                _BULK_MESSAGE_MATERIALIZE_TASK,
+                args=(str(receipt.request_id),),
+                queue="celery",
+                correlation_id=str(request_id),
+                source="admin_customers_bulk_send",
+                actor_id=str(actor_id),
             )
-        result = prepared.accepted_response()
-        result["materialization_dispatch"] = {
-            "queued": True,
-            "task_id": dispatch.task_id,
-        }
-        return JSONResponse(status_code=202, content=result)
+            if not dispatch.queued:
+                logger.warning(
+                    "customer_bulk_message_wakeup_deferred",
+                    extra={"request_id": str(request_id)},
+                )
+        except Exception:
+            logger.exception(
+                "customer_bulk_message_wakeup_deferred",
+                extra={"request_id": str(request_id)},
+            )
+        result = customer_bulk_messages.status(
+            db=db,
+            query=customer_bulk_messages.BulkMessageStatusQuery(
+                request_id=request_id,
+                actor_id=actor_id,
+            ),
+        )
+        return JSONResponse(status_code=202, content=result.model_dump(mode="json"))
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid bulk message request or send reference."
+        ) from exc
+    except DomainError as exc:
+        code = exc.code.rsplit(".", 1)[-1]
+        status_code = (
+            404
+            if code == "not_found"
+            else 409
+            if code in {"idempotency_conflict", "impact_changed"}
+            else 400
+        )
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Bulk customer message queue failed")
         raise HTTPException(
             status_code=500,
-            detail="Bulk message queue failed. Please try again.",
+            detail="Could not confirm the bulk send status. Check its send reference before sending again.",
         ) from e
+
+
+@router.get(
+    "/bulk/send-message/{request_id}",
+    dependencies=[
+        Depends(
+            require_permission(
+                web_customer_bulk_actions_service.CUSTOMER_MESSAGE_SEND_PERMISSION
+            )
+        )
+    ],
+)
+def customer_bulk_message_status(
+    request: Request, request_id: UUID, db: Session = Depends(get_db)
+):
+    from app.services import customer_bulk_messages
+
+    actor_id = _get_actor_id(request)
+    if not actor_id:
+        raise HTTPException(status_code=401, detail="Sign in to check this send.")
+    try:
+        result = customer_bulk_messages.status(
+            db=db,
+            query=customer_bulk_messages.BulkMessageStatusQuery(
+                request_id=request_id,
+                actor_id=UUID(actor_id),
+            ),
+        )
+        return JSONResponse(content=result.model_dump(mode="json"))
+    except DomainError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
 
 
 @router.get(

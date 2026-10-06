@@ -70,6 +70,11 @@ from app.services.bulk_actions import (
 )
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
+from app.services.customer_bulk_message_contracts import (
+    BulkMessageCounts,
+    BulkMessageEvaluation,
+    BulkMessageSpec,
+)
 from app.services.customer_financial_position import get_customer_financial_position
 from app.services.customer_identity_normalization import (
     collapse_whitespace,
@@ -100,7 +105,6 @@ from app.services.radius_access_state import (
 from app.services.whatsapp_notification_templates import (
     build_provider_template_body,
     provider_template_from_template,
-    sync_whatsapp_registry_templates,
 )
 
 
@@ -1426,88 +1430,6 @@ _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT = 10
 _BULK_MESSAGE_RENDER_SAMPLE_LIMIT = 3
 
 
-@dataclass(frozen=True, slots=True)
-class PreparedBulkMessageDispatch:
-    """Validated, drift-bound request ready for the task transport."""
-
-    payload_json: str
-    matched_count: int
-    created_count: int
-    queued_count: int
-    suppressed_count: int
-    skipped_count: int
-    suppressed: tuple[dict[str, str], ...]
-    skipped: tuple[dict[str, str], ...]
-
-    def accepted_response(self) -> dict[str, object]:
-        return {
-            "success": True,
-            "accepted": True,
-            "materialization_status": "queued",
-            "matched_count": self.matched_count,
-            "planned_count": self.created_count,
-            "planned_queued_count": self.queued_count,
-            "planned_suppressed_count": self.suppressed_count,
-            "skipped_count": self.skipped_count,
-            "suppressed": list(self.suppressed),
-            "skipped": list(self.skipped),
-        }
-
-
-def prepare_bulk_message_dispatch_from_payload(
-    db: Session,
-    payload: dict[str, Any],
-) -> PreparedBulkMessageDispatch:
-    """Validate a confirmed send without materializing deliveries in HTTP.
-
-    The worker re-runs the same authoritative resolution immediately before
-    writing. This first pass keeps confirmation and impact drift visible to
-    the operator while ensuring the reverse proxy never waits for thousands of
-    intent/notification inserts.
-    """
-
-    resolved = resolve_bulk_customer_scope(db, payload)
-    if not resolved.customers:
-        raise HTTPException(status_code=400, detail="No customers matched this scope")
-    _require_bulk_execution_confirmation(
-        payload,
-        resolved=resolved,
-        action_label="Bulk message",
-    )
-
-    preview_payload = dict(payload)
-    preview_payload["preview_only"] = True
-    preview = queue_bulk_message_from_payload(db, preview_payload)
-    expected_impact_token = str(payload.get("expected_impact_token") or "")
-    current_impact_token = str(preview.get("impact_token") or "")
-    if not expected_impact_token:
-        raise HTTPException(
-            status_code=400,
-            detail="Preview the bulk message impact before confirming",
-        )
-    if not hmac.compare_digest(expected_impact_token, current_impact_token):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "The recipients, template, or suppression impact changed after "
-                "preview. Review the updated impact before confirming again."
-            ),
-        )
-
-    task_payload = dict(payload)
-    task_payload.pop("preview_only", None)
-    return PreparedBulkMessageDispatch(
-        payload_json=json.dumps(task_payload, sort_keys=True, separators=(",", ":")),
-        matched_count=int(str(preview["matched_count"])),
-        created_count=int(str(preview["created_count"])),
-        queued_count=int(str(preview["queued_count"])),
-        suppressed_count=int(str(preview["suppressed_count"])),
-        skipped_count=int(str(preview["skipped_count"])),
-        suppressed=tuple(cast(list[dict[str, str]], preview["suppressed"])),
-        skipped=tuple(cast(list[dict[str, str]], preview["skipped"])),
-    )
-
-
 def _mask_notification_recipient(
     recipient: str,
     channel: NotificationChannel,
@@ -1620,9 +1542,131 @@ def _bulk_message_impact_token(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def evaluate_bulk_message(
+    db: Session, *, spec: BulkMessageSpec
+) -> BulkMessageEvaluation:
+    """Typed boundary for preview and the flush-only materialization participant."""
+    from app.services.domain_errors import DomainError
+    from app.services.owner_commands import owner_command_active
+
+    if not spec.preview_only and not owner_command_active(
+        db, owner="communications.customer_bulk_messages"
+    ):
+        raise DomainError(
+            code="communications.customer_bulk_messages.command_required",
+            message="Bulk materialization requires its command owner.",
+        )
+    try:
+        return _evaluate_bulk_message(db=db, spec=spec)
+    except HTTPException as exc:
+        suffix = "impact_changed" if exc.status_code == 409 else "invalid_command"
+        raise DomainError(
+            code=f"communications.customer_bulk_messages.{suffix}",
+            message=str(exc.detail),
+            retryable=False,
+        ) from exc
+
+
+def preview_bulk_message(db: Session, *, spec: BulkMessageSpec) -> BulkMessageCounts:
+    result = evaluate_bulk_message(
+        db=db, spec=spec.model_copy(update={"preview_only": True})
+    )
+    if not spec.confirmed or not spec.expected_impact_token:
+        from app.services.domain_errors import DomainError
+
+        raise DomainError(
+            code="communications.customer_bulk_messages.invalid_command",
+            message="Preview the bulk message impact before confirming.",
+            retryable=False,
+        )
+    if not hmac.compare_digest(spec.expected_impact_token, result.impact_token):
+        from app.services.domain_errors import DomainError
+
+        raise DomainError(
+            code="communications.customer_bulk_messages.impact_changed",
+            message="The message impact changed. Review a new preview.",
+            retryable=False,
+        )
+    from app.services.domain_errors import DomainError
+
+    selection = spec.selection
+    if (
+        selection is None
+        or selection.expected_count is None
+        or not selection.expected_scope_token
+    ):
+        raise DomainError(
+            code="communications.customer_bulk_messages.invalid_command",
+            message="Preview the customer scope before confirming.",
+            retryable=False,
+        )
+    if selection.expected_count != result.matched_count or not hmac.compare_digest(
+        selection.expected_scope_token, result.scope_token
+    ):
+        raise DomainError(
+            code="communications.customer_bulk_messages.impact_changed",
+            message="The customer scope changed. Review a new preview.",
+            retryable=False,
+        )
+    return BulkMessageCounts.model_validate(result.model_dump())
+
+
+def materialize_bulk_message(
+    db: Session, *, spec: BulkMessageSpec
+) -> BulkMessageCounts:
+    result = evaluate_bulk_message(
+        db=db, spec=spec.model_copy(update={"preview_only": False})
+    )
+    return BulkMessageCounts.model_validate(result.model_dump())
+
+
 def queue_bulk_message_from_payload(
     db: Session, payload: dict[str, Any]
 ) -> dict[str, object]:
+    """Legacy JSON adapter; every write now enters the same typed command owner."""
+    from pydantic import ValidationError
+
+    from app.services.customer_bulk_messages import (
+        ImmediateBulkMessageCommand,
+        materialize_immediate,
+    )
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.domain_errors import DomainError
+    from app.services.owner_commands import CommandContext
+
+    try:
+        spec = BulkMessageSpec.model_validate(payload)
+        if spec.preview_only:
+            result = evaluate_bulk_message(db=db, spec=spec)
+        else:
+            db_session_adapter.release_read_transaction(db)
+            result = materialize_immediate(
+                db=db,
+                command=ImmediateBulkMessageCommand(
+                    context=CommandContext.system(
+                        actor="system:legacy_bulk_message",
+                        scope="customer_bulk_message",
+                        reason="confirmed bulk message",
+                    ),
+                    spec=spec,
+                ),
+            )
+        return result.model_dump(mode="json", exclude_none=True)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid bulk message request"
+        ) from exc
+    except DomainError as exc:
+        raise HTTPException(
+            status_code=409 if exc.code.endswith("impact_changed") else 400,
+            detail=exc.message,
+        ) from exc
+
+
+def _evaluate_bulk_message(
+    db: Session, *, spec: BulkMessageSpec
+) -> BulkMessageEvaluation:
+    payload = spec.model_dump(mode="json", exclude_none=True)
     template_id = str(payload.get("template_id") or "").strip()
     channel_value = str(payload.get("channel") or "").strip().lower()
     if not template_id or not channel_value:
@@ -1637,7 +1681,6 @@ def queue_bulk_message_from_payload(
             status_code=400, detail="Unsupported notification channel"
         ) from exc
 
-    sync_whatsapp_registry_templates(db)
     template = None
     if channel == NotificationChannel.whatsapp:
         template = _notification_template_for_whatsapp(db, template_id)
@@ -1882,26 +1925,28 @@ def queue_bulk_message_from_payload(
             render_sample_count += 1
             if render_sample_count >= _BULK_MESSAGE_RENDER_SAMPLE_LIMIT:
                 break
-        return {
-            "success": True,
-            "preview": True,
-            "scope": resolved.scope,
-            "matched_count": len(customers),
-            "scope_token": resolved_scope_token,
-            "impact_token": impact_token,
-            "missing_ids": list(resolved.missing_ids),
-            "created_count": created_count,
-            "queued_count": queued_count,
-            "suppressed_count": suppressed_count,
-            "suppression_counts": suppression_counts,
-            "skipped_count": skipped_count,
-            "suppressed": suppressed,
-            "skipped": skipped,
-            "recipient_summary": recipient_summary,
-            "recipient_summary_limit": _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT,
-            "render_sample_count": render_sample_count,
-            "notification_ids": [],
-        }
+        return BulkMessageEvaluation.model_validate(
+            {
+                "success": True,
+                "preview": True,
+                "scope": resolved.scope,
+                "matched_count": len(customers),
+                "scope_token": resolved_scope_token,
+                "impact_token": impact_token,
+                "missing_ids": list(resolved.missing_ids),
+                "created_count": created_count,
+                "queued_count": queued_count,
+                "suppressed_count": suppressed_count,
+                "suppression_counts": suppression_counts,
+                "skipped_count": skipped_count,
+                "suppressed": suppressed,
+                "skipped": skipped,
+                "recipient_summary": recipient_summary,
+                "recipient_summary_limit": _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT,
+                "render_sample_count": render_sample_count,
+                "notification_ids": [],
+            }
+        )
 
     expected_impact_token = str(payload.get("expected_impact_token") or "")
     if not expected_impact_token:
@@ -1978,27 +2023,29 @@ def queue_bulk_message_from_payload(
                         reason=reason or "Suppressed by notification policy",
                     )
                 )
-    db.commit()
+    db.flush()
 
-    return {
-        "success": True,
-        "preview": preview_only,
-        "scope": resolved.scope,
-        "matched_count": len(customers),
-        "scope_token": resolved_scope_token,
-        "impact_token": impact_token,
-        "missing_ids": list(resolved.missing_ids),
-        "created_count": created_count,
-        "queued_count": queued_count,
-        "suppressed_count": suppressed_count,
-        "suppression_counts": suppression_counts,
-        "skipped_count": skipped_count,
-        "suppressed": suppressed,
-        "skipped": skipped,
-        "recipient_summary": recipient_summary,
-        "recipient_summary_limit": _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT,
-        "notification_ids": notification_ids,
-    }
+    return BulkMessageEvaluation.model_validate(
+        {
+            "success": True,
+            "preview": preview_only,
+            "scope": resolved.scope,
+            "matched_count": len(customers),
+            "scope_token": resolved_scope_token,
+            "impact_token": impact_token,
+            "missing_ids": list(resolved.missing_ids),
+            "created_count": created_count,
+            "queued_count": queued_count,
+            "suppressed_count": suppressed_count,
+            "suppression_counts": suppression_counts,
+            "skipped_count": skipped_count,
+            "suppressed": suppressed,
+            "skipped": skipped,
+            "recipient_summary": recipient_summary,
+            "recipient_summary_limit": _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT,
+            "notification_ids": notification_ids,
+        }
+    )
 
 
 def _bulk_message_suppression_item(
