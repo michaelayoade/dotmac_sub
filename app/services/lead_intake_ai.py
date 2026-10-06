@@ -149,10 +149,12 @@ def apply_inbox_intake_handoff(
         return None
     metadata = dict(message.metadata_ or {})
     if (
-        metadata.get("ai_intake_status") != "classified"
-        or bool(metadata.get("ai_intake_requires_follow_up"))
-        or metadata.get("ai_intent") not in lead_intake.QUALIFYING_INTENTS
-    ):
+        not metadata.get("ai_lead_candidate_event_id")
+        and (
+            metadata.get("ai_intake_status") != "classified"
+            or bool(metadata.get("ai_intake_requires_follow_up"))
+        )
+    ) or metadata.get("ai_intent") not in lead_intake.QUALIFYING_INTENTS:
         finish_read_transaction(db)
         return None
     try:

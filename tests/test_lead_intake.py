@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from app.models.ai_intake import AiIntakeConfig
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.event_store import EventStore
 from app.models.lead_intake import LeadIntakeInvitation, LeadIntakePartyType
 from app.models.party import Party, PartyContactPoint, PartyRole
 from app.models.sales import Lead, LeadOriginCapture
@@ -22,6 +23,15 @@ from app.models.team_inbox import (
     InboxConversationParticipant,
     InboxMessage,
 )
+from app.schemas.ai_intake import (
+    AiIntakeCategory,
+    AiIntakeClassification,
+    AiIntakeIntent,
+    AiIntakeOutcome,
+    AiIntakePartyType,
+    AiIntakeReason,
+    AiIntakeStatus,
+)
 from app.schemas.lead_intake import (
     AiLeadIntakeClassification,
     LeadCandidateAttribution,
@@ -29,7 +39,11 @@ from app.schemas.lead_intake import (
     LeadIntakeTemplateDraft,
     ResolvedLeadIntakeAddress,
 )
-from app.services import lead_intake_ai
+from app.services import (
+    ai_conversation_intake,
+    lead_intake_ai,
+    team_inbox_customer_completion,
+)
 from app.services.domain_errors import DomainError
 from app.services.events.handlers import lead_intake as lead_intake_event_handler
 from app.services.events.types import Event, EventType
@@ -46,6 +60,169 @@ def _context(key: str) -> CommandContext:
         reason="focused Lead intake behavior test",
         idempotency_key=key,
     )
+
+
+@pytest.mark.parametrize(
+    "status", [AiIntakeStatus.awaiting_follow_up, AiIntakeStatus.fallback]
+)
+def test_sales_capture_precedes_clarification_and_survives_later_complaint(
+    db_session, status: AiIntakeStatus
+):
+    conversation, message = _instagram_conversation(db_session)
+    metadata: dict[str, object] = {
+        **(message.metadata_ or {}),
+        "ai_intake_status": status.value,
+        "ai_intake_requires_follow_up": status is AiIntakeStatus.awaiting_follow_up,
+        "ai_intent": "coverage_request",
+        "ai_confidence": 0.96,
+        "ai_party_type": "individual",
+        "ai_party_type_confidence": 0.96,
+    }
+    classification = AiIntakeClassification(
+        intent=AiIntakeIntent.coverage_request,
+        category=AiIntakeCategory.coverage_request,
+        confidence=0.96,
+        party_type=AiIntakePartyType.individual,
+        party_type_confidence=0.96,
+        requires_follow_up=status is AiIntakeStatus.awaiting_follow_up,
+    )
+    outcome = AiIntakeOutcome(
+        status=status,
+        reason=AiIntakeReason.low_confidence,
+        classification=classification,
+    )
+    for _ in range(2):
+        ai_conversation_intake._stage_lead_candidate_classified(
+            db_session,
+            inbound=message,
+            conversation=conversation,
+            outcome=outcome,
+            metadata=metadata,
+        )
+        db_session.flush()
+    message.metadata_ = metadata
+    db_session.commit()
+    events = db_session.scalars(
+        select(EventStore).where(
+            EventStore.event_type == EventType.ai_intake_lead_candidate_classified.value
+        )
+    ).all()
+    assert len(events) == 1
+    assert metadata["ai_lead_candidate_event_id"] == str(events[0].event_id)
+    assert team_inbox_customer_completion._classified_sales_candidate_pending(
+        db_session, conversation
+    )
+    assert any(
+        finding.conversation_id == conversation.id
+        for finding in lead_intake.classified_candidate_drift(
+            db_session, since=datetime.now(UTC) - timedelta(days=1)
+        )
+    )
+    # Later routing/classification cannot retract the earlier message's event.
+    ai_conversation_intake._stage_lead_candidate_classified(
+        db_session,
+        inbound=message,
+        conversation=conversation,
+        outcome=AiIntakeOutcome(
+            status=AiIntakeStatus.classified,
+            reason=AiIntakeReason.classified,
+            classification=AiIntakeClassification(
+                intent=AiIntakeIntent.complaint,
+                category=AiIntakeCategory.complaint,
+                confidence=0.96,
+                requires_follow_up=False,
+            ),
+        ),
+        metadata={},
+    )
+    result = lead_intake_ai.apply_inbox_intake_handoff(
+        db_session,
+        conversation_id=conversation.id,
+        message_id=message.id,
+        allow_invitation=False,
+    )
+    assert result is not None and result.lead_id is not None
+    assert not team_inbox_customer_completion._classified_sales_candidate_pending(
+        db_session, conversation
+    )
+
+
+@pytest.mark.parametrize(
+    "intent,confidence,party_type,party_confidence,status",
+    [
+        (
+            AiIntakeIntent.complaint,
+            0.96,
+            AiIntakePartyType.individual,
+            0.96,
+            AiIntakeStatus.classified,
+        ),
+        (
+            AiIntakeIntent.general_enquiry,
+            0.96,
+            AiIntakePartyType.individual,
+            0.96,
+            AiIntakeStatus.classified,
+        ),
+        (
+            AiIntakeIntent.coverage_request,
+            0.4,
+            AiIntakePartyType.individual,
+            0.96,
+            AiIntakeStatus.fallback,
+        ),
+        (
+            AiIntakeIntent.coverage_request,
+            0.96,
+            AiIntakePartyType.unknown,
+            0.0,
+            AiIntakeStatus.fallback,
+        ),
+        (
+            AiIntakeIntent.coverage_request,
+            0.96,
+            AiIntakePartyType.individual,
+            0.4,
+            AiIntakeStatus.awaiting_follow_up,
+        ),
+        (
+            AiIntakeIntent.coverage_request,
+            0.96,
+            AiIntakePartyType.individual,
+            0.96,
+            AiIntakeStatus.classification_unavailable,
+        ),
+    ],
+)
+def test_sales_capture_refuses_complaints_and_unreliable_classification(
+    db_session,
+    intent: AiIntakeIntent,
+    confidence: float,
+    party_type: AiIntakePartyType,
+    party_confidence: float,
+    status: AiIntakeStatus,
+):
+    conversation, message = _conversation(db_session)
+    metadata: dict[str, object] = {}
+    ai_conversation_intake._stage_lead_candidate_classified(
+        db_session,
+        inbound=message,
+        conversation=conversation,
+        outcome=AiIntakeOutcome(
+            status=status,
+            reason=AiIntakeReason.low_confidence,
+            classification=AiIntakeClassification(
+                intent=intent,
+                category=AiIntakeCategory.general_enquiry,
+                confidence=confidence,
+                party_type=party_type,
+                party_type_confidence=party_confidence,
+                requires_follow_up=False,
+            ),
+        ),
+        metadata=metadata,
+    )
+    assert "ai_lead_candidate_event_id" not in metadata
 
 
 def _staff_and_team(db_session) -> tuple[SystemUser, ServiceTeam]:

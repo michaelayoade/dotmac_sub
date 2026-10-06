@@ -1451,8 +1451,13 @@ def classified_candidate_drift(
             continue
         metadata = dict(message.metadata_ or {})
         if (
-            metadata.get("ai_intake_status") != "classified"
-            or bool(metadata.get("ai_intake_requires_follow_up"))
+            (
+                not metadata.get("ai_lead_candidate_event_id")
+                and (
+                    metadata.get("ai_intake_status") != "classified"
+                    or bool(metadata.get("ai_intake_requires_follow_up"))
+                )
+            )
             or metadata.get("ai_intent") not in QUALIFYING_INTENTS
             or metadata.get("ai_party_type") not in {"individual", "organization"}
             or conversation_lead_relationships.active_link(db, message.conversation_id)

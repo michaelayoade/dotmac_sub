@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -336,14 +336,24 @@ def _classified_sales_candidate_pending(
             .where(
                 InboxMessage.conversation_id == conversation.id,
                 InboxMessage.direction == "inbound",
-                InboxMessage.metadata_["ai_intake_status"].as_string() == "classified",
+                or_(
+                    InboxMessage.metadata_["ai_lead_candidate_event_id"]
+                    .as_string()
+                    .is_not(None),
+                    and_(
+                        InboxMessage.metadata_["ai_intake_status"].as_string()
+                        == "classified",
+                        or_(
+                            requires_follow_up.is_(None), requires_follow_up.is_(False)
+                        ),
+                    ),
+                ),
                 InboxMessage.metadata_["ai_intent"]
                 .as_string()
                 .in_({"new_connection", "coverage_request"}),
                 InboxMessage.metadata_["ai_party_type"]
                 .as_string()
                 .in_({"individual", "organization"}),
-                or_(requires_follow_up.is_(None), requires_follow_up.is_(False)),
             )
             .limit(1)
         )
