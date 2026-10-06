@@ -569,6 +569,8 @@ DOMAIN = DomainSOT(
                 "survey lifecycle and content",
                 "survey invitation records",
                 "survey response records",
+                "survey response review",
+                "survey feedback report",
             ),
             depends_on=(
                 "party.registry",
@@ -617,8 +619,33 @@ DOMAIN = DomainSOT(
                         ),
                         canonical_writer="communications.surveys",
                     ),
+                    ConcernContract(
+                        name="survey response review",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "persisted Survey aggregate",
+                            "persisted Survey responses",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="survey feedback report",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "persisted Survey aggregate",
+                            "persisted Survey responses",
+                        ),
+                    ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="persisted Survey responses",
+                        owner="communications.surveys",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "SurveyResponse saved answers, submission time and "
+                            "optional rating/NPS values"
+                        ),
+                    ),
                     AuthorityInput(
                         name="typed Survey command",
                         owner="communications.surveys",
@@ -775,6 +802,49 @@ DOMAIN = DomainSOT(
                         "Survey and invitation rows plus audit evidence rebuild "
                         "current state; source-event uniqueness makes durable event "
                         "redelivery a no-op."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="survey feedback report",
+                        input_names=(
+                            "persisted Survey aggregate",
+                            "persisted Survey responses",
+                        ),
+                        writer="communications.surveys",
+                        freshness="Rebuilt from all saved submissions on each detail request.",
+                        stale_behavior=(
+                            "Current options define distributions; unsupported scales "
+                            "show option counts without inferred sentiment."
+                        ),
+                        drift_signal=(
+                            "Answers outside current options are counted separately; "
+                            "zero eligible ratings yield no percentage."
+                        ),
+                        rebuild_operation="survey_report with SurveyReportQuery",
+                        repair_owner="communications.surveys",
+                    ),
+                    ProjectionContract(
+                        name="survey response review",
+                        input_names=(
+                            "persisted Survey aggregate",
+                            "persisted Survey responses",
+                        ),
+                        writer="communications.surveys",
+                        freshness=(
+                            "Rebuilt on each detail request from current questions "
+                            "and saved responses."
+                        ),
+                        stale_behavior=(
+                            "Removed question keys retain saved values with explicit "
+                            "unavailable wording; labels use the current definition."
+                        ),
+                        drift_signal=(
+                            "A saved answer key absent from current questions is "
+                            "marked as an earlier question."
+                        ),
+                        rebuild_operation="response_reviews with SurveyResponseReviewQuery",
+                        repair_owner="communications.surveys",
                     ),
                 ),
                 migration=MigrationContract(
