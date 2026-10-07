@@ -42,6 +42,7 @@ from app.models.network import (
     DeviceStatus as CPEDeviceStatus,
 )
 from app.models.network_monitoring import NetworkDevice, PopSite
+from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
@@ -1211,6 +1212,7 @@ def build_customer_export_query(
     sort_by: CustomerListSort,
     sort_dir: SortDirection,
     billing_mode: str | None = None,
+    region_id: str | None = None,
 ) -> CustomerExportQuery:
     """Normalize the export request onto the canonical customer-list scope."""
 
@@ -1224,6 +1226,7 @@ def build_customer_export_query(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             sort_by=sort_by,
             sort_dir=sort_dir,
             page=1,
@@ -1627,38 +1630,48 @@ def build_customers_index_context(
     )
     region_options = customer_regions.region_options(db)
     region_by_id = {str(option.id): option for option in region_options}
+    live_nas_by_subscriber: dict[UUID, set[UUID]] = {}
+    if people:
+        for subscriber_id, nas_device_id in (
+            db.query(
+                RadiusActiveSession.subscriber_id,
+                RadiusActiveSession.nas_device_id,
+            )
+            .filter(
+                RadiusActiveSession.subscriber_id.in_(
+                    [person.id for person in people]
+                ),
+                RadiusActiveSession.nas_device_id.isnot(None),
+            )
+            .all()
+        ):
+            if subscriber_id is not None and nas_device_id is not None:
+                live_nas_by_subscriber.setdefault(subscriber_id, set()).add(
+                    nas_device_id
+                )
     region_assignments = customer_regions.assign_regions(
         db,
         (
             customer_regions.RegionCustomerContext(
                 subscriber_id=person.id,
-                latitude=next(
-                    (
-                        address.latitude
-                        for address in person.addresses
-                        if (
-                            address.latitude is not None
-                            and address.longitude is not None
-                        )
-                    ),
-                    None,
+                latitude=(
+                    primary_address.latitude
+                    if (primary_address := customer_regions.primary_geocoded_address(
+                        person.addresses
+                    ))
+                    else None
                 ),
-                longitude=next(
-                    (
-                        address.longitude
-                        for address in person.addresses
-                        if (
-                            address.latitude is not None
-                            and address.longitude is not None
-                        )
-                    ),
-                    None,
-                ),
+                longitude=primary_address.longitude if primary_address else None,
                 pop_site_id=person.pop_site_id,
                 nas_device_ids=frozenset(
-                    subscription.provisioning_nas_device_id
-                    for subscription in person.subscriptions
-                    if subscription.provisioning_nas_device_id is not None
+                    (
+                        subscription.provisioning_nas_device_id
+                        for subscription in person.subscriptions
+                        if subscription.provisioning_nas_device_id is not None
+                    )
+                )
+                | frozenset(
+                    live_nas_by_subscriber.get(person.id, set())
                 ),
             )
             for person in people

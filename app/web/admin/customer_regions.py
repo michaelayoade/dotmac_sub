@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -100,6 +101,26 @@ def customer_region_save(
     region_id: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    submitted_region = None
+    if region_id:
+        try:
+            submitted_region = db.get(customer_regions.CustomerRegion, _optional_uuid(region_id))
+        except (TypeError, ValueError):
+            submitted_region = None
+    form_values = {
+        "region_id": region_id or "",
+        "name": name,
+        "latitude": latitude,
+        "longitude": longitude,
+        "radius_meters": radius_meters,
+        "color": color,
+        "match_mode": match_mode,
+        "priority": priority,
+        "nas_device_id": nas_device_id or "",
+        "pop_site_id": pop_site_id or "",
+        "notes": notes or "",
+        "is_active": is_active is not None,
+    }
     try:
         customer_regions.save_region(
             db,
@@ -117,6 +138,23 @@ def customer_region_save(
             is_active=is_active is not None,
         )
         return RedirectResponse(url="/admin/customer-regions", status_code=303)
+    except IntegrityError:
+        db.rollback()
+        error = "A region with this name already exists. Choose a unique name."
+        return templates.TemplateResponse(
+            "admin/customer_regions/index.html",
+            _context(
+                request,
+                db,
+                regions=customer_regions.list_regions(db),
+                infrastructure_options=customer_regions.infrastructure_options(db),
+                match_modes=customer_regions.REGION_MATCH_MODES,
+                error=error,
+                editing_region=submitted_region,
+                form_values=form_values,
+            ),
+            status_code=422,
+        )
     except (ValueError, TypeError) as exc:
         return templates.TemplateResponse(
             "admin/customer_regions/index.html",
@@ -127,7 +165,8 @@ def customer_region_save(
                 infrastructure_options=customer_regions.infrastructure_options(db),
                 match_modes=customer_regions.REGION_MATCH_MODES,
                 error=str(exc),
-                editing_region=None,
+                editing_region=submitted_region,
+                form_values=form_values,
             ),
             status_code=422,
         )
@@ -138,5 +177,8 @@ def customer_region_save(
     dependencies=[Depends(require_permission("gis:area:write"))],
 )
 def customer_region_disable(region_id: UUID, db: Session = Depends(get_db)):
-    customer_regions.delete_region(db, region_id=region_id)
+    try:
+        customer_regions.delete_region(db, region_id=region_id)
+    except ValueError:
+        pass
     return RedirectResponse(url="/admin/customer-regions", status_code=303)

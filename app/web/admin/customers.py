@@ -3509,6 +3509,7 @@ def export_customers(
     pop_site_id: str | None = None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    region_id: str | None = None,
     sort: Literal["created_at", "name", "status"] = Query("created_at"),
     direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     db: Session = Depends(get_db),
@@ -3525,6 +3526,7 @@ def export_customers(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             sort_by=sort,
             sort_dir=direction,
         )

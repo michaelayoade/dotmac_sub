@@ -7,7 +7,8 @@ from collections import Counter
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import case, func
+from sqlalchemy import select as db_select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import Subscription
@@ -489,18 +490,37 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         map_limit = int(str(map_limit_raw)) if map_limit_raw is not None else None
     except (TypeError, ValueError):
         map_limit = None
-    if map_limit is not None and map_limit <= 0:
-        map_limit = None
+    # Keep the marker/session payload bounded even when a legacy setting is
+    # blank or has an unsafe value. Plant features remain independent.
+    map_limit = min(max(map_limit or 2000, 1), 5000)
+
+    primary_address_id = (
+        db_select(Address.id)
+        .where(
+            Address.subscriber_id == Subscriber.id,
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+        )
+        .order_by(
+            case((Address.is_primary.is_(True), 0), else_=1),
+            Address.id.asc(),
+        )
+        .limit(1)
+        .correlate(Subscriber)
+        .scalar_subquery()
+    )
 
     mapped_addresses = (
         db.query(Address.id, Address.subscriber_id, Subscriber.status)
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
         .filter(
+            Address.id == primary_address_id,
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
             Subscriber.is_active.is_(True),
         )
         .order_by(Address.id)
+        .limit(map_limit)
         .all()
     )
     customer_total = len(mapped_addresses)
@@ -542,6 +562,14 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
                         subscription.subscriber_id, frozenset()
                     ),
                     nas_id,
+                )
+            )
+        snapshot = snapshot_by_subscription.get(subscription.id)
+        if snapshot is not None and snapshot.nas_device_id is not None:
+            nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                (
+                    *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
+                    snapshot.nas_device_id,
                 )
             )
     pop_site_by_subscriber = dict(
@@ -600,14 +628,15 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         )
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
         .filter(
+            Address.id == primary_address_id,
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
             Subscriber.is_active.is_(True),
         )
         .order_by(Address.id)
+        .limit(map_limit)
     )
-    if map_limit is not None:
-        customer_addresses_query = customer_addresses_query.limit(map_limit)
+    # ``mapped_addresses`` is already the bounded, deterministic marker set.
     customer_addresses = customer_addresses_query.all()
 
     for addr in customer_addresses:

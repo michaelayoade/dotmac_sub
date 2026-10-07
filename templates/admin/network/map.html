@@ -913,8 +913,9 @@
         maxZoom: 19
     }).addTo(map);
 
+    const customerRegionBounds = L.latLngBounds();
     customerRegions.forEach(region => {
-        L.circle([region.latitude, region.longitude], {
+        const circle = L.circle([region.latitude, region.longitude], {
             radius: region.radius_meters,
             color: region.color,
             fillColor: region.color,
@@ -922,6 +923,7 @@
             weight: 2,
             dashArray: '5, 6'
         }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`).addTo(map);
+        customerRegionBounds.extend(circle.getBounds());
     });
 
     // Layer groups
@@ -1459,8 +1461,10 @@
             if (item.marker) visibleBounds.push(item.marker.getLatLng());
             else if (item.polyline) visibleBounds.push(...item.polyline.getLatLngs());
         });
-        if (visibleBounds.length > 0) {
-            map.fitBounds(visibleBounds, { padding: [50, 50] });
+        const fitBounds = L.latLngBounds(visibleBounds);
+        if (customerRegionBounds.isValid()) fitBounds.extend(customerRegionBounds);
+        if (fitBounds.isValid()) {
+            map.fitBounds(fitBounds, { padding: [50, 50] });
         }
     }
     const initialFocus = new URLSearchParams(window.location.search).get('focus');
