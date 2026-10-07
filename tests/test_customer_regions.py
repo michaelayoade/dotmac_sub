@@ -7,6 +7,7 @@ import pytest
 
 from app.services.customer_regions import (
     UNASSIGNED_REGION_FILTER,
+    CustomerRegionError,
     _validate_region_input,
     customer_region_filter_clause,
     primary_geocoded_address,
@@ -102,7 +103,7 @@ def test_primary_geocoded_address_is_deterministic():
     ],
 )
 def test_infrastructure_overlap_modes_require_a_target(match_mode, message):
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(CustomerRegionError, match=message):
         _validate_region_input(
             name="Zone",
             latitude=9.0,

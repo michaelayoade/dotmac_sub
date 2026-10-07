@@ -174,11 +174,10 @@ def test_device_tabs_keep_hidden_type_filter_in_shared_alpine_state():
         '<input id="device-type-filter" x-ref="deviceTypeFilter" type="hidden" '
         'name="type" x-model="activeType"' in template
     )
-    for device_type in ("all", "core", "olt", "ont", "cpe"):
-        assert (
-            f"x-on:click=\"activeType = '{device_type}'; "
-            f"$refs.deviceTypeFilter.value = '{device_type}'\"" in template
-        )
+    assert (
+        "x-on:click=\"activeType = '{{ dt.value }}'; "
+        "$refs.deviceTypeFilter.value = '{{ dt.value }}'\"" in template
+    )
 
 
 # --- Read owner ---
