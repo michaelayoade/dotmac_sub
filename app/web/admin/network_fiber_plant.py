@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import fiber_cost_items as fiber_cost_items_service
+from app.services import fiber_plant_api, vendor_routes_api
 from app.services import fiber_topology as fiber_topology_service
 from app.services import web_network_fdh as web_network_fdh_service
 from app.services import web_network_fiber as web_network_fiber_service
@@ -27,7 +28,7 @@ from app.services import (
     web_network_ont_identity_reviews as ont_identity_review_service,
 )
 from app.services.audit_helpers import log_audit_event
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import can, require_permission
 from app.services.network.as_built_plant_projection import (
     AsBuiltPlantProjectionError,
     activate_projected_segment,
@@ -270,6 +271,41 @@ def fiber_plant_map(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="fiber-map", active_menu="fiber")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/fiber/map.html", context)
+
+
+@router.get(
+    "/fiber-map/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def fiber_plant_map_authoring(
+    request: Request,
+    message: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Render review-gated route and asset authoring in the fiber-map workflow."""
+
+    context = _base_context(request, db, active_page="fiber-map", active_menu="fiber")
+    context.update(
+        {
+            "message": message,
+            "authoring_back_href": "/admin/network/fiber-map",
+            "authoring_back_label": "Back to Fibre Plant Map",
+            "authoring_return_to": "fiber_map",
+            "can_write_routes": can(request, "network:fiber:write"),
+            "projects": vendor_routes_api.list_admin_authoring_projects(db),
+            "work_orders": vendor_routes_api.list_admin_authoring_work_orders(db),
+            "route_geojson": vendor_routes_api.build_admin_proposal_geojson(db),
+            "network_geojson": fiber_plant_api.build_fiber_plant_geojson(
+                db,
+                include_fdh=True,
+                include_closures=True,
+                include_pops=True,
+                include_segments=True,
+            ),
+        }
+    )
+    return templates.TemplateResponse("admin/vendors/route_authoring.html", context)
 
 
 @router.get(

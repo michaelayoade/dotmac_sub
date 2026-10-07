@@ -978,7 +978,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review geometry, endpoints, project or work-order links when present, evidence, and existing network conflicts.",
         "When creating a staff proposal, choose Propose Route or Asset; project and work order links are optional, and no vendor quote is required.",
         "Approve or reject the pending proposal with a clear reason, then verify the resulting network or project state.",
-        route_templates=("/admin/network/fiber", "/admin/vendors/routes/new"),
+        route_templates=("/admin/network/fiber", "/admin/network/fiber-map/new"),
         notes=(
             "Staff-owned proposals remain separate from vendor quote submissions and stay pending until an authorized reviewer decides.",
             "If a work order already belongs to an installation project, linking the work order can populate that project association; otherwise the proposal may remain unscoped.",
