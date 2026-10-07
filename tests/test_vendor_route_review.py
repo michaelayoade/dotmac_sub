@@ -228,6 +228,9 @@ def test_review_queue_routes_templates_and_sot_are_explicit():
     authoring_template = (
         root / "templates/admin/vendors/route_authoring.html"
     ).read_text()
+    fiber_map_authoring_template = (
+        root / "templates/admin/network/fiber/route_authoring.html"
+    ).read_text()
     fiber_map_template = (root / "templates/admin/network/fiber/map.html").read_text()
     queue = (root / "templates/admin/vendors/operations.html").read_text()
     sot = (root / "docs/SOT_RELATIONSHIP_MAP.md").read_text()
@@ -257,8 +260,23 @@ def test_review_queue_routes_templates_and_sot_are_explicit():
     assert 'href="/admin/network/fiber-map/new"' in fiber_map_template
     fiber_map_routes = (root / "app/web/admin/network_fiber_plant.py").read_text()
     assert '"/fiber-map/new"' in fiber_map_routes
-    assert '"authoring_return_to": "fiber_map"' in fiber_map_routes
-    assert 'name="return_to"' in authoring_template
+    assert '"admin/network/fiber/route_authoring.html"' in fiber_map_routes
+    assert 'name="return_to" value="fiber_map"' in fiber_map_authoring_template
+    assert 'name="return_to"' not in authoring_template
+    for authoring_capability in (
+        'id="admin-route-author-map"',
+        'id="admin-route-author-form"',
+        'id="admin-route-locate"',
+        'id="admin-route-undo"',
+        'id="admin-route-clear"',
+        'id="admin-route-submit"',
+        'id="asset-pin-toggle"',
+        'id="asset-proposal-form"',
+        'name="project_id"',
+        'name="work_order_id"',
+    ):
+        assert authoring_capability in authoring_template
+        assert authoring_capability in fiber_map_authoring_template
     assert 'return_to=str(form.get("return_to") or "")' in map_routes
     assert "can_write_routes" in route_template
     assert "revision.detail_url" in queue

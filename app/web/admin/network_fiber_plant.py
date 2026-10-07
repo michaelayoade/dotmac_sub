@@ -289,9 +289,6 @@ def fiber_plant_map_authoring(
     context.update(
         {
             "message": message,
-            "authoring_back_href": "/admin/network/fiber-map",
-            "authoring_back_label": "Back to Fibre Plant Map",
-            "authoring_return_to": "fiber_map",
             "can_write_routes": can(request, "network:fiber:write"),
             "projects": vendor_routes_api.list_admin_authoring_projects(db),
             "work_orders": vendor_routes_api.list_admin_authoring_work_orders(db),
@@ -305,7 +302,9 @@ def fiber_plant_map_authoring(
             ),
         }
     )
-    return templates.TemplateResponse("admin/vendors/route_authoring.html", context)
+    return templates.TemplateResponse(
+        "admin/network/fiber/route_authoring.html", context
+    )
 
 
 @router.get(

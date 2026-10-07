@@ -405,9 +405,6 @@ def admin_route_authoring(
     context.update(
         {
             "message": message,
-            "authoring_back_href": "/admin/vendors/routes",
-            "authoring_back_label": "Back to route proposals",
-            "authoring_return_to": "vendor_routes",
             "can_write_routes": can(request, "network:fiber:write"),
             "projects": vendor_routes_api.list_admin_authoring_projects(db),
             "work_orders": vendor_routes_api.list_admin_authoring_work_orders(db),
