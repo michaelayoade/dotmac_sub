@@ -29,7 +29,7 @@ dependencies = [
     "cryptography==42.0.8",
     "paramiko==3.4.1",
     "ncclient==0.6.15",
-    "routeros-api==0.17.0",
+    "routeros-api==0.21.0",
     "pyrad==2.4",
     "geoalchemy2==0.14.7",
     "shapely==2.0.4",
