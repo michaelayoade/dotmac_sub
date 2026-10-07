@@ -1007,7 +1007,8 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         (),
         "Choose Last 1 month, Last 3 months, or Custom range before reviewing the report.",
         "Use Event type to compare cancellations, suspensions, or both; custom ranges require a start and end date.",
-        "Review the KPI totals, period-matched trend, reasons, and recent event timestamps together before drawing a conclusion.",
+        "Review the KPI totals and period-matched trend together before drawing a conclusion.",
+        "Review recent event timestamps and cancellation reasons within the selected scope.",
         "Export only the currently selected event type and date range when the filtered evidence is needed outside the report.",
         route_templates=("/admin/reports/churn",),
         notes=(
@@ -1781,7 +1782,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action(
             "filter-churn-events", "Filter cancellation or suspension events", 1, 2
         ),
-        _action("review-churn-evidence", "Review churn totals and trend", 3),
+        _action("review-churn-evidence", "Review churn totals and trend", 2, 3),
         _action(
             "export-churn-report",
             "Export the filtered churn report",

@@ -1014,8 +1014,10 @@ def get_churn_report_data(
     if filter_kwargs:
         monthly_churn = subscriber_growth.monthly_churn_series(
             db=db,
+            status=status_filter,
+            date_from=date_from,
+            date_to=date_to,
             population_total=total_subscribers,
-            **filter_kwargs,
         )
     else:
         monthly_churn = subscriber_growth.monthly_churn_series(db=db)
