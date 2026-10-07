@@ -6,7 +6,9 @@ from uuid import uuid4
 import pytest
 
 from app.services.customer_regions import (
+    UNASSIGNED_REGION_FILTER,
     _validate_region_input,
+    customer_region_filter_clause,
     primary_geocoded_address,
     resolve_region,
 )
@@ -113,3 +115,9 @@ def test_infrastructure_overlap_modes_require_a_target(match_mode, message):
             color="#0ea5e9",
             match_mode=match_mode,
         )
+
+
+def test_unassigned_customer_filter_uses_the_canonical_assignment_relation():
+    clause = customer_region_filter_clause(UNASSIGNED_REGION_FILTER)
+
+    assert clause is not None

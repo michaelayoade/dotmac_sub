@@ -313,6 +313,10 @@
                     <p class="text-sm text-slate-500 dark:text-slate-400">Fiber customers and network infrastructure</p>
                 </div>
                 <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 text-xs">
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" id="layer-regions" checked class="h-3.5 w-3.5 rounded border-slate-300 text-sky-500 focus:ring-sky-500/20">
+                        <span>Regions</span>
+                    </label>
                     <span class="flex items-center gap-1">
                         <span class="h-3 w-3 rounded-full bg-green-500"></span>
                         Connected center
@@ -517,6 +521,7 @@ new Chart(assetCtx, {
     const customerRegions = {{ customer_regions | tojson | safe }};
     const bounds = [];
     const regionBounds = L.latLngBounds();
+    const regionLayer = L.layerGroup();
     const customerConnectivityColors = {
         connected: 'var(--color-semantic-positive-600)',
         not_connected: 'var(--color-semantic-neutral-600)'
@@ -542,9 +547,11 @@ new Chart(assetCtx, {
             fillOpacity: 0.08,
             weight: 2,
             dashArray: '5, 6'
-        }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`).addTo(map);
+        }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`);
+        regionLayer.addLayer(circle);
         regionBounds.extend(circle.getBounds());
     });
+    if (document.getElementById('layer-regions').checked) map.addLayer(regionLayer);
 
     if (geojsonData.features && geojsonData.features.length > 0) {
         geojsonData.features.forEach(feature => {
@@ -574,15 +581,20 @@ new Chart(assetCtx, {
                 .addTo(map);
         });
 
-        if (bounds.length > 0 || regionBounds.isValid()) {
+        if (bounds.length > 0 || (map.hasLayer(regionLayer) && regionBounds.isValid())) {
             const visibleBounds = L.latLngBounds(bounds);
-            if (regionBounds.isValid()) visibleBounds.extend(regionBounds);
+        if (map.hasLayer(regionLayer) && regionBounds.isValid()) visibleBounds.extend(regionBounds);
             map.fitBounds(visibleBounds, { padding: [30, 30] });
         }
     } else {
-        if (regionBounds.isValid()) map.fitBounds(regionBounds, { padding: [30, 30] });
+        if (map.hasLayer(regionLayer) && regionBounds.isValid()) map.fitBounds(regionBounds, { padding: [30, 30] });
         else map.setView([-1.286389, 36.817223], 10); // Nairobi default
     }
+    document.getElementById('layer-regions').addEventListener('change', function() {
+        if (this.checked) map.addLayer(regionLayer);
+        else map.removeLayer(regionLayer);
+        if (this.checked && regionBounds.isValid()) map.fitBounds(regionBounds, { padding: [30, 30] });
+    });
 })();
 </script>
 {% endblock %}

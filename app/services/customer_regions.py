@@ -19,6 +19,7 @@ from app.models.subscriber import Address, Subscriber
 
 REGION_MATCH_MODES = tuple(mode.value for mode in CustomerRegionMatchMode)
 DEFAULT_REGION_COLOR = "#0ea5e9"
+UNASSIGNED_REGION_FILTER = "unassigned"
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +292,24 @@ def customer_region_exists_clause(region_id: str | UUID | None):
         .scalar_subquery()
     )
     return winner_region_id == normalized_id
+
+
+def customer_region_filter_clause(region_id: str | UUID | None):
+    """Return the canonical customer-list predicate for a region filter.
+
+    ``unassigned`` is deliberately a transport sentinel rather than a fake
+    UUID. It selects customers for whom the same winning-region relation used
+    by the configured-region filter has no row, so the list and reports share
+    one assignment definition.
+    """
+
+    if str(region_id or "").strip().lower() == UNASSIGNED_REGION_FILTER:
+        assignments = customer_region_assignment_cte()
+        assigned_subscriber_ids = db_select(assignments.c.subscriber_id).where(
+            assignments.c.assignment_rank == 1
+        )
+        return ~Subscriber.id.in_(assigned_subscriber_ids)
+    return customer_region_exists_clause(region_id)
 
 
 def primary_geocoded_address(addresses: Iterable[Address]) -> Address | None:

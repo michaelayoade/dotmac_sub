@@ -732,6 +732,12 @@
                         <div class="legend-line" style="height:0;border-top:2px dashed var(--color-accent-600)"></div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">Configured region radius</span>
                     </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background:var(--color-semantic-positive-600);border:3px solid #94a3b8;box-shadow:0 0 0 1px white">
+                            <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>
+                        </div>
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Grey ring = unassigned customer</span>
+                    </div>
                     <hr class="border-slate-200 dark:border-slate-700 my-2">
                     <div class="legend-item">
                         <div class="legend-line bg-red-500"></div>
@@ -803,6 +809,10 @@
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="layer-customers-not-connected" class="h-4 w-4 rounded border-slate-300 text-slate-600 focus:ring-slate-500">
                         <span class="text-sm text-slate-700 dark:text-slate-300">Not connected customers</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="layer-regions" checked class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">Customer regions</span>
                     </label>
                     <hr class="col-span-2 border-slate-200 dark:border-slate-700">
                     <label class="flex items-center gap-2 cursor-pointer">
@@ -913,19 +923,6 @@
         maxZoom: 19
     }).addTo(map);
 
-    const customerRegionBounds = L.latLngBounds();
-    customerRegions.forEach(region => {
-        const circle = L.circle([region.latitude, region.longitude], {
-            radius: region.radius_meters,
-            color: region.color,
-            fillColor: region.color,
-            fillOpacity: 0.08,
-            weight: 2,
-            dashArray: '5, 6'
-        }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`).addTo(map);
-        customerRegionBounds.extend(circle.getBounds());
-    });
-
     // Layer groups
     const layers = {
         pop: L.layerGroup(),
@@ -937,10 +934,28 @@
         onts: L.layerGroup(),
         customersConnected: L.layerGroup(),
         customersNotConnected: L.layerGroup(),
+        regions: L.layerGroup(),
         feeder: L.layerGroup(),
         distribution: L.layerGroup(),
         drop: L.layerGroup()
     };
+
+    const customerRegionBounds = L.latLngBounds();
+    customerRegions.forEach(region => {
+        const circle = L.circle([region.latitude, region.longitude], {
+            radius: region.radius_meters,
+            color: region.color,
+            fillColor: region.color,
+            fillOpacity: 0.08,
+            weight: 2,
+            dashArray: '5, 6'
+        }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`);
+        layers.regions.addLayer(circle);
+        customerRegionBounds.extend(circle.getBounds());
+    });
+    if (document.getElementById('layer-regions')?.checked) {
+        map.addLayer(layers.regions);
+    }
 
     const semanticTones = new Set(['positive', 'info', 'warning', 'negative', 'neutral']);
     const semanticTone = tone => semanticTones.has(tone) ? tone : 'neutral';
@@ -962,7 +977,7 @@
     function customerMarkerIcon(properties) {
         const status = customerVisualStatus(properties);
         const outline = customerStatusColors[status] || customerStatusColors.offline;
-        const regionColor = properties.region_color || outline;
+        const regionColor = properties.region_color || '#94a3b8';
         const background = properties.connectivity?.layer === 'connected'
             ? 'var(--color-semantic-positive-600)'
             : 'var(--color-semantic-neutral-600)';
@@ -1462,7 +1477,9 @@
             else if (item.polyline) visibleBounds.push(...item.polyline.getLatLngs());
         });
         const fitBounds = L.latLngBounds(visibleBounds);
-        if (customerRegionBounds.isValid()) fitBounds.extend(customerRegionBounds);
+        if (map.hasLayer(layers.regions) && customerRegionBounds.isValid()) {
+            fitBounds.extend(customerRegionBounds);
+        }
         if (fitBounds.isValid()) {
             map.fitBounds(fitBounds, { padding: [50, 50] });
         }
@@ -1485,11 +1502,12 @@
         'layer-onts': 'onts',
         'layer-customers-connected': 'customersConnected',
         'layer-customers-not-connected': 'customersNotConnected',
+        'layer-regions': 'regions',
         'layer-feeder': 'feeder',
         'layer-distribution': 'distribution',
         'layer-drop': 'drop'
     };
-    let layersSuppressed = true;
+    let layersSuppressed = Object.keys(layerToggles).every(id => !document.getElementById(id).checked);
 
     Object.entries(layerToggles).forEach(([checkboxId, layerName]) => {
         const checkbox = document.getElementById(checkboxId);

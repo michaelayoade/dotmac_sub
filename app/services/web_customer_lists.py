@@ -1050,7 +1050,7 @@ def _apply_customer_filters(
             ),
             Subscriber.subscriptions.any(_active_subscription_clause()),
         )
-    region_clause = customer_regions.customer_region_exists_clause(region_id)
+    region_clause = customer_regions.customer_region_filter_clause(region_id)
     if region_clause is not None:
         query = query.filter(region_clause)
     return query
@@ -1717,6 +1717,13 @@ def build_customers_index_context(
         "region_options": [
             {"value": str(option.id), "label": option.name, "color": option.color}
             for option in region_options
+        ]
+        + [
+            {
+                "value": customer_regions.UNASSIGNED_REGION_FILTER,
+                "label": "Unassigned",
+                "color": "#94a3b8",
+            }
         ],
         "selected_region": (
             {
@@ -1725,7 +1732,16 @@ def build_customers_index_context(
                 "color": selected_region.color,
             }
             if (selected_region := region_by_id.get(str(region_id))) is not None
-            else None
+            else (
+                {
+                    "id": customer_regions.UNASSIGNED_REGION_FILTER,
+                    "label": "Unassigned",
+                    "color": "#94a3b8",
+                }
+                if str(region_id or "").strip().lower()
+                == customer_regions.UNASSIGNED_REGION_FILTER
+                else None
+            )
         ),
         "selected_infrastructure": (
             {
