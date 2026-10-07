@@ -28,7 +28,7 @@ from app.models.automation import (
     AutomationStepRun,
     AutomationStepStatus,
 )
-from app.services import automation_actions, automation_capabilities
+from app.services import automation_actions, automation_capabilities, db_session_adapter
 from app.services.automation_contracts import (
     AutomationConditionField,
     AutomationOperator,
@@ -1355,6 +1355,10 @@ def execute_prepared_run(
                     ),
                 ),
             )
+            # Some action owners refresh a committed row before returning.
+            # SQLAlchemy then leaves an empty read transaction open, which
+            # would make the following finish owner command look nested.
+            db_session_adapter.release_read_transaction(db)
             succeeded = True
         except DomainError as exc:
             error_code = exc.code
