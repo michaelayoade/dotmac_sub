@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
 
+from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.fiber_change_request import FiberChangeRequestStatus
 from app.models.network import (
@@ -33,6 +34,11 @@ from app.schemas.fiber_cost_items import FiberCostEstimate, FiberPricingState
 from app.services import customer_regions
 from app.services import fiber_change_requests as change_request_service
 from app.services import fiber_cost_items, settings_spec
+from app.services.network.radius_sessions import (
+    SubscriptionSessionSnapshot,
+    subscription_session_snapshots,
+)
+from app.services.network_map import resolve_customer_connectivity
 
 logger = logging.getLogger(__name__)
 
@@ -506,6 +512,7 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
             Subscriber.last_name,
             Subscriber.id.label("subscriber_id"),
             Subscriber.pop_site_id,
+            Subscriber.status.label("customer_status"),
         )
         .join(OntAssignment, OntAssignment.service_address_id == Address.id)
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
@@ -521,16 +528,59 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
     customer_addresses = customer_addresses_query.all()
     configured_regions = customer_regions.list_regions(db, include_inactive=False)
 
+    subscriber_ids = {address.subscriber_id for address in customer_addresses}
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id.in_(subscriber_ids))
+        .order_by(Subscription.id)
+        .all()
+        if subscriber_ids
+        else []
+    )
+    snapshot_by_subscription = subscription_session_snapshots(db, subscriptions)
+    snapshots_by_subscriber: dict[UUID, list[SubscriptionSessionSnapshot]] = {
+        subscriber_id: [] for subscriber_id in subscriber_ids
+    }
+    nas_ids_by_subscriber: dict[UUID, frozenset[UUID]] = {
+        subscriber_id: frozenset() for subscriber_id in subscriber_ids
+    }
+    for subscription in subscriptions:
+        snapshot = snapshot_by_subscription.get(subscription.id)
+        if snapshot is not None:
+            snapshots_by_subscriber.setdefault(subscription.subscriber_id, []).append(
+                snapshot
+            )
+        if subscription.provisioning_nas_device_id is not None:
+            nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                (
+                    *nas_ids_by_subscriber.get(
+                        subscription.subscriber_id, frozenset()
+                    ),
+                    subscription.provisioning_nas_device_id,
+                )
+            )
+    connectivity_by_subscriber = {
+        subscriber_id: resolve_customer_connectivity(snapshots)
+        for subscriber_id, snapshots in snapshots_by_subscriber.items()
+    }
+    inactive_connectivity = resolve_customer_connectivity(())
+
     features: list[dict] = []
     for address in customer_addresses:
         subscriber_name = (
             f"{address.first_name or ''} {address.last_name or ''}".strip() or "Unknown"
+        )
+        connectivity = connectivity_by_subscriber.get(
+            address.subscriber_id, inactive_connectivity
         )
         region = customer_regions.resolve_region(
             configured_regions,
             latitude=float(address.latitude),
             longitude=float(address.longitude),
             pop_site_id=address.pop_site_id,
+            nas_device_ids=nas_ids_by_subscriber.get(
+                address.subscriber_id, frozenset()
+            ),
         )
         features.append(
             {
@@ -545,6 +595,12 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
                     "name": subscriber_name,
                     "address": address.address_line1,
                     "city": address.city or "",
+                    "customer_status": (
+                        address.customer_status.value
+                        if address.customer_status
+                        else None
+                    ),
+                    "connectivity": connectivity.to_transport(),
                     "region_name": region.name if region else None,
                     "region_color": region.color if region else None,
                 },
