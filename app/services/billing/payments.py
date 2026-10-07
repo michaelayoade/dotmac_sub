@@ -5120,7 +5120,7 @@ class PaymentAllocations(ListResponseMixin):
         db: Session,
         payload: PaymentAllocationConfirm,
         *,
-        funding_position_at: datetime | None,
+        funding_position_at: datetime,
     ) -> PaymentAllocationResult:
         """Stage an allocation link with no new customer-position effect.
 
@@ -5309,7 +5309,7 @@ class PaymentAllocations(ListResponseMixin):
         payment_id: UUID,
         invoice_id: UUID,
         amount: Decimal,
-        funding_position_at: datetime,
+        funding_position_at: datetime | None,
     ) -> PaymentAllocationResult:
         """Top up an existing allocation from newly evidenced payment credit.
 
