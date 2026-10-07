@@ -239,7 +239,7 @@ def test_project_infrastructure_guide_is_linked_and_searchable() -> None:
 
 
 def test_vendor_route_guidance_covers_optional_admin_proposals() -> None:
-    guide = guidance_for_path("/admin/vendors/routes/new")
+    guide = guidance_for_path("/admin/network/fiber-map/new")
     fiber_map_guide = guidance_for_path("/admin/network/fiber")
 
     assert guide is not None

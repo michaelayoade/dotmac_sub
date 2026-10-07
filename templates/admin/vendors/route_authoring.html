@@ -17,7 +17,7 @@
     {% set asset_control_class = "mt-1 block rounded-md border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition-colors focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-amber-600 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-amber-400" %}
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
-            <a href="/admin/vendors/routes" class="text-sm font-medium text-orange-600 hover:text-orange-700">&larr; Back to route proposals</a>
+            <a href="{{ authoring_back_href | default('/admin/vendors/routes') }}" class="text-sm font-medium text-orange-600 hover:text-orange-700">&larr; {{ authoring_back_label | default('Back to route proposals') }}</a>
             <h1 class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">Create admin map proposal</h1>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create a route or map asset with no vendor, project, or work order required. Link one only when it exists.</p>
         </div>
@@ -33,6 +33,7 @@
         <div class="space-y-6">
             <form method="post" action="/admin/vendors/routes/suggested-route" id="admin-route-author-form" class="rounded-md border border-violet-200 bg-violet-50/60 p-5 space-y-3 dark:border-violet-900/60 dark:bg-violet-950/20">
                 {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="return_to" value="{{ authoring_return_to | default('vendor_routes') }}">
                 <h2 class="font-bold text-slate-900 dark:text-white">Suggest a route</h2>
                 <p class="text-xs text-slate-600 dark:text-slate-300">Draw at least two points. Project and work order links are optional.</p>
                 <label class="block text-xs text-slate-600 dark:text-slate-300">Route name<input name="name" maxlength="160" required value="Suggested route" class="{{ route_control_class }} w-full"></label>
@@ -53,6 +54,7 @@
 
             <form method="post" action="/admin/vendors/routes/asset-proposals" id="asset-proposal-form" class="rounded-md border border-amber-200 bg-amber-50/70 p-5 space-y-3 dark:border-amber-900/60 dark:bg-amber-950/20">
                 {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="return_to" value="{{ authoring_return_to | default('vendor_routes') }}">
                 <h2 class="font-bold text-amber-950 dark:text-amber-100">Suggest a map asset</h2>
                 <p class="text-xs text-amber-900/80 dark:text-amber-200">Pin a splice closure. Project and work order links are optional.</p>
                 <button type="button" id="asset-pin-toggle" class="rounded-md border border-amber-500 px-3 py-2 text-sm font-semibold text-amber-800">Start pinning</button>
