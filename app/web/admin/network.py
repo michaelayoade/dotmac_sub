@@ -479,6 +479,18 @@ def comprehensive_network_map(
     context = _base_context(request, db, active_page="network-map")
     projection = network_map_service.build_network_map_projection(db=db)
     context.update(projection.to_template_context())
+    from app.services import customer_regions as customer_regions_service
+
+    context["customer_regions"] = [
+        {
+            "name": region.name,
+            "latitude": float(region.latitude),
+            "longitude": float(region.longitude),
+            "radius_meters": float(region.radius_meters),
+            "color": region.color,
+        }
+        for region in customer_regions_service.list_regions(db, include_inactive=False)
+    ]
     context["network_map_transfer"] = _network_map_transfer_controls(auth, db)
     return templates.TemplateResponse("admin/network/map.html", context)
 
