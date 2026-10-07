@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from typing import Iterable
 from uuid import UUID
 
-from sqlalchemy import and_, func, select as db_select
+from geoalchemy2.types import Geography
+from sqlalchemy import and_, case, cast, func, or_, select as db_select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import NasDevice
+from app.models.catalog import NasDevice, Subscription
 from app.models.customer_region import CustomerRegion, CustomerRegionMatchMode
 from app.models.network_monitoring import PopSite
+from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Address, Subscriber
 
 REGION_MATCH_MODES = tuple(mode.value for mode in CustomerRegionMatchMode)
@@ -87,6 +89,8 @@ def _validate_region_input(
     radius_meters: float,
     color: str,
     match_mode: str,
+    nas_device_id: UUID | None = None,
+    pop_site_id: UUID | None = None,
 ) -> tuple[str, float, float, float, str, str]:
     normalized_name = name.strip()
     if not normalized_name:
@@ -105,6 +109,10 @@ def _validate_region_input(
     normalized_mode = match_mode.strip().lower()
     if normalized_mode not in REGION_MATCH_MODES:
         raise ValueError("Unsupported region overlap mode")
+    if normalized_mode == CustomerRegionMatchMode.nas.value and not nas_device_id:
+        raise ValueError("Select a NAS when using the matching NAS overlap rule")
+    if normalized_mode == CustomerRegionMatchMode.pop_site.value and not pop_site_id:
+        raise ValueError("Select a POP/site when using the matching POP/site overlap rule")
     return (
         normalized_name,
         float(latitude),
@@ -138,6 +146,8 @@ def save_region(
         radius_meters=radius_meters,
         color=color,
         match_mode=match_mode,
+        nas_device_id=nas_device_id,
+        pop_site_id=pop_site_id,
     )
     region = db.get(CustomerRegion, region_id) if region_id else CustomerRegion()
     if region is None:
@@ -171,7 +181,7 @@ def delete_region(db: Session, *, region_id: UUID) -> None:
 
 
 def customer_region_exists_clause(region_id: str | UUID | None):
-    """Return a correlated EXISTS clause for customer list filtering."""
+    """Return a filter for the canonical winning region of a subscriber."""
 
     if not region_id:
         return None
@@ -185,16 +195,117 @@ def customer_region_exists_clause(region_id: str | UUID | None):
     address_point = func.ST_SetSRID(
         func.ST_MakePoint(Address.longitude, Address.latitude), 4326
     )
-    distance = func.ST_DistanceSphere(address_point, region_point)
-    return Subscriber.id.in_(
-        db_select(Address.subscriber_id)
-        .join(CustomerRegion, CustomerRegion.id == normalized_id)
-        .where(
+    fallback_distance = func.ST_DistanceSphere(address_point, region_point)
+    geography_distance = func.ST_Distance(
+        cast(Address.geom, Geography), cast(region_point, Geography)
+    )
+    distance = case(
+        (Address.geom.isnot(None), geography_distance),
+        else_=fallback_distance,
+    )
+    within_radius = or_(
+        and_(
+            Address.geom.isnot(None),
+            func.ST_DWithin(
+                cast(Address.geom, Geography),
+                cast(region_point, Geography),
+                CustomerRegion.radius_meters,
+            ),
+        ),
+        and_(
+            Address.geom.is_(None),
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
-            CustomerRegion.is_active.is_(True),
-            distance <= CustomerRegion.radius_meters,
+            fallback_distance <= CustomerRegion.radius_meters,
+        ),
+    )
+    primary_address_id = (
+        db_select(Address.id)
+        .where(
+            Address.subscriber_id == Subscriber.id,
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
         )
+        .order_by(
+            case((Address.is_primary.is_(True), 0), else_=1),
+            Address.id.asc(),
+        )
+        .limit(1)
+        .correlate(Subscriber)
+        .scalar_subquery()
+    )
+    mode_priority = case(
+        (CustomerRegion.match_mode == CustomerRegionMatchMode.manual.value, 3),
+        (
+            CustomerRegion.match_mode.in_(
+                (
+                    CustomerRegionMatchMode.nas.value,
+                    CustomerRegionMatchMode.pop_site.value,
+                )
+            ),
+            2,
+        ),
+        (CustomerRegion.match_mode == CustomerRegionMatchMode.nearest.value, 1),
+        else_=0,
+    )
+    infrastructure_match = or_(
+        and_(
+            CustomerRegion.match_mode == CustomerRegionMatchMode.nas.value,
+            or_(
+                Subscriber.subscriptions.any(
+                    and_(
+                        Subscription.provisioning_nas_device_id
+                        == CustomerRegion.nas_device_id,
+                        Subscription.provisioning_nas_device_id.isnot(None),
+                    )
+                ),
+                db_select(RadiusActiveSession.id)
+                .where(
+                    RadiusActiveSession.subscriber_id == Subscriber.id,
+                    RadiusActiveSession.nas_device_id == CustomerRegion.nas_device_id,
+                    RadiusActiveSession.nas_device_id.isnot(None),
+                )
+                .exists(),
+            ),
+        ),
+        and_(
+            CustomerRegion.match_mode == CustomerRegionMatchMode.pop_site.value,
+            CustomerRegion.pop_site_id == Subscriber.pop_site_id,
+            Subscriber.pop_site_id.isnot(None),
+        ),
+    )
+    winner_region_id = (
+        db_select(CustomerRegion.id)
+        .select_from(Address)
+        .join(CustomerRegion, CustomerRegion.is_active.is_(True))
+        .where(Address.id == primary_address_id, within_radius)
+        .order_by(
+            case((infrastructure_match, 0), else_=1),
+            mode_priority.desc(),
+            CustomerRegion.priority.desc(),
+            distance.asc(),
+            CustomerRegion.id.asc(),
+        )
+        .limit(1)
+        .correlate(Subscriber)
+        .scalar_subquery()
+    )
+    return winner_region_id == normalized_id
+
+
+def primary_geocoded_address(addresses: Iterable[Address]) -> Address | None:
+    """Return the stable address used for customer region classification."""
+
+    valid = [
+        address
+        for address in addresses
+        if address.latitude is not None and address.longitude is not None
+    ]
+    if not valid:
+        return None
+    return min(
+        valid,
+        key=lambda address: (not bool(address.is_primary), str(address.id)),
     )
 
 

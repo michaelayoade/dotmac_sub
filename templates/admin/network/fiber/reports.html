@@ -516,6 +516,7 @@ new Chart(assetCtx, {
     const geojsonData = {{ customer_geojson | tojson | safe }};
     const customerRegions = {{ customer_regions | tojson | safe }};
     const bounds = [];
+    const regionBounds = L.latLngBounds();
     const customerConnectivityColors = {
         connected: 'var(--color-semantic-positive-600)',
         not_connected: 'var(--color-semantic-neutral-600)'
@@ -534,7 +535,7 @@ new Chart(assetCtx, {
     }
 
     customerRegions.forEach(region => {
-        L.circle([region.latitude, region.longitude], {
+        const circle = L.circle([region.latitude, region.longitude], {
             radius: region.radius_meters,
             color: region.color,
             fillColor: region.color,
@@ -542,6 +543,7 @@ new Chart(assetCtx, {
             weight: 2,
             dashArray: '5, 6'
         }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`).addTo(map);
+        regionBounds.extend(circle.getBounds());
     });
 
     if (geojsonData.features && geojsonData.features.length > 0) {
@@ -572,12 +574,14 @@ new Chart(assetCtx, {
                 .addTo(map);
         });
 
-        if (bounds.length > 0) {
-            map.fitBounds(bounds, { padding: [30, 30] });
+        if (bounds.length > 0 || regionBounds.isValid()) {
+            const visibleBounds = L.latLngBounds(bounds);
+            if (regionBounds.isValid()) visibleBounds.extend(regionBounds);
+            map.fitBounds(visibleBounds, { padding: [30, 30] });
         }
     } else {
-        // No data - show a message
-        map.setView([-1.286389, 36.817223], 10); // Nairobi default
+        if (regionBounds.isValid()) map.fitBounds(regionBounds, { padding: [30, 30] });
+        else map.setView([-1.286389, 36.817223], 10); // Nairobi default
     }
 })();
 </script>
