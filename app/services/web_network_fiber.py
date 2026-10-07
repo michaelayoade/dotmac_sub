@@ -30,6 +30,7 @@ from app.models.network import (
 )
 from app.models.subscriber import Address, Subscriber
 from app.schemas.fiber_cost_items import FiberCostEstimate, FiberPricingState
+from app.services import customer_regions
 from app.services import fiber_change_requests as change_request_service
 from app.services import fiber_cost_items, settings_spec
 
@@ -503,6 +504,8 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
             Address.longitude,
             Subscriber.first_name,
             Subscriber.last_name,
+            Subscriber.id.label("subscriber_id"),
+            Subscriber.pop_site_id,
         )
         .join(OntAssignment, OntAssignment.service_address_id == Address.id)
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
@@ -516,11 +519,18 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
     if map_limit:
         customer_addresses_query = customer_addresses_query.limit(map_limit)
     customer_addresses = customer_addresses_query.all()
+    configured_regions = customer_regions.list_regions(db, include_inactive=False)
 
     features: list[dict] = []
     for address in customer_addresses:
         subscriber_name = (
             f"{address.first_name or ''} {address.last_name or ''}".strip() or "Unknown"
+        )
+        region = customer_regions.resolve_region(
+            configured_regions,
+            latitude=float(address.latitude),
+            longitude=float(address.longitude),
+            pop_site_id=address.pop_site_id,
         )
         features.append(
             {
@@ -535,6 +545,8 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
                     "name": subscriber_name,
                     "address": address.address_line1,
                     "city": address.city or "",
+                    "region_name": region.name if region else None,
+                    "region_color": region.color if region else None,
                 },
             }
         )
@@ -593,6 +605,16 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
     return {
         "stats": stats,
         "customer_geojson": {"type": "FeatureCollection", "features": features},
+        "customer_regions": [
+            {
+                "name": region.name,
+                "latitude": float(region.latitude),
+                "longitude": float(region.longitude),
+                "radius_meters": float(region.radius_meters),
+                "color": region.color,
+            }
+            for region in configured_regions
+        ],
         "customer_count": customer_total,
         "customer_map_count": len(customer_addresses),
     }

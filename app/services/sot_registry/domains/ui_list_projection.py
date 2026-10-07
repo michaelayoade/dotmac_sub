@@ -744,6 +744,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "admin customer searchable fields",
                 "admin customer filter semantics",
+                "admin customer region filter semantics",
                 "admin customer stable sort semantics",
                 "admin customer row and page projection",
                 "admin customer row name display truncation",
@@ -764,6 +765,7 @@ DOMAIN = DomainSOT(
                 "network.identity",
                 "network.ip_assignment_lifecycle",
                 "support.ticket_lifecycle",
+                "gis.customer_regions",
             ),
             notes=(
                 "The admin list and CSV export share one normalized scope and "
@@ -810,6 +812,7 @@ DOMAIN = DomainSOT(
                     for concern in (
                         "admin customer searchable fields",
                         "admin customer filter semantics",
+                        "admin customer region filter semantics",
                         "admin customer stable sort semantics",
                         "admin customer row and page projection",
                         "admin customer row name display truncation",

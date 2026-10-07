@@ -508,7 +508,19 @@ new Chart(assetCtx, {
     };
 
     const geojsonData = {{ customer_geojson | tojson | safe }};
+    const customerRegions = {{ customer_regions | tojson | safe }};
     const bounds = [];
+
+    customerRegions.forEach(region => {
+        L.circle([region.latitude, region.longitude], {
+            radius: region.radius_meters,
+            color: region.color,
+            fillColor: region.color,
+            fillOpacity: 0.08,
+            weight: 2,
+            dashArray: '5, 6'
+        }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`).addTo(map);
+    });
 
     if (geojsonData.features && geojsonData.features.length > 0) {
         geojsonData.features.forEach(feature => {
@@ -517,12 +529,18 @@ new Chart(assetCtx, {
             const coords = [geom.coordinates[1], geom.coordinates[0]];
             bounds.push(coords);
 
-            const icon = icons[p.type] || icons.customer;
+            const icon = p.type === 'customer' && p.region_color
+                ? L.divIcon({
+                    html: `<div style="background:#06b6d4;width:16px;height:16px;border-radius:50%;border:3px solid ${p.region_color};box-shadow:0 0 0 1px white,0 2px 4px rgba(0,0,0,0.3)"></div>`,
+                    className: '', iconSize: [18, 18], iconAnchor: [9, 9]
+                })
+                : (icons[p.type] || icons.customer);
 
             let popupContent = `<strong>${escapeHtml(p.name)}</strong>`;
             if (p.type === 'customer') {
                 popupContent += `<br><span style="color:#666;font-size:12px">${escapeHtml(p.address)}</span>`;
                 if (p.city) popupContent += `<br><span style="color:#999;font-size:11px">${escapeHtml(p.city)}</span>`;
+                if (p.region_name) popupContent += `<br><span style="color:${escapeHtml(p.region_color || '#64748b')};font-size:11px">Region: ${escapeHtml(p.region_name)}</span>`;
             } else if (p.code) {
                 popupContent += `<br><span style="color:#666;font-size:12px">${escapeHtml(p.code)}</span>`;
             }

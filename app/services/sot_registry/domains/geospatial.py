@@ -35,6 +35,16 @@ DOMAIN = DomainSOT(
                 "spatial feature import and projection",
             ),
         ),
+        SOTService(
+            name="gis.customer_regions",
+            module="app.services.customer_regions",
+            owns=(
+                "customer region configuration",
+                "radius-based customer region assignment",
+                "overlapping customer region tie-break resolution",
+            ),
+            depends_on=("customer.accounts", "network.identity", "gis.spatial_sync"),
+        ),
     ),
     entrypoints=(
         "app.api.geocoding",

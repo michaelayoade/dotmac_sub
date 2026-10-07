@@ -29,6 +29,7 @@ from app.models.network import (
 )
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
+from app.services import customer_regions
 from app.services import settings_spec
 from app.services.device_operational_status import (
     DeviceOperationalState,
@@ -529,6 +530,26 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
             snapshots_by_subscriber.setdefault(subscription.subscriber_id, []).append(
                 snapshot
             )
+    nas_ids_by_subscriber: dict[UUID, frozenset[UUID]] = {
+        subscriber_id: frozenset() for subscriber_id in mapped_subscriber_ids
+    }
+    for subscription in subscriptions:
+        nas_id = subscription.provisioning_nas_device_id
+        if nas_id is not None:
+            nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                (
+                    *nas_ids_by_subscriber.get(
+                        subscription.subscriber_id, frozenset()
+                    ),
+                    nas_id,
+                )
+            )
+    pop_site_by_subscriber = dict(
+        db.query(Subscriber.id, Subscriber.pop_site_id)
+        .filter(Subscriber.id.in_(mapped_subscriber_ids))
+        .all()
+    )
+    configured_regions = customer_regions.list_regions(db, include_inactive=False)
     connectivity_by_subscriber = {
         subscriber_id: resolve_customer_connectivity(snapshots)
         for subscriber_id, snapshots in snapshots_by_subscriber.items()
@@ -604,6 +625,13 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
             addr.subscriber_id,
             inactive_connectivity,
         )
+        region = customer_regions.resolve_region(
+            configured_regions,
+            latitude=float(addr.latitude),
+            longitude=float(addr.longitude),
+            pop_site_id=pop_site_by_subscriber.get(addr.subscriber_id),
+            nas_device_ids=nas_ids_by_subscriber.get(addr.subscriber_id, frozenset()),
+        )
         features.append(
             NetworkMapFeature(
                 geometry=_point(addr.longitude, addr.latitude),
@@ -615,6 +643,8 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
                     city=addr.city or "",
                     subscriber_id=addr.subscriber_id,
                     customer_status=addr.customer_status,
+                    customer_region_name=region.name if region else None,
+                    customer_region_color=region.color if region else None,
                     customer_route_kind=(
                         NetworkMapCustomerRouteKind.business
                         if is_business

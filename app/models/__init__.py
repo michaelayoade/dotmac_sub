@@ -251,6 +251,10 @@ from app.models.connector import (  # noqa: F401
     ConnectorConfig,
     ConnectorType,
 )
+from app.models.customer_region import (  # noqa: F401
+    CustomerRegion,
+    CustomerRegionMatchMode,
+)
 from app.models.contracts import ContractSignature  # noqa: F401
 from app.models.crm_sync_failure import (  # noqa: F401
     CrmSyncFailure,

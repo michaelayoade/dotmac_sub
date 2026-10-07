@@ -881,6 +881,7 @@
 (function() {
     // Map data from server
     const mapData = {{ map_data | tojson | safe }};
+    const customerRegions = {{ customer_regions | tojson | safe }};
     const mapStats = {{ stats | tojson | safe }};
     const canReadCustomers = {{ can(request, "customer:read") | tojson }};
 
@@ -901,6 +902,17 @@
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
         maxZoom: 19
     }).addTo(map);
+
+    customerRegions.forEach(region => {
+        L.circle([region.latitude, region.longitude], {
+            radius: region.radius_meters,
+            color: region.color,
+            fillColor: region.color,
+            fillOpacity: 0.08,
+            weight: 2,
+            dashArray: '5, 6'
+        }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`).addTo(map);
+    });
 
     // Layer groups
     const layers = {
@@ -938,11 +950,12 @@
     function customerMarkerIcon(properties) {
         const status = customerVisualStatus(properties);
         const outline = customerStatusColors[status] || customerStatusColors.offline;
+        const regionColor = properties.region_color || outline;
         const background = properties.connectivity?.layer === 'connected'
             ? 'var(--color-semantic-positive-600)'
             : 'var(--color-semantic-neutral-600)';
         return L.divIcon({
-            html: `<div style="background:${background};width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid ${outline};box-shadow:0 0 0 1px white,0 2px 5px rgba(0,0,0,.35)"><svg style="width:9px;height:9px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>`,
+            html: `<div style="background:${background};width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid ${regionColor};box-shadow:0 0 0 1px white,0 2px 5px rgba(0,0,0,.35)"><svg style="width:9px;height:9px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>`,
             className: '', iconSize: [20, 20], iconAnchor: [10, 10], popupAnchor: [0, -10]
         });
     }
@@ -1229,6 +1242,7 @@
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Customer status</span><span class="asset-detail-value" style="color:${customerColor}">${escapeHtml(p.customer_status || 'Unknown')}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Session status</span><span class="asset-detail-value status-foreground status-tone-${semanticTone(customerPresentation.tone)}">${sessionStatus}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Connectivity</span><span class="asset-detail-value">${escapeHtml(customerPresentation.label)}</span></div>`;
+            if (p.region_name) html += `<div class="asset-detail-row"><span class="asset-detail-label">Region</span><span class="asset-detail-value"><span class="customer-status-dot" style="background:${escapeHtml(p.region_color || '#64748b')}"></span>${escapeHtml(p.region_name)}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Source</span><span class="asset-detail-value">${escapeHtml(p.connectivity.source_owner)}</span></div>`;
             if (p.connectivity.observed_at) {
                 html += `<div class="asset-detail-row"><span class="asset-detail-label">Observed</span><span class="asset-detail-value">${escapeHtml(p.connectivity.observed_at)}</span></div>`;
