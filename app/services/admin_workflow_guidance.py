@@ -1053,7 +1053,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Define the center, radius, color, and overlap rule used to classify customers geographically.",
         ("/admin/customer-regions",),
         "Open Customer Regions from the Settings Hub and review existing active and disabled regions before changing one.",
-        "Create or edit a region with verified decimal coordinates, a radius, a color, and the overlap rule that matches the operating decision.",
+        "Create or edit a region with verified decimal coordinates, a radius, a color, and the overlap rule that matches the operating decision; if validation fails, correct the highlighted input and save again because the existing configuration remains unchanged.",
         "Use the map marker or click the map to adjust the center, then save and verify the radius boundary on the network maps.",
         "When radii overlap, use Nearest for geographic proximity, NAS or POP/site for the matching infrastructure tie-breaker, or Manual priority when an explicit precedence is required.",
         "Disable a region instead of deleting it when it should stop receiving new assignments but remain available for review history.",

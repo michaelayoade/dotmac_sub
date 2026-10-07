@@ -331,6 +331,7 @@ def save_region(
             pop_site_id=command.pop_site_id,
         )
         created = command.region_id is None
+        region: CustomerRegion | None
         if command.region_id is None:
             region = CustomerRegion()
         else:
