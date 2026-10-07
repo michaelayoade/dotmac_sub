@@ -4642,19 +4642,18 @@ typing-extensions = ">=4.12.2"
 
 [[package]]
 name = "routeros-api"
-version = "0.17.0"
+version = "0.21.0"
 description = "Python API to RouterBoard devices produced by MikroTik."
 optional = false
-python-versions = "*"
+python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "RouterOS-api-0.17.0.tar.gz", hash = "sha256:1b9898460ecc4667b54e477d495b74c2f24ae0aac4c90dd0e62f23ec7eae8252"},
-    {file = "RouterOS_api-0.17.0-py2.py3-none-any.whl", hash = "sha256:bf38da94a570875eaa87ff537558f765a4697dbce1a9753070194b687f441bf0"},
+    {file = "routeros_api-0.21.0-py2.py3-none-any.whl", hash = "sha256:4189c11bdeae0d8d654b1f1212f3654a54f0df8e4ec0bcb4d5bc31303a7f76d0"},
+    {file = "routeros_api-0.21.0.tar.gz", hash = "sha256:0d37452a4ff85cd476dca392068d7d76ba430c9b055c39d8dabc5930a997d82d"},
 ]
 
 [package.dependencies]
 six = "*"
-
 [[package]]
 name = "rsa"
 version = "4.9.1"
@@ -6227,4 +6226,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "02126e28f22743c96532841e52db089b2f97fe3a888befa6aac44c7c0c3c54c5"
+content-hash = "408cbbed96beafa693ea4e555bab05a9fe0324143579745bac2c58e63d11422c"
