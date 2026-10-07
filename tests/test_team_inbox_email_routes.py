@@ -19,6 +19,9 @@ from app.services import email as email_service
 from app.services import team_inbox_commands, team_inbox_routing
 
 ROUTES_TEMPLATE = Path("templates/admin/inbox/email_routes.html").read_text()
+AI_TESTING_TEMPLATE = Path(
+    "templates/admin/inbox/partials/ai_testing.html"
+).read_text()
 ROUTES_MODULE = Path("app/web/admin/inbox.py").read_text()
 
 
@@ -504,11 +507,19 @@ def test_ai_intake_admin_lifecycle_uses_canonical_separate_actions():
 
 
 def test_ai_intake_admin_history_is_read_only_and_exposes_all_version_states():
-    assert "Policy version history" in ROUTES_TEMPLATE
-    assert "Current active" in ROUTES_TEMPLATE
-    assert "'Active' if version.status == 'activated'" in ROUTES_TEMPLATE
-    assert "ai_intake_policy_version_history" in ROUTES_TEMPLATE
+    assert "Policy version history" in AI_TESTING_TEMPLATE
+    assert "Current active" in AI_TESTING_TEMPLATE
+    assert "'Active' if version.status == 'activated'" in AI_TESTING_TEMPLATE
+    assert "ai_intake_policy_version_history" in AI_TESTING_TEMPLATE
     assert "Policy version history" not in ROUTES_MODULE
+
+
+def test_ai_intake_testing_data_is_loaded_by_a_read_permission_partial():
+    assert 'include_testing_data=False' in ROUTES_MODULE
+    assert '"/settings/partials/ai-testing"' in ROUTES_MODULE
+    assert 'admin_policy_testing_context(db)' in ROUTES_MODULE
+    assert 'require_permission("support:ticket:read")' in ROUTES_MODULE
+    assert 'hx-get="/admin/crm/inbox/settings/partials/ai-testing"' in ROUTES_TEMPLATE
 
 
 def test_ai_polish_settings_are_editable_on_inbox_settings_page():

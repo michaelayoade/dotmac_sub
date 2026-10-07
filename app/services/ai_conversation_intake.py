@@ -1690,33 +1690,14 @@ def _policy_status(policy: AiIntakePolicy, draft: AiIntakePolicyVersion | None) 
 _ADMIN_POLICY_VERSION_HISTORY_LIMIT = 20
 
 
-def admin_policy_context(db: Session) -> dict[str, object]:
-    """Build the admin AI intake policy read model for the settings template."""
-
+def _admin_policy_testing_context(
+    db: Session,
+    *,
+    selected_policy: AiIntakePolicy | None,
+    selected_active: AiIntakePolicyVersion | None,
+) -> dict[str, object]:
     from app.services import ai_intake_canary_library, ai_intake_rollout_readiness
 
-    rows = (
-        db.query(AiIntakePolicy)
-        .order_by(AiIntakePolicy.updated_at.desc(), AiIntakePolicy.created_at.desc())
-        .all()
-    )
-    versions_by_policy: dict[UUID, list[AiIntakePolicyVersion]] = {}
-    if rows:
-        versions = (
-            db.query(AiIntakePolicyVersion)
-            .filter(AiIntakePolicyVersion.policy_id.in_([row.id for row in rows]))
-            .order_by(
-                AiIntakePolicyVersion.policy_id.asc(),
-                AiIntakePolicyVersion.version_number.desc(),
-            )
-            .all()
-        )
-        for version in versions:
-            versions_by_policy.setdefault(version.policy_id, []).append(version)
-    selected_policy = rows[0] if rows else None
-    selected_versions = (
-        versions_by_policy.get(selected_policy.id, []) if selected_policy else []
-    )
     history_versions = (
         db.query(AiIntakePolicyVersion)
         .filter(AiIntakePolicyVersion.policy_id == selected_policy.id)
@@ -1740,6 +1721,78 @@ def admin_policy_context(db: Session) -> dict[str, object]:
             superseded_at=version.superseded_at,
         )
         for version in history_versions
+    )
+    return {
+        "ai_intake_policy_version_history": version_history,
+        "ai_intake_policy_version_history_limit": _ADMIN_POLICY_VERSION_HISTORY_LIMIT,
+        "ai_intake_canary_matrix": (
+            ai_intake_rollout_readiness.data_driven_scenario_matrix()
+        ),
+        "ai_intake_canary_library": ai_intake_rollout_readiness.canary_library_rows(),
+        "ai_intake_canary_suites": ai_intake_canary_library.list_suites(db),
+        "ai_intake_canary_assertion_types": tuple(
+            sorted(
+                ai_intake_rollout_readiness.ai_intake_canary_runner.SUPPORTED_ASSERTION_TYPES
+            )
+        ),
+        "ai_intake_pre_activation_gate": (
+            ai_intake_rollout_readiness.pre_activation_gate_report(
+                db=db,
+                policy_version_id=selected_active.id if selected_active else None,
+            )
+        ),
+        "ai_intake_activation_plan": ai_intake_rollout_readiness.CONTROLLED_ACTIVATION_PLAN,
+    }
+
+
+def admin_policy_testing_context(db: Session) -> dict[str, object]:
+    """Build only the expensive read-only testing projection for admin settings."""
+
+    selected_policy = (
+        db.query(AiIntakePolicy)
+        .order_by(AiIntakePolicy.updated_at.desc(), AiIntakePolicy.created_at.desc())
+        .first()
+    )
+    selected_active = (
+        db.get(AiIntakePolicyVersion, selected_policy.active_version_id)
+        if selected_policy and selected_policy.active_version_id is not None
+        else None
+    )
+    return _admin_policy_testing_context(
+        db,
+        selected_policy=selected_policy,
+        selected_active=selected_active,
+    )
+
+
+def admin_policy_context(
+    db: Session,
+    *,
+    include_testing_data: bool = True,
+) -> dict[str, object]:
+    """Build the admin AI intake policy read model for the settings template."""
+
+    rows = (
+        db.query(AiIntakePolicy)
+        .order_by(AiIntakePolicy.updated_at.desc(), AiIntakePolicy.created_at.desc())
+        .all()
+    )
+    versions_by_policy: dict[UUID, list[AiIntakePolicyVersion]] = {}
+    if rows:
+        versions = (
+            db.query(AiIntakePolicyVersion)
+            .filter(AiIntakePolicyVersion.policy_id.in_([row.id for row in rows]))
+            .order_by(
+                AiIntakePolicyVersion.policy_id.asc(),
+                AiIntakePolicyVersion.version_number.desc(),
+            )
+            .all()
+        )
+        for version in versions:
+            versions_by_policy.setdefault(version.policy_id, []).append(version)
+    selected_policy = rows[0] if rows else None
+    selected_versions = (
+        versions_by_policy.get(selected_policy.id, []) if selected_policy else []
     )
     selected_draft = next(
         (version for version in selected_versions if version.status == "draft"),
@@ -1818,7 +1871,7 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         )
     except ValueError:
         clarification_questions = DEFAULT_CLARIFICATION_QUESTIONS
-    return {
+    context = {
         "ai_intake_policies": [
             {
                 "id": str(policy.id),
@@ -1846,8 +1899,6 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         "ai_intake_policy": selected_policy,
         "ai_intake_draft_version": selected_draft,
         "ai_intake_active_version": selected_active,
-        "ai_intake_policy_version_history": version_history,
-        "ai_intake_policy_version_history_limit": _ADMIN_POLICY_VERSION_HISTORY_LIMIT,
         "ai_intake_edit_version": editable_version,
         "ai_intake_policy_status": (
             _policy_status(selected_policy, selected_draft)
@@ -1885,26 +1936,16 @@ def admin_policy_context(db: Session) -> dict[str, object]:
         "ai_intake_tool_catalogue": (
             ai_intake_conversation_engine.tool_catalogue_snapshot()
         ),
-        "ai_intake_canary_matrix": (
-            ai_intake_rollout_readiness.data_driven_scenario_matrix()
-        ),
-        "ai_intake_canary_library": ai_intake_rollout_readiness.canary_library_rows(),
-        "ai_intake_canary_suites": ai_intake_canary_library.list_suites(db),
-        "ai_intake_canary_assertion_types": tuple(
-            sorted(
-                ai_intake_rollout_readiness.ai_intake_canary_runner.SUPPORTED_ASSERTION_TYPES
-            )
-        ),
-        "ai_intake_pre_activation_gate": (
-            ai_intake_rollout_readiness.pre_activation_gate_report(
-                db=db,
-                policy_version_id=selected_active.id if selected_active else None,
-            )
-        ),
-        "ai_intake_activation_plan": (
-            ai_intake_rollout_readiness.CONTROLLED_ACTIVATION_PLAN
-        ),
     }
+    if include_testing_data:
+        context.update(
+            _admin_policy_testing_context(
+                db,
+                selected_policy=selected_policy,
+                selected_active=selected_active,
+            )
+        )
+    return context
 
 
 def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
