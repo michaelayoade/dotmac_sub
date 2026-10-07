@@ -19,9 +19,7 @@ from app.services import email as email_service
 from app.services import team_inbox_commands, team_inbox_routing
 
 ROUTES_TEMPLATE = Path("templates/admin/inbox/email_routes.html").read_text()
-AI_TESTING_TEMPLATE = Path(
-    "templates/admin/inbox/partials/ai_testing.html"
-).read_text()
+AI_TESTING_TEMPLATE = Path("templates/admin/inbox/partials/ai_testing.html").read_text()
 ROUTES_MODULE = Path("app/web/admin/inbox.py").read_text()
 
 
@@ -515,9 +513,9 @@ def test_ai_intake_admin_history_is_read_only_and_exposes_all_version_states():
 
 
 def test_ai_intake_testing_data_is_loaded_by_a_read_permission_partial():
-    assert 'include_testing_data=False' in ROUTES_MODULE
+    assert "include_testing_data=False" in ROUTES_MODULE
     assert '"/settings/partials/ai-testing"' in ROUTES_MODULE
-    assert 'admin_policy_testing_context(db)' in ROUTES_MODULE
+    assert "admin_policy_testing_context(db)" in ROUTES_MODULE
     assert 'require_permission("support:ticket:read")' in ROUTES_MODULE
     assert 'hx-get="/admin/crm/inbox/settings/partials/ai-testing"' in ROUTES_TEMPLATE
 
