@@ -55,7 +55,7 @@ class ContactMethod(enum.Enum):
     push = "push"
 
 
-class ConnectionType(enum.Enum):
+class CustomerConnectionType(enum.Enum):
     """Customer last-mile medium used for regional connectivity reporting."""
 
     wireless = "wireless"
@@ -324,8 +324,8 @@ class Subscriber(Base):
     pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pop_sites.id", ondelete="SET NULL"), index=True
     )
-    connection_type: Mapped[ConnectionType | None] = mapped_column(
-        Enum(ConnectionType, native_enum=False, length=16)
+    connection_type: Mapped[CustomerConnectionType | None] = mapped_column(
+        Enum(CustomerConnectionType, native_enum=False, length=16)
     )
 
     # === Account Fields (from Subscriber + SubscriberAccount) ===

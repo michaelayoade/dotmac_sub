@@ -16,7 +16,6 @@ from sqlalchemy import select as db_select
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.fiber_change_request import FiberChangeRequestStatus
 from app.models.network import (
@@ -241,58 +240,14 @@ def _customer_map_payload(
     if map_limit is None:
         map_limit = _setting_int(db, SettingDomain.gis, "map_customer_limit", 2000)
     map_limit = min(max(int(map_limit or 2000), 1), 5000)
-    primary_address_id = (
-        db_select(Address.id)
-        .where(
-            Address.subscriber_id == Subscriber.id,
-            Address.latitude.isnot(None),
-            Address.longitude.isnot(None),
-        )
-        .order_by(
-            case((Address.is_primary.is_(True), 0), else_=1),
-            Address.id.asc(),
-        )
-        .limit(1)
-        .correlate(Subscriber)
-        .scalar_subquery()
+    customer_addresses = customer_regions.customer_map_address_observations(
+        db,
+        limit=map_limit,
     )
-    assigned_service_addresses = db_select(OntAssignment.service_address_id).where(
-        OntAssignment.active.is_(True),
-        OntAssignment.service_address_id.isnot(None),
-    )
-    customer_addresses = (
-        db.query(
-            Address.id,
-            Address.address_line1,
-            Address.city,
-            Address.latitude,
-            Address.longitude,
-            Subscriber.first_name,
-            Subscriber.last_name,
-            Subscriber.id.label("subscriber_id"),
-            Subscriber.pop_site_id,
-            Subscriber.status.label("customer_status"),
-        )
-        .join(Subscriber, Address.subscriber_id == Subscriber.id)
-        .filter(
-            Address.id == primary_address_id,
-            Address.id.in_(assigned_service_addresses),
-            Address.latitude.isnot(None),
-            Address.longitude.isnot(None),
-            Subscriber.is_active.is_(True),
-        )
-        .order_by(Address.id)
-        .limit(map_limit)
-        .all()
-    )
-    subscriber_ids = {address.subscriber_id for address in customer_addresses}
-    subscriptions = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id.in_(subscriber_ids))
-        .order_by(Subscription.id)
-        .all()
-        if subscriber_ids
-        else []
+    subscriber_ids = frozenset(address.subscriber_id for address in customer_addresses)
+    subscriptions = customer_regions.customer_map_subscriptions(
+        db,
+        subscriber_ids=subscriber_ids,
     )
     snapshot_by_subscription = subscription_session_snapshots(db, subscriptions)
     snapshots_by_subscriber: dict[UUID, list[SubscriptionSessionSnapshot]] = {
@@ -356,7 +311,7 @@ def _customer_map_payload(
                     "coordinates": [address.longitude, address.latitude],
                 },
                 "properties": {
-                    "id": str(address.id),
+                    "id": str(address.address_id),
                     "type": "customer",
                     "name": subscriber_name,
                     "address": address.address_line1,
@@ -711,14 +666,10 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
     customer_addresses = customer_addresses_query.all()
     configured_regions = customer_regions.list_regions(db, include_inactive=False)
 
-    subscriber_ids = {address.subscriber_id for address in customer_addresses}
-    subscriptions = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id.in_(subscriber_ids))
-        .order_by(Subscription.id)
-        .all()
-        if subscriber_ids
-        else []
+    subscriber_ids = frozenset(address.subscriber_id for address in customer_addresses)
+    subscriptions = customer_regions.customer_map_subscriptions(
+        db,
+        subscriber_ids=subscriber_ids,
     )
     snapshot_by_subscription = subscription_session_snapshots(db, subscriptions)
     snapshots_by_subscriber: dict[UUID, list[SubscriptionSessionSnapshot]] = {

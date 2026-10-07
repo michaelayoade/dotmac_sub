@@ -20,7 +20,7 @@ from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import (
     AccountStatus,
-    ConnectionType,
+    CustomerConnectionType,
     Subscriber,
     SubscriberCategory,
 )
@@ -691,8 +691,8 @@ def get_regional_report_data(
             or "unspecified"
         )
         if connection_key not in {
-            ConnectionType.wireless.value,
-            ConnectionType.wired.value,
+            CustomerConnectionType.wireless.value,
+            CustomerConnectionType.wired.value,
         }:
             connection_key = "unspecified"
         connection_counts[assigned_region][connection_key] += int(count or 0)

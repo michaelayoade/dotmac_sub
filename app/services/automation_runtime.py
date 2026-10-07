@@ -28,12 +28,13 @@ from app.models.automation import (
     AutomationStepRun,
     AutomationStepStatus,
 )
-from app.services import automation_actions, automation_capabilities, db_session_adapter
+from app.services import automation_actions, automation_capabilities
 from app.services.automation_contracts import (
     AutomationConditionField,
     AutomationOperator,
     AutomationValueType,
 )
+from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.event_replay_evidence import DurableEventReplayEvidence
 from app.services.list_query import (

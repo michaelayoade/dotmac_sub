@@ -371,6 +371,7 @@ class EventType(enum.Enum):
 
     # Fiber splice plans (cut sheets)
     fiber_cost_item_changed = "fiber.cost_item_changed"
+    customer_region_changed = "customer_region.changed"
     fiber_splice_plan_issued = "fiber.splice_plan_issued"
     fiber_splice_plan_cancelled = "fiber.splice_plan_cancelled"
     fiber_splice_plan_item_executed = "fiber.splice_plan_item_executed"

@@ -10,18 +10,51 @@ from uuid import UUID
 from geoalchemy2.types import Geography
 from sqlalchemy import and_, case, cast, func, or_
 from sqlalchemy import select as db_select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import CTE
 
 from app.models.catalog import NasDevice, Subscription
 from app.models.customer_region import CustomerRegion, CustomerRegionMatchMode
+from app.models.network import OntAssignment
 from app.models.network_monitoring import PopSite
 from app.models.radius_active_session import RadiusActiveSession
-from app.models.subscriber import Address, Subscriber
+from app.models.subscriber import Address, Subscriber, SubscriberStatus
+from app.services.domain_errors import DomainError
+from app.services.events import emit_event
+from app.services.events.types import EventType
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 REGION_MATCH_MODES = tuple(mode.value for mode in CustomerRegionMatchMode)
 DEFAULT_REGION_COLOR = "#0ea5e9"
 UNASSIGNED_REGION_FILTER = "unassigned"
+WRITE_SCOPE = "gis:area:write"
+_SAVE_REGION = OwnerCommandDefinition(
+    owner="gis.customer_regions",
+    concern="customer region configuration",
+    name="save_customer_region",
+)
+_DISABLE_REGION = OwnerCommandDefinition(
+    owner="gis.customer_regions",
+    concern="customer region configuration",
+    name="disable_customer_region",
+)
+
+
+class CustomerRegionError(DomainError):
+    """Stable transport-neutral customer-region failure."""
+
+
+def _error(suffix: str, message: str, **details: object) -> CustomerRegionError:
+    return CustomerRegionError(
+        code=f"gis.customer_regions.{suffix}",
+        message=message,
+        details=details,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +79,132 @@ class RegionCustomerContext:
     longitude: float | None
     pop_site_id: UUID | None = None
     nas_device_ids: frozenset[UUID] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class SaveCustomerRegionCommand:
+    context: CommandContext
+    region_id: UUID | None
+    name: str
+    latitude: float
+    longitude: float
+    radius_meters: float
+    color: str
+    match_mode: str
+    priority: int
+    nas_device_id: UUID | None
+    pop_site_id: UUID | None
+    notes: str | None
+    is_active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DisableCustomerRegionCommand:
+    context: CommandContext
+    region_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRegionOutcome:
+    region_id: UUID
+    name: str
+    is_active: bool
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerMapAddressObservation:
+    address_id: UUID
+    address_line1: str | None
+    city: str | None
+    latitude: float
+    longitude: float
+    first_name: str | None
+    last_name: str | None
+    subscriber_id: UUID
+    pop_site_id: UUID | None
+    customer_status: SubscriberStatus | None
+
+
+def customer_map_address_observations(
+    db: Session, *, limit: int
+) -> list[CustomerMapAddressObservation]:
+    """Load the bounded authoritative customer-location cohort for map views."""
+
+    primary_address_id = (
+        db_select(Address.id)
+        .where(
+            Address.subscriber_id == Subscriber.id,
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+        )
+        .order_by(
+            case((Address.is_primary.is_(True), 0), else_=1),
+            Address.id.asc(),
+        )
+        .limit(1)
+        .correlate(Subscriber)
+        .scalar_subquery()
+    )
+    assigned_service_addresses = db_select(OntAssignment.service_address_id).where(
+        OntAssignment.active.is_(True),
+        OntAssignment.service_address_id.isnot(None),
+    )
+    rows = (
+        db.query(
+            Address.id,
+            Address.address_line1,
+            Address.city,
+            Address.latitude,
+            Address.longitude,
+            Subscriber.first_name,
+            Subscriber.last_name,
+            Subscriber.id.label("subscriber_id"),
+            Subscriber.pop_site_id,
+            Subscriber.status.label("customer_status"),
+        )
+        .join(Subscriber, Address.subscriber_id == Subscriber.id)
+        .filter(
+            Address.id == primary_address_id,
+            Address.id.in_(assigned_service_addresses),
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+            Subscriber.is_active.is_(True),
+        )
+        .order_by(Address.id)
+        .limit(limit)
+        .all()
+    )
+    return [
+        CustomerMapAddressObservation(
+            address_id=row.id,
+            address_line1=row.address_line1,
+            city=row.city,
+            latitude=float(row.latitude),
+            longitude=float(row.longitude),
+            first_name=row.first_name,
+            last_name=row.last_name,
+            subscriber_id=row.subscriber_id,
+            pop_site_id=row.pop_site_id,
+            customer_status=row.customer_status,
+        )
+        for row in rows
+    ]
+
+
+def customer_map_subscriptions(
+    db: Session, *, subscriber_ids: frozenset[UUID]
+) -> list[Subscription]:
+    """Load subscriptions used by the canonical customer-map observations."""
+
+    if not subscriber_ids:
+        return []
+    return (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id.in_(subscriber_ids))
+        .order_by(Subscription.id)
+        .all()
+    )
 
 
 def list_regions(db: Session, *, include_inactive: bool = True) -> list[CustomerRegion]:
@@ -97,26 +256,52 @@ def _validate_region_input(
 ) -> tuple[str, float, float, float, str, str]:
     normalized_name = name.strip()
     if not normalized_name:
-        raise ValueError("Region name is required")
+        raise _error("invalid_region", "Region name is required", field="name")
     if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
-        raise ValueError("Latitude or longitude is outside its valid range")
+        raise _error(
+            "invalid_region",
+            "Latitude or longitude is outside its valid range",
+            field="coordinates",
+        )
     if not 1 <= radius_meters <= 100_000:
-        raise ValueError("Radius must be between 1 and 100,000 meters")
+        raise _error(
+            "invalid_region",
+            "Radius must be between 1 and 100,000 meters",
+            field="radius_meters",
+        )
     normalized_color = color.strip().lower()
     if len(normalized_color) != 7 or not normalized_color.startswith("#"):
-        raise ValueError("Region color must be a six-digit hex color")
+        raise _error(
+            "invalid_region",
+            "Region color must be a six-digit hex color",
+            field="color",
+        )
     try:
         int(normalized_color[1:], 16)
     except ValueError as exc:
-        raise ValueError("Region color must be a six-digit hex color") from exc
+        raise _error(
+            "invalid_region",
+            "Region color must be a six-digit hex color",
+            field="color",
+        ) from exc
     normalized_mode = match_mode.strip().lower()
     if normalized_mode not in REGION_MATCH_MODES:
-        raise ValueError("Unsupported region overlap mode")
+        raise _error(
+            "invalid_region",
+            "Unsupported region overlap mode",
+            field="match_mode",
+        )
     if normalized_mode == CustomerRegionMatchMode.nas.value and not nas_device_id:
-        raise ValueError("Select a NAS when using the matching NAS overlap rule")
+        raise _error(
+            "invalid_region",
+            "Select a NAS when using the matching NAS overlap rule",
+            field="nas_device_id",
+        )
     if normalized_mode == CustomerRegionMatchMode.pop_site.value and not pop_site_id:
-        raise ValueError(
-            "Select a POP/site when using the matching POP/site overlap rule"
+        raise _error(
+            "invalid_region",
+            "Select a POP/site when using the matching POP/site overlap rule",
+            field="pop_site_id",
         )
     return (
         normalized_name,
@@ -130,59 +315,142 @@ def _validate_region_input(
 
 def save_region(
     db: Session,
-    *,
-    region_id: UUID | None,
-    name: str,
-    latitude: float,
-    longitude: float,
-    radius_meters: float,
-    color: str,
-    match_mode: str,
-    priority: int,
-    nas_device_id: UUID | None,
-    pop_site_id: UUID | None,
-    notes: str | None,
-    is_active: bool,
-) -> CustomerRegion:
-    values = _validate_region_input(
-        name=name,
-        latitude=latitude,
-        longitude=longitude,
-        radius_meters=radius_meters,
-        color=color,
-        match_mode=match_mode,
-        nas_device_id=nas_device_id,
-        pop_site_id=pop_site_id,
+    command: SaveCustomerRegionCommand,
+) -> CustomerRegionOutcome:
+    """Create or update one region in the owner's atomic transaction."""
+
+    def operation() -> CustomerRegionOutcome:
+        values = _validate_region_input(
+            name=command.name,
+            latitude=command.latitude,
+            longitude=command.longitude,
+            radius_meters=command.radius_meters,
+            color=command.color,
+            match_mode=command.match_mode,
+            nas_device_id=command.nas_device_id,
+            pop_site_id=command.pop_site_id,
+        )
+        created = command.region_id is None
+        if command.region_id is None:
+            region = CustomerRegion()
+        else:
+            region = db.scalar(
+                db_select(CustomerRegion)
+                .where(CustomerRegion.id == command.region_id)
+                .with_for_update()
+            )
+        if region is None:
+            raise _error(
+                "region_not_found",
+                "Region not found",
+                region_id=str(command.region_id),
+            )
+        (
+            region.name,
+            region.latitude,
+            region.longitude,
+            region.radius_meters,
+            region.color,
+            region.match_mode,
+        ) = values
+        region.priority = int(command.priority)
+        region.nas_device_id = (
+            command.nas_device_id if region.match_mode == "nas" else None
+        )
+        region.pop_site_id = (
+            command.pop_site_id if region.match_mode == "pop_site" else None
+        )
+        region.notes = (
+            command.notes.strip() if command.notes and command.notes.strip() else None
+        )
+        region.is_active = bool(command.is_active)
+        if created:
+            db.add(region)
+        db.flush()
+        emit_event(
+            db,
+            EventType.customer_region_changed,
+            {
+                "region_id": str(region.id),
+                "change": "created" if created else "updated",
+                "is_active": region.is_active,
+                "command_id": str(command.context.command_id),
+            },
+            actor=command.context.actor,
+        )
+        return CustomerRegionOutcome(
+            region_id=region.id,
+            name=region.name,
+            is_active=region.is_active,
+            created=created,
+        )
+
+    try:
+        return execute_owner_command(
+            db,
+            definition=_SAVE_REGION,
+            context=command.context,
+            operation=operation,
+        )
+    except IntegrityError as exc:
+        raise _error(
+            "duplicate_name",
+            "A region with this name already exists. Choose a unique name.",
+            field="name",
+        ) from exc
+
+
+def delete_region(
+    db: Session, command: DisableCustomerRegionCommand
+) -> CustomerRegionOutcome:
+    """Disable a region while retaining its configuration and evidence."""
+
+    def operation() -> CustomerRegionOutcome:
+        region = db.scalar(
+            db_select(CustomerRegion)
+            .where(CustomerRegion.id == command.region_id)
+            .with_for_update()
+        )
+        if region is None:
+            raise _error(
+                "region_not_found",
+                "Region not found",
+                region_id=str(command.region_id),
+            )
+        replayed = not region.is_active
+        region.is_active = False
+        db.flush()
+        if not replayed:
+            emit_event(
+                db,
+                EventType.customer_region_changed,
+                {
+                    "region_id": str(region.id),
+                    "change": "disabled",
+                    "is_active": False,
+                    "command_id": str(command.context.command_id),
+                },
+                actor=command.context.actor,
+            )
+        return CustomerRegionOutcome(
+            region_id=region.id,
+            name=region.name,
+            is_active=False,
+            created=False,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_DISABLE_REGION,
+        context=command.context,
+        operation=operation,
     )
-    region = db.get(CustomerRegion, region_id) if region_id else CustomerRegion()
-    if region is None:
-        raise ValueError("Region not found")
-    (
-        region.name,
-        region.latitude,
-        region.longitude,
-        region.radius_meters,
-        region.color,
-        region.match_mode,
-    ) = values
-    region.priority = int(priority)
-    region.nas_device_id = nas_device_id if region.match_mode == "nas" else None
-    region.pop_site_id = pop_site_id if region.match_mode == "pop_site" else None
-    region.notes = notes.strip() if notes and notes.strip() else None
-    region.is_active = bool(is_active)
-    if region_id is None:
-        db.add(region)
-    db.commit()
-    db.refresh(region)
-    return region
 
 
-def delete_region(db: Session, *, region_id: UUID) -> None:
-    region = db.get(CustomerRegion, region_id)
-    if region is None:
-        raise ValueError("Region not found")
-    region.is_active = False
-    db.commit()
+def get_region(db: Session, *, region_id: UUID) -> CustomerRegion | None:
+    """Return one configured region for the read-only admin adapter."""
+
+    return db.get(CustomerRegion, region_id)
 
 
 def customer_region_exists_clause(region_id: str | UUID | None):

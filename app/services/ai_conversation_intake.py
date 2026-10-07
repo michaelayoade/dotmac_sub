@@ -1871,7 +1871,7 @@ def admin_policy_context(
         )
     except ValueError:
         clarification_questions = DEFAULT_CLARIFICATION_QUESTIONS
-    context = {
+    context: dict[str, object] = {
         "ai_intake_policies": [
             {
                 "id": str(policy.id),

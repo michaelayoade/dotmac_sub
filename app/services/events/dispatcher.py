@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from app.models.event_store import EventStatus, EventStore
@@ -82,20 +83,25 @@ def _record_permanent_handler_failure(
 def _isolated_handler_session(db: Session | Any) -> Iterator[Session | Any]:
     """Contain each handler's transaction without hiding parent writes.
 
-    Handlers share the dispatcher's connection through a savepoint-backed child
-    session. A handler can flush or even commit without ending the parent event
-    transaction, while a database error rolls back only that handler's work.
+    Production sessions bound to an Engine receive an independent root session.
+    Test and explicit integration sessions bound to an externally managed
+    Connection retain that connection through a savepoint-backed child session,
+    preserving fixture visibility without completing the outer transaction.
     """
     if not isinstance(db, Session):
         yield db
         return
 
-    handler_db = Session(
-        bind=db.connection(),
-        autoflush=False,
-        autocommit=False,
-        join_transaction_mode="create_savepoint",
-    )
+    bind = db.get_bind()
+    if isinstance(bind, Connection):
+        handler_db = Session(
+            bind=bind,
+            autoflush=False,
+            autocommit=False,
+            join_transaction_mode="create_savepoint",
+        )
+    else:
+        handler_db = Session(bind=bind, autoflush=False, autocommit=False)
     try:
         yield handler_db
         handler_db.commit()
