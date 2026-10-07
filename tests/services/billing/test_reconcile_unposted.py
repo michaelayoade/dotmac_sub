@@ -26,9 +26,15 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
-from app.schemas.billing import PaymentCreate, PaymentProviderEventIngest
+from app.schemas.billing import (
+    PaymentAllocationConfirm,
+    PaymentAllocationPreviewRequest,
+    PaymentCreate,
+    PaymentProviderEventIngest,
+)
 from app.services import billing as billing_service
 from app.services.billing._common import get_account_credit_balance
+from app.services.billing.payments import PaymentAllocations
 from app.services.billing.reconcile_unposted import (
     find_cohort_account_ids,
     project_settlement,
@@ -302,6 +308,51 @@ def test_settle_is_idempotent(db_session):
     )
     assert allocations_after_first == allocations_after_second
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("0.00")
+
+
+def test_existing_allocation_is_topped_up_during_scheduled_reconciliation(
+    db_session,
+):
+    sub = _native_subscriber(db_session, suffix="ExistingTopUp")
+    payment = _sitting_credit_payment(db_session, sub, Decimal("200.00"))
+    invoice = _open_invoice(db_session, sub, Decimal("200.00"))
+
+    request = PaymentAllocationPreviewRequest(
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        amount=Decimal("100.00"),
+    )
+    preview = PaymentAllocations.preview(db_session, request)
+    PaymentAllocations.stage_confirm(
+        db_session,
+        PaymentAllocationConfirm(
+            **request.model_dump(),
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key=f"initial-allocation-{payment.id}-{invoice.id}",
+        ),
+    )
+    db_session.commit()
+
+    db_session.refresh(invoice)
+    assert invoice.status == InvoiceStatus.partially_paid
+    assert invoice.balance_due == Decimal("100.00")
+
+    result = settle_open_invoices_from_credit(db_session, str(sub.id))
+    db_session.commit()
+
+    assert result.applied == Decimal("100.00")
+    db_session.refresh(invoice)
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    allocation = (
+        db_session.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .filter(PaymentAllocation.invoice_id == invoice.id)
+        .one()
+    )
+    assert allocation.amount == Decimal("200.00")
+    assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("0.00")
+
 
 
 def test_unreviewed_existing_allocation_is_not_rederived_or_recalculated(db_session):

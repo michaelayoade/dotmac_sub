@@ -5120,7 +5120,7 @@ class PaymentAllocations(ListResponseMixin):
         db: Session,
         payload: PaymentAllocationConfirm,
         *,
-        funding_position_at: datetime,
+        funding_position_at: datetime | None,
     ) -> PaymentAllocationResult:
         """Stage an allocation link with no new customer-position effect.
 
@@ -5316,8 +5316,7 @@ class PaymentAllocations(ListResponseMixin):
         A payment/invoice pair is unique, so a second allocation row cannot
         represent a later top-up. Settlement-driven account-credit recovery
         increases the existing allocation and its paired ledger entries
-        atomically, using the same reviewed funding boundary as the normal
-        allocation owner.
+        atomically, using the supplied funding boundary when one is available.
         """
         payment = lock_for_update(db, Payment, payment_id)
         invoice = lock_for_update(db, Invoice, invoice_id)
