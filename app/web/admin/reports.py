@@ -188,6 +188,12 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
                 "permission": "customer:read",
             },
             {
+                "name": "Regional Performance",
+                "url": "/admin/reports/regional-performance",
+                "description": "Revenue and customer status by configured region",
+                "permission": "reports:billing:read",
+            },
+            {
                 "name": "Churn",
                 "url": "/admin/reports/churn",
                 "description": "Retention, churn reasons, and cancellations",
@@ -858,6 +864,70 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
         content,
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=revenue-payments.csv"},
+    )
+
+
+@router.get(
+    "/regional-performance",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
+def reports_regional_performance(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    region_id: UUID | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    try:
+        report_data = web_reports_service.get_regional_report_data(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            region_id=region_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    context = {
+        "request": request,
+        "active_page": "reports-regional-performance",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "report": report_data,
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse("admin/reports/regional_performance.html", context)
+
+
+@router.get(
+    "/regional-performance/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
+)
+def reports_regional_performance_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    region_id: UUID | None = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        report_data = web_reports_service.get_regional_report_data(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            region_id=region_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        web_reports_service.build_regional_report_csv(report_data),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=regional-performance.csv"
+        },
     )
 
 

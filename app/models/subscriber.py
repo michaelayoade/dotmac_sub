@@ -55,6 +55,13 @@ class ContactMethod(enum.Enum):
     push = "push"
 
 
+class ConnectionType(enum.Enum):
+    """Customer last-mile medium used for regional connectivity reporting."""
+
+    wireless = "wireless"
+    wired = "wired"
+
+
 class SubscriberStatus(enum.Enum):
     """Account status — mirrors the imported customer status lifecycle.
 
@@ -311,6 +318,9 @@ class Subscriber(Base):
     # Service location (POP site determines the NAS/IP pool for provisioning)
     pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pop_sites.id", ondelete="SET NULL"), index=True
+    )
+    connection_type: Mapped[ConnectionType | None] = mapped_column(
+        Enum(ConnectionType, native_enum=False, length=16)
     )
 
     # === Account Fields (from Subscriber + SubscriberAccount) ===

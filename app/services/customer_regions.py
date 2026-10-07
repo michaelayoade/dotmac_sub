@@ -10,6 +10,7 @@ from uuid import UUID
 from geoalchemy2.types import Geography
 from sqlalchemy import and_, case, cast, func, or_, select as db_select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.selectable import CTE
 
 from app.models.catalog import NasDevice, Subscription
 from app.models.customer_region import CustomerRegion, CustomerRegionMatchMode
@@ -294,6 +295,125 @@ def customer_region_exists_clause(region_id: str | UUID | None):
     return winner_region_id == normalized_id
 
 
+def customer_region_assignment_cte() -> CTE:
+    """Build the canonical one-row-per-customer region assignment relation.
+
+    The CTE deliberately mirrors :func:`customer_region_exists_clause` so
+    reports can aggregate by the winning region in one bounded SQL pipeline
+    instead of resolving every customer in Python.  Callers must still apply
+    their own visibility and date/status predicates to the resulting relation.
+    """
+
+    region_point = func.ST_SetSRID(
+        func.ST_MakePoint(CustomerRegion.longitude, CustomerRegion.latitude), 4326
+    )
+    address_point = func.ST_SetSRID(
+        func.ST_MakePoint(Address.longitude, Address.latitude), 4326
+    )
+    fallback_distance = func.ST_DistanceSphere(address_point, region_point)
+    geography_distance = func.ST_Distance(
+        cast(Address.geom, Geography), cast(region_point, Geography)
+    )
+    distance = case(
+        (Address.geom.isnot(None), geography_distance),
+        else_=fallback_distance,
+    )
+    within_radius = or_(
+        and_(
+            Address.geom.isnot(None),
+            func.ST_DWithin(
+                cast(Address.geom, Geography),
+                cast(region_point, Geography),
+                CustomerRegion.radius_meters,
+            ),
+        ),
+        and_(
+            Address.geom.is_(None),
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+            fallback_distance <= CustomerRegion.radius_meters,
+        ),
+    )
+    primary_address_id = (
+        db_select(Address.id)
+        .where(
+            Address.subscriber_id == Subscriber.id,
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+        )
+        .order_by(
+            case((Address.is_primary.is_(True), 0), else_=1),
+            Address.id.asc(),
+        )
+        .limit(1)
+        .correlate(Subscriber)
+        .scalar_subquery()
+    )
+    mode_priority = case(
+        (CustomerRegion.match_mode == CustomerRegionMatchMode.manual.value, 3),
+        (
+            CustomerRegion.match_mode.in_(
+                (
+                    CustomerRegionMatchMode.nas.value,
+                    CustomerRegionMatchMode.pop_site.value,
+                )
+            ),
+            2,
+        ),
+        (CustomerRegion.match_mode == CustomerRegionMatchMode.nearest.value, 1),
+        else_=0,
+    )
+    infrastructure_match = or_(
+        and_(
+            CustomerRegion.match_mode == CustomerRegionMatchMode.nas.value,
+            or_(
+                Subscriber.subscriptions.any(
+                    and_(
+                        Subscription.provisioning_nas_device_id
+                        == CustomerRegion.nas_device_id,
+                        Subscription.provisioning_nas_device_id.isnot(None),
+                    )
+                ),
+                db_select(RadiusActiveSession.id)
+                .where(
+                    RadiusActiveSession.subscriber_id == Subscriber.id,
+                    RadiusActiveSession.nas_device_id == CustomerRegion.nas_device_id,
+                    RadiusActiveSession.nas_device_id.isnot(None),
+                )
+                .exists(),
+            ),
+        ),
+        and_(
+            CustomerRegion.match_mode == CustomerRegionMatchMode.pop_site.value,
+            CustomerRegion.pop_site_id == Subscriber.pop_site_id,
+            Subscriber.pop_site_id.isnot(None),
+        ),
+    )
+    assignment_rank = func.row_number().over(
+        partition_by=Subscriber.id,
+        order_by=(
+            case((infrastructure_match, 0), else_=1),
+            mode_priority.desc(),
+            CustomerRegion.priority.desc(),
+            distance.asc(),
+            CustomerRegion.id.asc(),
+        ),
+    ).label("assignment_rank")
+    return (
+        db_select(
+            Subscriber.id.label("subscriber_id"),
+            CustomerRegion.id.label("region_id"),
+            CustomerRegion.name.label("region_name"),
+            CustomerRegion.color.label("region_color"),
+            distance.label("distance_meters"),
+            assignment_rank,
+        )
+        .select_from(Subscriber)
+        .join(Address, Address.id == primary_address_id)
+        .join(CustomerRegion, CustomerRegion.is_active.is_(True))
+        .where(within_radius)
+        .cte("customer_region_assignments")
+    )
 def customer_region_filter_clause(region_id: str | UUID | None):
     """Return the canonical customer-list predicate for a region filter.
 
