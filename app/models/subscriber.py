@@ -237,6 +237,11 @@ class Subscriber(Base):
             unique=True,
             postgresql_where=text("crm_subscriber_id IS NOT NULL"),
         ),
+        Index(
+            "ix_subscribers_churn_status_updated_at",
+            "status",
+            "updated_at",
+        ),
         CheckConstraint(
             "(party_id IS NULL AND party_bound_at IS NULL AND "
             "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "

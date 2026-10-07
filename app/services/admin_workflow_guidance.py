@@ -999,6 +999,24 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/reports",),
     ),
     _guide(
+        "churn-report",
+        "Reports",
+        "Review subscriber churn",
+        "Authorized customer reporting and operations staff",
+        "Compare cancellation and suspension activity over a controlled calendar period.",
+        (),
+        "Choose Last 1 month, Last 3 months, or Custom range before reviewing the report.",
+        "Use Event type to compare cancellations, suspensions, or both; custom ranges require a start and end date.",
+        "Review the KPI totals and period-matched trend together before drawing a conclusion.",
+        "Review recent event timestamps and cancellation reasons within the selected scope.",
+        "Export only the currently selected event type and date range when the filtered evidence is needed outside the report.",
+        route_templates=("/admin/reports/churn",),
+        notes=(
+            "The chart and recent-event list use the selected calendar window in the application timezone.",
+            "Legacy subscriber rows without trusted lifecycle evidence remain visible through the compatibility fallback and should be backfilled before treating them as a complete historical record.",
+        ),
+    ),
+    _guide(
         "gis",
         "GIS / Map",
         "Manage service locations and map layers",
@@ -1759,6 +1777,17 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "export-report", "Export a report", 3, permission="reports:billing:export"
         ),
     ),
+    "churn-report": (
+        _action("choose-churn-window", "Choose the churn date range", 0),
+        _action("filter-churn-events", "Filter cancellation or suspension events", 1),
+        _action("review-churn-evidence", "Review churn totals and trend", 2, 3),
+        _action(
+            "export-churn-report",
+            "Export the filtered churn report",
+            4,
+            permission="customer:read",
+        ),
+    ),
     "gis": (
         _action("find-map-feature", "Find a map feature", 0),
         _action("review-map-feature", "Review map evidence", 1),
@@ -1992,6 +2021,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Reports",
         (
             "reports-overview",
+            "churn-report",
             "ticket-sla-report",
             "ncc-complaints-report",
             "support-csat-report",
@@ -2046,6 +2076,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "vendor-reviews": ("inventory:read", "finance:ap:read"),
     "vendor-routes": ("network:fiber:read",),
     "ticket-sla-report": ("reports:support:read",),
+    "churn-report": ("customer:read",),
     "ncc-complaints-report": ("reports:ncc:read",),
     "support-csat-report": ("reports:support:read",),
 }
