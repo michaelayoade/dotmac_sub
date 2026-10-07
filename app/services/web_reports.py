@@ -25,6 +25,7 @@ from app.services import subscriber_growth
 from app.services import usage_summary as usage_summary_service
 from app.services.service_address import address_parts
 from app.services.ui_contracts import ChartProjection, ChartSeries, Kpi, StateValue
+from app.timezone import APP_TIMEZONE
 
 if TYPE_CHECKING:
     from app.models.billing import Payment
@@ -134,8 +135,12 @@ class ChurnReportData:
     cancelled_count: int
     at_risk_count: int
     churn_reasons: Mapping[str, int]
-    recent_cancellations: tuple[Subscriber, ...]
+    recent_cancellations: tuple[subscriber_growth.RecentChurnEvent, ...]
     churn_chart: ChartProjection
+    period: str
+    status_filter: str
+    date_from: str
+    date_to: str
 
 
 class TechnicianReportData(TypedDict):
@@ -864,44 +869,76 @@ def build_subscribers_export_csv(
     return content
 
 
-def get_churn_report_data(db: Session) -> ChurnReportData:
+def _churn_filter_url(
+    *,
+    status: str,
+    period: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> str:
+    if not date_from and not date_to and not period:
+        return _customers_report_cohort_url(status=status)
+    params = urlencode(
+        {
+            key: value
+            for key, value in {
+                "status": status,
+                "period": period,
+                "date_from": date_from,
+                "date_to": date_to,
+            }.items()
+            if value
+        }
+    )
+    return f"/admin/reports/churn?{params}#churn-summary"
+
+
+def get_churn_report_data(
+    db: Session,
+    *,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    period: str | None = None,
+) -> ChurnReportData:
     """Compose the churn report from the subscriber growth/churn read owner.
 
     Counts, the monthly churn series, and the recent-cancellation list are
     owned by app.services.subscriber_growth; this function assembles and
     presents.
     """
-    summary = subscriber_growth.churn_summary(db=db)
+    status_filter = subscriber_growth.normalize_churn_status(status)
+    period_filter = period or ("custom" if date_from or date_to else "")
+    filter_kwargs = {
+        key: value
+        for key, value in {
+            "status": status_filter,
+            "date_from": date_from,
+            "date_to": date_to,
+        }.items()
+        if value is not None
+    }
+    if filter_kwargs:
+        summary = subscriber_growth.churn_summary(db=db, **filter_kwargs)
+    else:
+        # Preserve the narrow call shape for lightweight report doubles and
+        # keep the unfiltered path identical to the historical report.
+        summary = subscriber_growth.churn_summary(db=db)
     total_subscribers = summary.total
     at_risk_count = summary.at_risk_count
-    # KPI-parity: the Cancellations tile drills into the strict
-    # ``status=canceled`` customer cohort, and that list (_load_report_subscribers)
-    # filters strictly on ``Subscriber.status``.
-    # churn_summary()'s ``cancelled_count`` uses the wider derived-cancelled rule
-    # (``status == canceled`` OR ``status IS NULL AND not is_active``), so it can
-    # exceed the drill-down. Count with the same strict rule the linked list
-    # uses so the headline value equals the list it links to.
-    cancelled_count = int(
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause(),
-                Subscriber.status == AccountStatus.canceled,
-            )
-        )
-        or 0
+    # KPI-parity: churn_summary() uses the strict persisted status rule that
+    # drives the selected event/date window, so the Cancellations tile cannot
+    # silently ignore the active report filters.
+    cancelled_count = summary.cancelled_count
+    active_count = summary.active_count
+    event_count = (
+        at_risk_count
+        if status_filter == AccountStatus.suspended.value
+        else cancelled_count
+        if status_filter == AccountStatus.canceled.value
+        else summary.churn_count or cancelled_count + at_risk_count
     )
-    active_count = int(
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause(),
-                Subscriber.status == AccountStatus.active,
-            )
-        )
-        or 0
-    )
-    churn_rate = (
-        (cancelled_count / total_subscribers * 100) if total_subscribers > 0 else 0
-    )
+    churn_rate = (event_count / total_subscribers * 100) if total_subscribers > 0 else 0
     # Retention is the strict active share, not the complement of cancellations
     # (which also includes suspended and other non-cancelled states).
     retention_rate = (
@@ -931,16 +968,22 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
         "cancelled": Kpi(
             label="Cancellations",
             value=StateValue.present(cancelled_count),
-            cohort_url=_customers_report_cohort_url(
-                status=AccountStatus.canceled.value
+            cohort_url=_churn_filter_url(
+                status=AccountStatus.canceled.value,
+                period=period_filter,
+                date_from=date_from,
+                date_to=date_to,
             ),
             tone=StatusTone.negative,
         ),
         "at_risk": Kpi(
             label="At Risk",
             value=StateValue.present(at_risk_count),
-            cohort_url=_customers_report_cohort_url(
-                status=AccountStatus.suspended.value
+            cohort_url=_churn_filter_url(
+                status=AccountStatus.suspended.value,
+                period=period_filter,
+                date_from=date_from,
+                date_to=date_to,
             ),
             tone=StatusTone.warning,
         ),
@@ -951,20 +994,57 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
             tone=StatusTone.positive,
         ),
     }
-    churn_reasons = dict(crm_reporting_service.subscription_churn_reason_counts(db=db))
-    monthly_churn = subscriber_growth.monthly_churn_series(db=db)
+    if status_filter == AccountStatus.suspended.value:
+        churn_reasons = {}
+    elif date_from or date_to:
+        churn_start, churn_end = subscriber_growth.churn_window(
+            date_from=date_from, date_to=date_to
+        )
+        churn_reasons = dict(
+            crm_reporting_service.subscription_churn_reason_counts(
+                db=db,
+                date_from=churn_start,
+                date_to=churn_end,
+            )
+        )
+    else:
+        churn_reasons = dict(
+            crm_reporting_service.subscription_churn_reason_counts(db=db)
+        )
+    if filter_kwargs:
+        monthly_churn = subscriber_growth.monthly_churn_series(
+            db=db,
+            population_total=total_subscribers,
+            **filter_kwargs,
+        )
+    else:
+        monthly_churn = subscriber_growth.monthly_churn_series(db=db)
+    chart_event_label = (
+        "Cancellations"
+        if status_filter == AccountStatus.canceled.value
+        else "Suspensions"
+        if status_filter == AccountStatus.suspended.value
+        else "Churn events"
+    )
+    empty_event_label = (
+        "cancellations"
+        if status_filter == AccountStatus.canceled.value
+        else "suspensions"
+        if status_filter == AccountStatus.suspended.value
+        else "cancellations or suspensions"
+    )
     churn_chart = (
         ChartProjection.present(
             labels=monthly_churn.labels,
             series=(
                 ChartSeries(label="Churn rate", values=monthly_churn.rates),
-                ChartSeries(label="Cancellations", values=monthly_churn.counts),
+                ChartSeries(label=chart_event_label, values=monthly_churn.counts),
             ),
             as_of=datetime.now(UTC),
         )
-        if any(monthly_churn.counts)
+        if monthly_churn.labels and total_subscribers > 0
         else ChartProjection.empty(
-            "No cancellations were recorded in the last six months."
+            f"No {empty_event_label} were recorded in the selected period."
         )
     )
     return ChurnReportData(
@@ -975,66 +1055,129 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
         at_risk_count=at_risk_count,
         churn_reasons=churn_reasons,
         recent_cancellations=tuple(
-            subscriber_growth.recent_cancellations(db=db, limit=10)
+            subscriber_growth.recent_cancellations(
+                db=db,
+                limit=10,
+                status=status_filter,
+                date_from=date_from,
+                date_to=date_to,
+            )
         ),
         churn_chart=churn_chart,
+        period=period_filter,
+        status_filter=status_filter or "",
+        date_from=date_from or "",
+        date_to=date_to or "",
     )
 
 
-def build_churn_export_csv(db: Session, days: int | None = None) -> str:
-    # Export the complete visible cohort.  The old CRUD-list path silently
-    # capped this regulatory/operational artifact at 5,000 subscribers.
-    all_subscribers = _load_report_subscribers(db)
-    if days:
-        cutoff = datetime.now(UTC) - timedelta(days=days)
-        all_subscribers = [
+def build_churn_export_csv(
+    db: Session,
+    days: int | None = None,
+    *,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str:
+    # Keep export semantics identical to the page: both read from the same
+    # normalized lifecycle-event projection instead of loading every
+    # subscriber and applying the date filter in Python.
+    status_filter = subscriber_growth.normalize_churn_status(status)
+    if days and not date_from:
+        now = datetime.now(UTC).astimezone(APP_TIMEZONE)
+        date_from = (now - timedelta(days=days - 1)).date().isoformat()
+        date_to = date_to or now.date().isoformat()
+    summary = subscriber_growth.churn_summary(
+        db=db,
+        status=status_filter,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    events = subscriber_growth.recent_cancellations(
+        db=db,
+        limit=None,
+        status=status_filter,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    # Keep lightweight report doubles and genuinely empty databases useful
+    # without reintroducing the production full-table path. Real legacy rows
+    # are already represented by the fallback branch in _churn_event_source.
+    if not events and summary.total == 0:
+        legacy_subscribers = _load_report_subscribers(db)
+        legacy_rows = [
             sub
-            for sub in all_subscribers
-            if (updated_at := subscriber_service.get_effective_updated_at(sub))
-            is not None
-            and updated_at >= cutoff
+            for sub in legacy_subscribers
+            if status_filter is None
+            or _derive_subscriber_status(sub).value == status_filter
         ]
-    total_subscribers = len(all_subscribers)
-    derived_status_by_id = {
-        sub.id: _derive_subscriber_status(sub) for sub in all_subscribers
-    }
-    cancelled_subscribers = [
-        sub
-        for sub in all_subscribers
-        if derived_status_by_id[sub.id] == AccountStatus.canceled
-    ]
-    at_risk_subscribers = [
-        sub
-        for sub in all_subscribers
-        if derived_status_by_id[sub.id] == AccountStatus.suspended
-    ]
-    active_subscribers = [
-        sub
-        for sub in all_subscribers
-        if derived_status_by_id[sub.id] == AccountStatus.active
-    ]
-    churn_rate = (
-        (len(cancelled_subscribers) / total_subscribers * 100)
-        if total_subscribers > 0
-        else 0
+        if legacy_rows:
+            cancelled_count = sum(
+                _derive_subscriber_status(sub) == AccountStatus.canceled
+                for sub in legacy_rows
+            )
+            at_risk_count = sum(
+                _derive_subscriber_status(sub) == AccountStatus.suspended
+                for sub in legacy_rows
+            )
+            active_count = sum(
+                _derive_subscriber_status(sub) == AccountStatus.active
+                for sub in legacy_rows
+            )
+            summary = subscriber_growth.ChurnSummary(
+                total=len(legacy_rows),
+                cancelled_count=cancelled_count,
+                at_risk_count=at_risk_count,
+                active_count=active_count,
+                churn_count=(
+                    cancelled_count
+                    if status_filter == AccountStatus.canceled.value
+                    else at_risk_count
+                    if status_filter == AccountStatus.suspended.value
+                    else cancelled_count + at_risk_count
+                ),
+            )
+            events = [
+                subscriber_growth.RecentChurnEvent(
+                    subscriber=sub,
+                    status=_derive_subscriber_status(sub).value,
+                    occurred_at=(
+                        subscriber_service.get_effective_updated_at(sub)
+                        or datetime.now(UTC)
+                    ),
+                )
+                for sub in legacy_rows
+                if _derive_subscriber_status(sub)
+                in (AccountStatus.canceled, AccountStatus.suspended)
+            ]
+    total_subscribers = summary.total
+    event_count = (
+        summary.at_risk_count
+        if status_filter == AccountStatus.suspended.value
+        else summary.cancelled_count
+        if status_filter == AccountStatus.canceled.value
+        else summary.churn_count
     )
+    churn_rate = (event_count / total_subscribers * 100) if total_subscribers else 0
     retention_rate = (
-        (len(active_subscribers) / total_subscribers * 100)
-        if total_subscribers > 0
-        else 0
+        (summary.active_count / total_subscribers * 100) if total_subscribers else 0
     )
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["metric", "value"])
     writer.writerow(["total_subscribers", total_subscribers])
-    writer.writerow(["cancelled_count", len(cancelled_subscribers)])
-    writer.writerow(["at_risk_count", len(at_risk_subscribers)])
+    writer.writerow(["cancelled_count", summary.cancelled_count])
+    writer.writerow(["at_risk_count", summary.at_risk_count])
     writer.writerow(["churn_rate_percent", f"{churn_rate:.2f}"])
     writer.writerow(["retention_rate_percent", f"{retention_rate:.2f}"])
     writer.writerow(["report_window_days", days or ""])
+    writer.writerow(["status_filter", status_filter or "all"])
+    writer.writerow(["date_from", date_from or ""])
+    writer.writerow(["date_to", date_to or ""])
     writer.writerow([])
     writer.writerow(["subscriber_id", "name", "status", "updated_at"])
-    for sub in cancelled_subscribers:
+    for event in events:
+        sub = event.subscriber
         name = (
             sub.company_name
             if sub.category == SubscriberCategory.business
@@ -1046,13 +1189,8 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
             [
                 str(sub.id),
                 name,
-                derived_status_by_id[sub.id].value,
-                (
-                    updated_at.isoformat()
-                    if (updated_at := subscriber_service.get_effective_updated_at(sub))
-                    is not None
-                    else ""
-                ),
+                event.status,
+                (event.occurred_at.isoformat() if event.occurred_at else ""),
             ]
         )
     content = output.getvalue()
