@@ -1,0 +1,67 @@
+/* Shared marker treatment for staff route-authoring maps. */
+.route-authoring-plant-marker {
+  align-items: center;
+  border: 2px solid #ffffff;
+  box-shadow:
+    0 0 0 2px rgb(15 23 42 / 20%),
+    0 4px 10px rgb(2 8 23 / 35%);
+  color: #ffffff;
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  transition: transform 150ms ease-out, box-shadow 150ms ease-out;
+  width: 28px;
+}
+
+.route-authoring-plant-marker:hover {
+  box-shadow:
+    0 0 0 3px rgb(255 255 255 / 85%),
+    0 6px 14px rgb(2 8 23 / 40%);
+  transform: scale(1.12);
+}
+
+.route-authoring-plant-marker svg {
+  height: 16px;
+  width: 16px;
+}
+
+.route-authoring-plant-marker--fdh-cabinet {
+  background: linear-gradient(135deg, #f97316, #d97706);
+  border-radius: 0.4rem;
+}
+
+.route-authoring-plant-marker--splice-closure {
+  background: linear-gradient(135deg, #14b8a6, #059669);
+  border-radius: 9999px;
+}
+
+.route-authoring-plant-marker--fiber-access-point {
+  background: linear-gradient(135deg, #a855f7, #7c3aed);
+  border-radius: 9999px 9999px 9999px 0;
+  transform: rotate(-45deg);
+}
+
+.route-authoring-plant-marker--fiber-access-point svg {
+  transform: rotate(45deg);
+}
+
+.route-authoring-plant-marker--fiber-access-point:hover {
+  transform: rotate(-45deg) scale(1.12);
+}
+
+.route-authoring-plant-marker--pop-site {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  border-radius: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-authoring-plant-marker,
+  .route-authoring-plant-marker:hover {
+    transform: none;
+    transition: none;
+  }
+
+  .route-authoring-plant-marker--fiber-access-point svg {
+    transform: none;
+  }
+}
