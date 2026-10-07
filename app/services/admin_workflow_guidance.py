@@ -1779,9 +1779,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     ),
     "churn-report": (
         _action("choose-churn-window", "Choose the churn date range", 0),
-        _action(
-            "filter-churn-events", "Filter cancellation or suspension events", 1
-        ),
+        _action("filter-churn-events", "Filter cancellation or suspension events", 1),
         _action("review-churn-evidence", "Review churn totals and trend", 2, 3),
         _action(
             "export-churn-report",
