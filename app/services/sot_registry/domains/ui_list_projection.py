@@ -37,6 +37,8 @@ _CRM_REPORT_CONCERNS = (
     "project and task people-performance report projection",
 )
 
+_REGIONAL_REPORT_CONCERNS = ("regional performance report projection",)
+
 DOMAIN = DomainSOT(
     domain="ui_list_projection",
     services=(
@@ -278,6 +280,134 @@ DOMAIN = DomainSOT(
                         ),
                         repair_owner="communications.team_inbox_projection",
                     ),
+                ),
+            ),
+        ),
+        SOTService(
+            name="ui.regional_performance_report",
+            module="app.services.web_reports",
+            owns=_REGIONAL_REPORT_CONCERNS,
+            depends_on=(
+                "auth.permission_gate",
+                "customer.accounts",
+                "access.subscription_lifecycle",
+                "financial.invoices",
+                "financial.payments",
+                "gis.customer_regions",
+                "ui.list_contracts",
+            ),
+            notes=(
+                "The report is a read-only aggregate projection. Financial facts "
+                "are bounded by the selected date window; customer status, "
+                "connection type, active service, and winning region are "
+                "current-state inputs and are labeled as such in the UI."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="regional performance report projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "typed regional report query",
+                            "authorized billing-report scope",
+                            "canonical customer account records",
+                            "canonical subscription lifecycle records",
+                            "canonical invoice records",
+                            "canonical payment records",
+                            "configured customer regions",
+                            "explicit customer connection type",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed regional report query",
+                        owner="ui.list_contracts",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="inclusive UTC date bounds and optional configured-region UUID",
+                    ),
+                    AuthorityInput(
+                        name="authorized billing-report scope",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="reports:billing:read or reports:billing:export",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer account records",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="visible Subscriber records and explicit connection_type",
+                    ),
+                    AuthorityInput(
+                        name="explicit customer connection type",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Subscriber.connection_type with wireless, wired, or unspecified value",
+                    ),
+                    AuthorityInput(
+                        name="canonical subscription lifecycle records",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Subscription status and service identity",
+                    ),
+                    AuthorityInput(
+                        name="canonical invoice records",
+                        owner="financial.invoices",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="active, non-proforma invoices issued in the selected window",
+                    ),
+                    AuthorityInput(
+                        name="canonical payment records",
+                        owner="financial.payments",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="successful active payments collected in the selected window",
+                    ),
+                    AuthorityInput(
+                        name="configured customer regions",
+                        owner="gis.customer_regions",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="active radius regions and canonical winning assignment",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "The web adapter supplies a read session; grouped report "
+                        "queries never flush or commit."
+                    ),
+                    locking="Committed customer, region, subscription, invoice, and payment facts require no mutation lock.",
+                    idempotency="The same committed facts and typed report query produce the same regional rows and CSV.",
+                    retries="Bounded aggregate reads and CSV serialization are safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("ui.regional_performance_report.invalid_query",),
+                    mapping_owner="app.web.admin.reports regional performance adapter",
+                    fail_closed_on=(
+                        "missing exact report permission",
+                        "invalid date range",
+                        "invalid configured-region UUID",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="none; new regional report projection",
+                    new_owner="ui.regional_performance_report",
+                    verification=(
+                        "typed report query, current-state disclosure, grouped SQL, "
+                        "CSV parity, empty state, and customer drill-down tests"
+                    ),
+                    cutover_gate="regional report route and export use the same report data owner",
+                    fallback_retirement="No parallel regional report projection exists.",
+                ),
+                steward="Self-Care reporting",
+                design_refs=(
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/ADMIN_WORKFLOW_GUIDANCE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_web_regional_reports.py",
+                    "tests/test_customer_regions.py",
                 ),
             ),
         ),
@@ -744,6 +874,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "admin customer searchable fields",
                 "admin customer filter semantics",
+                "admin customer region filter semantics",
                 "admin customer stable sort semantics",
                 "admin customer row and page projection",
                 "admin customer row name display truncation",
@@ -764,6 +895,7 @@ DOMAIN = DomainSOT(
                 "network.identity",
                 "network.ip_assignment_lifecycle",
                 "support.ticket_lifecycle",
+                "gis.customer_regions",
             ),
             notes=(
                 "The admin list and CSV export share one normalized scope and "
@@ -810,6 +942,7 @@ DOMAIN = DomainSOT(
                     for concern in (
                         "admin customer searchable fields",
                         "admin customer filter semantics",
+                        "admin customer region filter semantics",
                         "admin customer stable sort semantics",
                         "admin customer row and page projection",
                         "admin customer row name display truncation",

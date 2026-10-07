@@ -239,7 +239,7 @@ def test_project_infrastructure_guide_is_linked_and_searchable() -> None:
 
 
 def test_vendor_route_guidance_covers_optional_admin_proposals() -> None:
-    guide = guidance_for_path("/admin/vendors/routes/new")
+    guide = guidance_for_path("/admin/network/fiber-map/new")
     fiber_map_guide = guidance_for_path("/admin/network/fiber")
 
     assert guide is not None
@@ -336,7 +336,7 @@ def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 55
+    assert len(guides) == 58
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id

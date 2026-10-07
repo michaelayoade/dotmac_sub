@@ -2,7 +2,16 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,6 +34,17 @@ class LifecycleEventType(enum.Enum):
 class SubscriptionLifecycleEvent(Base):
     __tablename__ = "subscription_lifecycle_events"
     __table_args__ = (
+        Index(
+            "ix_subscription_lifecycle_events_churn_type_time",
+            "event_type",
+            "effective_at",
+        ),
+        Index(
+            "ix_subscription_lifecycle_events_subscription_type_time",
+            "subscription_id",
+            "event_type",
+            "effective_at",
+        ),
         UniqueConstraint(
             "evidence_source",
             "source_id",

@@ -978,7 +978,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review geometry, endpoints, project or work-order links when present, evidence, and existing network conflicts.",
         "When creating a staff proposal, choose Propose Route or Asset; project and work order links are optional, and no vendor quote is required.",
         "Approve or reject the pending proposal with a clear reason, then verify the resulting network or project state.",
-        route_templates=("/admin/network/fiber", "/admin/vendors/routes/new"),
+        route_templates=("/admin/network/fiber", "/admin/network/fiber-map/new"),
         notes=(
             "Staff-owned proposals remain separate from vendor quote submissions and stay pending until an authorized reviewer decides.",
             "If a work order already belongs to an installation project, linking the work order can populate that project association; otherwise the proposal may remain unscoped.",
@@ -999,6 +999,41 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/reports",),
     ),
     _guide(
+        "churn-report",
+        "Reports",
+        "Review subscriber churn",
+        "Authorized customer reporting and operations staff",
+        "Compare cancellation and suspension activity over a controlled calendar period.",
+        (),
+        "Choose Last 1 month, Last 3 months, or Custom range before reviewing the report.",
+        "Use Event type to compare cancellations, suspensions, or both; custom ranges require a start and end date.",
+        "Review the KPI totals and period-matched trend together before drawing a conclusion.",
+        "Review recent event timestamps and cancellation reasons within the selected scope.",
+        "Export only the currently selected event type and date range when the filtered evidence is needed outside the report.",
+        route_templates=("/admin/reports/churn",),
+        notes=(
+            "The chart and recent-event list use the selected calendar window in the application timezone.",
+            "Legacy subscriber rows without trusted lifecycle evidence remain visible through the compatibility fallback and should be backfilled before treating them as a complete historical record.",
+        ),
+    ),
+    _guide(
+        "regional-performance-report",
+        "Reports",
+        "Review regional performance",
+        "Billing, operations, network management",
+        "Compare revenue, service, customer status, and connection type across configured regions.",
+        ("/admin/reports/regional-performance",),
+        "Choose the current-month default or enter an inclusive date range, then optionally narrow the report to one configured region.",
+        "Read revenue and collection figures as period-bound financial facts; customer status, connection type, active service, and region assignment are current-state values.",
+        "Use the region link in the detail table to inspect the matching customer list, including the Unassigned row when location cleanup is needed.",
+        "Confirm the selected period, region, and customer-state totals before exporting the report.",
+        "Export only the filtered scope you are authorized to use.",
+        notes=(
+            "Revenue is grouped using each customer's current winning region, so changing a radius, center, or overlap rule can change historical geographic grouping.",
+            "Wireless and Wired counts come from the customer's explicit Connection Type field; Unspecified means the field still needs manual classification.",
+        ),
+    ),
+    _guide(
         "gis",
         "GIS / Map",
         "Manage service locations and map layers",
@@ -1009,6 +1044,23 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open a feature to review its coordinates, ownership, source, and current status.",
         "Review pending customer pin corrections before accepting or rejecting them.",
         "Create or edit locations, areas, and layers only from verified geographic evidence.",
+    ),
+    _guide(
+        "customer-regions",
+        "GIS / Map",
+        "Configure customer regions",
+        "GIS and network administrators",
+        "Define the center, radius, color, and overlap rule used to classify customers geographically.",
+        ("/admin/customer-regions",),
+        "Open Customer Regions from the Settings Hub and review existing active and disabled regions before changing one.",
+        "Create or edit a region with verified decimal coordinates, a radius, a color, and the overlap rule that matches the operating decision; if validation fails, correct the highlighted input and save again because the existing configuration remains unchanged.",
+        "Use the map marker or click the map to adjust the center, then save and verify the radius boundary on the network maps.",
+        "When radii overlap, use Nearest for geographic proximity, NAS or POP/site for the matching infrastructure tie-breaker, or Manual priority when an explicit precedence is required.",
+        "Disable a region instead of deleting it when it should stop receiving new assignments but remain available for review history.",
+        notes=(
+            "NAS and POP/site rules are tie-breakers for customers already inside a configured radius; they do not replace missing customer geolocation.",
+            "Region write actions require gis:area:write. Users with map-view access can review the configuration without changing it.",
+        ),
     ),
     _guide(
         "integrations",
@@ -1759,6 +1811,28 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "export-report", "Export a report", 3, permission="reports:billing:export"
         ),
     ),
+    "churn-report": (
+        _action("choose-churn-window", "Choose the churn date range", 0),
+        _action("filter-churn-events", "Filter cancellation or suspension events", 1),
+        _action("review-churn-evidence", "Review churn totals and trend", 2, 3),
+        _action(
+            "export-churn-report",
+            "Export the filtered churn report",
+            4,
+            permission="customer:read",
+        ),
+    ),
+    "regional-performance-report": (
+        _action("filter-regional-report", "Filter regional performance", 0, 1),
+        _action("review-regional-metrics", "Review regional metrics", 2),
+        _action("open-regional-customers", "Open regional customers", 3),
+        _action(
+            "export-regional-report",
+            "Export the regional report",
+            4,
+            permission="reports:billing:export",
+        ),
+    ),
     "gis": (
         _action("find-map-feature", "Find a map feature", 0),
         _action("review-map-feature", "Review map evidence", 1),
@@ -1773,6 +1847,28 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Create or edit map data",
             3,
             permission="gis:location:write",
+        ),
+    ),
+    "customer-regions": (
+        _action("review-region-configuration", "Review region configuration", 0),
+        _action(
+            "edit-region-configuration",
+            "Create or edit a region",
+            1,
+            2,
+            permission="gis:area:write",
+        ),
+        _action(
+            "choose-overlap-rule",
+            "Choose an overlap rule",
+            3,
+            permission="gis:area:write",
+        ),
+        _action(
+            "disable-region",
+            "Disable a region",
+            4,
+            permission="gis:area:write",
         ),
     ),
     "integrations": (
@@ -1992,6 +2088,8 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Reports",
         (
             "reports-overview",
+            "churn-report",
+            "regional-performance-report",
             "ticket-sla-report",
             "ncc-complaints-report",
             "support-csat-report",
@@ -2004,7 +2102,9 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "reports:ncc:read",
         ),
     ),
-    AdminHelpNavigationSection("gis", "GIS / Map", ("gis",), "gis:map:view"),
+    AdminHelpNavigationSection(
+        "gis", "GIS / Map", ("gis", "customer-regions"), "gis:map:view"
+    ),
     AdminHelpNavigationSection(
         "integrations", "Integrations", ("integrations",), "system:settings:read"
     ),
@@ -2046,8 +2146,11 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "vendor-reviews": ("inventory:read", "finance:ap:read"),
     "vendor-routes": ("network:fiber:read",),
     "ticket-sla-report": ("reports:support:read",),
+    "churn-report": ("customer:read",),
+    "regional-performance-report": ("reports:billing:read",),
     "ncc-complaints-report": ("reports:ncc:read",),
     "support-csat-report": ("reports:support:read",),
+    "customer-regions": ("gis:map:view",),
 }
 
 

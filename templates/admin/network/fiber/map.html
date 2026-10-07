@@ -399,7 +399,7 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m-6-8h6M5 7h.01M5 12h.01M5 17h.01"/></svg>
                 Change Requests
             </a>
-            <a href="/admin/vendors/routes/new" class="group inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-800 shadow-sm transition-all hover:shadow-md dark:border-violet-700 dark:bg-violet-900/20 dark:text-violet-200">
+            <a href="/admin/network/fiber-map/new" class="group inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-800 shadow-sm transition-all hover:shadow-md dark:border-violet-700 dark:bg-violet-900/20 dark:text-violet-200">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                 Propose Route or Asset
             </a>
@@ -519,6 +519,14 @@
                         </div>
                         <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Access Point</span>
                     </div>
+                    <div class="legend-item">
+                        <div class="h-4 w-4 rounded-full border-2 border-amber-500 bg-emerald-500 shadow-sm"></div>
+                        <span class="text-sm text-slate-600 dark:text-slate-400">Customer: green center connected, neutral center not connected</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="h-4 w-4 rounded-full border-2 border-sky-500 bg-transparent"></div>
+                        <span class="text-sm text-slate-600 dark:text-slate-400">Customer region ring and radius boundary</span>
+                    </div>
                     <hr class="border-slate-200 dark:border-slate-700">
                     <div class="legend-item">
                         <div class="h-1 w-6 rounded-full bg-gradient-to-r from-red-500 to-rose-600"></div>
@@ -570,6 +578,14 @@
                     <label class="flex items-center gap-3 cursor-pointer group">
                         <input type="checkbox" id="layer-access-points" checked class="h-4 w-4 rounded border-slate-300 text-purple-500 focus:ring-purple-500/20">
                         <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">Access Points</span>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-customers" checked class="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">Customers</span>
+                    </label>
+                    <label class="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" id="layer-regions" checked class="h-4 w-4 rounded border-slate-300 text-sky-500 focus:ring-sky-500/20">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors">Customer regions</span>
                     </label>
                     <label class="flex items-center gap-3 cursor-pointer group">
                         <input type="checkbox" id="layer-feeder" checked class="h-4 w-4 rounded border-slate-300 text-red-500 focus:ring-red-500/20">
@@ -660,6 +676,8 @@
         fdh: L.layerGroup().addTo(map),
         closures: L.layerGroup().addTo(map),
         accessPoints: L.layerGroup().addTo(map),
+        customers: L.layerGroup().addTo(map),
+        regions: L.layerGroup().addTo(map),
         feeder: L.layerGroup().addTo(map),
         distribution: L.layerGroup().addTo(map),
         drop: L.layerGroup().addTo(map),
@@ -688,7 +706,16 @@
             iconSize: [22, 22],
             iconAnchor: [11, 11],
             popupAnchor: [0, -11]
-        })
+        }),
+        customer: properties => {
+            const connected = properties.connectivity?.layer === 'connected';
+            const center = connected ? '#16a34a' : '#64748b';
+            const ring = properties.region_color || '#94a3b8';
+            return L.divIcon({
+                html: `<div style="background:${center};width:16px;height:16px;border-radius:50%;border:3px solid ${ring};box-shadow:0 0 0 1px white,0 2px 4px rgba(0,0,0,0.3)"></div>`,
+                className: '', iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -9]
+            });
+        }
     };
 
     // Segment styles by type
@@ -757,6 +784,11 @@
         if (p.segment_type) content += `<div class="fiber-popup-detail"><strong>Type:</strong> ${escapeHtml(p.segment_type)}</div>`;
         if (p.fiber_count) content += `<div class="fiber-popup-detail"><strong>Fiber Count:</strong> ${p.fiber_count} cores</div>`;
         if (p.length_m) content += `<div class="fiber-popup-detail"><strong>Length:</strong> ${formatDistance(p.length_m)}</div>`;
+        if (p.type === 'customer') {
+            const connected = p.connectivity?.layer === 'connected';
+            content += `<div class="fiber-popup-detail"><strong>Connectivity:</strong> ${connected ? 'Connected' : 'Not connected'}</div>`;
+            if (p.region_name) content += `<div class="fiber-popup-detail" style="color:${escapeHtml(p.region_color || '#64748b')}"><strong>Region:</strong> ${escapeHtml(p.region_name)}</div>`;
+        }
 
         // Show coordinates for markers
         if (marker) {
@@ -1288,8 +1320,23 @@
 
     // Load fiber plant data from server-rendered GeoJSON
     const geojsonData = {{ geojson_data | tojson | safe }};
+    const customerRegions = {{ customer_regions | tojson | safe }};
     const bounds = [];
+    const regionBounds = L.latLngBounds();
     const dragCoords = document.getElementById('drag-coords');
+
+    customerRegions.forEach(region => {
+        const circle = L.circle([region.latitude, region.longitude], {
+            radius: region.radius_meters,
+            color: region.color,
+            fillColor: region.color,
+            fillOpacity: 0.08,
+            weight: 2,
+            dashArray: '5, 6'
+        }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`);
+        layers.regions.addLayer(circle);
+        regionBounds.extend(circle.getBounds());
+    });
 
     if (geojsonData.features && geojsonData.features.length > 0) {
         geojsonData.features.forEach(feature => {
@@ -1300,10 +1347,12 @@
                 const coords = [geom.coordinates[1], geom.coordinates[0]];
                 bounds.push(coords);
 
-                const icon = icons[p.type] || icons.splice_closure;
+                const icon = p.type === 'customer'
+                    ? icons.customer(p)
+                    : (icons[p.type] || icons.splice_closure);
                 const marker = L.marker(coords, {
                     icon: icon,
-                    draggable: false  // Start non-draggable
+                    draggable: p.type !== 'customer'  // Customer locations are read-only here
                 });
                 marker._lastSavedLatLng = { lat: coords[0], lng: coords[1] };
 
@@ -1354,7 +1403,8 @@
                     searchText
                 });
 
-                if (p.type === 'fdh_cabinet') layers.fdh.addLayer(marker);
+                if (p.type === 'customer') layers.customers.addLayer(marker);
+                else if (p.type === 'fdh_cabinet') layers.fdh.addLayer(marker);
                 else if (p.type === 'splice_closure') layers.closures.addLayer(marker);
                 else if (p.type === 'access_point') layers.accessPoints.addLayer(marker);
 
@@ -1406,10 +1456,12 @@
                 else layers.distribution.addLayer(polyline);
             }
         });
+    }
 
-        if (bounds.length > 0) {
-            map.fitBounds(bounds, { padding: [50, 50] });
-        }
+    if (bounds.length > 0 || regionBounds.isValid()) {
+        const visibleBounds = L.latLngBounds(bounds);
+        if (regionBounds.isValid()) visibleBounds.extend(regionBounds);
+        map.fitBounds(visibleBounds, { padding: [50, 50] });
     }
 
     // Layer toggle handlers
@@ -1424,6 +1476,14 @@
     document.getElementById('layer-access-points').addEventListener('change', function() {
         if (this.checked) map.addLayer(layers.accessPoints);
         else map.removeLayer(layers.accessPoints);
+    });
+    document.getElementById('layer-customers').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.customers);
+        else map.removeLayer(layers.customers);
+    });
+    document.getElementById('layer-regions').addEventListener('change', function() {
+        if (this.checked) map.addLayer(layers.regions);
+        else map.removeLayer(layers.regions);
     });
     document.getElementById('layer-feeder').addEventListener('change', function() {
         if (this.checked) map.addLayer(layers.feeder);

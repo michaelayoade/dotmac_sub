@@ -82,9 +82,11 @@ def _record_permanent_handler_failure(
 def _isolated_handler_session(db: Session | Any) -> Iterator[Session | Any]:
     """Contain each handler's transaction without hiding parent writes.
 
-    Handlers share the dispatcher's connection through a savepoint-backed child
-    session. A handler can flush or even commit without ending the parent event
-    transaction, while a database error rolls back only that handler's work.
+    Handlers share the dispatcher's checked-out connection through a
+    savepoint-backed child session. This preserves visibility of the claimed
+    event row without opening a second transaction that can block on locks held
+    by the dispatcher itself. A handler commit or rollback completes only its
+    savepoint, never the parent event transaction.
     """
     if not isinstance(db, Session):
         yield db

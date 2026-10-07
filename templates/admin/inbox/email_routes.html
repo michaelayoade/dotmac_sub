@@ -3,20 +3,201 @@
 {% block title %}Inbox channel routing - Inbox{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
+{% macro chevron(state) %}<svg aria-hidden="true" class="h-5 w-5 text-slate-400 transition-transform" :class="{ 'rotate-180': {{ state }} }" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" /></svg>{% endmacro %}
+<script type="application/json" id="inbox-settings-data-troubleshooting">{{ (ai_intake_troubleshooting_rules | default([]) | tojson) | tojson }}</script>
+<script type="application/json" id="inbox-settings-data-channel-overrides">{{ (ai_intake_channel_overrides_json | default('{}') | tojson) }}</script>
+<script type="application/json" id="inbox-settings-data-mappings">{{ (ai_intake_mapping_json | default('[]') | tojson) }}</script>
+<script type="application/json" id="inbox-settings-data-gender-choices">{{ ai_intake_data_cleanup_policy.get('gender_choices', {}) | tojson }}</script>
+<script type="application/json" id="inbox-settings-data-dob-formats">{{ (ai_intake_data_cleanup_policy.get('dob_formats', []) | tojson) }}</script>
+<div
+    x-data="{
+        sections: {
+            overview: true,
+            customer: false,
+            ai: false,
+            testing: false,
+            routing: false,
+            personal: false,
+        },
+        draftDirty: false,
+        invalidHandled: false,
+        canaryShowAll: false,
+        canaryFilter: 'all',
+        aiTab: 'basics',
+        routingTab: 'channels',
+        newScenario: false,
+        newSuite: false,
+        newOverrideChannel: '',
+        jsonEditors: {
+            troubleshooting: { scriptId: 'inbox-settings-data-troubleshooting', raw: '', value: [], dirty: false, valid: true },
+            channelOverrides: { scriptId: 'inbox-settings-data-channel-overrides', raw: '', value: {}, dirty: false, valid: true },
+            mappings: { scriptId: 'inbox-settings-data-mappings', raw: '', value: [], dirty: false, valid: true },
+            genderChoices: { scriptId: 'inbox-settings-data-gender-choices', raw: '', value: {}, dirty: false, valid: true },
+        },
+        dobFormats: [],
+        jsonWarnings: {},
+        sectionOrder: ['overview', 'customer', 'ai', 'testing', 'routing', 'personal'],
+        aiTabs: ['basics', 'conversation', 'intents', 'troubleshooting', 'messages', 'advanced'],
+        openSection(name, updateHash = true) {
+            if (this.aiTabs.includes(name)) { this.sections.ai = true; this.aiTab = name; name = `ai-${name}`; }
+            if (!this.sections[name.replace('ai-', '')]) this.sections[name.replace('ai-', '')] = true;
+            if (updateHash) window.history.replaceState({}, '', `#inbox-settings-${name}`);
+            this.$nextTick(() => document.getElementById(name.startsWith('ai-') ? 'inbox-settings-ai' : `inbox-settings-${name}`)?.scrollIntoView({ block: 'start' }));
+        },
+        openAiTab(tab, updateHash = true) { this.aiTab = tab; this.openSection(tab, updateHash); },
+        toggleSection(name) {
+            this.sections[name] = !this.sections[name];
+            if (this.sections[name]) this.openSection(name);
+        },
+        expandAll() { this.sectionOrder.forEach((name) => { this.sections[name] = true; }); },
+        collapseAll() { this.sectionOrder.forEach((name) => { this.sections[name] = name === 'overview'; }); },
+        canaryVisible(index, result) {
+            if (this.canaryFilter !== 'all' && this.canaryFilter !== result) return false;
+            if (this.canaryShowAll) return true;
+            return this.sectionCanaryIndexes().indexOf(index) < 10;
+        },
+        sectionCanaryIndexes() {
+            return Array.from(this.$root.querySelectorAll('[data-canary-result]')).filter((row) => this.canaryFilter === 'all' || row.dataset.canaryResult === this.canaryFilter).map((row) => Number(row.dataset.canaryIndex));
+        },
+        initJsonEditors() {
+            Object.entries(this.jsonEditors).forEach(([key, editor]) => {
+                const encoded = document.getElementById(editor.scriptId)?.textContent || '';
+                try {
+                    const initial = JSON.parse(encoded || (key === 'channelOverrides' || key === 'genderChoices' ? '{}' : '[]'));
+                    editor.raw = typeof initial === 'string' ? initial : JSON.stringify(initial);
+                    editor.value = typeof initial === 'string' ? JSON.parse(initial || (key === 'channelOverrides' || key === 'genderChoices' ? '{}' : '[]')) : initial;
+                }
+                catch (error) { editor.value = key === 'channelOverrides' || key === 'genderChoices' ? {} : []; editor.valid = false; this.jsonWarnings[key] = true; }
+            });
+            try { this.dobFormats = JSON.parse(document.getElementById('inbox-settings-data-dob-formats')?.textContent || '[]'); } catch (error) { this.dobFormats = []; }
+        },
+        loadIntentData(element) {
+            const script = document.getElementById(`inbox-settings-data-intent-${element.dataset.intentIndex}`);
+            if (script) Object.assign(this, JSON.parse(script.textContent || '{}'));
+        },
+        jsonValue(key) { const editor = this.jsonEditors[key]; return editor.dirty ? JSON.stringify(editor.value) : editor.raw; },
+        markJsonDirty(key) { this.jsonEditors[key].dirty = true; },
+        startFreshJson(key, fallback) { this.jsonEditors[key].value = fallback; this.jsonEditors[key].dirty = true; this.jsonEditors[key].valid = true; this.jsonWarnings[key] = false; },
+        addRule() { this.jsonEditors.troubleshooting.value.push({ condition: { type: 'intent', operator: 'equals', value: '' }, action: { type: 'handoff', destination_team_id: '' }, response: '', enabled: true }); this.markJsonDirty('troubleshooting'); },
+        removeRule(index) { this.jsonEditors.troubleshooting.value.splice(index, 1); this.markJsonDirty('troubleshooting'); },
+        addOverride(channel) { this.jsonEditors.channelOverrides.value[channel] = { business_tone: '', approved_isp_information: '', handoff: { customer_message: '', summary_template: '', announce_destination: false } }; this.markJsonDirty('channelOverrides'); },
+        availableOverrideChannels() { return Array.from(document.querySelectorAll('[data-channel-option]')).filter((option) => !Object.prototype.hasOwnProperty.call(this.jsonEditors.channelOverrides.value, option.value)).map((option) => option.value); },
+        removeOverride(channel) { delete this.jsonEditors.channelOverrides.value[channel]; this.markJsonDirty('channelOverrides'); },
+        addMapping() { this.jsonEditors.mappings.value.push({ intent: '', department: '', service_team_id: '', enabled: true }); this.markJsonDirty('mappings'); },
+        removeMapping(index) { this.jsonEditors.mappings.value.splice(index, 1); this.markJsonDirty('mappings'); },
+        addGenderChoice() { this.jsonEditors.genderChoices.value[''] = ''; this.markJsonDirty('genderChoices'); },
+        removeGenderChoice(label) { delete this.jsonEditors.genderChoices.value[label]; this.markJsonDirty('genderChoices'); },
+        setGenderLabel(oldLabel, newLabel) { if (oldLabel !== newLabel) { const value = this.jsonEditors.genderChoices.value[oldLabel]; delete this.jsonEditors.genderChoices.value[oldLabel]; this.jsonEditors.genderChoices.value[newLabel] = value; this.markJsonDirty('genderChoices'); } },
+        initHelpers() {
+            this.$nextTick(() => {
+                let helperIndex = 0;
+                this.$root.querySelectorAll('label > p, label > span > span.block').forEach((helper) => {
+                    if (helper.textContent.trim().split(' ').filter(Boolean).length <= 12 || helper.dataset.helperReady) return;
+                    const label = helper.closest('label');
+                    const control = label?.querySelector('input, select, textarea');
+                    if (!label || !control) return;
+                    helper.dataset.helperReady = 'true';
+                    const id = `inbox-setting-help-${++helperIndex}`;
+                    helper.id = id;
+                    helper.hidden = true;
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-400 text-[10px] font-bold text-slate-500 hover:border-amber-500 hover:text-amber-700 dark:border-slate-500 dark:text-slate-300 dark:hover:text-amber-300';
+                    button.setAttribute('aria-controls', id);
+                    button.setAttribute('aria-expanded', 'false');
+                    const labelText = Array.from(label.childNodes).find((node) => node.nodeType === Node.TEXT_NODE)?.textContent?.trim() || 'this field';
+                    button.setAttribute('aria-label', `More about ${labelText}`);
+                    button.textContent = 'i';
+                    control.setAttribute('aria-describedby', id);
+                    button.addEventListener('click', () => { helper.hidden = !helper.hidden; button.setAttribute('aria-expanded', String(!helper.hidden)); });
+                    control.parentElement.insertBefore(button, control);
+                });
+            });
+        },
+        openFromHash() {
+            const name = (window.location.hash || '').replace('#inbox-settings-', '');
+            if (name.startsWith('ai-') && this.aiTabs.includes(name.slice(3))) this.openAiTab(name.slice(3), false);
+            else if (this.sectionOrder.includes(name)) this.openSection(name, false);
+        },
+        expandForInvalid(event) {
+            if (this.invalidHandled) return;
+            this.invalidHandled = true;
+            this.$nextTick(() => { this.invalidHandled = false; });
+            const field = event.target;
+            const section = event.target.closest('[data-settings-section]')?.dataset.settingsSection;
+            const tab = field.closest('[data-ai-tab]')?.dataset.aiTab;
+            const routeTab = field.closest('[data-routing-tab]')?.dataset.routingTab;
+            if (tab) { this.sections.ai = true; this.aiTab = tab; }
+            if (routeTab) { this.sections.routing = true; this.routingTab = routeTab; }
+            if (section) {
+                this.openSection(section === 'ai' ? (tab || 'basics') : section, false);
+                this.$nextTick(() => field.focus());
+            }
+        },
+    }"
+    x-init="initJsonEditors(); openFromHash(); initHelpers()"
+    @hashchange.window="openFromHash()"
+    @invalid.capture="expandForInvalid($event)"
+    @submit.capture="invalidHandled = false"
+    class="mx-auto min-w-0 max-w-7xl space-y-5 p-4 sm:p-6"
+>
     <header>
         <nav class="text-xs text-slate-500 dark:text-slate-400"><a href="/admin/inbox" class="hover:text-amber-700">Inbox</a> / Channel routing</nav>
-        <h1 class="mt-1 font-display text-xl font-semibold text-slate-950 dark:text-white">Mailbox routing</h1>
-        <p class="mt-1 max-w-3xl text-sm text-slate-500 dark:text-slate-400">
-            Channel routes choose the default service team for each mailbox, WhatsApp number, Meta account, or registered website and portal widget surface. AI intake routes can override that default when a classified intent meets the configured confidence threshold. Each mailbox route can also select the SMTP profile used when its team replies.
-        </p>
+        <h1 class="mt-1 font-display text-2xl font-semibold text-slate-950 dark:text-white">Inbox settings</h1>
+        <p class="mt-1 max-w-3xl text-sm text-slate-500 dark:text-slate-400">Inbox settings for customer resolution, AI intake, queue messaging, and channel routing.</p>
     </header>
 
     {% if notice_message %}
     <p role="status" class="rounded-lg border px-3 py-2 text-sm {% if notice_status == 'error' %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800 dark:bg-rose-950/20 dark:text-rose-200{% else %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-200{% endif %}">{{ notice_message }}</p>
     {% endif %}
 
-    <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <nav class="sticky top-0 z-30 -mx-4 overflow-x-auto border-y border-slate-200 bg-white/95 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:border-slate-700 dark:bg-slate-900/95" aria-label="Inbox settings sections">
+        <div class="flex min-w-max items-center gap-1 text-xs font-semibold">
+            {% for key, label in [('overview', 'Overview'), ('customer', 'Customer resolution'), ('ai', 'AI intake policy'), ('testing', 'Testing & versions'), ('routing', 'Routing'), ('personal', 'My settings')] %}
+            <button type="button" @click="openSection('{{ key }}')" class="rounded-lg px-3 py-2 text-slate-600 hover:bg-amber-50 hover:text-amber-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-amber-300">{{ label }}</button>
+            {% endfor %}
+            <span class="mx-1 h-5 border-l border-slate-200 dark:border-slate-700"></span>
+            <button type="button" @click="expandAll()" class="rounded-lg px-3 py-2 text-amber-700 hover:bg-amber-50 dark:text-amber-300">Expand all</button>
+            <button type="button" @click="collapseAll()" class="rounded-lg px-3 py-2 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800">Collapse all</button>
+        </div>
+    </nav>
+
+            <section id="inbox-settings-overview" data-settings-section="overview" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <button type="button" @click="toggleSection('overview')" :aria-expanded="sections.overview.toString()" aria-controls="inbox-settings-overview-body" class="group flex min-h-16 w-full items-start justify-between gap-4 p-5 text-left hover:bg-slate-50 dark:hover:bg-slate-900">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Overview</h2>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review the active scope and lifecycle actions before opening detailed settings.</p>
+                    </div>
+                     <span class="flex items-center gap-3"><span class="rounded-full px-3 py-1 text-xs font-semibold {% if ai_intake_policy_status is defined and ai_intake_policy_status == 'Active' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% elif ai_intake_policy_status is defined and ai_intake_policy_status == 'Draft' %}bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200{% endif %}">{{ ai_intake_policy_status if ai_intake_policy_status is defined else 'Not configured' }}</span>{{ chevron('sections.overview') }}</span>
+                </button>
+                <div id="inbox-settings-overview-body" x-show="sections.overview" x-cloak>
+                <div class="grid gap-3 border-t border-slate-100 p-5 sm:grid-cols-2 xl:grid-cols-5 dark:border-slate-700">
+                    <div><p class="text-xs text-slate-500 dark:text-slate-400">Active version</p><p class="mt-1 font-semibold text-slate-900 dark:text-white">{% if ai_intake_active_version %}v{{ ai_intake_active_version.version_number }}{% else %}None{% endif %}</p></div>
+                    <div><p class="text-xs text-slate-500 dark:text-slate-400">Draft version</p><p class="mt-1 font-semibold text-slate-900 dark:text-white">{% if ai_intake_draft_version %}v{{ ai_intake_draft_version.version_number }}{% else %}None{% endif %}</p></div>
+                    {% set provider_value = ai_intake_policy.provider if ai_intake_policy is defined and ai_intake_policy else '' %}
+                    {% set provider_labels = {'meta_cloud_api': 'WhatsApp Cloud API', 'meta.social': 'Meta social', 'fiber_website': 'Fiber website chat widget', 'native_widget': 'Native portal widget'} %}
+                    {% set channel_value = ai_intake_policy.channel_type if ai_intake_policy is defined and ai_intake_policy else '' %}
+                    {% set channel_ns = namespace(label=channel_value) %}{% for channel in ai_channel_options %}{% if channel.value == channel_value %}{% set channel_ns.label = channel.label %}{% endif %}{% endfor %}
+                    <div><p class="text-xs text-slate-500 dark:text-slate-400">Provider</p><p class="mt-1 truncate font-semibold text-slate-900 dark:text-white">{{ provider_labels.get(provider_value, provider_value or 'Not configured') }}</p></div>
+                    <div><p class="text-xs text-slate-500 dark:text-slate-400">Channel scope</p><p class="mt-1 truncate font-semibold text-slate-900 dark:text-white">{{ channel_ns.label or 'Not configured' }}</p></div>
+                    <div><p class="text-xs text-slate-500 dark:text-slate-400">Threshold</p><p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ ai_intake_escalation_rules.get('confidence_threshold', 0.75) if ai_intake_escalation_rules is defined and ai_intake_escalation_rules else 'Not configured' }}</p></div>
+                </div>
+                <div class="flex flex-wrap gap-2 border-t border-slate-100 p-5 dark:border-slate-700">
+                    <button type="button" @click="openSection('basics')" class="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Open policy details</button>
+                    {% if ai_intake_draft_version %}<button type="submit" form="ai-intake-validate-form" class="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Validate draft</button><button type="submit" form="ai-intake-activate-form" class="min-h-10 rounded-lg border border-emerald-500 px-4 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-400 dark:text-emerald-300 dark:hover:bg-emerald-950/30">Activate draft</button>{% endif %}
+                    {% if ai_intake_policy and ai_intake_policy.active_version_id and ai_intake_policy.is_enabled %}<button type="submit" form="ai-intake-disable-form" class="min-h-10 rounded-lg border border-rose-300 px-4 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300">Disable</button>{% endif %}
+                </div>
+                {% if ai_intake_active_version and ai_intake_draft_version %}<p class="border-t border-slate-100 px-5 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">Activating replaces v{{ ai_intake_active_version.version_number }} with v{{ ai_intake_draft_version.version_number }} for new conversations.</p>{% endif %}
+                </div>
+             </section>
+
+    <section id="inbox-settings-customer" data-settings-section="customer" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button" @click="toggleSection('customer')" :aria-expanded="sections.customer.toString()" aria-controls="inbox-settings-customer-body" class="flex min-h-16 w-full items-center justify-between gap-4 px-5 py-4 text-left">
+            <span><span class="block font-semibold text-slate-900 dark:text-white">Customer resolution</span><span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">Required fields and identity guard</span></span>
+            {{ chevron('sections.customer') }}
+        </button>
+        <div id="inbox-settings-customer-body" x-show="sections.customer" x-cloak class="border-t border-slate-100 dark:border-slate-700">
+    <section class="rounded-xl bg-white dark:bg-slate-800">
         <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
             <h2 class="font-semibold text-slate-900 dark:text-white">Customer resolution requirements</h2>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">These fields block agent resolution for Customer conversations only. Leads remain resolvable with incomplete profiles. Required fields are snapshotted when a conversation arrives; the identity guard below applies immediately to all conversations.</p>
@@ -50,21 +231,22 @@
             {% else %}<p class="text-xs text-slate-500">Administrator settings permission is required to change this policy.</p>{% endif %}
         </form>
     </section>
-
-    <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Composable AI intake</h2>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Versioned business prompts for WhatsApp, Facebook Messenger, Instagram DM, and native website or portal chat widgets. Save, validate, activate and disable are separate actions.</p>
-                </div>
-                <span class="rounded-lg px-2.5 py-1 text-xs font-semibold {% if ai_intake_policy_status == 'Active' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% elif ai_intake_policy_status == 'Draft' %}bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200{% endif %}">
-                    {{ ai_intake_policy_status }}
-                </span>
-            </div>
         </div>
-        {% if ai_intake_policies %}
-        <div class="border-b border-slate-100 px-5 py-3 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300">
+    </section>
+
+    <section id="inbox-settings-ai" data-settings-section="ai" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button" @click="toggleSection('ai')" :aria-expanded="sections.ai.toString()" aria-controls="inbox-settings-ai-body" class="group flex min-h-16 w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-900">
+            <span><span class="block font-semibold text-slate-900 dark:text-white">AI intake policy</span><span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">Basics, tools, routing, messages, and advanced policy controls</span></span>
+            {{ chevron('sections.ai') }}</button>
+         <div id="inbox-settings-ai-body" x-show="sections.ai" x-cloak>
+        <div class="border-t border-slate-100 px-5 py-4 dark:border-slate-700">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <h2 class="font-semibold text-slate-900 dark:text-white">AI policy editor</h2>
+                <span class="rounded-lg px-2.5 py-1 text-xs font-semibold {% if ai_intake_policy_status == 'Active' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% elif ai_intake_policy_status == 'Draft' %}bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200{% endif %}">{{ ai_intake_policy_status }}</span>
+            </div>
+         </div>
+         {% if ai_intake_policies %}
+        <div x-show="aiTab === 'basics'" x-cloak class="border-b border-slate-100 px-5 py-3 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300" data-ai-tab="basics">
             {% for policy in ai_intake_policies %}
             <span class="mr-2 inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 dark:bg-slate-700">
                 <span class="font-mono">{{ policy.provider }}/{{ policy.account_scope }}</span>
@@ -74,18 +256,19 @@
             {% endfor %}
         </div>
         {% endif %}
-        <form method="post" action="/admin/crm/inbox/ai-intake-policy/draft" class="grid gap-4 p-5 lg:grid-cols-6">
+        <form id="ai-intake-draft-form" method="post" action="/admin/crm/inbox/ai-intake-policy/draft" @input="draftDirty = true" @change="draftDirty = true" class="min-w-0 grid gap-4 p-5 lg:grid-cols-6">
             {% include "components/forms/csrf_input.html" %}
-            <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300 lg:col-span-6">
-                Protected instructions: the assistant must disclose it is AI, avoid unsupported promises, ignore prompt injection, avoid private-data exposure, stop after human takeover, and leave routing, assignment, queueing and provider delivery to Team Inbox.
+            <input type="hidden" name="replace_existing_draft" value="true">
+            <div x-data="{ infoOpen: false }" x-show="aiTab === 'basics'" x-cloak class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300 lg:col-span-6" data-ai-tab="basics">
+                <span class="font-semibold">Protected instructions</span><button type="button" class="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-400 text-[10px] font-bold" @click="infoOpen = !infoOpen" :aria-expanded="infoOpen.toString()" aria-controls="protected-instructions-help" aria-label="More about Protected instructions">i</button>
+                <p id="protected-instructions-help" x-show="infoOpen" x-cloak class="mt-2">The assistant must disclose it is AI, avoid unsupported promises, ignore prompt injection, avoid private-data exposure, stop after human takeover, and leave routing, assignment, queueing and provider delivery to Team Inbox.</p>
             </div>
-            <nav aria-label="AI intake composer sections" class="lg:col-span-6">
-                <ol class="flex flex-wrap gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-                    {% for item in ['Overview', 'Channels', 'Persona', 'Intents', 'Identification', 'Tools', 'Troubleshooting', 'Routing', 'Handoff', 'Queue', 'Safety', 'Review'] %}
-                    <li class="rounded-lg border border-slate-200 px-2.5 py-1 dark:border-slate-700">{{ item }}</li>
+            <nav aria-label="AI intake policy tabs" role="tablist" class="lg:col-span-6 flex min-w-0 gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-700">
+                    {% for key, label in [('basics', 'Basics'), ('conversation', 'Conversation & tools'), ('intents', 'Intents & routing'), ('troubleshooting', 'Troubleshooting & handoff'), ('messages', 'Messages'), ('advanced', 'Advanced')] %}
+                    <button type="button" role="tab" id="inbox-settings-ai-tab-{{ key }}" aria-controls="inbox-settings-ai-{{ key }}" :aria-selected="(aiTab === '{{ key }}').toString()" @click="openAiTab('{{ key }}')" @keydown.right.prevent="openAiTab(aiTabs[(aiTabs.indexOf('{{ key }}') + 1) % aiTabs.length])" @keydown.left.prevent="openAiTab(aiTabs[(aiTabs.indexOf('{{ key }}') - 1 + aiTabs.length) % aiTabs.length])" class="shrink-0 border-b-2 border-transparent px-3 py-3 text-xs font-semibold text-slate-600 hover:border-amber-400 hover:text-amber-700 dark:text-slate-300" :class="{ 'border-amber-500 text-slate-900 dark:text-white': aiTab === '{{ key }}' }">{{ label }}</button>
                     {% endfor %}
-                </ol>
             </nav>
+            <div id="inbox-settings-ai-basics" data-settings-section="ai" data-ai-tab="basics" role="tabpanel" aria-labelledby="inbox-settings-ai-tab-basics" x-show="aiTab === 'basics'" x-cloak class="min-w-0 scroll-mt-20 grid gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40 lg:col-span-6 lg:grid-cols-6">
             <div class="lg:col-span-6">
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Overview and channels</h3>
             </div>
@@ -110,17 +293,17 @@
                 </select>
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Limits this policy to one supported customer messaging channel. Widget AI starts with the visitor's first message after activation.</p>
             </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Confidence
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Confidence
                 <input name="confidence_threshold" type="number" min="0" max="1" step="0.01" value="{{ ai_intake_escalation_rules.get('confidence_threshold', 0.75) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Below this confidence, the conversational engine determines the next useful clarification.</p>
             </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Clarifications
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Clarifications
                 <input name="max_clarification_turns" type="number" min="0" max="5" value="{{ ai_intake_escalation_rules.get('max_clarification_turns', 1) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Maximum configured clarification attempts before an explicit fallback reason is required.</p>
             </label>
-            <input name="escalate_after_minutes" type="hidden" value="{{ ai_intake_escalation_rules.get('escalate_after_minutes', 5) }}">
-            <input name="customer_response_timeout_minutes" type="hidden" value="{{ ai_intake_escalation_rules.get('customer_response_timeout_minutes', ai_intake_escalation_rules.get('escalate_after_minutes', 5)) }}">
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">AI hold before human handoff (minutes)
+             <input name="escalate_after_minutes" type="hidden" value="{{ ai_intake_escalation_rules.get('escalate_after_minutes', 5) }}" class="lg:col-span-6">
+             <input name="customer_response_timeout_minutes" type="hidden" value="{{ ai_intake_escalation_rules.get('customer_response_timeout_minutes', ai_intake_escalation_rules.get('escalate_after_minutes', 5)) }}" class="lg:col-span-6">
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">AI hold before human handoff (minutes)
                 <input name="customer_wait_handoff_minutes" type="number" min="1" max="1440" value="{{ ai_intake_escalation_rules.get('customer_wait_handoff_minutes', 10) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">When this hold elapses, AI hands the conversation to normal agent assignment or the team's FIFO queue. The default is 10 minutes.</p>
             </label>
@@ -134,15 +317,17 @@
                 Skip campaign-attributed conversations
                 <span class="block text-xs font-normal text-slate-500 dark:text-slate-400">Prevents campaign-attributed conversations from entering AI intake.</span>
             </label>
-            <section class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40 lg:col-span-6">
+            </div>
+            </div>
+             <section id="inbox-settings-ai-conversation" data-settings-section="ai" data-ai-tab="conversation" role="tabpanel" aria-labelledby="inbox-settings-ai-tab-conversation" x-show="aiTab === 'conversation'" x-cloak class="min-w-0 scroll-mt-20 grid gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40 lg:col-span-6 lg:grid-cols-6">
                 {% set engine_enabled = ai_intake_engine_metadata.get('conversational_engine_enabled', false) %}
                 {% set engine_mode = ai_intake_conversation_engine_mode %}
                 {% set permitted_identifiers = ai_intake_permitted_identifiers %}
                 {% set tool_config = ai_intake_tool_config %}
                 {% set conversation_policy = ai_intake_conversation_policy %}
                 {% set handoff_policy = conversation_policy.get('handoff', {}) %}
-                <div class="grid gap-4 lg:grid-cols-6">
-                    <div class="lg:col-span-6">
+                 <div class="grid gap-4 lg:col-span-6 lg:grid-cols-6">
+                     <div class="lg:col-span-6">
                         <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Conversation, identification and tools</h3>
                     </div>
                     <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200 lg:col-span-3">
@@ -182,40 +367,29 @@
                             {% endfor %}
                         </ul>
                     </div>
-                    <div class="lg:col-span-6">
-                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Troubleshooting and handoff</h3>
-                    </div>
-                    <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Customer handoff message
-                        <textarea name="handoff_customer_message" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ handoff_policy.get('customer_message') or ai_intake_conversation_templates.get('standard_handoff', '') }}</textarea>
-                        <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Used when the conversational engine decides to hand over.</p>
-                    </label>
-                    <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Internal summary template
-                        <textarea name="handoff_summary_template" maxlength="2000" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ handoff_policy.get('summary_template', '') }}</textarea>
-                        <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Approved variables include {{ '{{customer}}' }}, {{ '{{portal_id}}' }}, {{ '{{issue}}' }}, {{ '{{intent}}' }}, {{ '{{customer_details}}' }}, {{ '{{monitoring_findings}}' }}, {{ '{{tool_results}}' }}, {{ '{{escalation_reason}}' }} and {{ '{{destination_team}}' }}.</p>
-                    </label>
-                    <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200 lg:col-span-2">
-                        <input type="checkbox" name="announce_destination_team" value="true" {% if handoff_policy.get('announce_destination') %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">
-                        Allow destination announcement
-                    </label>
-                    <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200 lg:col-span-2">
-                        <input type="checkbox" name="handoff_after_classification" value="true" {% if conversation_policy.get('handoff_after_classification', false) %}checked{% endif %} class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">
-                        Handoff after classification
-                        <span class="block text-xs font-normal text-slate-500 dark:text-slate-400">Allows immediate handoff after a route-ready classification.</span>
-                    </label>
-                    <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Troubleshooting rules JSON
-                        <textarea name="troubleshooting_rules_json" maxlength="4000" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950">{{ conversation_policy.get('troubleshooting_rules', []) | tojson }}</textarea>
-                        <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Advanced inspection/fallback only. Visual rules below are the primary editor; executable code is not accepted.</p>
-                    </label>
                 </div>
             </section>
-            <section class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40 lg:col-span-6">
-                <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+             <section id="inbox-settings-ai-intents" data-settings-section="ai" data-ai-tab="intents" role="tabpanel" aria-labelledby="inbox-settings-ai-tab-intents" x-show="aiTab === 'intents'" x-cloak class="min-w-0 scroll-mt-20 grid gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40 lg:col-span-6 lg:grid-cols-6">
+                 <div class="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-end sm:justify-between lg:col-span-6">
                     <div>
                         <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Intent composer</h3>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Keys are validated against the current backend intent catalogue. Add rows, disable rows, set priority, tools, required fields and routing target.</p>
                     </div>
                 </div>
-                <div class="mt-3 space-y-3">
+                 <label class="mt-3 block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Fallback team
+                    <select name="fallback_team_id" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
+                        <option value="">Choose an active fallback team before activation</option>
+                        {% for team in service_team_options %}<option value="{{ team.id }}" {% if ai_intake_policy and ai_intake_policy.fallback_team_id == team.id %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Profile-completion support team
+                    <select name="data_cleaning_support_team_id" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
+                        <option value="">Disabled</option>
+                        {% for team in service_team_options %}<option value="{{ team.id }}" {% if ai_intake_data_cleanup_policy.get('support_team_id') == team.id|string %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
+                    </select>
+                    <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Optional team for the separate profile-completion workflow.</p>
+                </label>
+                 <div class="mt-3 min-w-0 space-y-3 lg:col-span-6">
                     {% for intent in ai_intake_intent_definitions %}
                     <div class="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950 lg:grid-cols-12">
                         <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Key
@@ -251,16 +425,11 @@
                         <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Description
                             <textarea name="intent_description" rows="2" maxlength="600" class="mt-1 w-full rounded-lg border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">{{ intent.get('description', '') }}</textarea>
                         </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Examples
-                            <textarea name="intent_examples" rows="2" maxlength="800" class="mt-1 w-full rounded-lg border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">{% for example in intent.get('examples', []) %}{{ example }}
-{% endfor %}</textarea>
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Allowed tools
-                            <input name="intent_allowed_tools" value="{{ intent.get('allowed_tools', []) | join(', ') }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Required fields
-                            <input name="intent_required_fields" value="{{ intent.get('required_fields', []) | join(', ') }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
-                        </label>
+                        <script type="application/json" id="inbox-settings-data-intent-existing-{{ loop.index0 }}">{{ {'examples': intent.get('examples', []), 'selectedTools': intent.get('allowed_tools', []), 'selectedFields': intent.get('required_fields', [])} | tojson }}</script><div class="lg:col-span-6 grid gap-3 lg:grid-cols-3" data-intent-index="existing-{{ loop.index0 }}" x-data="{ examples: [], selectedTools: [], selectedFields: [] }" x-init="loadIntentData($el)">
+                            <div class="lg:col-span-1"><span class="text-xs font-semibold">Examples</span><input type="hidden" name="intent_examples" :value="examples.join('\n')"><template x-for="(example, index) in examples" :key="index"><div class="mt-2 flex gap-1"><input x-model="examples[index]" class="min-w-0 flex-1 rounded-lg border-slate-300 text-xs"><button type="button" @click="examples.splice(index, 1)" :aria-label="`Delete example ${index}`" class="text-rose-700">Delete</button></div></template><button type="button" @click="examples.push('')" class="mt-2 rounded-lg border border-amber-400 px-2 py-1 text-xs font-semibold text-amber-700">Add example</button></div>
+                            <div class="lg:col-span-1"><span class="text-xs font-semibold">Allowed tools</span><input type="hidden" name="intent_allowed_tools" :value="selectedTools.join(', ')"><div class="mt-2 flex flex-wrap gap-2">{% for tool in ai_intake_tool_catalogue %}<label class="rounded-full border px-2 py-1 text-xs"><input type="checkbox" value="{{ tool.key }}" x-model="selectedTools" :title="{{ tool.description | tojson }}"> {{ tool.key|replace('_', ' ')|title }}</label>{% endfor %}</div></div>
+                            <div class="lg:col-span-1"><span class="text-xs font-semibold">Required fields</span><input type="hidden" name="intent_required_fields" :value="selectedFields.join(', ')"><div class="mt-2 flex flex-wrap gap-2">{% for field in ai_intake_permitted_identifiers %}<label class="rounded-full border px-2 py-1 text-xs"><input type="checkbox" value="{{ field }}" x-model="selectedFields"> {{ field|replace('_', ' ')|title }}</label>{% endfor %}</div></div>
+                        </div>
                     </div>
                     {% endfor %}
                     {% for _ in range(0, 3) %}
@@ -275,96 +444,30 @@
                         <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Route team<select name="intent_route_team_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}</select></label>
                         <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Handoff<select name="intent_handoff" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="false">No</option><option value="true">Yes</option></select></label>
                         <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Description<textarea name="intent_description" rows="2" maxlength="600" class="mt-1 w-full rounded-lg border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"></textarea></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Examples<textarea name="intent_examples" rows="2" maxlength="800" class="mt-1 w-full rounded-lg border-slate-300 px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"></textarea></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Allowed tools<input name="intent_allowed_tools" placeholder="customer_lookup" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Required fields<input name="intent_required_fields" placeholder="portal_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
+                        <script type="application/json" id="inbox-settings-data-intent-new-{{ loop.index0 }}">{{ {'examples': [], 'selectedTools': [], 'selectedFields': []} | tojson }}</script><div class="lg:col-span-6 grid gap-3 lg:grid-cols-3" data-intent-index="new-{{ loop.index0 }}" x-data="{ examples: [], selectedTools: [], selectedFields: [] }" x-init="loadIntentData($el)"><div><span class="text-xs font-semibold">Examples</span><input type="hidden" name="intent_examples" :value="examples.join('\n')"><template x-for="(example, index) in examples" :key="index"><div class="mt-2 flex gap-1"><input x-model="examples[index]" class="min-w-0 flex-1 rounded-lg border-slate-300 text-xs"><button type="button" @click="examples.splice(index, 1)" :aria-label="`Delete example ${index}`" class="text-rose-700">Delete</button></div></template><button type="button" @click="examples.push('')" class="mt-2 rounded-lg border border-amber-400 px-2 py-1 text-xs font-semibold text-amber-700">Add example</button></div><div><span class="text-xs font-semibold">Allowed tools</span><input type="hidden" name="intent_allowed_tools" :value="selectedTools.join(', ')"><div class="mt-2 flex flex-wrap gap-2">{% for tool in ai_intake_tool_catalogue %}<label class="rounded-full border px-2 py-1 text-xs"><input type="checkbox" value="{{ tool.key }}" x-model="selectedTools"> {{ tool.key|replace('_', ' ')|title }}</label>{% endfor %}</div></div><div><span class="text-xs font-semibold">Required fields</span><input type="hidden" name="intent_required_fields" :value="selectedFields.join(', ')"><div class="mt-2 flex flex-wrap gap-2">{% for field in ai_intake_permitted_identifiers %}<label class="rounded-full border px-2 py-1 text-xs"><input type="checkbox" value="{{ field }}" x-model="selectedFields"> {{ field|replace('_', ' ')|title }}</label>{% endfor %}</div></div></div>
                     </div>
                     {% endfor %}
                 </div>
             </section>
-            <section class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40 lg:col-span-6">
-                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Troubleshooting rule editor</h3>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Rules are typed. Conditions and actions are backend-defined; the form does not accept Python, SQL, Jinja or arbitrary expressions.</p>
-                {% set visual_rules = conversation_policy.get('troubleshooting_rules', []) %}
-                <div class="mt-3 space-y-3">
-                    {% for rule in visual_rules %}
-                    {% set condition = rule.get('condition', {}) %}
-                    <div class="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950 lg:grid-cols-12">
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">When
-                            <select name="rule_condition_type" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
-                                <option value=""></option>
-                                {% for key in ai_intake_supported_rule_conditions %}<option value="{{ key }}" {% if condition.get('type') == key %}selected{% endif %}>{{ key }}</option>{% endfor %}
-                                <option value="field:los_red" {% if condition.get('field') == 'los_red' %}selected{% endif %}>field:los_red</option>
-                                <option value="field:router_restarted" {% if condition.get('field') == 'router_restarted' %}selected{% endif %}>field:router_restarted</option>
-                                <option value="field:router_powered" {% if condition.get('field') == 'router_powered' %}selected{% endif %}>field:router_powered</option>
-                            </select>
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Operator
-                            <select name="rule_condition_operator" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
-                                {% for op in ['equals', 'present', 'contains', '>=', '>', '<=', '<'] %}<option value="{{ op }}" {% if condition.get('operator', 'equals') == op %}selected{% endif %}>{{ op }}</option>{% endfor %}
-                            </select>
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Value
-                            <input name="rule_condition_value" value="{{ condition.get('value') or condition.get('intent') or condition.get('category') or condition.get('monitoring_status') or condition.get('equals') or '' }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Then
-                            <select name="rule_action" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
-                                <option value=""></option>
-                                {% for action in ai_intake_supported_rule_actions %}<option value="{{ action }}" {% if rule.get('action') == action %}selected{% endif %}>{{ action }}</option>{% endfor %}
-                            </select>
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Tool / field
-                            <select name="rule_tool" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
-                                <option value="{{ rule.get('tool', '') }}">{{ rule.get('tool', '') }}</option>
-                                {% for tool in ai_intake_tool_catalogue %}<option value="{{ tool.key }}">{{ tool.key }}</option>{% endfor %}
-                                <option value="portal_id">portal_id</option>
-                                <option value="registered_email">registered_email</option>
-                                <option value="registered_phone">registered_phone</option>
-                            </select>
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Destination
-                            <select name="rule_destination_team_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">
-                                <option value=""></option>
-                                {% for team in service_team_options %}<option value="{{ team.id }}" {% if rule.get('destination_team_id') == team.id|string %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
-                            </select>
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Enabled
-                            <select name="rule_enabled" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="true" {% if rule.get('enabled', true) %}selected{% endif %}>Yes</option><option value="false" {% if not rule.get('enabled', true) %}selected{% endif %}>No</option></select>
-                        </label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-11">Guidance / response
-                            <input name="rule_guidance" value="{{ rule.get('response', '') }}" maxlength="800" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900">
-                        </label>
-                    </div>
-                    {% endfor %}
-                    {% for _ in range(0, 3) %}
-                    <div class="grid gap-3 rounded-lg border border-dashed border-slate-300 bg-white p-3 dark:border-slate-700 dark:bg-slate-950 lg:grid-cols-12">
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">When<select name="rule_condition_type" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for key in ai_intake_supported_rule_conditions %}<option value="{{ key }}">{{ key }}</option>{% endfor %}<option value="field:los_red">field:los_red</option><option value="field:router_restarted">field:router_restarted</option><option value="field:router_powered">field:router_powered</option></select></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Operator<select name="rule_condition_operator" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900">{% for op in ['equals', 'present', 'contains', '>=', '>', '<=', '<'] %}<option value="{{ op }}">{{ op }}</option>{% endfor %}</select></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Value<input name="rule_condition_value" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Then<select name="rule_action" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for action in ai_intake_supported_rule_actions %}<option value="{{ action }}">{{ action }}</option>{% endfor %}</select></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Tool / field<select name="rule_tool" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for tool in ai_intake_tool_catalogue %}<option value="{{ tool.key }}">{{ tool.key }}</option>{% endfor %}<option value="portal_id">portal_id</option><option value="registered_email">registered_email</option><option value="registered_phone">registered_phone</option></select></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Destination<select name="rule_destination_team_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value=""></option>{% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}</select></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Enabled<select name="rule_enabled" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="true">Yes</option><option value="false">No</option></select></label>
-                        <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-11">Guidance / response<input name="rule_guidance" maxlength="800" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label>
-                    </div>
-                    {% endfor %}
+             <section id="inbox-settings-ai-troubleshooting" data-settings-section="ai" data-ai-tab="troubleshooting" role="tabpanel" aria-labelledby="inbox-settings-ai-tab-troubleshooting" x-show="aiTab === 'troubleshooting'" x-cloak class="min-w-0 scroll-mt-20 grid gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40 lg:col-span-6 lg:grid-cols-6">                     <label class="lg:col-span-3">Customer handoff message<textarea name="handoff_customer_message" maxlength="800" rows="3">{{ handoff_policy.get('customer_message') or ai_intake_conversation_templates.get('standard_handoff', '') }}</textarea></label>
+                    <label class="lg:col-span-3">Internal summary template<textarea name="handoff_summary_template" maxlength="2000" rows="3">{{ handoff_policy.get('summary_template', '') }}</textarea></label>
+                    <label class="flex items-center gap-2 lg:col-span-3"><input type="checkbox" name="announce_destination_team" value="true"> Allow destination announcement</label>
+                    <label class="flex items-center gap-2 lg:col-span-3"><input type="checkbox" name="handoff_after_classification" value="true"> Handoff after classification</label>
+                    <div class="lg:col-span-6 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950" data-json-editor="troubleshooting">
+                         <input type="hidden" name="troubleshooting_rules_json" :value="jsonValue('troubleshooting')">
+                         <div x-show="jsonWarnings.troubleshooting" x-cloak class="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">Existing value could not be read and will be saved unchanged. <button type="button" class="font-semibold underline" @click="startFreshJson('troubleshooting', [])">Start fresh</button></div>
+                         <div class="flex flex-wrap items-center justify-between gap-2"><div><h3 class="text-sm font-semibold text-slate-900 dark:text-white">Troubleshooting rule editor</h3><p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Rules are typed and preserve condition fields, responses, destinations and enabled state.</p></div><button type="button" @click="addRule()" class="min-h-9 rounded-lg border border-amber-400 px-3 text-xs font-semibold text-amber-700 hover:bg-amber-50">Add rule</button></div>
+                         <div class="mt-3 space-y-3">
+                             <template x-for="(rule, index) in jsonEditors.troubleshooting.value" :key="index"><div class="grid min-w-0 gap-3 rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700 lg:grid-cols-12"><div class="font-medium text-slate-600 dark:text-slate-300 lg:col-span-12" x-text="`Rule ${index}: If ${rule.condition?.type || 'condition'} ${rule.condition?.value || ''} → ${rule.action?.type || 'action'}`"></div><label class="lg:col-span-2">When<select name="rule_condition_type" x-model="rule.condition.type" @change="markJsonDirty('troubleshooting')" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="intent">intent</option><option value="category">category</option><option value="field_present">field present</option><option value="field_value">field value</option><option value="sentiment">sentiment</option></select></label><label class="lg:col-span-2" x-show="['field_present','field_value'].includes(rule.condition?.type)">Field<select name="rule_condition_field" data-form-consumer="client" x-model="rule.condition.field" @change="markJsonDirty('troubleshooting')" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="portal_id">Portal ID</option><option value="registered_email">Email</option><option value="registered_phone">Phone</option></select></label><label class="lg:col-span-2">Operator<select name="rule_condition_operator" x-model="rule.condition.operator" @change="markJsonDirty('troubleshooting')" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="equals">equals</option><option value="present">present</option><option value="contains">contains</option></select></label><label class="lg:col-span-2">Value<input name="rule_condition_value" x-model="rule.condition.value" @input="markJsonDirty('troubleshooting')" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label><label class="lg:col-span-2">Then<select name="rule_action" x-model="rule.action.type" @change="markJsonDirty('troubleshooting')" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="route">Route</option><option value="handoff">Hand off</option><option value="execute_tool">Execute tool</option><option value="invoke_tool">Invoke tool</option></select></label><label class="lg:col-span-2" x-show="['execute_tool','invoke_tool'].includes(rule.action?.type)">Tool<select name="rule_tool" x-model="rule.action.tool" @change="markJsonDirty('troubleshooting')" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="customer_lookup">Customer lookup</option><option value="subscriber_monitoring">Subscriber monitoring</option></select></label><label class="lg:col-span-2" x-show="rule.action?.type === 'handoff'">Team<select name="rule_destination_team_id" x-model="rule.action.destination_team_id" @change="markJsonDirty('troubleshooting')" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-900"><option value="">Choose team</option>{% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}</select></label><label class="lg:col-span-3">Response / guidance<input name="rule_guidance" x-model="rule.response" @input="markJsonDirty('troubleshooting')" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-900"></label><label class="flex items-center gap-2 lg:col-span-1"><input type="checkbox" name="rule_enabled" x-model="rule.enabled" @change="markJsonDirty('troubleshooting')" class="rounded border-slate-300 text-amber-500"> Enabled</label><button type="button" :aria-label="`Remove rule ${index + 1}`" @click="removeRule(index)" class="min-h-9 rounded-lg border border-rose-300 px-2 text-rose-700 hover:bg-rose-50 lg:col-span-1">Remove</button></div></template>
+                             <p x-show="!jsonEditors.troubleshooting.value.length" class="rounded-lg border border-dashed border-slate-300 p-4 text-xs text-slate-500">No troubleshooting rules. Add a rule to define a typed fallback.</p>
+                         </div>
+                     </div>
+</section>
+             <div id="inbox-settings-ai-messages" data-settings-section="ai" data-ai-tab="messages" role="tabpanel" aria-labelledby="inbox-settings-ai-tab-messages" x-show="aiTab === 'messages'" x-cloak class="min-w-0 scroll-mt-20 grid gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40 lg:col-span-6 lg:grid-cols-6">
+                <div class="lg:col-span-6">
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Customer-facing messages</h3>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Copy used for welcome, clarification, handoff, and queue communication.</p>
                 </div>
-            </section>
-            <input type="hidden" name="replace_existing_draft" value="true">
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Fallback team
-                <select name="fallback_team_id" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
-                    <option value="">Choose an active fallback team before activation</option>
-                    {% for team in service_team_options %}<option value="{{ team.id }}" {% if ai_intake_policy and ai_intake_policy.fallback_team_id == team.id %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
-                </select>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Receives conversations when the AI cannot classify or complete intake.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Profile-completion support team
-                <select name="data_cleaning_support_team_id" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
-                    <option value="">Disabled</option>
-                    {% for team in service_team_options %}<option value="{{ team.id }}" {% if ai_intake_data_cleanup_policy.get('support_team_id') == team.id|string %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
-                </select>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Optional team for the separate profile-completion workflow.</p>
-            </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">AI display name
                 <input name="display_name" maxlength="120" value="{{ ai_intake_edit_version.display_name if ai_intake_edit_version else 'Dotmac Support' }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Customer-facing support identity. It may be Dotmac Support, but must not impersonate a human employee.</p>
@@ -389,68 +492,47 @@
                 <textarea name="direct_ai_question_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('direct_ai_question', '') }}</textarea>
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Truthful response when a customer asks whether the responder is automated.</p>
             </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Direct human question response
-                <textarea name="direct_human_question_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('direct_human_question', '') }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Truthful response when a customer asks whether they are speaking with a human.</p>
-            </label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Direct human question response
+                 <textarea name="direct_human_question_message" maxlength="1200" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_conversation_templates.get('direct_human_question', '') }}</textarea>
+                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Truthful response when a customer asks whether they are speaking with a human.</p>
+             </label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Generic clarification question
+                 <textarea name="generic_clarification_question" maxlength="300" required rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_clarification_questions[0] }}</textarea>
+             </label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Customer type clarification question
+                 <textarea name="customer_type_clarification_question" maxlength="300" required rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_clarification_questions[1] }}</textarea>
+             </label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Business tone
+                 <textarea name="business_tone" maxlength="1000" rows="4" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.business_tone if ai_intake_edit_version and ai_intake_edit_version.business_tone else "Business casual, empathetic, smart and concise for a Nigerian internet service provider." }}</textarea>
+             </label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Approved ISP information
+                 <textarea name="approved_isp_information" maxlength="4000" rows="4" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.approved_isp_information if ai_intake_edit_version and ai_intake_edit_version.approved_isp_information else "" }}</textarea>
+             </label>
+             {% set queue_templates = ai_intake_queue_templates %}
+             <div class="lg:col-span-6"><h3 class="text-sm font-semibold text-slate-900 dark:text-white">Queue messaging</h3></div>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Queue update minutes<input name="queue_position_update_minutes" type="number" min="1" max="120" value="{{ queue_templates.get('position_update_minutes', 10) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Queue heartbeat minutes<input name="queue_heartbeat_minutes" type="number" min="5" max="240" value="{{ queue_templates.get('heartbeat_minutes', 30) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+             <label class="flex items-start gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-6"><input name="queue_heartbeat_enabled" type="checkbox" value="true" {% if queue_templates.get('heartbeat_enabled', false) %}checked{% endif %} class="mt-0.5 rounded border-slate-300 text-primary-600 focus:ring-primary-500"><span>Enable queue heartbeats</span></label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Initial queue template<textarea name="queue_initial_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('initial', '') }}</textarea></label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Position update template<textarea name="queue_position_update_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('position_update', '') }}</textarea></label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Heartbeat template<textarea name="queue_heartbeat_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('heartbeat', '') }}</textarea></label>
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Handoff template<textarea name="queue_handoff_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('handoff', '') }}</textarea></label>
+             </div>
+             <div id="inbox-settings-ai-advanced" data-settings-section="ai" data-ai-tab="advanced" role="tabpanel" aria-labelledby="inbox-settings-ai-tab-advanced" x-show="aiTab === 'advanced'" x-cloak class="min-w-0 scroll-mt-20 grid gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40 lg:col-span-6 lg:grid-cols-6">
+                <div class="lg:col-span-6">
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Advanced</h3>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Less frequently changed policy data and compatibility controls.</p>
+                </div>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-6">Channel overrides JSON
-                <textarea name="channel_overrides_json" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_channel_overrides_json }}</textarea>
+                <input type="hidden" name="channel_overrides_json" :value="jsonValue('channelOverrides')"><div data-json-editor="channel-overrides" class="mt-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950"><div x-show="jsonWarnings.channelOverrides" x-cloak class="mb-2 text-xs text-amber-800">Existing value could not be read and will be saved unchanged. <button type="button" @click="startFreshJson('channelOverrides', {})">Start fresh</button></div><select x-model="newOverrideChannel" class="rounded-lg border-slate-300 text-xs"><option value="">Choose channel</option>{% for channel in channel_options %}<option data-channel-option value="{{ channel.value }}" x-show="availableOverrideChannels().includes('{{ channel.value }}')">{{ channel.label }}</option>{% endfor %}</select><button type="button" @click="if (newOverrideChannel) { addOverride(newOverrideChannel); newOverrideChannel = ''; }" class="rounded-lg border border-amber-400 px-3 py-2 text-xs font-semibold text-amber-700">Add channel override</button><template x-for="(override, channel) in jsonEditors.channelOverrides.value" :key="channel"><div class="mt-3 rounded-lg border p-3"><div class="flex items-center justify-between"><strong x-text="channel"></strong><button type="button" @click="removeOverride(channel)" :aria-label="`Remove ${channel} override`" class="text-rose-700">Remove</button></div><div class="mt-2 grid gap-3 lg:grid-cols-2"><label>Business tone<textarea x-model="override.business_tone" @input="markJsonDirty('channelOverrides')"></textarea></label><label>Approved ISP information<textarea x-model="override.approved_isp_information" @input="markJsonDirty('channelOverrides')"></textarea></label><label>Handoff customer message<textarea x-model="override.handoff.customer_message" @input="markJsonDirty('channelOverrides')"></textarea></label><label>Handoff summary template<textarea x-model="override.handoff.summary_template" @input="markJsonDirty('channelOverrides')"></textarea></label><label class="flex items-center gap-2"><input type="checkbox" x-model="override.handoff.announce_destination" @change="markJsonDirty('channelOverrides')"> Announce destination team</label></div><p class="mt-2 text-xs text-slate-500" x-text="`${override.troubleshooting_rules?.length || 0} channel-specific rules are kept as they are`"></p></div></template></div>
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Optional per-channel conversation template overrides for supported messaging channels.</p>
             </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Generic clarification question
-                <textarea name="generic_clarification_question" maxlength="300" required rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_clarification_questions[0] }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent when the AI cannot confidently identify what the customer needs.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Customer type clarification question
-                <textarea name="customer_type_clarification_question" maxlength="300" required rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_clarification_questions[1] }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent for a confident new-connection request when the customer type is unclear.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Business tone
-                <textarea name="business_tone" maxlength="1000" rows="4" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.business_tone if ai_intake_edit_version and ai_intake_edit_version.business_tone else "Business casual, empathetic, smart and concise for a Nigerian internet service provider." }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Guides the style of generated AI responses.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Approved ISP information
-                <textarea name="approved_isp_information" maxlength="4000" rows="4" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.approved_isp_information if ai_intake_edit_version and ai_intake_edit_version.approved_isp_information else "" }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Approved service facts the AI may use when answering customers.</p>
-            </label>
-            {% set queue_templates = ai_intake_queue_templates %}
-            <div class="lg:col-span-6">
-                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Queue messaging</h3>
-            </div>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Queue update minutes
-                <input name="queue_position_update_minutes" type="number" min="1" max="120" value="{{ queue_templates.get('position_update_minutes', 10) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Minutes between checks for a forward change in current visible position.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Queue heartbeat minutes
-                <input name="queue_heartbeat_minutes" type="number" min="5" max="240" value="{{ queue_templates.get('heartbeat_minutes', 30) }}" class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Minimum minutes between opt-in reassurance messages.</p>
-            </label>
-            <label class="flex items-start gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-6">
-                <input name="queue_heartbeat_enabled" type="checkbox" value="true" {% if queue_templates.get('heartbeat_enabled', false) %}checked{% endif %} class="mt-0.5 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
-                <span>Enable queue heartbeats <span class="block font-normal text-slate-500 dark:text-slate-400">Off by default. Heartbeats are reassurance only and must not repeat a queue position.</span></span>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Initial queue template
-                <textarea name="queue_initial_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('initial', '') }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent when the conversation first enters a human-agent queue. Approved variables: {{ '{{current_visible_position}}' }} (preferred), {{ '{{position}}' }}, {{ '{{queue_position}}' }} (legacy current-position alias), and {{ '{{team_name}}' }}.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Position update template
-                <textarea name="queue_position_update_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('position_update', '') }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent only when the customer's current visible position moves forward.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Heartbeat template
-                <textarea name="queue_heartbeat_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('heartbeat', '') }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Optional reassurance; must not include a queue-position variable.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Handoff template
-                <textarea name="queue_handoff_template" maxlength="800" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ queue_templates.get('handoff', '') }}</textarea>
-                <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Sent when a queued conversation is promoted to a human agent.</p>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-6">Editable business instructions
+             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-6">Editable business instructions
                 <textarea name="instructions" maxlength="2000" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_edit_version.business_instructions if ai_intake_edit_version and ai_intake_edit_version.business_instructions else "" }}</textarea>
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Business-specific guidance supplied to the AI within protected policy limits.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-6">Intent mappings JSON
-                <textarea name="department_mappings_json" rows="7" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950">{{ ai_intake_mapping_json }}</textarea>
+                <input type="hidden" name="department_mappings_json" :value="jsonValue('mappings')"><div data-json-editor="mappings" class="mt-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950"><div x-show="jsonWarnings.mappings" x-cloak class="mb-2 text-xs text-amber-800">Existing value could not be read and will be saved unchanged. <button type="button" @click="startFreshJson('mappings', [])">Start fresh</button></div><button type="button" @click="addMapping()" class="rounded-lg border border-amber-400 px-3 py-2 text-xs font-semibold text-amber-700">Add mapping</button><template x-for="(mapping, index) in jsonEditors.mappings.value" :key="index"><div class="mt-3 grid gap-2 rounded-lg border p-3 lg:grid-cols-12"><label class="lg:col-span-3">Intent<select x-model="mapping.intent" @change="markJsonDirty('mappings')">{% for key in ai_intake_supported_intent_keys %}<option value="{{ key }}">{{ key }}</option>{% endfor %}</select></label><label class="lg:col-span-3">Department<input x-model="mapping.department" @input="markJsonDirty('mappings')"></label><label class="lg:col-span-3">Service team<select x-model="mapping.service_team_id" @change="markJsonDirty('mappings')">{% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}</select></label><label class="flex items-center gap-2 lg:col-span-2"><input type="checkbox" x-model="mapping.enabled" @change="markJsonDirty('mappings')"> Enabled</label><button type="button" @click="removeMapping(index)" :aria-label="`Remove mapping ${index + 1}`" class="text-rose-700">Remove</button></div></template></div>
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Maps approved intents to service teams for routing after classification.</p>
             </label>
             <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200 lg:col-span-3">
@@ -464,272 +546,61 @@
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Reserved prompt for a future approved profile-completion flow.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">Gender choices JSON
-                <textarea name="data_cleanup_gender_choices_json" maxlength="1000" rows="4" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950">{{ data_cleanup_policy.get('gender_choices', {}) | tojson }}</textarea>
+                <input type="hidden" name="data_cleanup_gender_choices_json" :value="jsonValue('genderChoices')"><div data-json-editor="gender-choices" class="mt-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950"><span class="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">Disabled pending compliance</span><div x-show="jsonWarnings.genderChoices" x-cloak class="mt-2 text-xs text-amber-800">Existing value could not be read and will be saved unchanged. <button type="button" @click="startFreshJson('genderChoices', {})">Start fresh</button></div><button type="button" @click="addGenderChoice()" class="mt-2 rounded-lg border border-amber-400 px-3 py-2 text-xs font-semibold text-amber-700">Add option</button><template x-for="(value, label) in jsonEditors.genderChoices.value" :key="label"><div class="mt-2 grid grid-cols-2 gap-2"><input :value="label" @change="setGenderLabel(label, $event.target.value)" aria-label="Option label"><input x-model="jsonEditors.genderChoices.value[label]" @input="markJsonDirty('genderChoices')" aria-label="Stored value"><button type="button" @click="removeGenderChoice(label)" :aria-label="`Remove ${label} option`" class="text-rose-700">Remove</button></div></template></div>
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Reserved normalized choices for the future profile-completion flow.</p>
             </label>
             <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-3">DOB formats
-                <textarea name="data_cleanup_dob_formats" maxlength="300" rows="4" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950">{% for fmt in data_cleanup_policy.get('dob_formats', []) %}{{ fmt }}
-{% endfor %}</textarea>
+                <input type="hidden" name="data_cleanup_dob_formats" :value="dobFormats.join('\n')"><div class="mt-2 space-y-2"><template x-for="format in dobFormats" :key="format"><label class="flex items-center gap-2"><input type="checkbox" :value="format" x-model="dobFormats"><span x-text="format"></span></label></template><label class="flex items-center gap-2"><input type="checkbox" value="%Y-%m-%d" x-model="dobFormats"> 2026-10-07 (YYYY-MM-DD)</label><label class="flex items-center gap-2"><input type="checkbox" value="%d/%m/%Y" x-model="dobFormats"> 07/10/2026 (DD/MM/YYYY)</label><label class="flex items-center gap-2"><input type="checkbox" value="%m/%d/%Y" x-model="dobFormats"> 10/07/2026 (MM/DD/YYYY)</label></div>
                 <p class="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">Reserved accepted date formats for the future profile-completion flow.</p>
             </label>
+            </div>
             <div class="rounded-lg border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400 lg:col-span-6">
                 Saving creates or updates a draft only. Activation validates the provider scope, fallback team and mapped teams, then writes the runtime compatibility projection. Activated versions are immutable.
             </div>
             <div class="flex flex-wrap items-center gap-2 lg:col-span-6">
                 <button type="submit" class="min-h-11 rounded-lg bg-amber-500 px-5 text-sm font-semibold text-white hover:bg-amber-600">Save draft</button>
-            </div>
-        </form>
-        <section aria-labelledby="ai-intake-canary-library" class="border-t border-slate-100 px-5 py-4 dark:border-slate-700">
-            <div class="flex flex-wrap items-baseline justify-between gap-2">
-                <div>
-                    <h3 id="ai-intake-canary-library" class="text-sm font-semibold text-slate-900 dark:text-white">Canary / Scenario Library</h3>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Versioned scenarios built from typed turns, simulated read-only tool results and approved assertions. Runs use simulation mode and do not send messages or create queue entries.</p>
-                </div>
-                <span class="rounded-lg px-2.5 py-1 text-xs font-semibold {% if ai_intake_pre_activation_gate.ready %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% else %}bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200{% endif %}">
-                    Ready: {{ "YES" if ai_intake_pre_activation_gate.ready else "NO" }}
-                </span>
-            </div>
-            <div class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]">
-                <div class="space-y-3">
-                    <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
-                        <table class="min-w-full divide-y divide-slate-200 text-left text-xs dark:divide-slate-700">
-                            <thead class="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
-                                <tr>
-                                    <th class="px-3 py-2 font-semibold">Scenario</th>
-                                    <th class="px-3 py-2 font-semibold">Revision</th>
-                                    <th class="px-3 py-2 font-semibold">Required</th>
-                                    <th class="px-3 py-2 font-semibold">Latest</th>
-                                    <th class="px-3 py-2 font-semibold">Run</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
-                                {% for scenario in ai_intake_canary_library %}
-                                <tr>
-                                    <td class="px-3 py-2">
-                                        <div class="font-semibold text-slate-800 dark:text-slate-100">{{ scenario.name }}</div>
-                                        <div class="font-mono text-[11px] text-slate-500 dark:text-slate-400">{{ scenario.scenario_id }}</div>
-                                    </td>
-                                    <td class="px-3 py-2 font-mono">v{{ scenario.revision }}</td>
-                                    <td class="px-3 py-2">{{ "YES" if scenario.required_for_activation else "NO" }}</td>
-                                    <td class="px-3 py-2">
-                                        <span class="rounded px-2 py-1 font-semibold {% if scenario.latest_passed %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% else %}bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200{% endif %}">{{ "PASS" if scenario.latest_passed else "PENDING" }}</span>
-                                    </td>
-                                    <td class="px-3 py-2">
-                                        <form method="post" action="/admin/crm/inbox/ai-intake-canary/run">
-                                            {% include "components/forms/csrf_input.html" %}
-                                            <input type="hidden" name="scenario_id" value="{{ scenario.scenario_id }}">
-                                            <button class="min-h-9 rounded-lg border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-200">Run</button>
-                                        </form>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
-                        <table class="min-w-full divide-y divide-slate-200 text-left text-xs dark:divide-slate-700">
-                            <thead class="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400">
-                                <tr><th class="px-3 py-2 font-semibold">Suite</th><th class="px-3 py-2 font-semibold">Required</th><th class="px-3 py-2 font-semibold">Scenarios</th><th class="px-3 py-2 font-semibold">Run</th></tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
-                                {% for suite in ai_intake_canary_suites %}
-                                <tr>
-                                    <td class="px-3 py-2"><div class="font-semibold text-slate-800 dark:text-slate-100">{{ suite.name }}</div><div class="font-mono text-[11px] text-slate-500 dark:text-slate-400">{{ suite.suite_key }}</div></td>
-                                    <td class="px-3 py-2">{{ "YES" if suite.required_for_activation else "NO" }}</td>
-                                    <td class="px-3 py-2">{{ suite.scenario_count }}</td>
-                                    <td class="px-3 py-2">
-                                        <form method="post" action="/admin/crm/inbox/ai-intake-canary/run">
-                                            {% include "components/forms/csrf_input.html" %}
-                                            <input type="hidden" name="suite_id" value="{{ suite.suite_id }}">
-                                            <button class="min-h-9 rounded-lg border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-200">Run</button>
-                                        </form>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-                <div class="space-y-3">
-                    <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                        <div class="flex flex-wrap gap-2">
-                            <form method="post" action="/admin/crm/inbox/ai-intake-canary/run">
-                                {% include "components/forms/csrf_input.html" %}
-                                <button class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-200">Run enabled</button>
-                            </form>
-                            <form method="post" action="/admin/crm/inbox/ai-intake-canary/run">
-                                {% include "components/forms/csrf_input.html" %}
-                                <input type="hidden" name="required_only" value="true">
-                                <button class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-200">Run required</button>
-                            </form>
-                        </div>
-                    </div>
-                    <form method="post" action="/admin/crm/inbox/ai-intake-canary/scenario" class="rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-                        {% include "components/forms/csrf_input.html" %}
-                        <div class="font-semibold text-slate-800 dark:text-slate-100">Create or edit scenario</div>
-                        <label class="mt-2 block font-semibold">Scenario ID<input name="scenario_key" required maxlength="120" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
-                        <label class="mt-2 block font-semibold">Name<input name="name" required maxlength="160" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
-                        <label class="mt-2 block font-semibold">First inbound message<textarea name="first_turn_text" required maxlength="4000" rows="3" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-950"></textarea></label>
-                        <div class="mt-2 grid grid-cols-2 gap-2">
-                            <label class="block font-semibold">Engine<select name="engine" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"><option value="langgraph_v1">langgraph_v1</option><option value="custom_v1">custom_v1</option></select></label>
-                            <label class="block font-semibold">Intent<select name="expected_intent" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"><option value="unknown">unknown</option><option value="technical_support">technical_support</option><option value="billing_issue">billing_issue</option><option value="payment_confirmation">payment_confirmation</option><option value="new_connection">new_connection</option></select></label>
-                        </div>
-                        <label class="mt-2 block font-semibold">Assertions<select name="assertion_type" multiple size="6" class="mt-1 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">{% for assertion_type in ai_intake_canary_assertion_types %}<option value="{{ assertion_type }}">{{ assertion_type }}</option>{% endfor %}</select></label>
-                        <label class="mt-2 block font-semibold">Tags<input name="tags" maxlength="240" placeholder="regression, media" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
-                        <div class="mt-2 grid grid-cols-2 gap-2">
-                            <label class="flex items-center gap-2 font-semibold"><input type="checkbox" name="enabled" value="true" checked class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Enabled</label>
-                            <label class="flex items-center gap-2 font-semibold"><input type="checkbox" name="required_for_activation" value="true" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Required</label>
-                        </div>
-                        <button class="mt-3 min-h-10 w-full rounded-lg bg-amber-500 px-3 text-xs font-semibold text-white hover:bg-amber-600">Save revision</button>
-                    </form>
-                    <form method="post" action="/admin/crm/inbox/ai-intake-canary/suite" class="rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
-                        {% include "components/forms/csrf_input.html" %}
-                        <div class="font-semibold text-slate-800 dark:text-slate-100">Create or edit suite</div>
-                        <label class="mt-2 block font-semibold">Suite ID<input name="suite_key" required maxlength="120" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
-                        <label class="mt-2 block font-semibold">Name<input name="name" required maxlength="160" class="mt-1 h-10 w-full rounded-lg border-slate-300 px-3 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
-                        <label class="mt-2 block font-semibold">Scenarios<select name="scenario_id" multiple size="6" class="mt-1 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">{% for scenario in ai_intake_canary_library %}<option value="{{ scenario.scenario_id }}">{{ scenario.name }}</option>{% endfor %}</select></label>
-                        <div class="mt-2 grid grid-cols-2 gap-2">
-                            <label class="flex items-center gap-2 font-semibold"><input type="checkbox" name="enabled" value="true" checked class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Enabled</label>
-                            <label class="flex items-center gap-2 font-semibold"><input type="checkbox" name="required_for_activation" value="true" class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Required</label>
-                        </div>
-                        <button class="mt-3 min-h-10 w-full rounded-lg bg-amber-500 px-3 text-xs font-semibold text-white hover:bg-amber-600">Save suite</button>
-                    </form>
-                </div>
-            </div>
-        </section>
-        {% if ai_intake_draft_version %}
-        <div class="flex flex-wrap gap-2 border-t border-slate-100 p-5 dark:border-slate-700">
-            <form method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_draft_version.id }}/validate">
-                {% include "components/forms/csrf_input.html" %}
-                <button class="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-200">Validate draft</button>
-            </form>
-            <form method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_draft_version.id }}/activate" onsubmit="return confirm('Activate this AI intake policy version for new eligible conversations?')">
-                {% include "components/forms/csrf_input.html" %}
-                <input type="hidden" name="confirm_activation" value="true">
-                <button class="min-h-10 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700">Activate draft</button>
-            </form>
-            <span class="self-center rounded-lg bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Draft v{{ ai_intake_draft_version.version_number }}</span>
         </div>
-        <section aria-labelledby="ai-intake-preview" class="border-t border-slate-100 px-5 py-4 dark:border-slate-700">
-            <h3 id="ai-intake-preview" class="text-sm font-semibold text-slate-900 dark:text-white">Test / simulator</h3>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Runs the selected draft against an example message without sending customer messages, assigning agents or entering a live queue.</p>
-            <form method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_draft_version.id }}/preview" class="mt-3 grid gap-3 lg:grid-cols-6">
-                {% include "components/forms/csrf_input.html" %}
-                <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-4">Example customer message
-                    <textarea name="preview_customer_message" required maxlength="1000" rows="4" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950" placeholder="My internet has not been browsing since morning. My Portal ID is 12345."></textarea>
-                </label>
-                <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 lg:col-span-2">Preview channel
-                    <select name="preview_channel_type" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
-                        {% for channel in ai_channel_options if channel.value in ['whatsapp', 'facebook_messenger', 'instagram_dm', 'chat_widget'] %}
-                        <option value="{{ channel.value }}" {% if ai_intake_policy and ai_intake_policy.channel_type == channel.value %}selected{% endif %}>{{ channel.label }}</option>
-                        {% endfor %}
-                    </select>
-                    <div class="mt-3 space-y-2 rounded-lg border border-slate-200 bg-white p-2 text-xs dark:border-slate-700 dark:bg-slate-950">
-                        <label class="flex items-start gap-2"><input type="radio" name="preview_mode" value="simulation" checked class="mt-0.5 border-slate-300 text-amber-500 focus:ring-amber-500"> <span><span class="font-semibold">Simulation</span><br><span class="text-slate-500 dark:text-slate-400">Uses deterministic mock tool results. No live subscriber or monitoring reads.</span></span></label>
-                        <label class="flex items-start gap-2"><input type="radio" name="preview_mode" value="live_read_only" class="mt-0.5 border-slate-300 text-amber-500 focus:ring-amber-500"> <span><span class="font-semibold">Authorized read-only</span><br><span class="text-slate-500 dark:text-slate-400">Uses live read-only customer data and monitoring where tools are enabled.</span></span></label>
-                    </div>
-                    <button class="mt-3 min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-200">Run preview</button>
-                </label>
-            </form>
-            {% if ai_intake_preview_result %}
-            <div class="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs dark:border-slate-700 dark:bg-slate-900/40 lg:grid-cols-2">
-                <div>
-                    <p class="font-semibold text-slate-700 dark:text-slate-200">Decision</p>
-                    <dl class="mt-2 space-y-1 text-slate-600 dark:text-slate-300">
-                        <div><dt class="inline font-semibold">Intent:</dt> <dd class="inline">{{ ai_intake_preview_result.interpreted_intent or 'unknown' }}</dd></div>
-                        <div><dt class="inline font-semibold">Category:</dt> <dd class="inline">{{ ai_intake_preview_result.category or 'unknown' }}</dd></div>
-                        <div><dt class="inline font-semibold">Action:</dt> <dd class="inline">{{ ai_intake_preview_result.next_action }}</dd></div>
-                        <div><dt class="inline font-semibold">Team:</dt> <dd class="inline">{{ ai_intake_preview_result.destination_team_name or ai_intake_preview_result.destination_team_id or 'not resolved' }}</dd></div>
-                        <div><dt class="inline font-semibold">Mode:</dt> <dd class="inline">{{ ai_intake_preview_result.preview_mode }}</dd></div>
-                    </dl>
-                    {% if ai_intake_preview_result.response_text %}
-                    <p class="mt-3 font-semibold text-slate-700 dark:text-slate-200">Customer response</p>
-                    <p class="mt-1 rounded border border-slate-200 bg-white p-2 text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">{{ ai_intake_preview_result.response_text }}</p>
-                    {% endif %}
-                </div>
-                <div>
-                    <p class="font-semibold text-slate-700 dark:text-slate-200">State and tools</p>
-                    <pre class="mt-2 max-h-80 overflow-auto rounded border border-slate-200 bg-white p-2 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">{{ ai_intake_preview_result.current_state | tojson(indent=2) }}</pre>
-                </div>
+        </form>
+    </section>
+
+    <section id="inbox-settings-testing" data-settings-section="testing" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button" @click="toggleSection('testing')" :aria-expanded="sections.testing.toString()" aria-controls="inbox-settings-testing-body" class="group flex min-h-16 w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-900">
+            <span><span class="block font-semibold text-slate-900 dark:text-white">Testing and versions</span><span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">Canary scenarios, simulator, lifecycle, and version history</span></span>
+            {{ chevron('sections.testing') }}
+        </button>
+        <div id="inbox-settings-testing-body" data-settings-section="testing" x-show="sections.testing" x-cloak class="border-t border-slate-100 dark:border-slate-700">
+            <div id="ai-testing-loader" class="p-5" hx-get="/admin/crm/inbox/settings/partials/ai-testing" hx-trigger="intersect once" hx-swap="innerHTML" hx-on::response-error="this.innerHTML = '<div class=&quot;rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900&quot;>Could not load testing data. <button type=&quot;button&quot; class=&quot;ml-2 rounded border border-amber-400 px-3 py-1 font-semibold&quot; onclick=&quot;htmx.ajax('GET', '/admin/crm/inbox/settings/partials/ai-testing', {target: '#ai-testing-loader', swap: 'innerHTML'})&quot;>Retry</button></div>'">
+                <span class="text-sm text-slate-500 dark:text-slate-400">Loading…</span>
             </div>
-            {% endif %}
-        </section>
-        {% endif %}
-        {% if ai_intake_policy_version_history %}
-        <section aria-labelledby="ai-intake-version-history" class="border-t border-slate-100 px-5 py-4 dark:border-slate-700">
-            <div class="flex flex-wrap items-baseline justify-between gap-2">
-                <div>
-                    <h3 id="ai-intake-version-history" class="text-sm font-semibold text-slate-900 dark:text-white">Policy version history</h3>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Read-only evidence of the {{ ai_intake_policy_version_history_limit }} most recent versions. Only a current draft can be validated or activated.</p>
-                </div>
+            <div class="hidden" aria-hidden="true">
+                {% if ai_intake_draft_version %}
+                <form id="ai-intake-validate-form" method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_draft_version.id }}/validate">{% include "components/forms/csrf_input.html" %}</form>
+                <form id="ai-intake-activate-form" method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_draft_version.id }}/activate" onsubmit="return confirm('Activate this AI intake policy version for new eligible conversations?')">{% include "components/forms/csrf_input.html" %}<input type="hidden" name="confirm_activation" value="true"></form>
+                {% endif %}
+                {% if ai_intake_policy and ai_intake_policy.active_version_id and ai_intake_policy.is_enabled %}
+                <form id="ai-intake-disable-form" method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_policy.id }}/disable" onsubmit="return confirm('Disable AI intake for this provider scope? Existing sessions retain their version evidence.')">{% include "components/forms/csrf_input.html" %}<input type="hidden" name="confirm_disable" value="true"></form>
+                {% endif %}
             </div>
-            <div class="mt-3 overflow-x-auto">
-                <table class="min-w-full text-left text-xs">
-                    <thead class="border-b border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                        <tr><th scope="col" class="px-2 py-2 font-semibold">Version</th><th scope="col" class="px-2 py-2 font-semibold">Status</th><th scope="col" class="px-2 py-2 font-semibold">Created</th><th scope="col" class="px-2 py-2 font-semibold">Activated</th><th scope="col" class="px-2 py-2 font-semibold">Superseded</th></tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
-                        {% for version in ai_intake_policy_version_history %}
-                        <tr>
-                            <td class="px-2 py-2 font-mono text-slate-700 dark:text-slate-200">v{{ version.version_number }}{% if version.is_active %}<span class="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 font-sans font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">Current active</span>{% endif %}</td>
-                            <td class="px-2 py-2"><span class="rounded px-1.5 py-0.5 font-semibold {% if version.status == 'activated' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% elif version.status == 'superseded' %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200{% else %}bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200{% endif %}">{{ 'Active' if version.status == 'activated' else version.status | title }}</span></td>
-                            <td class="px-2 py-2 tabular-nums text-slate-600 dark:text-slate-300"><time datetime="{{ version.created_at.isoformat() }}">{{ version.created_at | app_datetime('%d %b %Y %H:%M') }}</time></td>
-                            <td class="px-2 py-2 tabular-nums text-slate-600 dark:text-slate-300">{% if version.activated_at %}<time datetime="{{ version.activated_at.isoformat() }}">{{ version.activated_at | app_datetime('%d %b %Y %H:%M') }}</time>{% else %}—{% endif %}</td>
-                            <td class="px-2 py-2 tabular-nums text-slate-600 dark:text-slate-300">{% if version.superseded_at %}<time datetime="{{ version.superseded_at.isoformat() }}">{{ version.superseded_at | app_datetime('%d %b %Y %H:%M') }}</time>{% else %}—{% endif %}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </section>
-        {% endif %}
-        {% if ai_intake_policy %}
-        <div class="flex flex-wrap items-center gap-2 border-t border-slate-100 p-5 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300">
-            {% if ai_intake_active_version %}
-            <span class="rounded-lg bg-emerald-100 px-2 py-1 font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">Active v{{ ai_intake_active_version.version_number }}</span>
-            {% endif %}
-            {% if ai_intake_policy.active_version_id and ai_intake_policy.is_enabled %}
-            <form method="post" action="/admin/crm/inbox/ai-intake-policy/{{ ai_intake_policy.id }}/disable" onsubmit="return confirm('Disable AI intake for this provider scope? Existing sessions retain their version evidence.')">
-                {% include "components/forms/csrf_input.html" %}
-                <input type="hidden" name="confirm_disable" value="true">
-                <button class="min-h-9 rounded-lg border border-rose-300 px-3 font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300">Disable policy</button>
-            </form>
-            {% endif %}
-            <span>Disabled policies stop new AI sessions; existing sessions finish, expire or hand off through the established lifecycle.</span>
         </div>
-        {% endif %}
     </section>
 
-    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <h2 class="font-semibold text-slate-900 dark:text-white">AI Polish settings</h2>
-        <form method="post" action="/admin/crm/inbox/ai-polish-settings" class="mt-4 grid gap-4 lg:grid-cols-2">
-            {% include "components/forms/csrf_input.html" %}
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Business voice
-                <textarea name="inbox_ai_polish_business_voice" maxlength="2000" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_polish_business_voice }}</textarea>
-            </label>
-            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Channel guidance
-                <textarea name="inbox_ai_polish_channel_guidance" maxlength="2000" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_polish_channel_guidance }}</textarea>
-            </label>
-            <div class="lg:col-span-2">
-                <button class="min-h-10 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white hover:bg-amber-600">Save AI Polish settings</button>
-            </div>
-        </form>
-    </section>
 
-    {% if introduction_preference %}
-    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <h2 class="font-semibold text-slate-900 dark:text-white">My chat introduction</h2>
-        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use <code>{agent_name}</code> for your display name. Automatic introductions apply only to the native chat-widget channel.</p>
-        <form method="post" action="/admin/crm/inbox/agent-introduction" class="mt-4 space-y-3">
-            {% include "components/forms/csrf_input.html" %}
-            <textarea name="template" required maxlength="500" rows="2" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">{{ introduction_preference.template }}</textarea>
-            <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200"><input type="checkbox" name="auto_send_chat_widget" value="true" {% if introduction_preference.auto_send_chat_widget %}checked{% endif %}> Automatically send on my first pickup of a chat-widget conversation</label>
-            <button class="min-h-10 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white">Save introduction</button>
-        </form>
-    </section>
-    {% endif %}
+    <div x-show="draftDirty" x-cloak class="sticky bottom-4 z-20 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/95 px-4 py-3 text-sm shadow-lg backdrop-blur dark:border-amber-700/60 dark:bg-slate-900/95">
+        <span class="font-semibold text-amber-900 dark:text-amber-200">Unsaved AI intake draft changes</span>
+        <button type="submit" form="ai-intake-draft-form" class="min-h-10 rounded-lg bg-amber-600 px-4 text-sm font-semibold text-white hover:bg-amber-700">Save draft</button>
+    </div>
 
-    <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <section id="inbox-settings-routing" data-settings-section="routing" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button" @click="toggleSection('routing')" :aria-expanded="sections.routing.toString()" aria-controls="inbox-settings-routing-body" class="group flex min-h-16 w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-900">
+            <span><span class="block font-semibold text-slate-900 dark:text-white">Routing</span><span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">Channel defaults, AI intake routes, and mailbox routes</span></span>
+            {{ chevron('sections.routing') }}</button>
+        <div id="inbox-settings-routing-body" x-show="sections.routing" x-cloak class="space-y-5 border-t border-slate-100 p-5 dark:border-slate-700">
+        <nav role="tablist" aria-label="Routing tabs" class="flex min-w-0 gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-700">
+            <button type="button" role="tab" aria-controls="inbox-settings-routing-channels" :aria-selected="(routingTab === 'channels').toString()" @click="routingTab = 'channels'" class="shrink-0 border-b-2 border-transparent px-3 py-3 text-xs font-semibold text-slate-600 hover:border-amber-400 hover:text-amber-700 dark:text-slate-300" :class="{ 'border-amber-500 text-slate-900 dark:text-white': routingTab === 'channels' }">Channel defaults</button>
+            <button type="button" role="tab" aria-controls="inbox-settings-routing-ai" :aria-selected="(routingTab === 'ai').toString()" @click="routingTab = 'ai'" class="shrink-0 border-b-2 border-transparent px-3 py-3 text-xs font-semibold text-slate-600 hover:border-amber-400 hover:text-amber-700 dark:text-slate-300" :class="{ 'border-amber-500 text-slate-900 dark:text-white': routingTab === 'ai' }">AI intake routes</button>
+            <button type="button" role="tab" aria-controls="inbox-settings-routing-mailbox" :aria-selected="(routingTab === 'mailbox').toString()" @click="routingTab = 'mailbox'" class="shrink-0 border-b-2 border-transparent px-3 py-3 text-xs font-semibold text-slate-600 hover:border-amber-400 hover:text-amber-700 dark:text-slate-300" :class="{ 'border-amber-500 text-slate-900 dark:text-white': routingTab === 'mailbox' }">Mailbox routes</button>
+        </nav>
+    <section id="inbox-settings-routing-channels" data-routing-tab="channels" x-show="routingTab === 'channels'" x-cloak role="tabpanel" class="scroll-mt-20 rounded-xl bg-white dark:bg-slate-800">
         <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
             <h2 class="font-semibold text-slate-900 dark:text-white">Channel defaults</h2>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use the exact provider identity: mailbox address for email, phone_number_id for WhatsApp, page/account id for Meta, or one of the registered widget scopes shown in the AI policy editor above.</p>
@@ -803,7 +674,7 @@
         </div>
     </section>
 
-    <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <section id="inbox-settings-routing-ai" data-routing-tab="ai" x-show="routingTab === 'ai'" x-cloak role="tabpanel" class="scroll-mt-20 rounded-xl bg-white dark:bg-slate-800">
         <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
             <h2 class="font-semibold text-slate-900 dark:text-white">AI intake routes</h2>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">AI rules apply after channel defaults when a message carries an intent/category and confidence.</p>
@@ -813,7 +684,7 @@
             <select name="channel_type" required class="h-11 rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
                 {% for channel in ai_channel_options %}<option value="{{ channel.value }}">{{ channel.label }}</option>{% endfor %}
             </select>
-            <input name="intent_key" required maxlength="120" placeholder="billing_issue" class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+            <select name="intent_key" required class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">Choose an intent</option>{% for intent in ai_intake_intent_definitions %}<option value="{{ intent.key }}">{{ intent.display_name or intent.key|replace('_', ' ')|title }}</option>{% endfor %}</select>
             <select name="ai_service_team_id" required class="h-11 rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
                 <option value="">Choose a team</option>
                 {% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}
@@ -862,7 +733,7 @@
         </div>
     </section>
 
-    <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <section id="inbox-settings-routing-mailbox" data-routing-tab="mailbox" x-show="routingTab === 'mailbox'" x-cloak role="tabpanel" class="scroll-mt-20 rounded-xl bg-white dark:bg-slate-800">
         <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
             <h2 class="font-semibold text-slate-900 dark:text-white">Mailbox routes</h2>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The SMTP listener only receives what your mail provider forwards to it; these rows decide where forwarded email lands.</p>
@@ -954,6 +825,44 @@
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+    </section>
+        </div>
+    </section>
+
+    <section id="inbox-settings-personal" data-settings-section="personal" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button" @click="toggleSection('personal')" :aria-expanded="sections.personal.toString()" aria-controls="inbox-settings-personal-body" class="flex min-h-16 w-full items-center justify-between gap-4 px-5 py-4 text-left">
+            <span><span class="block font-semibold text-slate-900 dark:text-white">My settings</span><span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">AI Polish and your chat introduction</span></span>
+            {{ chevron('sections.personal') }}</button>
+        <div id="inbox-settings-personal-body" x-show="sections.personal" x-cloak class="space-y-5 border-t border-slate-100 p-5 dark:border-slate-700">
+    <section class="rounded-xl bg-white p-0 dark:bg-slate-800">
+        <h2 class="font-semibold text-slate-900 dark:text-white">AI Polish settings</h2>
+        <form method="post" action="/admin/crm/inbox/ai-polish-settings" class="mt-4 grid gap-4 lg:grid-cols-2">
+            {% include "components/forms/csrf_input.html" %}
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Business voice
+                <textarea name="inbox_ai_polish_business_voice" maxlength="2000" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_polish_business_voice }}</textarea>
+            </label>
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Channel guidance
+                <textarea name="inbox_ai_polish_channel_guidance" maxlength="2000" rows="5" class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ ai_polish_channel_guidance }}</textarea>
+            </label>
+            <div class="lg:col-span-2">
+                <button class="min-h-10 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white hover:bg-amber-600">Save AI Polish settings</button>
+            </div>
+        </form>
+    </section>
+
+    {% if introduction_preference %}
+    <section class="rounded-xl bg-white p-5 dark:bg-slate-800">
+        <h2 class="font-semibold text-slate-900 dark:text-white">My chat introduction</h2>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use <code>{agent_name}</code> for your display name. Automatic introductions apply only to the native chat-widget channel.</p>
+        <form method="post" action="/admin/crm/inbox/agent-introduction" class="mt-4 space-y-3">
+            {% include "components/forms/csrf_input.html" %}
+            <textarea name="template" required maxlength="500" rows="2" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">{{ introduction_preference.template }}</textarea>
+            <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200"><input type="checkbox" name="auto_send_chat_widget" value="true" {% if introduction_preference.auto_send_chat_widget %}checked{% endif %}> Automatically send on my first pickup of a chat-widget conversation</label>
+            <button class="min-h-10 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white">Save introduction</button>
+        </form>
+    </section>
+    {% endif %}
         </div>
     </section>
 </div>
