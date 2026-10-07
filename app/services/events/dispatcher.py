@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from app.models.event_store import EventStatus, EventStore
@@ -93,15 +92,12 @@ def _isolated_handler_session(db: Session | Any) -> Iterator[Session | Any]:
         return
 
     bind = db.get_bind()
-    if isinstance(bind, Connection):
-        handler_db = Session(
-            bind=bind,
-            autoflush=False,
-            autocommit=False,
-            join_transaction_mode="create_savepoint",
-        )
-    else:
-        handler_db = Session(bind=bind, autoflush=False, autocommit=False)
+    handler_db = Session(
+        bind=bind,
+        autoflush=False,
+        autocommit=False,
+        join_transaction_mode="create_savepoint",
+    )
     try:
         yield handler_db
         handler_db.commit()
