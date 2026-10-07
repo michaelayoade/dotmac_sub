@@ -354,7 +354,6 @@ def test_existing_allocation_is_topped_up_during_scheduled_reconciliation(
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("0.00")
 
 
-
 def test_unreviewed_existing_allocation_is_not_rederived_or_recalculated(db_session):
     """A stale legacy allocation without settlement evidence fails closed.
 
