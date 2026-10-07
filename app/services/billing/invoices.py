@@ -29,6 +29,8 @@ from app.models.billing import (
     LedgerEntryType,
     LedgerSource,
     PaymentAllocation,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
     TaxApplication,
     TaxRate,
 )
@@ -441,6 +443,25 @@ class ReviewedPrepaidInvoiceSequenceDocument:
     invoice_id: UUID
     line_id: UUID
     subscription_id: UUID
+    billing_period_start: datetime
+    billing_period_end: datetime
+    expected_status: InvoiceStatus
+    expected_line_quantity: Decimal
+    expected_line_unit_price: Decimal
+    expected_line_amount: Decimal
+    line_description: str
+    evidence_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedPrepaidInvoiceSequenceReassignment:
+    """Exact before/after identity for one misdated sequence document."""
+
+    invoice_id: UUID
+    line_id: UUID
+    subscription_id: UUID
+    expected_billing_period_start: datetime
+    expected_billing_period_end: datetime
     billing_period_start: datetime
     billing_period_end: datetime
     expected_status: InvoiceStatus
@@ -2509,6 +2530,104 @@ class Invoices(ListResponseMixin):
                 "billing_period_start": document.billing_period_start.isoformat(),
                 "billing_period_end": document.billing_period_end.isoformat(),
                 "reviewed_prepaid_sequence_ref": document.evidence_ref,
+            }
+        )
+        line.metadata_ = line_metadata
+        db.flush()
+        return invoice
+
+    @staticmethod
+    def reassign_reviewed_prepaid_sequence_document_for_owner(
+        db: Session,
+        document: ReviewedPrepaidInvoiceSequenceReassignment,
+    ) -> Invoice:
+        """Move one now-unfunded document to an exact reviewed period.
+
+        The coordinating reconciliation owner must first release every active
+        allocation and revoke the old entitlement. This participant changes
+        documentary identity only and remains flush-only.
+        """
+
+        invoice = lock_for_update(db, Invoice, str(document.invoice_id))
+        eligible_statuses = {
+            InvoiceStatus.issued,
+            InvoiceStatus.partially_paid,
+            InvoiceStatus.overdue,
+        }
+        active_allocation = db.scalar(
+            select(PaymentAllocation.id)
+            .where(
+                PaymentAllocation.invoice_id == document.invoice_id,
+                PaymentAllocation.is_active.is_(True),
+            )
+            .limit(1)
+        )
+        active_entitlement = db.scalar(
+            select(ServiceEntitlement.id)
+            .where(
+                ServiceEntitlement.source_invoice_id == document.invoice_id,
+                ServiceEntitlement.subscription_id == document.subscription_id,
+                ServiceEntitlement.status == ServiceEntitlementStatus.active,
+            )
+            .limit(1)
+        )
+        if (
+            invoice is None
+            or not invoice.is_active
+            or invoice.is_proforma
+            or invoice.status is not document.expected_status
+            or invoice.status not in eligible_statuses
+            or active_allocation is not None
+            or active_entitlement is not None
+            or _evidence_utc(invoice.billing_period_start)
+            != _evidence_utc(document.expected_billing_period_start)
+            or _evidence_utc(invoice.billing_period_end)
+            != _evidence_utc(document.expected_billing_period_end)
+            or document.billing_period_end <= document.billing_period_start
+            or not document.evidence_ref.strip()
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.reviewed_sequence_reassignment_rejected",
+                message="Invoice is not an exact unfunded reviewed sequence document.",
+                details={"invoice_id": str(document.invoice_id)},
+            )
+        line = db.scalar(
+            select(InvoiceLine)
+            .where(
+                InvoiceLine.id == document.line_id,
+                InvoiceLine.invoice_id == invoice.id,
+                InvoiceLine.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if (
+            line is None
+            or line.subscription_id != document.subscription_id
+            or round_money(to_decimal(line.quantity))
+            != round_money(document.expected_line_quantity)
+            or round_money(to_decimal(line.unit_price))
+            != round_money(document.expected_line_unit_price)
+            or round_money(to_decimal(line.amount))
+            != round_money(document.expected_line_amount)
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.reviewed_sequence_reassignment_rejected",
+                message="Reviewed sequence line identity changed after preview.",
+                details={
+                    "invoice_id": str(document.invoice_id),
+                    "line_id": str(document.line_id),
+                },
+            )
+        invoice.billing_period_start = document.billing_period_start
+        invoice.billing_period_end = document.billing_period_end
+        line.description = document.line_description
+        line_metadata = dict(line.metadata_ or {})
+        line_metadata.update(
+            {
+                "kind": "base_subscription",
+                "billing_period_start": document.billing_period_start.isoformat(),
+                "billing_period_end": document.billing_period_end.isoformat(),
+                "reviewed_prepaid_sequence_reassignment_ref": document.evidence_ref,
             }
         )
         line.metadata_ = line_metadata
