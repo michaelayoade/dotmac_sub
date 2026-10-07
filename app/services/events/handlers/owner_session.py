@@ -14,12 +14,16 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 
 @contextmanager
 def owner_session(db: Session) -> Generator[Session, None, None]:
-    session = Session(bind=db.get_bind(), autoflush=False)
+    bind = db.get_bind()
+    if isinstance(bind, Connection):
+        bind = bind.engine
+    session = Session(bind=bind, autoflush=False)
     try:
         yield session
     finally:
