@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import TypedDict
 from uuid import UUID
 
 from sqlalchemy import select
@@ -57,8 +58,14 @@ from app.services.service_period_policy import (
 )
 
 _OWNER = "financial.outage_compensation"
-_POLICY_VERSION = 2
+_POLICY_VERSION = 3
 OUTAGE_REPAIR_SCOPE = "billing:prepaid_reconciliation:repair"
+OUTAGE_APPROVAL_SCOPE = "billing:outage_compensation:approve"
+_APPROVE_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern="reviewed outage grant approval",
+    name="approve_outage_compensation",
+)
 _REVIEW_COMMAND = OwnerCommandDefinition(
     owner=_OWNER,
     concern="reviewed outage compensation recovery",
@@ -90,6 +97,20 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+class CompensationEvidenceSnapshot(TypedDict):
+    threshold_seconds: int
+    posting_policy: str
+    unresolved_time_credit_ids: list[str]
+    review_decision_id: str | None
+    duration_unit: str
+    funding_cap: str
+    planned_maintenance: str
+    evaluated_at: str
+    source_interval_ids: list[str]
+    funded_entitlement_ids: list[str]
+    compensated_ranges: list[tuple[str, str]]
+
+
 @dataclass(frozen=True, slots=True)
 class OutageCompensationPreview:
     account_id: UUID
@@ -102,7 +123,7 @@ class OutageCompensationPreview:
     tail_before: datetime | None
     tail_after: datetime | None
     fingerprint: str
-    policy_snapshot: dict[str, object]
+    policy_snapshot: CompensationEvidenceSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,7 +242,11 @@ def _pending_cluster(
         if (
             review is None
             or review.subscription_id != subscription_id
-            or review.status is not OutageCompensationDecisionStatus.review_required
+            or review.status
+            not in {
+                OutageCompensationDecisionStatus.review_required,
+                OutageCompensationDecisionStatus.awaiting_approval,
+            }
             or review.resolved_by_decision_id is not None
         ):
             raise _error(
@@ -302,15 +327,13 @@ def preview_outage_compensation(
             )
         ).all()
     )
-    credited = merge_intervals(
-        [
-            TimeInterval(
-                datetime.fromisoformat(item[0]), datetime.fromisoformat(item[1])
-            )
-            for decision in previous
-            for item in (decision.policy_snapshot or {}).get("compensated_ranges", [])
-        ]
+    from app.services.compensated_service_time import (
+        TimeCreditQuery,
+        resolve_compensated_service_time,
     )
+
+    history = resolve_compensated_service_time(db, TimeCreditQuery(subscription_id))
+    credited = history.credited
     newly_funded = subtract_intervals(intersect_intervals(eligible, funded), credited)
     funded_overlap = interval_seconds(newly_funded)
     tail_before = max((item.ends_at for item in funded), default=None)
@@ -346,6 +369,10 @@ def preview_outage_compensation(
             or _utc(row.ended_at) <= _utc(row.started_at)
             for row in rows
         )
+    ):
+        status = OutageCompensationDecisionStatus.review_required
+    if any(
+        intersect_seconds(eligible, (item.interval,)) for item in history.unresolved
     ):
         status = OutageCompensationDecisionStatus.review_required
     tail_after = (
@@ -408,8 +435,14 @@ def preview_outage_compensation(
             )
         ).all()
     )
-    policy_snapshot: dict[str, object] = {
+    policy_snapshot: CompensationEvidenceSnapshot = {
         "threshold_seconds": threshold,
+        "posting_policy": "staff_approval_required",
+        "unresolved_time_credit_ids": [
+            str(item.source_id)
+            for item in history.unresolved
+            if intersect_seconds(eligible, (item.interval,))
+        ],
         "review_decision_id": str(review_decision_id) if review_decision_id else None,
         "duration_unit": "exact_seconds",
         "funding_cap": "outage_intersection_with_active_entitlements",
@@ -426,7 +459,7 @@ def preview_outage_compensation(
             > 0
         ],
         "compensated_ranges": [
-            [item.starts_at.isoformat(), item.ends_at.isoformat()]
+            (item.starts_at.isoformat(), item.ends_at.isoformat())
             for item in newly_funded
         ]
         if status is OutageCompensationDecisionStatus.compensated
@@ -494,7 +527,10 @@ def apply_outage_compensation(
 
 
 def _stage_outage_compensation(
-    db: Session, command: ApplyOutageCompensationCommand
+    db: Session,
+    command: ApplyOutageCompensationCommand,
+    *,
+    approved_by: UUID | None = None,
 ) -> OutageCompensationResult:
     key = command.idempotency_key.strip()
     if not key:
@@ -535,7 +571,15 @@ def _stage_outage_compensation(
     decision = OutageCompensationDecision(
         account_id=preview.account_id,
         subscription_id=preview.subscription_id,
-        status=preview.status,
+        status=(
+            OutageCompensationDecisionStatus.awaiting_approval
+            if preview.status is OutageCompensationDecisionStatus.compensated
+            and approved_by is None
+            else preview.status
+        ),
+        approved_by=approved_by,
+        approval_reason=command.context.reason if approved_by else None,
+        approved_fingerprint=command.expected_fingerprint if approved_by else None,
         threshold_seconds=preview.threshold_seconds,
         eligible_seconds=preview.eligible_seconds,
         funded_overlap_seconds=preview.funded_overlap_seconds,
@@ -546,7 +590,7 @@ def _stage_outage_compensation(
         preview_fingerprint=preview.fingerprint,
         idempotency_key=key,
         created_by=command.context.actor,
-        applied_at=_utc(command.effective_at),
+        applied_at=_utc(command.effective_at) if approved_by else None,
     )
     db.add(decision)
     db.flush()
@@ -583,7 +627,10 @@ def _stage_outage_compensation(
             )
         )
     entitlement_id: UUID | None = None
-    if preview.status is OutageCompensationDecisionStatus.compensated:
+    if (
+        preview.status is OutageCompensationDecisionStatus.compensated
+        and approved_by is not None
+    ):
         assert preview.tail_before is not None and preview.tail_after is not None
         tail_currency = (
             db.scalar(
@@ -617,6 +664,26 @@ def _stage_outage_compensation(
         db.flush()
         entitlement_id = entitlement.id
         decision.entitlement_id = entitlement.id
+        from app.services.compensated_service_time import (
+            StageTimeCreditCommand,
+            TimeCreditSource,
+            stage_compensated_service_time,
+        )
+
+        ranges = tuple(
+            TimeInterval(datetime.fromisoformat(start), datetime.fromisoformat(end))
+            for start, end in preview.policy_snapshot["compensated_ranges"]
+        )
+        stage_compensated_service_time(
+            db,
+            StageTimeCreditCommand(
+                subscription_id=subscription.id,
+                source=TimeCreditSource.outage,
+                source_id=decision.id,
+                ranges=ranges,
+                evidence_ref=f"outage-compensation:{decision.id}",
+            ),
+        )
         from app.services.subscription_lifecycle import resolve_subscription_lifecycle
 
         previous_head = resolve_subscription_lifecycle(db, str(subscription.id)).head
@@ -652,6 +719,25 @@ def _stage_outage_compensation(
         assert original is not None
         original.resolved_by_decision_id = decision.id
         db.flush()
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    emit_event(
+        db,
+        EventType.outage_compensation_approved
+        if approved_by
+        else EventType.outage_compensation_proposed,
+        {
+            "schema_version": 1,
+            "decision_id": str(decision.id),
+            "status": decision.status.value,
+            "preview_fingerprint": decision.preview_fingerprint,
+            "seconds": decision.funded_overlap_seconds,
+        },
+        actor=command.context.actor,
+        account_id=subscription.subscriber_id,
+        subscription_id=subscription.id,
+    )
     return OutageCompensationResult(
         decision_id=decision.id,
         status=decision.status,
@@ -663,6 +749,322 @@ def _stage_outage_compensation(
         ),
         tail_after=decision.tail_after,
         replayed=False,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ApproveOutageCompensationCommand:
+    decision_id: UUID
+    expected_fingerprint: str
+    actor_system_user_id: UUID
+    effective_at: datetime
+
+
+def require_time_credit_staff(db: Session, principal_id: UUID, permission: str) -> None:
+    from app.models.system_user import SystemUser
+    from app.services.auth_dependencies import has_permission
+    from app.services.system_user_assignments import system_user_role_names
+
+    principal = db.get(SystemUser, principal_id)
+    if (
+        principal is None
+        or not principal.is_active
+        or not has_permission(
+            {
+                "principal_id": str(principal_id),
+                "principal_type": "system_user",
+                "roles": set(system_user_role_names(db, principal_id)),
+            },
+            db,
+            permission,
+        )
+    ):
+        raise _error(
+            "approval_permission_required",
+            "An active staff approver with the required permission is required.",
+        )
+
+
+def approve_outage_compensation(
+    db: Session, command: ApproveOutageCompensationCommand, *, context: CommandContext
+) -> OutageCompensationResult:
+    def operation() -> OutageCompensationResult:
+        if (
+            context.scope != OUTAGE_APPROVAL_SCOPE
+            or context.actor != f"user:{command.actor_system_user_id}"
+            or not context.reason.strip()
+            or len(context.reason) > 1000
+            or not context.idempotency_key
+        ):
+            raise _error(
+                "approval_permission_required",
+                "Named staff approval, reason and idempotency evidence are required.",
+            )
+        require_time_credit_staff(
+            db, command.actor_system_user_id, OUTAGE_APPROVAL_SCOPE
+        )
+        original = db.get(OutageCompensationDecision, command.decision_id)
+        if original is None:
+            raise _error("review_invalid", "Compensation proposal was not found.")
+        lock_account(db, str(original.account_id))
+        db.refresh(original, with_for_update=True)
+        maker = original.created_by.rsplit(":", 1)[-1]
+        if maker == str(command.actor_system_user_id):
+            raise _error(
+                "self_approval_forbidden",
+                "A compensation proposal must be approved by a different staff member.",
+            )
+        if original.resolved_by_decision_id is not None:
+            approved = db.get(
+                OutageCompensationDecision, original.resolved_by_decision_id
+            )
+            if (
+                approved is None
+                or approved.approved_by is None
+                or approved.approved_fingerprint != command.expected_fingerprint
+                or approved.idempotency_key != context.idempotency_key
+            ):
+                raise _error(
+                    "idempotency_conflict",
+                    "This proposal already has a different approval.",
+                )
+            return OutageCompensationResult(
+                approved.id,
+                approved.status,
+                approved.entitlement_id,
+                approved.funded_overlap_seconds,
+                approved.tail_after,
+                True,
+            )
+        preview = preview_outage_compensation(
+            db,
+            subscription_id=original.subscription_id,
+            effective_at=datetime.now(UTC),
+            review_decision_id=original.id,
+        )
+        if preview.fingerprint != command.expected_fingerprint:
+            raise _error(
+                "stale_preview",
+                "Funding, policy or downtime changed; review a fresh proposal.",
+            )
+        if preview.status is not OutageCompensationDecisionStatus.compensated:
+            raise _error(
+                "review_required",
+                "This proposal requires evidence review and cannot be posted.",
+            )
+        result = _stage_outage_compensation(
+            db,
+            ApplyOutageCompensationCommand(
+                subscription_id=original.subscription_id,
+                expected_fingerprint=command.expected_fingerprint,
+                idempotency_key=context.idempotency_key,
+                effective_at=command.effective_at,
+                context=context,
+                review_decision_id=original.id,
+            ),
+            approved_by=command.actor_system_user_id,
+        )
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                actor_type=AuditActorType.user,
+                actor_id=str(command.actor_system_user_id),
+                actor_label=context.actor,
+                action="outage_compensation.approved",
+                entity_type="outage_compensation_decision",
+                entity_id=str(result.decision_id),
+                metadata_={
+                    "proposal_id": str(original.id),
+                    "preview_fingerprint": command.expected_fingerprint,
+                    "reason": context.reason,
+                },
+            ),
+        )
+        db.flush()
+        return result
+
+    return execute_owner_command(
+        db, definition=_APPROVE_COMMAND, context=context, operation=operation
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyTimeCreditPreview:
+    entry_id: UUID
+    subscription_id: UUID
+    ranges: tuple[TimeInterval, ...]
+    fingerprint: str
+    source_seconds: int
+    grant_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class AttestLegacyTimeCreditCommand:
+    entry_id: UUID
+    ranges: tuple[TimeInterval, ...]
+    expected_fingerprint: str
+    actor_system_user_id: UUID
+
+
+def preview_legacy_time_credit(
+    db: Session, entry_id: UUID, *, ranges: tuple[TimeInterval, ...] | None = None
+) -> LegacyTimeCreditPreview:
+    from app.models.service_extension import (
+        ServiceExtension,
+        ServiceExtensionEntry,
+        ServiceExtensionStatus,
+    )
+
+    entry = db.get(ServiceExtensionEntry, entry_id)
+    extension = db.get(ServiceExtension, entry.extension_id) if entry else None
+    if (
+        entry is None
+        or extension is None
+        or extension.status is not ServiceExtensionStatus.applied
+        or entry.grant_starts_at is None
+        or entry.grant_ends_at is None
+    ):
+        raise _error(
+            "legacy_credit_invalid",
+            "An applied extension with exact grant evidence is required.",
+        )
+    window = (TimeInterval(_utc(extension.window_start), _utc(extension.window_end)),)
+    reviewed = merge_intervals(list(ranges if ranges is not None else window))
+    grant_seconds = int(
+        (_utc(entry.grant_ends_at) - _utc(entry.grant_starts_at)).total_seconds()
+    )
+    if (
+        not reviewed
+        or reviewed != (ranges if ranges is not None else window)
+        or intersect_intervals(reviewed, window) != reviewed
+        or interval_seconds(reviewed) > grant_seconds
+    ):
+        raise _error(
+            "legacy_credit_invalid",
+            "Reviewed clock ranges must be inside the original outage window and backed by the granted time.",
+        )
+    payload = {
+        "entry": str(entry.id),
+        "subscription": str(entry.subscription_id),
+        "extension": str(extension.id),
+        "window": [window[0].starts_at.isoformat(), window[0].ends_at.isoformat()],
+        "grant": [str(entry.grant_starts_at), str(entry.grant_ends_at)],
+        "ranges": [
+            [item.starts_at.isoformat(), item.ends_at.isoformat()] for item in reviewed
+        ],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode()
+    ).hexdigest()
+    return LegacyTimeCreditPreview(
+        entry.id,
+        entry.subscription_id,
+        reviewed,
+        fingerprint,
+        interval_seconds(window),
+        grant_seconds,
+    )
+
+
+def attest_legacy_time_credit(
+    db: Session, command: AttestLegacyTimeCreditCommand, *, context: CommandContext
+) -> LegacyTimeCreditPreview:
+    definition = OwnerCommandDefinition(
+        owner=_OWNER,
+        concern="reviewed legacy time credit attestation",
+        name="attest_legacy_time_credit",
+    )
+
+    def operation() -> LegacyTimeCreditPreview:
+        if (
+            context.scope != OUTAGE_REPAIR_SCOPE
+            or context.actor
+            not in {
+                f"user:{command.actor_system_user_id}",
+                f"staff:{command.actor_system_user_id}",
+            }
+            or not context.reason.strip()
+            or len(context.reason) > 1000
+            or not context.idempotency_key
+        ):
+            raise _error(
+                "repair_permission_required", "Named staff repair evidence is required."
+            )
+        require_time_credit_staff(db, command.actor_system_user_id, OUTAGE_REPAIR_SCOPE)
+        preview = preview_legacy_time_credit(
+            db, command.entry_id, ranges=command.ranges
+        )
+        subscription = db.get(Subscription, preview.subscription_id)
+        if subscription is None:
+            raise _error("subscription_not_found", "Subscription was not found.")
+        lock_account(db, str(subscription.subscriber_id))
+        preview = preview_legacy_time_credit(
+            db, command.entry_id, ranges=command.ranges
+        )
+        if preview.fingerprint != command.expected_fingerprint:
+            raise _error("stale_preview", "Legacy compensation evidence changed.")
+        from app.models.service_period_purchase import CompensatedServiceTime
+        from app.services.compensated_service_time import (
+            StageTimeCreditCommand,
+            TimeCreditSource,
+            stage_compensated_service_time,
+        )
+
+        replay = (
+            db.scalar(
+                select(CompensatedServiceTime.id)
+                .where(
+                    CompensatedServiceTime.source_kind == "extension",
+                    CompensatedServiceTime.source_id == command.entry_id,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        stage_compensated_service_time(
+            db,
+            StageTimeCreditCommand(
+                subscription_id=preview.subscription_id,
+                source=TimeCreditSource.extension,
+                source_id=preview.entry_id,
+                ranges=preview.ranges,
+                evidence_ref=f"staff-attestation:{command.actor_system_user_id}:{preview.fingerprint}",
+            ),
+        )
+        if not replay:
+            AuditEvents.stage(
+                db,
+                AuditEventCreate(
+                    actor_type=AuditActorType.user,
+                    actor_id=str(command.actor_system_user_id),
+                    actor_label=context.actor,
+                    action="time_credit.legacy_attested",
+                    entity_type="service_extension_entry",
+                    entity_id=str(command.entry_id),
+                    metadata_={
+                        "reason": context.reason,
+                        "preview_fingerprint": preview.fingerprint,
+                    },
+                ),
+            )
+            from app.services.events import emit_event
+            from app.services.events.types import EventType
+
+            emit_event(
+                db,
+                EventType.time_credit_attested,
+                {
+                    "schema_version": 1,
+                    "source_id": str(command.entry_id),
+                    "preview_fingerprint": preview.fingerprint,
+                },
+                actor=context.actor,
+                subscription_id=preview.subscription_id,
+            )
+        return preview
+
+    return execute_owner_command(
+        db, definition=definition, context=context, operation=operation
     )
 
 
@@ -800,6 +1202,9 @@ def consume_outage_compensation_event(
 
 
 __all__ = [
+    "ApproveOutageCompensationCommand",
+    "approve_outage_compensation",
+    "OUTAGE_APPROVAL_SCOPE",
     "ReviewOutageCompensationCommand",
     "review_outage_compensation",
     "ApplyOutageCompensationCommand",

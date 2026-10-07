@@ -64,12 +64,18 @@ does not rewrite purchased invoices, VAT, or service periods.
 
 `financial.purchased_service_coverage` reads exact purchase coverage facts for
 lifecycle and catalog admission. `financial.purchase_payment_recovery_state`
-owns purchase state transitions following confirmed refunds/reversals as a
+owns purchase state transitions following confirmed refunds/reversals or verified unsuccessful unpaid checkout observations as a
 flush-only payment transaction participant. These lower-level boundaries read
 persisted facts and never call the purchase settlement coordinator; the owner
 dependency graph remains acyclic.
 
 ## Outage policy
+
+Posting remains manual, as selected by Michael on 7 October 2026 and required by
+`OUTAGE_SLA_SPINE.md`. The flag permits proposal collection and approved posting;
+it never approves an individual remedy. The six-hour control is an internal
+proposal threshold, not an invented contractual SLA.
+
 
 - The default minimum eligible outage is six hours and is editable as
   `billing.outage_compensation_min_hours`.
@@ -80,14 +86,15 @@ dependency graph remains acyclic.
   connected below-threshold history can qualify when new evidence arrives.
 - Compensation is capped to the intersection of outage time and already funded
   entitlement coverage for the affected subscription.
-- A qualifying decision appends one zero-value entitlement to the then-current
-  funded tail. Each interval receives only one consumption link; historical
+- A qualifying event records an `awaiting_approval` proposal without an
+  entitlement, anchor change or schedule rebase. A separate approved decision
+  appends one zero-value entitlement to the then-current funded tail. Each interval receives only one consumption link; historical
   evidence can inform a later delta without another link or another full award.
-- Automatic grants require active prepaid service, exact evidence, current
+- Approved grants require active prepaid service, exact evidence, current
   funded coverage, and a funded tail later than processing time. Suspended,
   terminated, postpaid, expired, ambiguous, or conflicting service changes
   produce durable review decisions. Historical grants lacking credited ranges
-  require reviewed backfill before automatic delta awards resume.
+  require reviewed backfill before staff can approve another delta award.
 - Resolved/discarded outage events trigger the compensation owner after the
   downtime ledger commits. Per-subscription owner-output receipts make event
   replay an exact no-op; no whole-customer financial sweep is introduced.
@@ -118,7 +125,8 @@ python -m scripts.billing.recover_period_purchase --purchase-id <uuid> --apply -
 python -m scripts.billing.recover_period_purchase --subscription-id <uuid> --review-decision-id <decision-uuid>
 ```
 
-Purchase recovery reports `await_provider`, `resolve_blocker`,
+Purchase recovery reports `await_provider`, `close_unpaid_checkout`,
+`start_new_checkout`, `resolve_blocker`,
 `refund_or_provider_review`, `retry_settlement`, or `complete`. A retry uses the
 existing exact receipt and frozen purchase, and persists its reviewed key for
 completed replay. Changed quotes, wrong amounts/currencies, uncertain capture,
@@ -136,7 +144,53 @@ Outage recovery re-evaluates an unresolved decision against current authoritativ
 evidence and records a new decision. The original review links to its resolution;
 consumed intervals are not rewritten. A still-ambiguous review cannot force a grant.
 
+## Approval and shared clock evidence
+
+Finance reviews receipts and proposals at `/admin/billing/service-period-review`.
+Each receipt shows its provider reference, currency and collected/refunded/held
+amounts. Held money is displayed separately from available credit in customer billing.
+
+`approve_outage_compensation` requires an active system-user principal with
+`billing:outage_compensation:approve`, different human maker and approver, current
+fingerprint, idempotency key and reason. The owner rechecks live permissions and
+all financial/clock facts. Service principals cannot approve. The original
+proposal and approved decision are linked; approval identity and reason persist.
+
+`financial.compensated_service_time` owns append-only original clock-range claims.
+Pause resume, new bulk service extensions and approved outages stage claims in
+their account-locked grant transaction. Its history resolver reads facts without
+calling producer coordinators. Exact historical pause grants and outage snapshots
+are deducted. Rounded legacy extensions without exact per-service clock mappings
+require staff attestation, even after a later renewal. Existing service is not
+clawed back. History remains present after refunds and reversals; withdrawing a
+grant never automatically authorizes another award.
+
+Legacy review uses the repair permission and source-fingerprint checks:
+
+```
+python -m scripts.billing.recover_period_purchase --legacy-extension-entry <entry-uuid>
+python -m scripts.billing.recover_period_purchase --legacy-extension-entry <entry-uuid> --credited-from <ISO-with-offset> --credited-until <ISO-with-offset> --apply --fingerprint <reviewed-fingerprint> --idempotency-key <key> --actor-system-user-id <staff-uuid> --reason "Verified original credited clock"
+python -m scripts.billing.recover_period_purchase --subscription-id <uuid> --review-decision-id <proposal-uuid> --approve-outage --apply --fingerprint <reviewed-fingerprint> --idempotency-key <key> --actor-system-user-id <approver-uuid> --reason "Reviewed funded outage remedy"
+```
+
+Confirmed failed/abandoned intents with no receipt or settled service release
+the purchase restriction through the payment-recovery record participant.
+Timeout, not-found and expired-but-unverified outcomes do not. Old references
+remain; a genuine late capture is held even when a newer checkout exists.
+Browser keys change only when the owner explicitly confirms a fresh checkout is safe.
+
+The accrual owner's typed purchase-admission query preserves the provisional
+recovery hold; `ended_at` alone is not finalization. Quote dates, VAT and expiry
+are visible before payment. Both fetch requests carry the live CSRF token;
+stale previews cannot authorize payment and unknown retries retain the same key.
+
 ## Rollout
+
+Revision `647_purchase_outage_approval` merges both current native histories and
+adds approval provenance, immutable clock claims and the additive permission.
+Downgrade refuses to erase proposal, approval or claim evidence. There is no
+stamping, metadata schema substitution or deletion of historical data.
+
 
 Both `billing.prepaid_period_purchase_enabled` and
 `billing.outage_compensation_enabled` default to false. Schema deployment and

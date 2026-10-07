@@ -78,7 +78,7 @@ def resolve_purchased_coverage(
         if not included:
             break
     pending = db.scalar(
-        select(PrepaidPeriodPurchase.id)
+        select(PrepaidPeriodPurchase)
         .where(
             PrepaidPeriodPurchase.subscription_id == query.subscription_id,
             PrepaidPeriodPurchase.status.in_(
@@ -97,4 +97,11 @@ def resolve_purchased_coverage(
         )
         .limit(1)
     )
-    return PurchasedCoverage(_utc(tail) if tail else None, pending is not None)
+    from app.services.purchase_payment_recovery_state import (
+        unpaid_purchase_intent_can_close,
+    )
+
+    unresolved = pending is not None and not unpaid_purchase_intent_can_close(
+        db, pending
+    )
+    return PurchasedCoverage(_utc(tail) if tail else None, unresolved)

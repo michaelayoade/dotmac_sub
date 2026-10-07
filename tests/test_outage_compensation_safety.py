@@ -74,7 +74,33 @@ def _apply(db, subscription, now):
         ),
     )
     db.rollback()
-    return outages.apply_outage_compensation(db, command)
+    result = outages.apply_outage_compensation(db, command)
+    if result.status is not OutageCompensationDecisionStatus.awaiting_approval:
+        return result
+    from tests.period_purchase_review_helpers import create_review_staff
+
+    principal = create_review_staff(db)
+    db.commit()
+    approved = outages.preview_outage_compensation(
+        db,
+        subscription_id=subscription.id,
+        effective_at=datetime.now(UTC),
+        review_decision_id=result.decision_id,
+    )
+    approval = outages.ApproveOutageCompensationCommand(
+        decision_id=result.decision_id,
+        expected_fingerprint=approved.fingerprint,
+        actor_system_user_id=principal.id,
+        effective_at=datetime.now(UTC),
+    )
+    context = CommandContext.system(
+        actor=f"user:{principal.id}",
+        scope=outages.OUTAGE_APPROVAL_SCOPE,
+        reason="Reviewed exact outage credit",
+        idempotency_key=str(uuid4()),
+    )
+    db.rollback()
+    return outages.approve_outage_compensation(db, approval, context=context)
 
 
 def test_sequential_finalization_does_not_compensate_overlap_twice(

@@ -874,8 +874,16 @@ def test_outage_compensation_rebases_next_cycle_cancellation(
     )
 
     assert changed == 1
-    assert schedule.effective_at.astimezone(UTC) == extended
-    assert schedule.next_attempt_at.astimezone(UTC) == extended
+    assert (
+        schedule.effective_at.replace(tzinfo=UTC)
+        if schedule.effective_at.tzinfo is None
+        else schedule.effective_at.astimezone(UTC)
+    ) == extended
+    assert (
+        schedule.next_attempt_at.replace(tzinfo=UTC)
+        if schedule.next_attempt_at.tzinfo is None
+        else schedule.next_attempt_at.astimezone(UTC)
+    ) == extended
     assert (
         schedule.reviewed_head
         == resolve_subscription_lifecycle(db_session, str(subscription.id)).head
@@ -915,7 +923,11 @@ def test_outage_compensation_preserves_explicit_date_cancellation(
     )
 
     assert changed == 0
-    assert schedule.effective_at.astimezone(UTC) == explicit_date
+    assert (
+        schedule.effective_at.replace(tzinfo=UTC)
+        if schedule.effective_at.tzinfo is None
+        else schedule.effective_at.astimezone(UTC)
+    ) == explicit_date
 
 
 def test_failed_due_status_command_retries_with_backoff(

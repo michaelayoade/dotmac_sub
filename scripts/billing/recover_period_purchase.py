@@ -15,7 +15,13 @@ from app.models.system_user import SystemUser
 from app.services.auth_dependencies import has_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.outage_compensation import (
+    OUTAGE_APPROVAL_SCOPE,
+    ApproveOutageCompensationCommand,
+    AttestLegacyTimeCreditCommand,
     ReviewOutageCompensationCommand,
+    approve_outage_compensation,
+    attest_legacy_time_credit,
+    preview_legacy_time_credit,
     preview_outage_compensation,
     review_outage_compensation,
 )
@@ -49,6 +55,10 @@ def main() -> None:
     entity = parser.add_mutually_exclusive_group(required=True)
     entity.add_argument("--purchase-id", type=UUID)
     entity.add_argument("--subscription-id", type=UUID)
+    entity.add_argument("--legacy-extension-entry", type=UUID)
+    parser.add_argument("--approve-outage", action="store_true")
+    parser.add_argument("--credited-from", type=datetime.fromisoformat)
+    parser.add_argument("--credited-until", type=datetime.fromisoformat)
     parser.add_argument("--review-decision-id", type=UUID)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--fingerprint")
@@ -64,11 +74,30 @@ def main() -> None:
         parser.error(
             "Apply requires the reviewed fingerprint, idempotency key, active staff ID, and reason"
         )
+    if args.approve_outage and not args.subscription_id:
+        parser.error("Outage approval requires the subscription and reviewed decision")
+    if bool(args.credited_from) != bool(args.credited_until):
+        parser.error("Specify both credited clock boundaries")
+    if args.credited_from and (
+        args.credited_from.tzinfo is None or args.credited_until.tzinfo is None
+    ):
+        parser.error("Credited clock boundaries require explicit timezone offsets")
+    from app.services.outage_interval_algebra import TimeInterval
+
+    credited_ranges = (
+        (TimeInterval(args.credited_from, args.credited_until),)
+        if args.credited_from
+        else None
+    )
     now = datetime.now(UTC)
     with db_session_adapter.owner_command_session() as db:
         if not args.apply:
             preview = (
-                preview_purchase_recovery(db, args.purchase_id)
+                preview_legacy_time_credit(
+                    db, args.legacy_extension_entry, ranges=credited_ranges
+                )
+                if args.legacy_extension_entry
+                else preview_purchase_recovery(db, args.purchase_id)
                 if args.purchase_id
                 else preview_outage_compensation(
                     db,
@@ -83,12 +112,40 @@ def main() -> None:
         granted = _permission(db, principal_id)
         db_session_adapter.release_read_transaction(db)
         context = CommandContext.system(
-            actor=f"staff:{principal_id}",
-            scope=PURCHASE_REPAIR_SCOPE,
+            actor=f"user:{principal_id}",
+            scope=OUTAGE_APPROVAL_SCOPE
+            if args.approve_outage
+            else PURCHASE_REPAIR_SCOPE,
             reason=args.reason,
             idempotency_key=args.idempotency_key,
         )
-        if args.purchase_id:
+        if args.legacy_extension_entry:
+            preview = preview_legacy_time_credit(
+                db, args.legacy_extension_entry, ranges=credited_ranges
+            )
+            db_session_adapter.release_read_transaction(db)
+            result = attest_legacy_time_credit(
+                db,
+                AttestLegacyTimeCreditCommand(
+                    entry_id=args.legacy_extension_entry,
+                    ranges=preview.ranges,
+                    expected_fingerprint=args.fingerprint,
+                    actor_system_user_id=principal_id,
+                ),
+                context=context,
+            )
+        elif args.approve_outage:
+            result = approve_outage_compensation(
+                db,
+                ApproveOutageCompensationCommand(
+                    decision_id=args.review_decision_id,
+                    expected_fingerprint=args.fingerprint,
+                    actor_system_user_id=principal_id,
+                    effective_at=now,
+                ),
+                context=context,
+            )
+        elif args.purchase_id:
             result = retry_purchase_settlement(
                 db,
                 RetryPurchaseSettlementCommand(

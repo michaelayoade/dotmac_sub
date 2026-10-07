@@ -1255,6 +1255,19 @@ def stage_gateway_topup_observation(
                     intent, TopupIntentStatus.expired, source=command.source.value
                 )
 
+    # The verified fact and the unpaid purchase consequence commit together.
+    if intent.purpose == "prepaid_period_purchase":
+        from app.services.purchase_payment_recovery_state import (
+            ResolveUnpaidPurchaseIntentCommand,
+            stage_unpaid_purchase_intent_resolution,
+        )
+
+        intent.metadata_ = metadata
+        db.flush()
+        stage_unpaid_purchase_intent_resolution(
+            db, ResolveUnpaidPurchaseIntentCommand(intent_id=intent.id)
+        )
+
     evidence_changed = metadata != original_metadata
     if evidence_changed:
         intent.metadata_ = metadata

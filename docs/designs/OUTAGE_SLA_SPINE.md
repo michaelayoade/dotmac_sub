@@ -224,6 +224,14 @@ in_progress → completed, plus canceled and overrun.
 
 ## 6. Compensation (approved; posting gated)
 
+PR #3393 preserves this gate (Michael, 2026-10-07). Resolved outputs may create
+reviewable proposals. Posting requires an active named staff approver holding
+`billing:outage_compensation:approve`, maker/approver separation, current bound
+fingerprint, reason and idempotency key. The flag and service/API principals
+do not approve grants. The prepaid purchase design documents shared original
+clock evidence and legacy attestation.
+
+
 - Downtime measurement, SLA determination, and financial remedy are separate
   owners. Exact qualifying downtime is always calculated.
 - Compensation is created only when an effective contract or regulatory

@@ -1946,17 +1946,60 @@ def release_pause_cause_and_resume_subscription(
         raise BillingAnchorProjectionError(
             "Unexpected reconciled prepaid renewal evidence"
         )
-    target_anchor = compensation_anchor + timedelta(seconds=paused_seconds)
-    if subscription.billing_mode == BillingMode.prepaid:
+    from app.services.compensated_service_time import (
+        TimeCreditQuery,
+        resolve_compensated_service_time,
+    )
+    from app.services.outage_interval_algebra import (
+        TimeInterval,
+        intersect_seconds,
+        interval_seconds,
+        subtract_intervals,
+    )
+
+    pause_start = _aware_utc(episode.effective_at)
+    assert pause_start is not None
+    original_clock = (TimeInterval(pause_start, command.resumed_at),)
+    credited_clock = resolve_compensated_service_time(
+        db, TimeCreditQuery(subscription.id)
+    )
+    if any(
+        intersect_seconds(original_clock, (item.interval,))
+        for item in credited_clock.unresolved
+    ):
+        raise BillingAnchorProjectionError(
+            "Resolve overlapping historical time credits before preserving paused service"
+        )
+    net_clock = subtract_intervals(original_clock, credited_clock.credited)
+    net_seconds = interval_seconds(net_clock)
+    target_anchor = compensation_anchor + timedelta(seconds=net_seconds)
+    if subscription.billing_mode == BillingMode.prepaid and net_seconds > 0:
         grant_pause_compensation_entitlement(
             db,
             GrantPauseCompensationEntitlementCommand(
                 pause_episode_id=episode.id,
                 subscription_id=subscription.id,
                 account_id=subscription.subscriber_id,
-                pause_effective_at=effective_at,
+                pause_effective_at=pause_start,
                 starts_at=compensation_anchor,
                 ends_at=target_anchor,
+            ),
+        )
+    if net_seconds > 0:
+        from app.services.compensated_service_time import (
+            StageTimeCreditCommand,
+            TimeCreditSource,
+            stage_compensated_service_time,
+        )
+
+        stage_compensated_service_time(
+            db,
+            StageTimeCreditCommand(
+                subscription_id=subscription.id,
+                source=TimeCreditSource.pause,
+                source_id=episode.id,
+                ranges=net_clock,
+                evidence_ref=f"pause-episode:{episode.id}",
             ),
         )
     stage_subscription_billing_anchor(

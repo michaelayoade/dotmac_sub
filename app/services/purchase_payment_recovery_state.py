@@ -8,9 +8,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Payment, PaymentStatus
+from app.models.billing import Payment, PaymentStatus, TopupIntent
 from app.models.service_period_purchase import (
     PrepaidPeriodPurchase,
+    PrepaidPeriodPurchasePeriod,
     PrepaidPeriodPurchaseStatus,
 )
 from app.services.domain_errors import DomainError
@@ -90,3 +91,74 @@ def stage_purchase_payment_recovery(
         purchase.status = PrepaidPeriodPurchaseStatus.review_required
         purchase.failure_code = f"{_OWNER}.payment_partially_refunded"
     db.flush()
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveUnpaidPurchaseIntentCommand:
+    intent_id: UUID
+
+
+def unpaid_purchase_intent_can_close(
+    db: Session, purchase: PrepaidPeriodPurchase
+) -> bool:
+    """One policy for admission, projections and terminal-observation recovery."""
+    if (
+        purchase.payment_id is not None
+        or purchase.completed_at is not None
+        or purchase.topup_intent_id is None
+    ):
+        return False
+    if purchase.status not in {
+        PrepaidPeriodPurchaseStatus.quoted,
+        PrepaidPeriodPurchaseStatus.payment_pending,
+    }:
+        return False
+    intent = db.get(TopupIntent, purchase.topup_intent_id)
+    if (
+        intent is None
+        or intent.account_id != purchase.account_id
+        or intent.purpose != "prepaid_period_purchase"
+        or intent.completed_payment_id is not None
+    ):
+        return False
+    if (
+        intent.status,
+        intent.gateway_last_outcome,
+        intent.gateway_last_reason_code,
+    ) not in {
+        ("failed", "failed", "provider_reported_failed"),
+        ("abandoned", "abandoned", "provider_reported_abandoned"),
+    }:
+        return False
+    receipt = db.scalar(
+        select(Payment.id)
+        .where(Payment.reserved_for_purchase_id == purchase.id)
+        .limit(1)
+    )
+    service = db.scalar(
+        select(PrepaidPeriodPurchasePeriod.id)
+        .where(
+            PrepaidPeriodPurchasePeriod.purchase_id == purchase.id,
+            PrepaidPeriodPurchasePeriod.invoice_id.is_not(None),
+        )
+        .limit(1)
+    )
+    return receipt is None and service is None
+
+
+def stage_unpaid_purchase_intent_resolution(
+    db: Session, command: ResolveUnpaidPurchaseIntentCommand
+) -> bool:
+    """Flush-only participant; the caller holds the canonical account lock."""
+    purchase = db.scalar(
+        select(PrepaidPeriodPurchase)
+        .where(PrepaidPeriodPurchase.topup_intent_id == command.intent_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if purchase is None or not unpaid_purchase_intent_can_close(db, purchase):
+        return False
+    purchase.status = PrepaidPeriodPurchaseStatus.failed
+    purchase.failure_code = f"{_OWNER}.provider_confirmed_unpaid"
+    db.flush()
+    return True

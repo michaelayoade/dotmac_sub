@@ -154,6 +154,10 @@ DEFAULT_PERMISSIONS = [
     ("billing:extension:create", "Create service extensions"),
     ("billing:extension:apply", "Apply or cancel service extensions"),
     (
+        "billing:outage_compensation:approve",
+        "Approve reviewed outage time compensation",
+    ),
+    (
         "billing:extension:reverse",
         "Reverse applied service extensions after reviewed impact preview",
     ),

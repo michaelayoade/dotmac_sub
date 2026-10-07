@@ -41,7 +41,6 @@ from app.models.catalog import (
     Subscription,
     SubscriptionAddOn,
 )
-from app.models.network_monitoring import CustomerOutageInterval
 from app.models.service_period_purchase import (
     PrepaidPeriodPurchase,
     PrepaidPeriodPurchasePeriod,
@@ -95,7 +94,10 @@ from app.services.prepaid_service_renewals import (
 )
 from app.services.purchase_payment_recovery_state import (
     PurchasePaymentRecoveryCommand,
+    ResolveUnpaidPurchaseIntentCommand,
     stage_purchase_payment_recovery,
+    stage_unpaid_purchase_intent_resolution,
+    unpaid_purchase_intent_can_close,
 )
 from app.services.purchased_service_coverage import (
     PurchasedCoverage,
@@ -236,7 +238,7 @@ class SettleVerifiedPrepaidPeriodPurchaseCommand:
 @dataclass(frozen=True, slots=True)
 class PrepaidPeriodPurchaseSettlement:
     purchase_id: UUID
-    payment_id: UUID
+    payment_id: UUID | None
     invoice_ids: tuple[UUID, ...]
     entitlement_ids: tuple[UUID, ...]
     coverage_ends_at: datetime
@@ -247,6 +249,8 @@ class PrepaidPeriodPurchaseSettlement:
 
 class PurchaseRecoveryAction(StrEnum):
     await_provider = "await_provider"
+    close_unpaid_checkout = "close_unpaid_checkout"
+    start_new_checkout = "start_new_checkout"
     retry_settlement = "retry_settlement"
     refund_or_provider_review = "refund_or_provider_review"
     resolve_blocker = "resolve_blocker"
@@ -307,6 +311,7 @@ def preview_purchase_recovery(
                 subscription_id=purchase.subscription_id,
                 period_count=purchase.period_count,
                 effective_at=_utc(purchase.created_at),
+                for_existing_purchase_id=purchase.id,
             )
             current_quote = quote.fingerprint
             paid_at = purchase.verified_paid_at or payment.created_at
@@ -328,6 +333,18 @@ def preview_purchase_recovery(
             reason = exc.code
     if purchase.status is PrepaidPeriodPurchaseStatus.completed:
         action = PurchaseRecoveryAction.complete
+    if (
+        purchase.status
+        in {
+            PrepaidPeriodPurchaseStatus.failed,
+            PrepaidPeriodPurchaseStatus.expired,
+            PrepaidPeriodPurchaseStatus.canceled,
+        }
+        and not receipts
+    ):
+        action = PurchaseRecoveryAction.start_new_checkout
+    elif unpaid_purchase_intent_can_close(db, purchase):
+        action = PurchaseRecoveryAction.close_unpaid_checkout
     if (
         db.scalar(
             select(Payment.id)
@@ -392,6 +409,18 @@ def retry_purchase_settlement(
                 "repair_permission_required",
                 "Prepaid reconciliation permission is required.",
             )
+        from app.services.outage_compensation import require_time_credit_staff
+
+        if context.actor not in {
+            f"staff:{command.actor_system_user_id}",
+            f"user:{command.actor_system_user_id}",
+        }:
+            raise _error(
+                "repair_permission_required", "Named staff repair evidence is required."
+            )
+        require_time_credit_staff(
+            db, command.actor_system_user_id, PURCHASE_REPAIR_SCOPE
+        )
         key = (context.idempotency_key or "").strip()
         if not key or not context.reason.strip():
             raise _error(
@@ -412,6 +441,20 @@ def retry_purchase_settlement(
                 "idempotency_conflict",
                 "Recovery key names a different reviewed preview.",
             )
+        if (
+            previous_fingerprint == command.expected_fingerprint
+            and purchase.status is PrepaidPeriodPurchaseStatus.failed
+        ):
+            return PrepaidPeriodPurchaseSettlement(
+                purchase_id=purchase.id,
+                payment_id=None,
+                invoice_ids=(),
+                entitlement_ids=(),
+                coverage_ends_at=purchase.coverage_ends_at,
+                replayed=True,
+                status=purchase.status,
+                failure_code=purchase.failure_code,
+            )
         preview = preview_purchase_recovery(db, purchase.id)
         completed_replay = (
             previous_fingerprint == command.expected_fingerprint
@@ -419,6 +462,44 @@ def retry_purchase_settlement(
         )
         if not completed_replay and preview.fingerprint != command.expected_fingerprint:
             raise _error("stale_quote", "Recovery evidence changed; review it again.")
+        if preview.action is PurchaseRecoveryAction.close_unpaid_checkout:
+            assert purchase.topup_intent_id is not None
+            if not stage_unpaid_purchase_intent_resolution(
+                db,
+                ResolveUnpaidPurchaseIntentCommand(intent_id=purchase.topup_intent_id),
+            ):
+                raise _error(
+                    "recovery_evidence_invalid", "Unpaid provider evidence changed."
+                )
+            purchase.policy_snapshot = {
+                **(purchase.policy_snapshot or {}),
+                "recovery_receipts": {**receipts, key: command.expected_fingerprint},
+            }
+            AuditEvents.stage(
+                db,
+                AuditEventCreate(
+                    actor_type=AuditActorType.user,
+                    actor_id=str(command.actor_system_user_id),
+                    actor_label=context.actor,
+                    action="prepaid_period_purchase.unpaid_checkout_closed",
+                    entity_type="prepaid_period_purchase",
+                    entity_id=str(purchase.id),
+                    metadata_={
+                        "reason": context.reason,
+                        "preview_fingerprint": command.expected_fingerprint,
+                    },
+                ),
+            )
+            return PrepaidPeriodPurchaseSettlement(
+                purchase_id=purchase.id,
+                payment_id=None,
+                invoice_ids=(),
+                entitlement_ids=(),
+                coverage_ends_at=purchase.coverage_ends_at,
+                replayed=False,
+                status=purchase.status,
+                failure_code=purchase.failure_code,
+            )
         payment = db.get(Payment, purchase.payment_id) if purchase.payment_id else None
         if (
             payment is None
@@ -590,17 +671,18 @@ def _eligible_subscription(
             "open_debt",
             "Existing invoice debt must be cleared before buying future service periods.",
         )
-    open_outage = db.scalar(
-        select(CustomerOutageInterval.id).where(
-            CustomerOutageInterval.subscription_id == subscription_id,
-            CustomerOutageInterval.state == "confirmed_unavailable",
-            CustomerOutageInterval.ended_at.is_(None),
-        )
+    from app.services.network.customer_outage_accrual import (
+        OutagePurchaseAdmissionQuery,
+        resolve_outage_purchase_admission,
     )
-    if open_outage is not None:
+
+    outage = resolve_outage_purchase_admission(
+        db, OutagePurchaseAdmissionQuery(subscription_id)
+    )
+    if not outage.allowed:
         raise _error(
             "active_outage",
-            "Service periods cannot be purchased while this service has an active outage.",
+            "Service periods cannot be purchased until outage recovery is finalized.",
         )
     active_add_on = db.scalar(
         select(SubscriptionAddOn.id).where(
@@ -626,16 +708,32 @@ def _eligible_subscription(
 def preview_prepaid_period_purchase(
     db: Session,
     *,
-    account_id: object,
-    subscription_id: object,
+    account_id: UUID | str,
+    subscription_id: UUID | str,
     period_count: int,
     effective_at: datetime,
+    for_existing_purchase_id: UUID | None = None,
 ) -> PrepaidPeriodPurchaseQuote:
     policy = _policy(db)
     if not policy.enabled:
-        raise _error("feature_disabled", "Service-period purchase is not enabled.")
+        existing_purchase = (
+            db.get(PrepaidPeriodPurchase, for_existing_purchase_id)
+            if for_existing_purchase_id
+            else None
+        )
+        if (
+            existing_purchase is None
+            or existing_purchase.account_id != coerce_uuid(account_id)
+            or existing_purchase.subscription_id != coerce_uuid(subscription_id)
+        ):
+            raise _error("feature_disabled", "Service-period purchase is not enabled.")
     maximum = policy.max_months
-    if isinstance(period_count, bool) or period_count < 1 or period_count > maximum:
+    if (
+        isinstance(period_count, bool)
+        or not isinstance(period_count, int)
+        or period_count < 1
+        or period_count > maximum
+    ):
         raise _error(
             "period_count_invalid",
             f"Choose between 1 and {maximum} monthly service periods.",
@@ -799,6 +897,23 @@ def _stage_prepaid_period_purchase(
                 "idempotency_conflict", "Purchase key already names another quote."
             )
         if (
+            existing.status is PrepaidPeriodPurchaseStatus.failed
+            and existing.payment_id is None
+            and existing.failure_code
+            == "financial.purchase_payment_recovery_state.provider_confirmed_unpaid"
+            and db.scalar(
+                select(Payment.id)
+                .where(Payment.reserved_for_purchase_id == existing.id)
+                .limit(1)
+            )
+            is None
+        ):
+            raise _error(
+                "purchase_closed_unpaid",
+                "This verified unpaid checkout is closed. Review a new quote.",
+                safe_new_checkout=True,
+            )
+        if (
             existing.topup_intent_id is None
             and existing.payment_id is None
             and _utc(existing.expires_at) <= _utc(command.effective_at)
@@ -823,6 +938,11 @@ def _stage_prepaid_period_purchase(
         )
         .with_for_update()
     )
+    if live is not None and live.topup_intent_id is not None:
+        if stage_unpaid_purchase_intent_resolution(
+            db, ResolveUnpaidPurchaseIntentCommand(intent_id=live.topup_intent_id)
+        ):
+            live = None
     if live is not None:
         if (
             live.topup_intent_id is None
@@ -1132,6 +1252,7 @@ def settle_prepaid_period_purchase(
         subscription_id=purchase.subscription_id,
         period_count=purchase.period_count,
         effective_at=_utc(purchase.created_at),
+        for_existing_purchase_id=purchase.id,
     )
     if quote.fingerprint != purchase.preview_fingerprint:
         raise _error(

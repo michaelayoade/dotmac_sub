@@ -46,6 +46,9 @@
             <div><p class="text-xs uppercase text-stone-500">VAT</p><p id="preview-tax" class="text-xl font-semibold"></p></div>
             <div><p class="text-xs uppercase text-stone-500">Total</p><p id="preview-total" class="text-xl font-semibold"></p></div>
         </div>
+        <p id="preview-coverage" class="mt-4 text-sm font-medium"></p>
+        <p id="preview-expiry" class="mt-1 text-sm text-stone-500"></p>
+        <p class="mt-3 text-sm">This payment buys the dated service periods below. Early cancellation and plan changes require billing review; this is separate from flexible account credit.</p>
         <div id="preview-periods" class="mt-5 space-y-2 text-sm"></div>
         <button id="pay-button" type="button" class="mt-6 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white">Continue to payment</button>
     </div>
@@ -56,71 +59,114 @@
     let quote = null;
     let idempotencyKey = null;
     let paymentPending = false;
+    let attemptedKey = null;
+    let previewSequence = 0;
     const error = document.getElementById('period-error');
+    const previewButton = document.getElementById('preview-button');
+    const payButton = document.getElementById('pay-button');
     const showError = message => { error.textContent = message; error.classList.remove('hidden'); };
     const payload = () => ({
         subscription_id: document.getElementById('subscription-id').value,
         period_count: Number(document.getElementById('period-count').value),
     });
-    ['subscription-id', 'period-count', 'provider', 'payment-method-id'].forEach(id => {
-        document.getElementById(id)?.addEventListener('change', () => {
-            quote = null;
-            document.getElementById('period-preview').classList.add('hidden');
-        });
-    });
-    document.getElementById('preview-button').addEventListener('click', async () => {
-        error.classList.add('hidden');
-        const response = await fetch('/portal/billing/service-periods/preview', {
-            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload())
-        });
-        const data = await response.json();
-        if (!response.ok) return showError(data.detail || 'Unable to prepare quote.');
-        const storageKey = `dotmac-period-purchase:${payload().subscription_id}:${data.preview_fingerprint}`;
-        try {
-            idempotencyKey = sessionStorage.getItem(storageKey) || crypto.randomUUID();
-            sessionStorage.setItem(storageKey, idempotencyKey);
-        } catch (error) {
-            if (!quote || quote.preview_fingerprint !== data.preview_fingerprint) idempotencyKey = crypto.randomUUID();
-        }
-        quote = data;
-        document.getElementById('preview-subtotal').textContent = `${data.currency} ${Number(data.subtotal).toLocaleString()}`;
-        document.getElementById('preview-tax').textContent = `${data.currency} ${Number(data.tax_total).toLocaleString()}`;
-        document.getElementById('preview-total').textContent = `${data.currency} ${Number(data.total).toLocaleString()}`;
-        document.getElementById('preview-periods').innerHTML = data.periods.map(p =>
-            `<div class="flex justify-between rounded-lg bg-white/70 p-3 dark:bg-stone-900/50"><span>Period ${p.ordinal}</span><span>VAT ${Number(p.tax_total).toLocaleString()} · Total ${Number(p.total).toLocaleString()}</span></div>`
-        ).join('');
-        document.getElementById('period-preview').classList.remove('hidden');
-    });
-    document.getElementById('pay-button').addEventListener('click', async () => {
-        if (!quote || paymentPending) return;
-        paymentPending = true;
-        const payButton = document.getElementById('pay-button');
+    const invalidateQuote = () => {
+        previewSequence += 1;
+        quote = null;
         payButton.disabled = true;
+        document.getElementById('period-preview').classList.add('hidden');
+    };
+    const headers = () => ({'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()});
+    const readResponse = async response => {
+        const text = await response.text();
+        let data;
+        try { data = JSON.parse(text); }
+        catch (_) { throw new Error('Your session or request could not be verified. Refresh the page and try again.'); }
+        if (!response.ok) {
+            const failure = new Error(data.detail || 'The request could not be completed.');
+            failure.retryWithNewQuote = data.retry_with_new_quote === true;
+            throw failure;
+        }
+        return data;
+    };
+    const money = (value, currency) => `${currency} ${Number(value).toLocaleString('en-NG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    const date = (value, timezone) => new Intl.DateTimeFormat('en-NG', {
+        dateStyle: 'medium', timeStyle: 'medium', timeZone: timezone || 'Africa/Lagos'
+    }).format(new Date(value));
+    ['subscription-id', 'period-count', 'provider', 'payment-method-id'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', invalidateQuote);
+    });
+    previewButton.addEventListener('click', async () => {
+        if (paymentPending) return;
+        invalidateQuote();
+        const sequence = previewSequence;
+        const reviewedInputs = payload();
+        error.classList.add('hidden');
+        previewButton.disabled = true;
         try {
-        const body = {...payload(), preview_fingerprint: quote.preview_fingerprint, provider: document.getElementById('provider').value, idempotency_key: idempotencyKey};
+            const data = await readResponse(await fetch('/portal/billing/service-periods/preview', {
+                method: 'POST', headers: headers(), body: JSON.stringify(reviewedInputs)
+            }));
+            if (sequence !== previewSequence) return;
+            const storageKey = `dotmac-period-purchase:${reviewedInputs.subscription_id}:${data.preview_fingerprint}`;
+            try {
+                idempotencyKey = sessionStorage.getItem(storageKey) || crypto.randomUUID();
+                sessionStorage.setItem(storageKey, idempotencyKey);
+            } catch (_) { idempotencyKey = crypto.randomUUID(); }
+            quote = data;
+            document.getElementById('preview-subtotal').textContent = money(data.subtotal, data.currency);
+            document.getElementById('preview-tax').textContent = money(data.tax_total, data.currency);
+            document.getElementById('preview-total').textContent = money(data.total, data.currency);
+            document.getElementById('preview-coverage').textContent = `Coverage: ${date(data.coverage_starts_at, data.timezone)} to ${date(data.coverage_ends_at, data.timezone)} (${data.timezone}).`;
+            document.getElementById('preview-expiry').textContent = `Quote expires ${date(data.expires_at, data.timezone)}.`;
+            const periods = document.getElementById('preview-periods');
+            periods.replaceChildren();
+            data.periods.forEach(period => {
+                const row = document.createElement('div');
+                row.className = 'rounded-lg bg-white/70 p-3 dark:bg-stone-900/50';
+                row.textContent = `Period ${period.ordinal}: ${date(period.starts_at, data.timezone)} to ${date(period.ends_at, data.timezone)} — VAT ${money(period.tax_total, data.currency)}; total ${money(period.total, data.currency)}`;
+                periods.appendChild(row);
+            });
+            payButton.disabled = false;
+            document.getElementById('period-preview').classList.remove('hidden');
+        } catch (failure) {
+            if (sequence === previewSequence) showError(failure.message);
+        } finally {
+            previewButton.disabled = false;
+        }
+    });
+    payButton.addEventListener('click', async () => {
+        if (!quote || paymentPending) return;
+        if (attemptedKey !== idempotencyKey && new Date(quote.expires_at).getTime() <= Date.now()) {
+            invalidateQuote();
+            return showError('This quote expired. Review the amount again before paying.');
+        }
+        attemptedKey = idempotencyKey;
+        paymentPending = true;
+        payButton.disabled = true;
+        previewButton.disabled = true;
+        const body = {...payload(), preview_fingerprint: quote.preview_fingerprint,
+            provider: document.getElementById('provider').value, idempotency_key: idempotencyKey};
         const method = document.getElementById('payment-method-id');
         if (method && method.value) body.payment_method_id = method.value;
-        const response = await fetch('/portal/billing/service-periods/intent', {
-            method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey}, body: JSON.stringify(body)
-        });
-        const data = await response.json();
-        if (!response.ok) {
-            if (data.retry_with_new_quote) {
-                try { sessionStorage.removeItem(`dotmac-period-purchase:${body.subscription_id}:${body.preview_fingerprint}`); } catch (error) {}
+        try {
+            const data = await readResponse(await fetch('/portal/billing/service-periods/intent', {
+                method: 'POST', headers: {...headers(), 'Idempotency-Key': idempotencyKey}, body: JSON.stringify(body)
+            }));
+            if (data.charged || data.verification_required) window.location.href = `/portal/billing/service-periods/verify?reference=${encodeURIComponent(data.reference)}&provider=${encodeURIComponent(data.provider_type)}`;
+            else if (data.checkout_url) window.location.href = data.checkout_url;
+            else showError('Payment provider did not return a checkout link. Retry to check the existing payment.');
+        } catch (failure) {
+            if (failure.retryWithNewQuote) {
+                try { sessionStorage.removeItem(`dotmac-period-purchase:${body.subscription_id}:${body.preview_fingerprint}`); } catch (_) {}
+                invalidateQuote();
                 idempotencyKey = null;
-                quote = null;
-                document.getElementById('period-preview').classList.add('hidden');
+                attemptedKey = null;
             }
-            return showError(data.detail || 'Unable to start payment.');
-        }
-        if (data.charged || data.verification_required) window.location.href = `/portal/billing/service-periods/verify?reference=${encodeURIComponent(data.reference)}&provider=${encodeURIComponent(data.provider_type)}`;
-        else if (data.checkout_url) window.location.href = data.checkout_url;
-        else showError('Payment provider did not return a checkout link.');
-        } catch (error) {
-            showError('Unable to confirm checkout. Retry to check the existing payment.');
+            showError(failure.message ? `${failure.message} Retry checks the existing payment; do not start another charge.` : 'Unable to confirm checkout. Retry to check the existing payment.');
         } finally {
             paymentPending = false;
-            payButton.disabled = false;
+            payButton.disabled = !quote;
+            previewButton.disabled = false;
         }
     });
 })();

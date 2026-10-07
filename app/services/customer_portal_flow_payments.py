@@ -101,6 +101,7 @@ from app.services.topup_intents import (
     project_topup_intent_lifecycle,
     stage_topup_intent_completion,
 )
+from app.timezone import APP_TIMEZONE_NAME as purchases_timezone_name
 
 logger = logging.getLogger(__name__)
 _ONLINE_PROVIDER_LABELS = {
@@ -1866,6 +1867,7 @@ def preview_service_period_purchase(
         "total": quote.total,
         "preview_fingerprint": quote.fingerprint,
         "expires_at": quote.expires_at,
+        "timezone": purchases_timezone_name,
         "periods": [
             {
                 "ordinal": row.ordinal,

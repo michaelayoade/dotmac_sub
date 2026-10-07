@@ -550,6 +550,9 @@ class EventType(enum.Enum):
     outage_rerooted = "outage.rerooted"
     outage_discarded = "outage.discarded"
     outage_resolved = "outage.resolved"
+    outage_compensation_proposed = "outage_compensation.proposed"
+    outage_compensation_approved = "outage_compensation.approved"
+    time_credit_attested = "time_credit.attested"
 
     # Planned maintenance lifecycle outputs (docs/designs/OUTAGE_SLA_SPINE.md
     # §5). Staged atomically with each window transition by

@@ -2276,9 +2276,18 @@ def customer_service_period_purchase_intent(
                 "detail": message,
                 "retry_with_new_quote": (
                     isinstance(exc, DomainError)
-                    and exc.code
-                    == "financial.prepaid_period_purchases.purchase_expired"
-                    and exc.details.get("checkout_started") is False
+                    and (
+                        (
+                            exc.code
+                            == "financial.prepaid_period_purchases.purchase_expired"
+                            and exc.details.get("checkout_started") is False
+                        )
+                        or (
+                            exc.code
+                            == "financial.prepaid_period_purchases.purchase_closed_unpaid"
+                            and exc.details.get("safe_new_checkout") is True
+                        )
+                    )
                 ),
             },
             status_code=400,

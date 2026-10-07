@@ -51,6 +51,12 @@
 
     {% include "customer/billing/_location_capture_prompt.html" %}
 
+    {% if held_purchase_credit is defined and held_purchase_credit > 0 %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-900 dark:bg-amber-950">
+        <strong>Payment held for service review: {{ currency_label }} {{ "{:,.2f}".format(held_purchase_credit) }}</strong>
+        <p>This recorded payment is reserved for your service-period purchase and is separate from available account credit. Contact billing with your payment reference; do not pay again.</p>
+    </div>
+    {% endif %}
     <!-- Stats Cards - Visual hierarchy with escalating urgency -->
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 stagger-children">
         <div class="group relative overflow-hidden rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-6 shadow-premium card-hover dark:border-emerald-900/50 dark:from-emerald-900/20 dark:to-stone-800">

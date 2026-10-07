@@ -37,6 +37,7 @@ class PrepaidPeriodPurchaseStatus(enum.Enum):
 
 class OutageCompensationDecisionStatus(enum.Enum):
     compensated = "compensated"
+    awaiting_approval = "awaiting_approval"
     below_threshold = "below_threshold"
     excluded = "excluded"
     no_funded_overlap = "no_funded_overlap"
@@ -245,6 +246,11 @@ class OutageCompensationDecision(Base):
         UUID(as_uuid=True),
         ForeignKey("outage_compensation_decisions.id", ondelete="RESTRICT"),
     )
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("system_users.id", ondelete="RESTRICT")
+    )
+    approval_reason: Mapped[str | None] = mapped_column(String(1000))
+    approved_fingerprint: Mapped[str | None] = mapped_column(String(64))
     entitlement_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("service_entitlements.id", ondelete="RESTRICT")
     )
@@ -304,3 +310,45 @@ class OutageCompensationDecisionInterval(Base):
     )
 
     decision = relationship("OutageCompensationDecision", back_populates="intervals")
+
+
+class CompensatedServiceTime(Base):
+    """Immutable original clock ranges claimed atomically by a grant writer."""
+
+    __tablename__ = "compensated_service_times"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_kind",
+            "source_id",
+            "ordinal",
+            name="uq_compensated_service_time_source",
+        ),
+        CheckConstraint(
+            "ends_at > starts_at", name="ck_compensated_service_time_positive"
+        ),
+        CheckConstraint("ordinal >= 0", name="ck_compensated_service_time_ordinal"),
+        CheckConstraint(
+            "source_kind IN ('pause', 'extension', 'outage')",
+            name="ck_compensated_service_time_source",
+        ),
+        Index(
+            "ix_compensated_service_time_subscription", "subscription_id", "starts_at"
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evidence_ref: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )

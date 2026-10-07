@@ -381,7 +381,7 @@ def test_delayed_confirmation_uses_provider_capture_time(
 def test_quote_timestamp_is_the_persisted_review_time(db_session, purchase_setup):
     purchase_id, quote_command, _ = purchase_setup
     purchase = db_session.get(PrepaidPeriodPurchase, purchase_id)
-    assert purchase.created_at.astimezone(UTC) == quote_command.effective_at
+    assert purchases._utc(purchase.created_at) == quote_command.effective_at
     current = purchases.preview_prepaid_period_purchase(
         db_session,
         account_id=purchase.account_id,
@@ -448,15 +448,19 @@ def test_held_receipt_recovery_is_preview_bound_and_replayable(
     monkeypatch.setattr(purchases, "settle_prepaid_period_purchase", settlement)
     preview = purchases.preview_purchase_recovery(db_session, purchase_id)
     assert preview.action is purchases.PurchaseRecoveryAction.retry_settlement
+    from tests.period_purchase_review_helpers import create_review_staff
+
+    principal = create_review_staff(db_session)
+    db_session.commit()
     retry = purchases.RetryPurchaseSettlementCommand(
         purchase_id=purchase_id,
         expected_fingerprint=preview.fingerprint,
         effective_at=datetime.now(UTC),
         permission_granted=True,
-        actor_system_user_id=uuid4(),
+        actor_system_user_id=principal.id,
     )
     context = CommandContext.system(
-        actor="pytest:operator",
+        actor=f"staff:{principal.id}",
         scope=purchases.PURCHASE_REPAIR_SCOPE,
         reason="Retry held settlement after correcting participant",
         idempotency_key=str(uuid4()),

@@ -80,11 +80,20 @@ SERVICES: tuple[SOTService, ...] = (
                 ConcernContract(
                     name="confirmed purchase payment recovery state",
                     role=OwnerRole.COMMAND_WRITER,
-                    input_names=("confirmed reserved payment recovery facts",),
+                    input_names=(
+                        "confirmed reserved payment recovery facts",
+                        "verified terminal intent facts",
+                    ),
                     canonical_writer="financial.purchase_payment_recovery_state",
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="verified terminal intent facts",
+                    owner="financial.topup_intents",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Provider-confirmed failed/abandoned intent, receipt absence and no completed service; unknown, expired and not-found outcomes do not release holds.",
+                ),
                 AuthorityInput(
                     name="confirmed reserved payment recovery facts",
                     owner="financial.payments",
@@ -131,18 +140,84 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="financial.compensated_service_time",
+        module="app.services.compensated_service_time",
+        owns=("compensated service clock claims", "compensated service clock history"),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="compensated service clock claims",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=("exact original clock evidence",),
+                    canonical_writer="financial.compensated_service_time",
+                ),
+                ConcernContract(
+                    name="compensated service clock history",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "persisted credit claims and historical source facts",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="exact original clock evidence",
+                    owner="external:typed_grant_owner",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Typed validated source identity, original ranges and provenance supplied by the account-locked grant writer.",
+                ),
+                AuthorityInput(
+                    name="persisted credit claims and historical source facts",
+                    owner="financial.compensated_service_time",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Append-only clock claims, exact pause episode/grant pairs, existing outage snapshots and unresolved legacy extension mappings; reads facts without calling producer coordinators.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary="Flush-only participant in the grant or reviewed-attestation owner's transaction.",
+                locking="The caller holds the canonical account lock before resolving and claiming ranges.",
+                idempotency="Unique source kind, identity and ordinal replay the exact original ranges.",
+                retries="Retry the enclosing owner transaction; ambiguous history requires reviewed attestation.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.compensated_service_time.evidence_invalid",
+                    "financial.compensated_service_time.idempotency_conflict",
+                ),
+                mapping_owner="grant writer adapters",
+                fail_closed_on=("changed or ambiguous compensated clock evidence",),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.compensated_service_time",
+                verification="Cross-mechanism compensation and PostgreSQL rollback/concurrency proofs.",
+                cutover_gate="All applicable grant writers stage claims with their grants; overlapping uncertain legacy sources require review.",
+                fallback_retirement="No automatic inference of original compensated clocks from future grant dates or rounded legacy days.",
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/designs/PREPAID_PERIOD_PURCHASE_AND_OUTAGE_COMPENSATION.md",
+            ),
+            test_refs=("tests/test_period_purchase_completion.py",),
+        ),
+    ),
+    SOTService(
         name="financial.outage_compensation",
         module="app.services.outage_compensation",
         owns=(
             "finalized outage service-period compensation",
             "reviewed outage compensation recovery",
             "outage compensation funding retraction",
+            "reviewed outage grant approval",
+            "reviewed legacy time credit attestation",
         ),
         depends_on=(
             "access.subscription_lifecycle",
             "control.settings_spec",
             "events.owner_outputs",
             "financial.prepaid_service_renewals",
+            "financial.compensated_service_time",
             "network.customer_outage_accrual",
             "service_intent.subscription_lifecycle",
             "auth.permission_gate",
@@ -152,7 +227,7 @@ SERVICES: tuple[SOTService, ...] = (
             "Consumes each finalized customer-outage interval exactly once, "
             "measures eligible downtime in exact seconds, caps compensation to "
             "funded entitlement overlap, and appends the result after the "
-            "current funded tail without changing subscription lifecycle state."
+            "current funded tail only after staff approval; event consumption records proposals without posting service."
         ),
         contract=ServiceContract(
             concerns=(
@@ -188,8 +263,34 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     canonical_writer="financial.outage_compensation",
                 ),
+                ConcernContract(
+                    name="reviewed outage grant approval",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "finalized customer outage intervals",
+                        "funded prepaid coverage intervals",
+                        "prior compensation and funding reversal evidence",
+                        "staff approval permission",
+                    ),
+                    canonical_writer="financial.outage_compensation",
+                ),
+                ConcernContract(
+                    name="reviewed legacy time credit attestation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "prior compensation and funding reversal evidence",
+                        "staff repair permission",
+                    ),
+                    canonical_writer="financial.outage_compensation",
+                ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="staff approval permission",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Active system-user principal, dedicated billing:outage_compensation:approve permission, separate human maker/approver, reason and reviewed fingerprint.",
+                ),
                 AuthorityInput(
                     name="prior compensation and funding reversal evidence",
                     owner="financial.outage_compensation",
@@ -249,7 +350,7 @@ SERVICES: tuple[SOTService, ...] = (
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
                     "The owner locks the subscriber account and writes one "
-                    "decision, its consumed interval links, its zero-value exact "
+                    "proposal and interval links; only a named Finance approval may write its zero-value exact "
                     "entitlement, and the billing-anchor projection atomically."
                 ),
                 locking=(
@@ -271,6 +372,9 @@ SERVICES: tuple[SOTService, ...] = (
             errors=ErrorContract(
                 domain_codes=(
                     "financial.outage_compensation.configuration_invalid",
+                    "financial.outage_compensation.approval_permission_required",
+                    "financial.outage_compensation.self_approval_forbidden",
+                    "financial.outage_compensation.legacy_credit_invalid",
                     "financial.outage_compensation.feature_disabled",
                     "financial.outage_compensation.idempotency_conflict",
                     "financial.outage_compensation.idempotency_required",
@@ -294,7 +398,13 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             events=EventContract(
-                event_types=("outage.discarded", "outage.resolved"),
+                event_types=(
+                    "outage.discarded",
+                    "outage.resolved",
+                    "outage_compensation.proposed",
+                    "outage_compensation.approved",
+                    "time_credit.attested",
+                ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
@@ -785,6 +895,7 @@ SERVICES: tuple[SOTService, ...] = (
         depends_on=(
             "access.subscription_lifecycle",
             "auth.permission_gate",
+            "financial.compensated_service_time",
             "control.settings_spec",
             "customer.accounts",
             "events.dispatcher",
@@ -1014,6 +1125,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.service_extensions.reversal_evidence_incomplete",
                     "financial.service_extensions.reversal_reason_too_long",
                     "financial.service_extensions.self_approval_forbidden",
+                    "financial.service_extensions.time_credit_conflict",
                     "financial.service_extensions.stale_reversal_preview",
                     "financial.service_extensions.transition_conflict",
                     "financial.service_extensions.write_conflict",
@@ -4556,6 +4668,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.prepaid_period_purchases.price_changed",
                     "financial.prepaid_period_purchases.provider_evidence_mismatch",
                     "financial.prepaid_period_purchases.purchase_expired",
+                    "financial.prepaid_period_purchases.purchase_closed_unpaid",
                     "financial.prepaid_period_purchases.purchase_incomplete",
                     "financial.prepaid_period_purchases.purchase_ineligible",
                     "financial.prepaid_period_purchases.purchase_noncontiguous",

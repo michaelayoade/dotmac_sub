@@ -308,7 +308,11 @@ def get_billing_page(
     )
     billing_activity = _build_billing_activity(db, account_id_str)
 
+    from app.services.billing._common import get_reserved_purchase_credit_balance
+
+    held_purchase_credit = get_reserved_purchase_credit_balance(db, account_id_str)
     return {
+        "held_purchase_credit": held_purchase_credit,
         "invoices": invoices,
         "status": status,
         "page": page,

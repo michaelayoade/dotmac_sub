@@ -87,6 +87,56 @@ DOMAIN = DomainSOT(
     setting_domains=("subscriber",),
     services=(
         SOTService(
+            name="customer.period_purchase_finance_review",
+            module="app.services.web_billing_period_reviews",
+            owns=("period purchase Finance review projection",),
+            depends_on=(
+                "financial.prepaid_period_purchases",
+                "financial.outage_compensation",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="period purchase Finance review projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("purchase and outage review facts",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="purchase and outage review facts",
+                        owner="financial.prepaid_period_purchases",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed purchase recovery previews, held receipts and outage approval previews from their financial owners.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Read-only bounded Finance projection.",
+                    locking="Commands revalidate under their account locks.",
+                    idempotency="Same owner facts project the same actions.",
+                    retries="Refresh after every command or stale preview.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="Finance route adapters",
+                    fail_closed_on=("incomplete owner evidence",),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.period_purchase_finance_review",
+                    verification="Typed Finance projection and permission tests.",
+                    cutover_gate="Finance views call owner queries only.",
+                    fallback_retirement="Templates and routes do not decide payment or grant eligibility.",
+                ),
+                steward="billing and finance operations",
+                design_refs=(
+                    "docs/designs/PREPAID_PERIOD_PURCHASE_AND_OUTAGE_COMPENSATION.md",
+                ),
+                test_refs=("tests/test_period_purchase_completion.py",),
+            ),
+        ),
+        SOTService(
             name="customer.avatar",
             module="app.services.avatar",
             owns=("subscriber avatar selection and durable metadata",),
