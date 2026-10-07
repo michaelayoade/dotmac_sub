@@ -205,6 +205,8 @@ class NetworkMapFeatureProperties:
     address: str | None = None
     subscriber_id: UUID | None = None
     customer_status: SubscriberStatus | None = None
+    customer_region_name: str | None = None
+    customer_region_color: str | None = None
     customer_route_kind: NetworkMapCustomerRouteKind | None = None
     connectivity: NetworkMapCustomerConnectivity | None = None
     customer_detail_link: NetworkMapLink | None = None
@@ -277,6 +279,9 @@ class NetworkMapFeatureProperties:
                 else None
             ),
         }
+        if self.feature_type is NetworkMapFeatureType.customer:
+            values["region_name"] = self.customer_region_name
+            values["region_color"] = self.customer_region_color
         return {key: value for key, value in values.items() if value is not None}
 
 

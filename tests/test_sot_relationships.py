@@ -624,6 +624,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.identity",
         "network.ip_assignment_lifecycle",
         "support.ticket_lifecycle",
+        "gis.customer_regions",
     )
     account_visibility = sot_relationships.owning_service_for(
         "legacy imported Subscriber deletion classification"

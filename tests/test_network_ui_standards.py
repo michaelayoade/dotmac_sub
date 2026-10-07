@@ -304,7 +304,10 @@ def test_network_map_layers_are_opt_in_on_initial_load() -> None:
 def test_network_map_filters_bypass_none_only_for_selected_results() -> None:
     source = (TEMPLATES / "admin/network/map.html").read_text(encoding="utf-8")
 
-    assert "let layersSuppressed = true;" in source
+    assert (
+        "let layersSuppressed = Object.keys(layerToggles).every(id => "
+        "!document.getElementById(id).checked);"
+    ) in source
     assert "function layersRequiredByFilters()" in source
     assert "function applyLayerFilterBypass(requiredLayers)" in source
     assert "if (!enabled) applyMapFilters();" in source
