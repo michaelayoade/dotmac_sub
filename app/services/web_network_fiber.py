@@ -8,6 +8,7 @@ import logging
 import math
 from datetime import datetime
 from decimal import Decimal
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import case, func
@@ -306,7 +307,7 @@ def _customer_map_payload(
             snapshots_by_subscriber.setdefault(subscription.subscriber_id, []).append(
                 snapshot
             )
-            snapshot_nas = snapshot.nas_device_id
+            snapshot_nas = cast(UUID | None, snapshot.nas_device_id)
             if snapshot_nas is not None:
                 nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                     (
@@ -316,7 +317,7 @@ def _customer_map_payload(
                         snapshot_nas,
                     )
                 )
-        provisioning_nas = subscription.provisioning_nas_device_id
+        provisioning_nas = cast(UUID | None, subscription.provisioning_nas_device_id)
         if provisioning_nas is not None:
             nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                 (
@@ -390,9 +391,9 @@ def _customer_map_payload(
 
 def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
     """Return GeoJSON + stats + cost settings for fiber map page."""
-    features: list[dict] = []
+    features: list[dict[str, object]] = []
     customer_payload = _customer_map_payload(db)
-    features.extend(customer_payload["features"])
+    features.extend(cast(list[dict[str, object]], customer_payload["features"]))
 
     fdh_cabinets = (
         db.query(FdhCabinet)
@@ -732,20 +733,22 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
             snapshots_by_subscriber.setdefault(subscription.subscriber_id, []).append(
                 snapshot
             )
-            if snapshot.nas_device_id is not None:
+            snapshot_nas_id = cast(UUID | None, snapshot.nas_device_id)
+            if snapshot_nas_id is not None:
                 nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                     (
                         *nas_ids_by_subscriber.get(
                             subscription.subscriber_id, frozenset()
                         ),
-                        snapshot.nas_device_id,
+                        snapshot_nas_id,
                     )
                 )
-        if subscription.provisioning_nas_device_id is not None:
+        provisioning_nas_id = cast(UUID | None, subscription.provisioning_nas_device_id)
+        if provisioning_nas_id is not None:
             nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                 (
                     *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
-                    subscription.provisioning_nas_device_id,
+                    provisioning_nas_id,
                 )
             )
     connectivity_by_subscriber = {

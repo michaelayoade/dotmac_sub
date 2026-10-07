@@ -5,6 +5,7 @@ import logging
 import math
 from collections import Counter
 from collections.abc import Sequence
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import case, func
@@ -553,7 +554,7 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         subscriber_id: frozenset() for subscriber_id in mapped_subscriber_ids
     }
     for subscription in subscriptions:
-        nas_id = subscription.provisioning_nas_device_id
+        nas_id = cast(UUID | None, subscription.provisioning_nas_device_id)
         if nas_id is not None:
             nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                 (
@@ -562,18 +563,23 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
                 )
             )
         snapshot = snapshot_by_subscription.get(subscription.id)
-        if snapshot is not None and snapshot.nas_device_id is not None:
+        snapshot_nas_id = (
+            cast(UUID | None, snapshot.nas_device_id) if snapshot is not None else None
+        )
+        if snapshot_nas_id is not None:
             nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                 (
                     *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
-                    snapshot.nas_device_id,
+                    snapshot_nas_id,
                 )
             )
-    pop_site_by_subscriber = dict(
+    pop_site_rows = cast(
+        list[tuple[UUID, UUID | None]],
         db.query(Subscriber.id, Subscriber.pop_site_id)
         .filter(Subscriber.id.in_(mapped_subscriber_ids))
-        .all()
+        .all(),
     )
+    pop_site_by_subscriber: dict[UUID, UUID | None] = dict(pop_site_rows)
     configured_regions = customer_regions.list_regions(db, include_inactive=False)
     connectivity_by_subscriber = {
         subscriber_id: resolve_customer_connectivity(snapshots)
