@@ -82,18 +82,18 @@ def _record_permanent_handler_failure(
 def _isolated_handler_session(db: Session | Any) -> Iterator[Session | Any]:
     """Contain each handler's transaction without hiding parent writes.
 
-    Production sessions bound to an Engine receive an independent root session.
-    Test and explicit integration sessions bound to an externally managed
-    Connection retain that connection through a savepoint-backed child session,
-    preserving fixture visibility without completing the outer transaction.
+    Handlers share the dispatcher's checked-out connection through a
+    savepoint-backed child session. This preserves visibility of the claimed
+    event row without opening a second transaction that can block on locks held
+    by the dispatcher itself. A handler commit or rollback completes only its
+    savepoint, never the parent event transaction.
     """
     if not isinstance(db, Session):
         yield db
         return
 
-    bind = db.get_bind()
     handler_db = Session(
-        bind=bind,
+        bind=db.connection(),
         autoflush=False,
         autocommit=False,
         join_transaction_mode="create_savepoint",
