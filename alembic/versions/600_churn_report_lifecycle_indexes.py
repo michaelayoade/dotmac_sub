@@ -12,7 +12,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "572_churn_report_lifecycle_indexes"
+revision: str = "600_churn_report_lifecycle_indexes"
 down_revision: str | None = "646_test_connection_finance_review"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

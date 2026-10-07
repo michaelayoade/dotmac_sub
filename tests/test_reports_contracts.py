@@ -28,6 +28,7 @@ def _make_subscriber(
     *,
     is_active: bool = True,
     updated_at: datetime | None = None,
+    created_at: datetime | None = None,
 ) -> Subscriber:
     from app.services.subscriber import _default_reseller_id
 
@@ -42,6 +43,7 @@ def _make_subscriber(
         status=status,
         is_active=is_active,
         updated_at=updated_at,
+        created_at=created_at,
         user_type=UserType.customer,
         reseller_id=_default_reseller_id(db_session),
     )
@@ -238,17 +240,20 @@ def test_churn_report_filters_event_type_and_calendar_window(db_session):
         AccountStatus.canceled,
         is_active=False,
         updated_at=datetime(2026, 6, 30, 12, tzinfo=UTC),
+        created_at=datetime(2026, 6, 1, 12, tzinfo=UTC),
     )
     suspended_in_range = _make_subscriber(
         db_session,
         AccountStatus.suspended,
         updated_at=datetime(2026, 7, 15, 12, tzinfo=UTC),
+        created_at=datetime(2026, 6, 1, 12, tzinfo=UTC),
     )
     _make_subscriber(
         db_session,
         AccountStatus.canceled,
         is_active=False,
         updated_at=datetime(2026, 9, 1, 12, tzinfo=UTC),
+        created_at=datetime(2026, 6, 1, 12, tzinfo=UTC),
     )
 
     filtered = web_reports.get_churn_report_data(

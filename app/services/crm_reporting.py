@@ -1092,7 +1092,6 @@ def subscription_churn_reason_counts(
         )
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
         .where(
-            subscriber_service.visible_subscriber_clause(),
             (
                 (Subscription.status == SubscriptionStatus.canceled)
                 | (Subscription.canceled_at.is_not(None))
