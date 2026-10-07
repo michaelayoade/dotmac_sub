@@ -392,6 +392,7 @@ SERVICES: tuple[SOTService, ...] = (
             "customer.financial_position",
             "access.subscription_lifecycle",
             "access.walled_garden_policy",
+            "access.test_connection",
         ),
         notes=(
             "One read-only policy owner resolves customer-impact, billing, "
@@ -416,6 +417,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical subscriber account state",
                         "canonical subscription lifecycle state",
                         "canonical access restriction intent",
+                        "bounded test access",
                     ),
                 ),
                 ConcernContract(
@@ -440,6 +442,12 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="bounded test access",
+                    owner="access.test_connection",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Typed, clock-valid subscription grant; affects RADIUS only, never commercial eligibility",
+                ),
                 AuthorityInput(
                     name="canonical subscriber account state",
                     owner="customer.accounts",

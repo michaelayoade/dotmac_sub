@@ -439,11 +439,22 @@ def _sync_billing_health_snapshot_schedule(session) -> None:
     )
 
 
+def _sync_automation_scheduled_rules_schedule(session) -> None:
+    _sync_scheduled_task(
+        session,
+        name="automation_scheduled_rule_runner",
+        task_name="app.tasks.automation.run_scheduled_automation_rules",
+        enabled=True,
+        interval_seconds=60,
+    )
+
+
 def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
     session = SessionLocal()
     try:
         _sync_billing_health_snapshot_schedule(session)
+        _sync_automation_scheduled_rules_schedule(session)
         enabled = control_registry.is_enabled(session, "gis.sync")
         interval_minutes = resolve_integer(
             session, SettingDomain.gis, "sync_interval_minutes"
@@ -1242,13 +1253,9 @@ def build_beat_schedule() -> dict:
             ),
             interval_seconds=max(queue_notification_scan_interval, 10),
         )
-        _sync_scheduled_task(
-            session,
-            name="team_inbox_reply_reminders",
-            task_name="app.tasks.team_inbox.send_reply_reminders",
-            enabled=True,
-            interval_seconds=60,
-        )
+        # Reply reminders are retired; disable any existing database rows so
+        # an upgrade cannot leave the old email task running.
+        _retire_scheduled_task(session, "app.tasks.team_inbox.send_reply_reminders")
         _sync_scheduled_task(
             session,
             name="team_inbox_ai_intake_recovery",

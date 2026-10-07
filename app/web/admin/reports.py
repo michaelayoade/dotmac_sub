@@ -2721,12 +2721,26 @@ def _ncc_window_form_dates(start: datetime, end: datetime) -> tuple[str, str]:
     return local_start.isoformat(), local_end.isoformat()
 
 
-def _parse_ncc_date_start(value: str | None) -> datetime | None:
+def _parse_ncc_report_date(value: str | None) -> date | None:
     if not value:
         return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    for date_format in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(cleaned, date_format).date()
+        except (ValueError, TypeError):
+            continue
     try:
-        parsed_date = datetime.fromisoformat(value).date()
+        return datetime.fromisoformat(cleaned).date()
     except (ValueError, TypeError):
+        return None
+
+
+def _parse_ncc_date_start(value: str | None) -> datetime | None:
+    parsed_date = _parse_ncc_report_date(value)
+    if parsed_date is None:
         return None
     return datetime.combine(
         parsed_date,
@@ -2736,11 +2750,8 @@ def _parse_ncc_date_start(value: str | None) -> datetime | None:
 
 
 def _parse_ncc_date_end(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed_date = datetime.fromisoformat(value).date()
-    except (ValueError, TypeError):
+    parsed_date = _parse_ncc_report_date(value)
+    if parsed_date is None:
         return None
     return datetime.combine(
         parsed_date,
@@ -2776,7 +2787,7 @@ def reports_ncc_complaints(
     date_from: str | None = None,
     date_to: str | None = None,
     page: int = Query(default=1, ge=1),
-    per_page: Literal[20, 50, 100] = Query(default=20),
+    per_page: int = Query(default=20, ge=1),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2788,13 +2799,16 @@ def reports_ncc_complaints(
         query=ncc_complaints_service.NccComplaintsReportQuery(start=start, end=end),
     )
     report = snapshot.as_legacy_dict()
-    requested_list_query = (
-        ncc_complaints_service.NCC_COMPLAINTS_LIST_DEFINITION.build_query(
-            search=None,
-            filters={"date_from": date_from, "date_to": date_to},
-            page=page,
-            per_page=per_page,
-        )
+    requested_list_query = ncc_complaints_service.NCC_COMPLAINTS_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"date_from": effective_date_from, "date_to": effective_date_to},
+        page=page,
+        per_page=(
+            per_page
+            if per_page
+            in ncc_complaints_service.NCC_COMPLAINTS_LIST_DEFINITION.per_page_options
+            else ncc_complaints_service.NCC_COMPLAINTS_LIST_DEFINITION.default_per_page
+        ),
     )
     table_page = ncc_complaints_service.paginate_report(
         snapshot,
@@ -2803,7 +2817,7 @@ def reports_ncc_complaints(
     # Surface, per row, whether it is filable — the workbook's own validator
     # is the authority, so the officer sees exactly what CRM's export would.
     rows = []
-    for record in ncc_workbook.export_rows(
+    for record in ncc_workbook.template_export_rows(
         [item.as_mapping() for item in table_page.records]
     ):
         status = ncc_workbook.validation_status(record)
@@ -2812,7 +2826,7 @@ def reports_ncc_complaints(
         )
     not_filable = sum(
         1
-        for record in ncc_workbook.export_rows(report["records"])
+        for record in ncc_workbook.template_export_rows(report["records"])
         if not ncc_workbook.validation_status(record).startswith("[OK]")
     )
     weekly_configuration = ncc_weekly_delivery_service.get_configuration(db=db)
@@ -2830,8 +2844,8 @@ def reports_ncc_complaints(
         "columns": report["columns"],
         "rows": rows,
         "not_filable": not_filable,
-        "date_from": date_from or effective_date_from,
-        "date_to": date_to or effective_date_to,
+        "date_from": effective_date_from,
+        "date_to": effective_date_to,
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "weekly_configuration": weekly_configuration,
         "weekly_runs": weekly_runs,

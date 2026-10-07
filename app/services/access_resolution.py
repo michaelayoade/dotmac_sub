@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
@@ -28,6 +28,7 @@ from app.services.prepaid_currency import (
 )
 from app.services.radius_access_state import derive_access_state
 from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
+from app.services.test_connection_policy import TestConnectionAccess
 
 ACTIVE_CUSTOMER_SUBSCRIBER_STATUSES = frozenset({SubscriberStatus.active})
 RADIUS_PERMISSIVE_SUBSCRIBER_STATUSES = frozenset(
@@ -316,6 +317,8 @@ def resolve_customer_access(
     *,
     subscriber: SubscriberAccessInput | None = None,
     access_restriction_mode: AccessRestrictionMode | None = None,
+    test_access: TestConnectionAccess | None = None,
+    evaluated_at: datetime | None = None,
 ) -> CustomerAccessDecision:
     """Resolve one subscription's customer-facing billing and access state."""
     account = subscriber if subscriber is not None else subscription.subscriber
@@ -372,6 +375,14 @@ def resolve_customer_access(
     )
     if account_hard_reject and radius_state == AccessState.active:
         radius_state = AccessState.suspended
+    if (
+        test_access is not None
+        and test_access.subscription_id == subscription.id
+        and test_access.valid_at(evaluated_at or datetime.now(UTC))
+    ):
+        # Only network eligibility changes. Commercial/funding/billable fields
+        # above continue to describe the normal financial state.
+        radius_state = AccessState.active
     radius_blocked = radius_state in {AccessState.suspended, AccessState.captive}
     radius_allowed = radius_state in {AccessState.active, AccessState.captive}
 
@@ -394,7 +405,9 @@ def resolve_customer_access(
         radius_allowed=radius_allowed,
         radius_blocked=radius_blocked,
         radius_mode=_radius_mode(radius_state),
-        access_block_reason=_access_block_reason(
+        access_block_reason=None
+        if radius_state is AccessState.active
+        else _access_block_reason(
             subscription_status=subscription_status,
             subscriber_status=subscriber_status,
             account_enabled=account_enabled,

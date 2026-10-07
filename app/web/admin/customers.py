@@ -92,6 +92,9 @@ register_customer_portal_filters(templates)
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
 
 _NOTIFICATION_QUEUE_TASK = "app.tasks.notifications.deliver_notification_queue"
+_BULK_MESSAGE_MATERIALIZE_TASK = (
+    "app.tasks.notifications.materialize_customer_bulk_message"
+)
 
 
 def _reseller_form_context(
@@ -241,11 +244,123 @@ def _subscription_action_permission_context(
         ),
         "can_activate_subscriptions": can_write_catalog
         or (bool(auth) and has_permission(auth, db, "subscription:activate")),
+        "can_test_connection": bool(auth)
+        and auth.get("principal_type") == "system_user"
+        and has_permission(auth, db, "subscription:test_connection"),
         "can_suspend_subscriptions": can_write_catalog
         or (bool(auth) and has_permission(auth, db, "subscription:suspend")),
         "can_reconcile_service_changes": bool(auth)
         and has_permission(auth, db, "provisioning:service_change_reconcile"),
     }
+
+
+@router.get(
+    "/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:test_connection"))],
+)
+def customer_test_connection_form(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: UUID,
+    subscription_id: UUID,
+    db: Session = Depends(get_db),
+):
+    from app.services.test_connection import (
+        TEST_CONNECTION_FORM,
+        TestConnectionPreviewQuery,
+        preview_test_connection,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    try:
+        preview = preview_test_connection(
+            db,
+            query=TestConnectionPreviewQuery(
+                subscriber_id=customer_id,
+                subscription_id=subscription_id,
+            ),
+        )
+    except DomainError as exc:
+        raise HTTPException(
+            status_code=404 if exc.code.endswith("subscription_not_found") else 400,
+            detail=exc.message,
+        ) from exc
+    return templates.TemplateResponse(
+        "admin/customers/test_connection.html",
+        {
+            "request": request,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "customers",
+            "active_menu": "customers",
+            "preview": preview,
+            "form_state": TEST_CONNECTION_FORM.state(list(preview.prerequisites)),
+            "command_id": str(uuid4()),
+            "customer_url": f"/admin/customers/{customer_type}/{customer_id}",
+        },
+    )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:test_connection"))],
+)
+def customer_test_connection_activate(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: UUID,
+    subscription_id: UUID,
+    command_id: UUID = Form(...),
+):
+    from app.services.test_connection import (
+        PERMISSION,
+        ActivateTestConnectionCommand,
+        activate_test_connection,
+    )
+
+    auth = getattr(request.state, "auth", {})
+    if auth.get("principal_type") != "system_user" or not auth.get("principal_id"):
+        raise HTTPException(
+            status_code=403, detail="Test Connection requires an authorized staff user."
+        )
+    actor_id = UUID(str(auth["principal_id"]))
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=str(actor_id),
+        scope=PERMISSION,
+        reason="Customer subscription connectivity troubleshooting",
+        idempotency_key=f"test-connection:{command_id}",
+    )
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    try:
+        with db_session_adapter.owner_command_session() as db:
+            outcome = activate_test_connection(
+                db,
+                command=ActivateTestConnectionCommand(
+                    context=context,
+                    subscriber_id=customer_id,
+                    subscription_id=subscription_id,
+                    actor_id=actor_id,
+                ),
+            )
+    except DomainError as exc:
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Test Connection not activated",
+            message=exc.message,
+        )
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=True,
+        title="Test Connection requested",
+        message=f"{outcome.duration_seconds // 3600} hour(s) granted. Expires {outcome.expires_at.strftime('%d %b %Y %H:%M UTC')}. Check the subscription for delivery status.",
+    )
 
 
 def _workflow_changed_count(result: Mapping[str, Any]) -> int:
@@ -3293,12 +3408,44 @@ def bulk_send_customer_message(
 ):
     """Queue a bulk notification for selected or filtered customers."""
     try:
-        result = web_customer_actions_service.queue_bulk_message_from_payload(
-            db=db, payload=data
+        if bool(data.get("preview_only")):
+            return web_customer_actions_service.queue_bulk_message_from_payload(
+                db=db,
+                payload=data,
+            )
+
+        prepared = (
+            web_customer_actions_service.prepare_bulk_message_dispatch_from_payload(
+                db=db,
+                payload=data,
+            )
         )
-        if result.get("preview") is True:
-            return result
-        return _kick_notification_delivery(result)
+        dispatch = enqueue_task(
+            _BULK_MESSAGE_MATERIALIZE_TASK,
+            args=(prepared.payload_json,),
+            queue="celery",
+            correlation_id=str(data.get("expected_impact_token") or "") or None,
+            source="admin_customers_bulk_send",
+            actor_id=_get_actor_id(request),
+        )
+        if not dispatch.queued:
+            logger.error(
+                "Failed to enqueue customer bulk message materialization: %s",
+                dispatch.error,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The bulk message could not be queued for processing. "
+                    "Please try again."
+                ),
+            )
+        result = prepared.accepted_response()
+        result["materialization_dispatch"] = {
+            "queued": True,
+            "task_id": dispatch.task_id,
+        }
+        return JSONResponse(status_code=202, content=result)
     except HTTPException:
         raise
     except Exception as e:

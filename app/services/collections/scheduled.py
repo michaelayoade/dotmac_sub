@@ -538,9 +538,42 @@ def _sync_quarantine_work_items(
     )
 
 
+def _prepaid_work_item_counts(
+    session: Session, *, now: datetime | None = None
+) -> dict[str, float]:
+    """Count open prepaid finance work items and those past their SLA.
+
+    ``renewal_terms_unresolved`` reports only subscriptions currently due for
+    enforcement; these counts report the whole open work-item backlog (and its
+    overdue part) so dashboards and alerts can see both.
+    """
+    from app.services.observability import count_open_findings
+    from app.services.prepaid_renewal_terms_backfill import (
+        RENEWAL_TERMS_FINDING_PREFIX,
+    )
+
+    as_of = now or datetime.now(UTC)
+    prefixes = (_QUARANTINE_FINDING_PREFIX, RENEWAL_TERMS_FINDING_PREFIX)
+    return {
+        "coverage_quarantine_work_items_open": float(
+            count_open_findings(session, managed_prefix=_QUARANTINE_FINDING_PREFIX)
+        ),
+        "renewal_terms_work_items_open": float(
+            count_open_findings(session, managed_prefix=RENEWAL_TERMS_FINDING_PREFIX)
+        ),
+        "work_items_overdue": float(
+            sum(
+                count_open_findings(session, managed_prefix=prefix, overdue_at=as_of)
+                for prefix in prefixes
+            )
+        ),
+    }
+
+
 def _publish_prepaid_enforcement_snapshot(
     repair: PrepaidCoverageRepairOutcome,
     sweep: dict[str, int | str],
+    work_items: dict[str, float] | None = None,
 ) -> None:
     """Export bounded repair + enforcement counts for /metrics and alerting."""
     from app.services.observability import StateObservation, publish_state_snapshot
@@ -576,6 +609,8 @@ def _publish_prepaid_enforcement_snapshot(
         "warned": _count("warned"),
         "restored": _count("restored"),
     }
+    # Omitted (absent series, not a false zero) when the count query failed.
+    signals.update(work_items or {})
     if repair.status is PrepaidCoverageRepairStatus.error or signals["sweep_errors"]:
         status = "error"
     elif any(
@@ -656,7 +691,13 @@ def run_prepaid_balance_sweep() -> dict[str, int | str]:
             renewal_repair = _RENEWAL_TERMS_REPAIR_FAILED
         result = run_sweep(session, deadline=deadline)
         try:
-            _publish_prepaid_enforcement_snapshot(repair, result)
+            work_items: dict[str, float] | None = _prepaid_work_item_counts(session)
+        except Exception:
+            session.rollback()
+            logger.exception("prepaid_work_item_counts_failed")
+            work_items = None
+        try:
+            _publish_prepaid_enforcement_snapshot(repair, result, work_items)
         except Exception:
             logger.exception("prepaid_enforcement_snapshot_failed")
         result.update(repair.as_stats())

@@ -39,7 +39,6 @@ from app.models.subscriber import (
     SubscriberChannel,
     SubscriberStatus,
 )
-from app.schemas.notification import NotificationCreate
 from app.schemas.subscriber import (
     AddressCreate,
     AddressUpdate,
@@ -48,11 +47,11 @@ from app.schemas.subscriber import (
 )
 from app.services import (
     account_status_commands,
+    communication_intents,
     customer_portal,
 )
 from app.services import billing_day as billing_day_service
 from app.services import catalog as catalog_service
-from app.services import notification as notification_service
 from app.services import radius as radius_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_lists as web_customer_lists_service
@@ -1427,6 +1426,88 @@ _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT = 10
 _BULK_MESSAGE_RENDER_SAMPLE_LIMIT = 3
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedBulkMessageDispatch:
+    """Validated, drift-bound request ready for the task transport."""
+
+    payload_json: str
+    matched_count: int
+    created_count: int
+    queued_count: int
+    suppressed_count: int
+    skipped_count: int
+    suppressed: tuple[dict[str, str], ...]
+    skipped: tuple[dict[str, str], ...]
+
+    def accepted_response(self) -> dict[str, object]:
+        return {
+            "success": True,
+            "accepted": True,
+            "materialization_status": "queued",
+            "matched_count": self.matched_count,
+            "planned_count": self.created_count,
+            "planned_queued_count": self.queued_count,
+            "planned_suppressed_count": self.suppressed_count,
+            "skipped_count": self.skipped_count,
+            "suppressed": list(self.suppressed),
+            "skipped": list(self.skipped),
+        }
+
+
+def prepare_bulk_message_dispatch_from_payload(
+    db: Session,
+    payload: dict[str, Any],
+) -> PreparedBulkMessageDispatch:
+    """Validate a confirmed send without materializing deliveries in HTTP.
+
+    The worker re-runs the same authoritative resolution immediately before
+    writing. This first pass keeps confirmation and impact drift visible to
+    the operator while ensuring the reverse proxy never waits for thousands of
+    intent/notification inserts.
+    """
+
+    resolved = resolve_bulk_customer_scope(db, payload)
+    if not resolved.customers:
+        raise HTTPException(status_code=400, detail="No customers matched this scope")
+    _require_bulk_execution_confirmation(
+        payload,
+        resolved=resolved,
+        action_label="Bulk message",
+    )
+
+    preview_payload = dict(payload)
+    preview_payload["preview_only"] = True
+    preview = queue_bulk_message_from_payload(db, preview_payload)
+    expected_impact_token = str(payload.get("expected_impact_token") or "")
+    current_impact_token = str(preview.get("impact_token") or "")
+    if not expected_impact_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Preview the bulk message impact before confirming",
+        )
+    if not hmac.compare_digest(expected_impact_token, current_impact_token):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The recipients, template, or suppression impact changed after "
+                "preview. Review the updated impact before confirming again."
+            ),
+        )
+
+    task_payload = dict(payload)
+    task_payload.pop("preview_only", None)
+    return PreparedBulkMessageDispatch(
+        payload_json=json.dumps(task_payload, sort_keys=True, separators=(",", ":")),
+        matched_count=int(str(preview["matched_count"])),
+        created_count=int(str(preview["created_count"])),
+        queued_count=int(str(preview["queued_count"])),
+        suppressed_count=int(str(preview["suppressed_count"])),
+        skipped_count=int(str(preview["skipped_count"])),
+        suppressed=tuple(cast(list[dict[str, str]], preview["suppressed"])),
+        skipped=tuple(cast(list[dict[str, str]], preview["skipped"])),
+    )
+
+
 def _mask_notification_recipient(
     recipient: str,
     channel: NotificationChannel,
@@ -1850,26 +1931,35 @@ def queue_bulk_message_from_payload(
             payload_variables=payload_variables,
             required_variables=required_variables,
         )
-        notification = notification_service.notifications.queue_customer_notification(
+        intent_result = communication_intents.submit(
             db,
-            NotificationCreate(
-                template_id=template.id,
+            communication_intents.CommunicationIntent(
                 subscriber_id=subscriber.id,
-                channel=channel,
                 event_type="service_bulk_message",
                 category=category,
-                recipient=recipient,
+                template_id=template.id,
                 subject=subject if channel == NotificationChannel.email else None,
                 body=body,
-                status=(
+                channels=(channel,),
+                include_reseller=False,
+                recipients={channel: recipient},
+                requested_status=(
                     NotificationStatus.queued
                     if allowed
                     else NotificationStatus.canceled
                 ),
+                requested_last_error=condition_error or reason,
                 send_at=quiet_send_at if allowed else None,
-                last_error=condition_error or reason,
+                dedupe_key=f"admin-customer-bulk:{impact_token}:{subscriber.id}",
+                metadata={
+                    "source": "admin_customers_bulk_send",
+                    "bulk_impact_token": impact_token,
+                },
             ),
         )
+        notification = next(iter(intent_result.deliveries), None)
+        if notification is None:
+            raise RuntimeError("bulk communication intent produced no delivery")
         if notification.id:
             notification_ids.append(str(notification.id))
         if notification.status == NotificationStatus.queued:

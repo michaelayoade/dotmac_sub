@@ -48,7 +48,9 @@ _CAPTURE_COMMAND = OwnerCommandDefinition(
 )
 
 _POLICY_VERSION = "prepaid-renewal-terms-backfill-v2"
-_FINDING_PREFIX = "prepaid-renewal-terms:evidence:"
+#: Public so the prepaid enforcement snapshot can count these work items.
+RENEWAL_TERMS_FINDING_PREFIX = "prepaid-renewal-terms:evidence:"
+_FINDING_PREFIX = RENEWAL_TERMS_FINDING_PREFIX
 #: Finance review window recorded on each unresolved-evidence work item.
 _EVIDENCE_SLA_HOURS = 72
 

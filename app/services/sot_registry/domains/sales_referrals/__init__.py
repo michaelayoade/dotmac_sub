@@ -7,7 +7,9 @@ from app.services.automation_contracts import (
     AutomationActionInput,
     AutomationCatalogItem,
     AutomationCatalogState,
+    AutomationConditionField,
     AutomationDomainCapabilities,
+    AutomationOperator,
     AutomationScriptTargetCapability,
     AutomationTriggerCapability,
     AutomationValueType,
@@ -32,6 +34,78 @@ from app.services.sot_registry.domains.sales_referrals.referrals import (
     SERVICES as REFERRALS_SERVICES,
 )
 from app.services.sot_registry.model import DomainSOT
+
+_LEAD_STATUS_VALUES = (
+    "new",
+    "contacted",
+    "qualified",
+    "proposal",
+    "negotiation",
+    "won",
+    "lost",
+)
+_QUOTE_STATUS_VALUES = ("draft", "sent", "accepted", "rejected", "expired")
+_ORDER_STATUS_VALUES = ("draft", "confirmed", "paid", "fulfilled", "cancelled")
+_PAYMENT_REVIEW_VALUES = ("pending", "approved", "rejected")
+
+
+def _enum_field(
+    key: str,
+    label: str,
+    values: tuple[str, ...],
+) -> AutomationConditionField:
+    return AutomationConditionField(
+        key=key,
+        label=label,
+        value_type=AutomationValueType.enum,
+        operators=(
+            AutomationOperator.equals,
+            AutomationOperator.not_equals,
+            AutomationOperator.in_values,
+            AutomationOperator.not_in_values,
+        ),
+        enum_values=values,
+    )
+
+
+def _text_field(key: str, label: str) -> AutomationConditionField:
+    return AutomationConditionField(
+        key=key,
+        label=label,
+        value_type=AutomationValueType.string,
+        operators=(
+            AutomationOperator.equals,
+            AutomationOperator.not_equals,
+            AutomationOperator.contains,
+            AutomationOperator.is_empty,
+            AutomationOperator.is_not_empty,
+        ),
+    )
+
+
+def _uuid_field(key: str, label: str) -> AutomationConditionField:
+    return AutomationConditionField(
+        key=key,
+        label=label,
+        value_type=AutomationValueType.uuid,
+        operators=(AutomationOperator.equals, AutomationOperator.not_equals),
+    )
+
+
+def _decimal_field(key: str, label: str) -> AutomationConditionField:
+    return AutomationConditionField(
+        key=key,
+        label=label,
+        value_type=AutomationValueType.decimal,
+        operators=(
+            AutomationOperator.equals,
+            AutomationOperator.greater_than,
+            AutomationOperator.greater_than_or_equal,
+            AutomationOperator.less_than,
+            AutomationOperator.less_than_or_equal,
+        ),
+    )
+
 
 DOMAIN = DomainSOT(
     domain="sales_referrals",
@@ -81,7 +155,38 @@ DOMAIN = DomainSOT(
                 entity_type="sales.lead",
                 tenant_id_field="tenant_id",
                 entity_id_field="lead_id",
-                fields=(),
+                fields=(
+                    _enum_field("status", "Lead status", _LEAD_STATUS_VALUES),
+                    _text_field("lead_source", "Lead source"),
+                    _uuid_field("pipeline_id", "Pipeline"),
+                ),
+                author_permission="crm:lead:read",
+                runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.lead.updated",
+                label="Lead updated",
+                event_type="lead.updated",
+                event_schema_version=1,
+                entity_type="sales.lead",
+                tenant_id_field="tenant_id",
+                entity_id_field="lead_id",
+                fields=(
+                    _enum_field("status", "Lead status", _LEAD_STATUS_VALUES),
+                    _uuid_field("pipeline_id", "Pipeline"),
+                ),
+                author_permission="crm:lead:read",
+                runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.lead.account_converted",
+                label="Lead converted to customer account",
+                event_type="lead.account_converted",
+                event_schema_version=1,
+                entity_type="sales.lead",
+                tenant_id_field="tenant_id",
+                entity_id_field="lead_id",
+                fields=(_text_field("outcome", "Conversion outcome"),),
                 author_permission="crm:lead:read",
                 runtime_enabled=True,
             ),
@@ -93,7 +198,82 @@ DOMAIN = DomainSOT(
                 entity_type="sales.quote",
                 tenant_id_field="tenant_id",
                 entity_id_field="quote_id",
-                fields=(),
+                fields=(
+                    _enum_field("status", "Quote status", _QUOTE_STATUS_VALUES),
+                    _text_field("currency", "Currency"),
+                    _decimal_field("total", "Quote total"),
+                    _uuid_field("lead_id", "Lead"),
+                    _uuid_field("subscriber_id", "Customer account"),
+                ),
+                author_permission="crm:quote:read",
+                runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.quote.accepted",
+                label="Quote accepted",
+                event_type="quote.accepted",
+                event_schema_version=1,
+                entity_type="sales.quote",
+                tenant_id_field="tenant_id",
+                entity_id_field="quote_id",
+                fields=(
+                    _decimal_field("total", "Quote total"),
+                    _text_field("currency", "Currency"),
+                    _uuid_field("sales_order_id", "Sales order"),
+                    _uuid_field("project_id", "Project"),
+                    _uuid_field("subscriber_id", "Customer account"),
+                ),
+                author_permission="crm:quote:read",
+                runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.quote.payment_review_requested",
+                label="Quote payment review requested",
+                event_type="quote.payment_review_requested",
+                event_schema_version=1,
+                entity_type="sales.quote",
+                tenant_id_field="tenant_id",
+                entity_id_field="quote_id",
+                fields=(
+                    _enum_field(
+                        "payment_review_status",
+                        "Payment review status",
+                        _PAYMENT_REVIEW_VALUES,
+                    ),
+                    _uuid_field("subscriber_id", "Customer account"),
+                ),
+                author_permission="crm:quote:read",
+                runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.quote.payment_approved",
+                label="Quote payment approved",
+                event_type="quote.payment_approved",
+                event_schema_version=1,
+                entity_type="sales.quote",
+                tenant_id_field="tenant_id",
+                entity_id_field="quote_id",
+                fields=(
+                    _uuid_field("subscriber_id", "Customer account"),
+                    _uuid_field("reviewer_system_user_id", "Reviewer"),
+                    _text_field("reason", "Review reason"),
+                ),
+                author_permission="crm:quote:read",
+                runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.quote.payment_rejected",
+                label="Quote payment rejected",
+                event_type="quote.payment_rejected",
+                event_schema_version=1,
+                entity_type="sales.quote",
+                tenant_id_field="tenant_id",
+                entity_id_field="quote_id",
+                fields=(
+                    _uuid_field("subscriber_id", "Customer account"),
+                    _uuid_field("reviewer_system_user_id", "Reviewer"),
+                    _text_field("reason", "Review reason"),
+                ),
                 author_permission="crm:quote:read",
                 runtime_enabled=True,
             ),
@@ -105,9 +285,116 @@ DOMAIN = DomainSOT(
                 entity_type="sales.sales_order",
                 tenant_id_field="tenant_id",
                 entity_id_field="sales_order_id",
-                fields=(),
+                fields=(
+                    _decimal_field("total", "Order total"),
+                    _decimal_field("amount_paid", "Amount paid"),
+                    _text_field("currency", "Currency"),
+                    _enum_field(
+                        "from_payment_status",
+                        "Previous payment status",
+                        ("pending", "partial", "paid", "waived"),
+                    ),
+                    _enum_field(
+                        "to_payment_status",
+                        "New payment status",
+                        ("pending", "partial", "paid", "waived"),
+                    ),
+                ),
                 author_permission="crm:sales_order:read",
                 runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.sales_order.paid",
+                label="Sales order paid",
+                event_type="sales_order.paid",
+                event_schema_version=1,
+                entity_type="sales.sales_order",
+                tenant_id_field="tenant_id",
+                entity_id_field="sales_order_id",
+                fields=(
+                    _decimal_field("total", "Order total"),
+                    _decimal_field("amount_paid", "Amount paid"),
+                    _text_field("currency", "Currency"),
+                ),
+                author_permission="crm:sales_order:read",
+                runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.sales_order.fulfilled",
+                label="Sales order fulfilled",
+                event_type="sales_order.fulfilled",
+                event_schema_version=1,
+                entity_type="sales.sales_order",
+                tenant_id_field="tenant_id",
+                entity_id_field="sales_order_id",
+                fields=(
+                    _enum_field(
+                        "from_status", "Previous order status", _ORDER_STATUS_VALUES
+                    ),
+                    _enum_field("to_status", "New order status", _ORDER_STATUS_VALUES),
+                    _uuid_field("cx_handoff_id", "Customer-experience handoff"),
+                ),
+                author_permission="crm:sales_order:read",
+                runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="sales.lead.scheduled",
+                label="Lead scheduled evaluation",
+                event_type="sales.lead.scheduled",
+                event_schema_version=1,
+                entity_type="sales.lead",
+                tenant_id_field="tenant_id",
+                entity_id_field="lead_id",
+                fields=(
+                    _enum_field("status", "Lead status", _LEAD_STATUS_VALUES),
+                    _uuid_field("pipeline_id", "Pipeline"),
+                ),
+                author_permission="crm:lead:read",
+                runtime_enabled=True,
+                scheduled=True,
+                schedule_adapter_key="sales.lead",
+            ),
+            AutomationTriggerCapability(
+                key="sales.quote.scheduled",
+                label="Quote scheduled evaluation",
+                event_type="sales.quote.scheduled",
+                event_schema_version=1,
+                entity_type="sales.quote",
+                tenant_id_field="tenant_id",
+                entity_id_field="quote_id",
+                fields=(
+                    _enum_field("status", "Quote status", _QUOTE_STATUS_VALUES),
+                    _enum_field(
+                        "payment_review_status",
+                        "Payment review status",
+                        _PAYMENT_REVIEW_VALUES,
+                    ),
+                ),
+                author_permission="crm:quote:read",
+                runtime_enabled=True,
+                scheduled=True,
+                schedule_adapter_key="sales.quote",
+            ),
+            AutomationTriggerCapability(
+                key="sales.sales_order.scheduled",
+                label="Sales order scheduled evaluation",
+                event_type="sales.sales_order.scheduled",
+                event_schema_version=1,
+                entity_type="sales.sales_order",
+                tenant_id_field="tenant_id",
+                entity_id_field="sales_order_id",
+                fields=(
+                    _enum_field("status", "Sales order status", _ORDER_STATUS_VALUES),
+                    _enum_field(
+                        "payment_status",
+                        "Payment status",
+                        ("pending", "partial", "paid", "waived"),
+                    ),
+                ),
+                author_permission="crm:sales_order:read",
+                runtime_enabled=True,
+                scheduled=True,
+                schedule_adapter_key="sales.sales_order",
             ),
         ),
         actions=(
@@ -123,15 +410,7 @@ DOMAIN = DomainSOT(
                         key="status",
                         label="Status",
                         value_type=AutomationValueType.enum,
-                        enum_values=(
-                            "new",
-                            "contacted",
-                            "qualified",
-                            "proposal",
-                            "negotiation",
-                            "won",
-                            "lost",
-                        ),
+                        enum_values=_LEAD_STATUS_VALUES,
                     ),
                 ),
                 author_permission="crm:lead:write",
@@ -151,7 +430,7 @@ DOMAIN = DomainSOT(
                         key="status",
                         label="Status",
                         value_type=AutomationValueType.enum,
-                        enum_values=("draft", "sent", "rejected", "expired"),
+                        enum_values=_QUOTE_STATUS_VALUES,
                     ),
                 ),
                 author_permission="crm:quote:write",
@@ -171,7 +450,7 @@ DOMAIN = DomainSOT(
                         key="status",
                         label="Status",
                         value_type=AutomationValueType.enum,
-                        enum_values=("draft", "confirmed", "cancelled"),
+                        enum_values=_ORDER_STATUS_VALUES,
                     ),
                 ),
                 author_permission="crm:sales_order:write",

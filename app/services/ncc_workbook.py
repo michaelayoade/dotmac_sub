@@ -1598,6 +1598,17 @@ _EMPTY_MARKERS = {
     "not applicable",
     "not specified",
 }
+_FILING_NA = "N/A"
+_FILING_NA_ALLOWED_COLUMNS = {
+    "MSISDN",
+    "First Name",
+    "Last Name",
+    "Age",
+    "Gender",
+    "State",
+    "LGA",
+}
+_ACCEPTED_FILING_GENDERS = {"Female", "Male", "Unknown", _FILING_NA}
 
 
 ACCEPTED_CATEGORIES = set(CATEGORY_SLA)
@@ -1633,10 +1644,22 @@ def clean_basic_text(value: object) -> str:
 
 def clean_age(value: object) -> str:
     age_text = clean_text(value)
+    if age_text.upper() == _FILING_NA:
+        return _FILING_NA
     if not age_text or not age_text.isdigit():
         return ""
     age = int(age_text)
     return str(age) if 13 <= age <= 150 else ""
+
+
+def clean_gender(value: object) -> str:
+    gender = clean_text(value)
+    if not gender:
+        return ""
+    if gender.upper() == _FILING_NA:
+        return _FILING_NA
+    normalized = gender.replace("_", " ").title()
+    return normalized if normalized in _ACCEPTED_FILING_GENDERS else ""
 
 
 def clean_status(value: object) -> str:
@@ -1701,14 +1724,19 @@ _TEMPLATE_DATE_COLUMNS = {
 
 
 def excel_serial_from_display_timestamp(value: str) -> float | None:
-    """ "DD/MM/YYYY HH:MM:SS" -> Excel serial. Excel's epoch is 1899-12-30
+    """Display timestamp -> Excel serial. Excel's epoch is 1899-12-30
     (its 1900 leap-year bug baked in)."""
     cleaned = " ".join((value or "").strip().split())
     if not cleaned:
         return None
-    try:
-        timestamp = datetime.strptime(cleaned, "%d/%m/%Y %H:%M:%S").replace(tzinfo=UTC)
-    except ValueError:
+    timestamp = None
+    for date_format in ("%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S"):
+        try:
+            timestamp = datetime.strptime(cleaned, date_format).replace(tzinfo=UTC)
+            break
+        except ValueError:
+            continue
+    if timestamp is None:
         return None
     excel_epoch = datetime(1899, 12, 30, tzinfo=UTC)
     delta = timestamp - excel_epoch
@@ -1760,11 +1788,59 @@ def template_export_rows(records: list[dict[str, str]]) -> list[dict[str, str]]:
     for record in export_rows(records):
         rows.append(
             {
-                TEMPLATE_COLUMN_BY_INTERNAL[column]: str(record.get(column, ""))
+                TEMPLATE_COLUMN_BY_INTERNAL[column]: _template_filing_value(
+                    column, record.get(column, ""), record
+                )
                 for column in COLUMNS
             }
         )
     return rows
+
+
+def _normalise_display_timestamp(value: object) -> str:
+    cleaned = clean_text(value)
+    if not cleaned:
+        return ""
+    for date_format in ("%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S"):
+        try:
+            return datetime.strptime(cleaned, date_format).strftime("%d-%m-%Y %H:%M:%S")
+        except ValueError:
+            continue
+    return cleaned
+
+
+def _normalise_filing_msisdn(value: object) -> str:
+    msisdn = clean_text(value)
+    if not msisdn:
+        return _FILING_NA
+    if 3 <= len(msisdn) <= 15:
+        return msisdn
+    return _FILING_NA
+
+
+def _template_filing_value(column: str, value: object, record: dict[str, str]) -> str:
+    cleaned = " ".join(str(value or "").strip().split())
+    if column in {"created date time", "Resolved date", "user notes datetime"}:
+        return _normalise_display_timestamp(cleaned)
+    if column == "VALIDATION STATUS":
+        return ""
+    if column == "MSISDN":
+        return _normalise_filing_msisdn(cleaned)
+    if column == "Age":
+        return clean_age(cleaned) or _FILING_NA
+    if column == "Gender":
+        if clean_text(cleaned).lower() == "other":
+            return "Unknown"
+        return clean_gender(cleaned) or _FILING_NA
+    if column in {"First Name", "Last Name", "State", "LGA"} and not cleaned:
+        return _FILING_NA
+    if (
+        column == "Resolution Note"
+        and clean_status(record.get("Status")) == "Resolved"
+        and not cleaned
+    ):
+        return _FILING_NA
+    return cleaned
 
 
 def _export_column_widths(
@@ -1855,65 +1931,77 @@ def validation_status(record: dict[str, str]) -> str:
         errors.append(f"{column} {message} (col {col_ref})")
 
     for column in REQUIRED_COLUMNS:
-        value = clean_text(record.get(column))
+        value = clean_text(_row_value(record, column))
         # "Unknown" is an accepted answer for Last Name in incomplete CRM data.
         if column == "Last Name" and value == "Unknown":
+            continue
+        if column == "Gender" and clean_gender(value):
+            continue
+        if column in _FILING_NA_ALLOWED_COLUMNS and value.upper() == _FILING_NA:
             continue
         if not value or not clean_basic_text(value):
             add_error(column, "is required")
 
-    msisdn = clean_text(record.get("MSISDN"))
-    if msisdn and not msisdn.isdigit():
-        add_error("MSISDN", "must contain digits only")
-    elif msisdn and not msisdn.startswith("234"):
-        add_error("MSISDN", "must start with 234")
-    elif msisdn and len(msisdn) != 13:
-        add_error("MSISDN", "must be 13 digits including 234")
+    msisdn = clean_text(_row_value(record, "MSISDN"))
+    if msisdn and msisdn.upper() != _FILING_NA and not (3 <= len(msisdn) <= 15):
+        add_error("MSISDN", "must be between 3 and 15 characters")
 
-    first_name = clean_basic_text(record.get("First Name"))
-    last_name = clean_basic_text(record.get("Last Name"))
-    if first_name and not re.fullmatch(r"[A-Za-z]+", first_name):
+    first_name_raw = clean_text(_row_value(record, "First Name"))
+    last_name_raw = clean_text(_row_value(record, "Last Name"))
+    first_name = clean_basic_text(first_name_raw)
+    last_name = clean_basic_text(last_name_raw)
+    if (
+        first_name
+        and first_name_raw.upper() != _FILING_NA
+        and not re.fullmatch(r"[A-Za-z]+", first_name)
+    ):
         add_error("First Name", "must contain letters only")
-    if last_name and not re.fullmatch(r"[A-Za-z-]+", last_name):
+    if (
+        last_name
+        and last_name_raw.upper() != _FILING_NA
+        and not re.fullmatch(r"[A-Za-z-]+", last_name)
+    ):
         add_error("Last Name", "must contain letters only; hyphen is allowed")
-    if name_contains_test(record.get("First Name")):
+    if name_contains_test(_row_value(record, "First Name")):
         add_error("First Name", "must not contain test data")
-    if name_contains_test(record.get("Last Name")):
+    if name_contains_test(_row_value(record, "Last Name")):
         add_error("Last Name", "must not contain test data")
-    if not clean_age(record.get("Age")):
-        add_error("Age", "must be a whole number from 13 to 150")
-    if clean_text(record.get("Gender")) not in {"Female", "Male"}:
-        add_error("Gender", "must be Female or Male")
-    if clean_text(record.get("Ticket ID")) and not re.fullmatch(
+    if not clean_age(_row_value(record, "Age")):
+        add_error("Age", "must be a whole number from 13 to 150 or N/A")
+    if not clean_gender(_row_value(record, "Gender")):
+        add_error("Gender", "must be Female, Male, Unknown or N/A")
+    if clean_text(_row_value(record, "Ticket ID")) and not re.fullmatch(
         rf"{re.escape(OPERATOR_PREFIX)}-\d{{8}}-[A-Za-z0-9-]+",
-        clean_text(record.get("Ticket ID")),
+        clean_text(_row_value(record, "Ticket ID")),
     ):
         add_error("Ticket ID", f"must use format {OPERATOR_PREFIX}-YYYYMMDD-Number")
-    if clean_text(record.get("Category")) and not clean_category(
-        record.get("Category")
+    if clean_text(_row_value(record, "Category")) and not clean_category(
+        _row_value(record, "Category")
     ):
         add_error("Category", "must match an NCC accepted category")
-    if clean_text(record.get("sub category code")) and not clean_subcategory_code(
-        record.get("sub category code"), category=record.get("Category")
+    if clean_text(
+        _row_value(record, "sub category code")
+    ) and not clean_subcategory_code(
+        _row_value(record, "sub category code"), category=_row_value(record, "Category")
     ):
         add_error("sub category code", "must match the selected NCC category")
-    if clean_status(record.get("Status")) == "Resolved":
-        if not clean_basic_text(record.get("Resolved date")):
+    if clean_status(_row_value(record, "Status")) == "Resolved":
+        if not clean_basic_text(_row_value(record, "Resolved date")):
             add_error("Resolved date", "is required when Status is Resolved")
-        if not clean_basic_text(record.get("Resolved within SLA")):
+        if not clean_basic_text(_row_value(record, "Resolved within SLA")):
             add_error("Resolved within SLA", "is required when Status is Resolved")
-        if not clean_basic_text(record.get("Resolution Note")):
+        if not clean_basic_text(_row_value(record, "Resolution Note")):
             add_error("Resolution Note", "is required when Status is Resolved")
-    elif clean_status(record.get("Status")) == "Pending":
-        if clean_basic_text(record.get("Resolved date")):
+    elif clean_status(_row_value(record, "Status")) == "Pending":
+        if clean_basic_text(_row_value(record, "Resolved date")):
             add_error("Resolved date", "must be empty when Status is Pending")
-        if clean_basic_text(record.get("Resolved within SLA")):
+        if clean_basic_text(_row_value(record, "Resolved within SLA")):
             add_error("Resolved within SLA", "must be empty when Status is Pending")
-        if clean_basic_text(record.get("Resolution Note")):
+        if clean_basic_text(_row_value(record, "Resolution Note")):
             add_error("Resolution Note", "must be empty when Status is Pending")
     if clean_category(
-        record.get("Category")
-    ) == "Data Depletion" and not clean_basic_text(record.get("Phone Type")):
+        _row_value(record, "Category")
+    ) == "Data Depletion" and not clean_basic_text(_row_value(record, "Phone Type")):
         add_error("Phone Type", "is required when Category is Data Depletion")
     return f"[FAIL] {'; '.join(errors)}" if errors else "[OK] All validations passed"
 
@@ -2314,7 +2402,9 @@ def _data_validations_xml(columns: list[str]) -> str:
             formula2="150",
         ),
         _list_validation_xml(
-            column="Gender *", formula1='"Male,Female"', allow_blank=False
+            column="Gender *",
+            formula1='"Female,Male,Unknown,N/A"',
+            allow_blank=False,
         ),
         _data_validation_xml(
             validation_type="custom",

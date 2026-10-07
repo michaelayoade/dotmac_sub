@@ -51,6 +51,16 @@ allocation is posted to the same document, its ledger consumption and
 customer-subledger settlement duplicate an economic effect that the opening
 already absorbed, leaving false partial debt and understating customer credit.
 
+The inverse risk also exists: a pre-opening payment can still appear to have
+unused allocation room even though its economic effect was incorporated in the
+approved customer opening. Generic account-credit application must not offer
+that historical payment to a later invoice. Source selection uses the later of
+the caller's reviewed funding boundary and the approved opening for the
+account/currency; a payment counts only if its creation or paid instant is
+after that boundary. This prevention does not itself reclassify an existing
+allocation or create a documentary invoice for service already funded by a
+direct renewal adjustment. Those require separately previewed repair commands.
+
 ## Canonical policy
 
 ### Reviewed paid-coverage correction

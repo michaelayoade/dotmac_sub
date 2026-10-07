@@ -566,6 +566,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
         SupportLifecycleProjectionHandler,
     )
     from app.services.events.handlers.surveys import SurveyTriggerHandler
+    from app.services.events.handlers.test_connection import TestConnectionHandler
     from app.services.events.handlers.webhook import WebhookHandler
 
     dispatcher.register_handler(WebhookHandler())
@@ -580,6 +581,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(MaterialsLifecycleProjectionHandler())
     dispatcher.register_handler(IdentityLifecycleProjectionHandler())
     dispatcher.register_handler(EnforcementHandler())
+    dispatcher.register_handler(TestConnectionHandler())
     dispatcher.register_handler(IPAssignmentProjectionHandler())
     dispatcher.register_handler(CredentialSessionProjectionHandler())
     dispatcher.register_handler(ArrangementHandler())

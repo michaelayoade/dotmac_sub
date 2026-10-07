@@ -43,6 +43,9 @@ from app.services.sot_registry.domains.financial_access.provider_payments import
 from app.services.sot_registry.domains.financial_access.sales_funding import (
     SERVICES as SALES_FUNDING_SERVICES,
 )
+from app.services.sot_registry.domains.financial_access.test_connections import (
+    SERVICES as TEST_CONNECTION_SERVICES,
+)
 from app.services.sot_registry.model import DomainSOT
 
 DOMAIN = DomainSOT(
@@ -64,6 +67,7 @@ DOMAIN = DomainSOT(
         *PREPAID_SERVICES,
         *COLLECTION_OPERATIONS_SERVICES,
         *PROVIDER_PAYMENTS_SERVICES,
+        *TEST_CONNECTION_SERVICES,
     ),
     entrypoints=(
         "app.services.billing_automation",

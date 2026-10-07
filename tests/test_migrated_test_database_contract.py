@@ -116,6 +116,7 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     assert repository_heads() == frozenset(
         {
             "646_prepaid_purchase_safety",
+            "646_test_connection_finance_review",
             "bi_0001_billing",
             "cl_0001_collections",
             "ib_0001_conversations",

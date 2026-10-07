@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy.exc import OperationalError
 
@@ -310,6 +311,9 @@ def _run_enforcement_reconciler() -> dict[str, int]:
             )
         }
     )
+    from app.services.test_connection_policy import TEST_RADIUS_PREFIX
+
+    owned_access_groups += [TEST_RADIUS_PREFIX + name for name in owned_access_groups]
     target = authoritative_accounting_target(db)
     db.rollback()
     if not target:
@@ -584,6 +588,34 @@ def _run_enforcement_reconciler() -> dict[str, int]:
         radreply_rows=observed_reply_rows,
         radusergroup_rows=observed_group_rows,
     )
+    from app.services.test_connection_policy import (
+        ObservedRadiusAttribute,
+        effective_radius_observation,
+    )
+
+    observed = effective_radius_observation(
+        checks=tuple(
+            ObservedRadiusAttribute(
+                username=str(row["username"]),
+                attribute=str(row["attribute"]),
+                value=str(row["value"]),
+            )
+            for row in observed_check_rows
+        ),
+        replies=tuple(
+            ObservedRadiusAttribute(
+                username=str(row["username"]),
+                attribute=str(row["attribute"]),
+                value=str(row["value"]),
+            )
+            for row in observed_reply_rows
+        ),
+        evaluated_at=datetime.now(UTC),
+        suspended_list=walled_garden_address_list,
+    )
+    observed_usernames = {str(row["username"]) for row in observed_check_rows}
+    rejected = (rejected - observed_usernames) | set(observed.rejected)
+    captive_tagged = (captive_tagged - observed_usernames) | set(observed.captive)
     target_fingerprint = str(target["target_fingerprint"])
     target_expected = expected_projection_fingerprints.get(target_fingerprint)
     if not isinstance(target_expected, dict):
@@ -622,8 +654,12 @@ def _run_enforcement_reconciler() -> dict[str, int]:
         desired_fingerprints=target_expected,
         observed_fingerprints=observed_fingerprints,
         enforce_simultaneous_use=enforce_simultaneous_use,
-        observed_simultaneous_use_check=simultaneous_use_check,
-        observed_simultaneous_use_reply=simultaneous_use_reply,
+        observed_simultaneous_use_check=set(observed.concurrency_check)
+        if enforce_simultaneous_use
+        else simultaneous_use_check,
+        observed_simultaneous_use_reply=set(observed.concurrency_reply)
+        if enforce_simultaneous_use
+        else simultaneous_use_reply,
     )
     stats["missing_radius_auth"] = len(drift.missing_auth)
     stats["stale_radius_auth"] = len(drift.stale_auth)

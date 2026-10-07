@@ -7,9 +7,9 @@
 # This adapter proves the exact staging host contract before opting out of that
 # local dump. Seabone's cold application imports can exceed the production
 # health budget under measured disk/swap pressure, so this adapter also owns a
-# staging-only ten-minute health window. Production uses its own verified
-# adapter, where backups remain enabled by default and the shorter health budget
-# remains unchanged.
+# ten-minute health window. Production uses its own verified adapter, where
+# backups remain enabled by default; it sets the same ten-minute web health
+# window for its own measured cold-start reasons.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

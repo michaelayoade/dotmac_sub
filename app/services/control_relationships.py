@@ -144,6 +144,12 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
 
 
 HANDLER_CONTROLS: dict[str, HandlerControl] = {
+    "TestConnectionHandler": HandlerControl(
+        "TestConnectionHandler",
+        HandlerStage.state,
+        51,
+        ("bounded_test_access_delivery",),
+    ),
     "LifecycleHandler": HandlerControl(
         "LifecycleHandler", HandlerStage.state, 10, ("subscription_lifecycle",)
     ),
@@ -321,6 +327,10 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         from app.services.events.handlers.credential_session_projection import (
             HANDLED_EVENT_TYPES,
         )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "TestConnectionHandler":
+        from app.services.events.handlers.test_connection import HANDLED_EVENT_TYPES
 
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "IPAssignmentProjectionHandler":

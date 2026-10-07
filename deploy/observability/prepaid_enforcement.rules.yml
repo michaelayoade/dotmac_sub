@@ -104,6 +104,25 @@ groups:
             these accounts; enforcement stays fail-closed until then.
           runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
 
+      # --- Owned finance work items must be worked within their SLA. The
+      # deadline is fixed when an item opens, so this fires once any open
+      # quarantine or renewal-terms work item outlives its review window.
+      - alert: PrepaidWorkItemsOverdue
+        expr: observability_state{domain="prepaid_enforcement",signal="work_items_overdue"} > 0
+        for: 1h
+        labels:
+          severity: warning
+          area: prepaid-enforcement
+          owner: financial-collections
+        annotations:
+          summary: "Prepaid finance work items are past their review SLA"
+          description: >
+            Open prepaid-coverage quarantine or renewal-terms evidence work
+            items in admin alerts have passed their sla_due_at. Each needs a
+            finance decision; enforcement for these accounts stays
+            fail-closed until the evidence is corrected.
+          runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
+
       - alert: PrepaidNoContactRouteAccounts
         expr: observability_state{domain="prepaid_enforcement",signal="no_contact_route"} > 0
         for: 1h

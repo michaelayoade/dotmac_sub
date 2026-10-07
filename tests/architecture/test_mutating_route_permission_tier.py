@@ -115,6 +115,7 @@ _WRITE_TIER_VERBS = frozenset(
         "send",
         "service_change_reconcile",
         "suspend",
+        "test_connection",  # Grants bounded subscription service access.
         "update",
         "use",
         "verify",

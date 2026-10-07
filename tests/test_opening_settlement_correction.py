@@ -36,6 +36,7 @@ from app.models.prepaid_funding import (
     PrepaidOpeningFundingConsumption,
 )
 from app.services.billing._common import resolve_invoice_settlement_amounts
+from app.services.billing.account_credit import _source_payments
 from app.services.billing.customer_subledger import resolve_position
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_draft_reconciliation import (
@@ -453,3 +454,71 @@ def test_preopening_correction_fails_closed_when_opening_does_not_reconstruct(
     assert preview.disposition is OpeningSettlementCorrectionDisposition.manual_review
     assert preview.actionable is False
     assert "opening does not exactly reconstruct" in preview.reason
+
+
+def test_account_credit_sources_do_not_reuse_payment_absorbed_by_opening(
+    db_session,
+    subscriber,
+    monkeypatch,
+):
+    _scenario(db_session, subscriber)
+    post_opening = db_session.query(Payment).filter_by(account_id=subscriber.id).one()
+    pre_opening = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("18812.50"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=INVOICE_AT,
+        created_at=INVOICE_AT,
+        is_active=True,
+    )
+    db_session.add(pre_opening)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.billing.account_credit.get_spendable_account_credit_balance",
+        lambda *_args, **_kwargs: Decimal("1000.00"),
+    )
+    monkeypatch.setattr(
+        "app.services.billing.account_credit.PaymentAllocations.available_amount_at_reviewed_boundary_for_owner",
+        lambda *_args, **_kwargs: Decimal("1000.00"),
+    )
+
+    implicit = _source_payments(db_session, str(subscriber.id))
+    explicitly_older = _source_payments(
+        db_session, str(subscriber.id), funding_position_at=BASELINE_AT
+    )
+
+    assert [payment.id for payment, _room in implicit] == [post_opening.id]
+    assert [payment.id for payment, _room in explicitly_older] == [post_opening.id]
+
+
+def test_account_credit_sources_without_opening_retain_legacy_payment(
+    db_session,
+    subscriber,
+    monkeypatch,
+):
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("1000.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=INVOICE_AT,
+        created_at=INVOICE_AT,
+        is_active=True,
+    )
+    db_session.add(payment)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.billing.account_credit.get_spendable_account_credit_balance",
+        lambda *_args, **_kwargs: Decimal("1000.00"),
+    )
+    monkeypatch.setattr(
+        "app.services.billing.account_credit.PaymentAllocations.available_amount_at_reviewed_boundary_for_owner",
+        lambda *_args, **_kwargs: Decimal("1000.00"),
+    )
+
+    sources = _source_payments(db_session, str(subscriber.id))
+
+    assert [(item.id, room) for item, room in sources] == [
+        (payment.id, Decimal("1000.00"))
+    ]

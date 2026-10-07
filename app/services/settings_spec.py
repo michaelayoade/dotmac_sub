@@ -213,6 +213,34 @@ MAX_CONCATENATED_SMS_CHARS = 918
 
 SETTINGS_SPECS: list[SettingSpec] = [
     SettingSpec(
+        domain=SettingDomain.radius,
+        key="test_connection_default_hours",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=2,
+        min_value=1,
+        max_value=24,
+        label="Default Test Connection duration (hours)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="test_connection_maximum_hours",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=24,
+        min_value=4,
+        max_value=24,
+        label="Maximum Test Connection duration (hours)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="test_connection_deadline_verified",
+        env_var=None,
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Test Connection RADIUS/NAS deadline verified",
+    ),
+    SettingSpec(
         domain=SettingDomain.auth,
         key="credential_rotation_enabled",
         env_var="CREDENTIAL_ROTATION_ENABLED",
@@ -2748,6 +2776,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
+        key="customer_minimum_age_years",
+        env_var="CUSTOMER_MINIMUM_AGE_YEARS",
+        value_type=SettingValueType.integer,
+        default=13,
+        min_value=0,
+        max_value=120,
+        label="Minimum customer age",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
         key="default_country_code",
         env_var="DEFAULT_COUNTRY_CODE",
         value_type=SettingValueType.string,
@@ -3916,24 +3954,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     # set would leave an editable control that decides nothing and an obvious
     # place for a second chat writer to reappear, so the concept is gone rather
     # than re-pointed. Migration 569 deletes any surviving row.
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="inbox_reply_reminder_delay_minutes",
-        env_var="INBOX_REPLY_REMINDER_DELAY_MINUTES",
-        value_type=SettingValueType.integer,
-        default=15,
-        min_value=1,
-        label="Team Inbox first reply reminder delay (minutes)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="inbox_reply_reminder_repeat_minutes",
-        env_var="INBOX_REPLY_REMINDER_REPEAT_MINUTES",
-        value_type=SettingValueType.integer,
-        default=15,
-        min_value=1,
-        label="Team Inbox reply reminder repeat interval (minutes)",
-    ),
     SettingSpec(
         domain=SettingDomain.comms,
         key="campaign_processing_enabled",

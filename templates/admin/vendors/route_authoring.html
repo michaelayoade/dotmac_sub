@@ -1,0 +1,127 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Admin Map Proposals - Admin{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+    #admin-route-author-map { height: 620px; min-height: 460px; border-radius: 1rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="relative space-y-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+            <a href="/admin/vendors/routes" class="text-sm font-medium text-orange-600 hover:text-orange-700">&larr; Back to route proposals</a>
+            <h1 class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">Create admin map proposal</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create a route or map asset with no vendor, project, or work order required. Link one only when it exists.</p>
+        </div>
+        <span class="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold text-violet-800 dark:bg-violet-900/40 dark:text-violet-200">network:fiber:write</span>
+    </div>
+
+    {% if message %}<div class="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ message }}</div>{% endif %}
+
+    {% if can_write_routes %}
+    <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,420px)]">
+        <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div id="admin-route-author-map" role="region" aria-label="Admin proposal map"></div>
+        </div>
+        <div class="space-y-6">
+            <form method="post" action="/admin/vendors/routes/suggested-route" id="admin-route-author-form" class="rounded-md border border-violet-200 bg-violet-50/60 p-5 space-y-3 dark:border-violet-900/60 dark:bg-violet-950/20">
+                {% include "components/forms/csrf_input.html" %}
+                <h2 class="font-bold text-slate-900 dark:text-white">Suggest a route</h2>
+                <p class="text-xs text-slate-600 dark:text-slate-300">Draw at least two points. Project and work order links are optional.</p>
+                <label class="block text-xs text-slate-600 dark:text-slate-300">Route name<input name="name" maxlength="160" required value="Suggested route" class="mt-1 block w-full rounded-md border-slate-300"></label>
+                <label class="block text-xs text-slate-600 dark:text-slate-300">Project (optional)<select name="project_id" class="mt-1 block w-full rounded-md border-slate-300"><option value="">No project</option>{% for project in projects %}<option value="{{ project.id }}">{{ project.label }} · {{ project.status | replace('_', ' ') }}</option>{% endfor %}</select></label>
+                <label class="block text-xs text-slate-600 dark:text-slate-300">Work order (optional)<select name="work_order_id" class="mt-1 block w-full rounded-md border-slate-300"><option value="">No work order</option>{% for work_order in work_orders %}<option value="{{ work_order.id }}">{{ work_order.public_id }} — {{ work_order.title }}</option>{% endfor %}</select></label>
+                <input type="hidden" name="geojson" id="admin-route-geojson">
+                <label class="block text-xs text-slate-600 dark:text-slate-300">Calculated length (m)<input name="length_meters" id="admin-route-length" type="number" step="0.1" min="0" readonly class="mt-1 block w-32 rounded-md border-slate-300 bg-slate-100"></label>
+                <label class="block text-xs text-slate-600 dark:text-slate-300">Notes<textarea name="notes" maxlength="2000" rows="3" class="mt-1 block w-full rounded-md border-slate-300"></textarea></label>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" id="admin-route-locate" class="rounded-md bg-violet-600 px-3 py-2 text-sm font-semibold text-white">Add my location</button>
+                    <button type="button" id="admin-route-undo" class="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled>Undo</button>
+                    <button type="button" id="admin-route-clear" class="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled>Clear</button>
+                    <button type="submit" id="admin-route-submit" class="rounded-md bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" disabled>Submit route proposal</button>
+                </div>
+                <p id="admin-route-hint" class="text-xs text-slate-600 dark:text-slate-300" role="status">Add at least 2 points to submit.</p>
+                <p id="admin-route-error" class="hidden text-sm font-medium text-red-700" role="alert"></p>
+            </form>
+
+            <form method="post" action="/admin/vendors/routes/asset-proposals" id="asset-proposal-form" class="rounded-md border border-amber-200 bg-amber-50/70 p-5 space-y-3 dark:border-amber-900/60 dark:bg-amber-950/20">
+                {% include "components/forms/csrf_input.html" %}
+                <h2 class="font-bold text-amber-950 dark:text-amber-100">Suggest a map asset</h2>
+                <p class="text-xs text-amber-900/80 dark:text-amber-200">Pin a splice closure. Project and work order links are optional.</p>
+                <button type="button" id="asset-pin-toggle" class="rounded-md border border-amber-500 px-3 py-2 text-sm font-semibold text-amber-800">Start pinning</button>
+                <input type="hidden" name="latitude" id="asset-latitude">
+                <input type="hidden" name="longitude" id="asset-longitude">
+                <label class="block text-xs text-amber-950 dark:text-amber-100">Closure name<input name="name" maxlength="160" required class="mt-1 block w-full rounded-md border-amber-300"></label>
+                <label class="block text-xs text-amber-950 dark:text-amber-100">Project (optional)<select name="project_id" class="mt-1 block w-full rounded-md border-amber-300"><option value="">No project</option>{% for project in projects %}<option value="{{ project.id }}">{{ project.label }}</option>{% endfor %}</select></label>
+                <label class="block text-xs text-amber-950 dark:text-amber-100">Work order (optional)<select name="work_order_id" class="mt-1 block w-full rounded-md border-amber-300"><option value="">No work order</option>{% for work_order in work_orders %}<option value="{{ work_order.id }}">{{ work_order.public_id }} — {{ work_order.title }}</option>{% endfor %}</select></label>
+                <label class="block text-xs text-amber-950 dark:text-amber-100">Notes<textarea name="notes" maxlength="2000" rows="2" class="mt-1 block w-full rounded-md border-amber-300"></textarea></label>
+                <p id="asset-pin-hint" class="text-xs text-amber-900/80 dark:text-amber-200">Start pinning, then click the map.</p>
+                <button type="submit" id="asset-proposal-submit" disabled class="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Submit asset proposal</button>
+            </form>
+        </div>
+    </div>
+    {% else %}
+    <p class="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">Authoring is hidden because this account does not have <code>network:fiber:write</code>.</p>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/leaflet/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+{% if can_write_routes %}<script src="/static/js/vendor-route-authoring.js"></script>{% endif %}
+{% if can_write_routes %}
+<script>
+(function() {
+    const proposalGeojson = {{ route_geojson | tojson | safe }};
+    const networkGeojson = {{ network_geojson | tojson | safe }};
+    window.VendorRouteAuthoring.mount({
+        mapId: 'admin-route-author-map',
+        formId: 'admin-route-author-form',
+        geojsonId: 'admin-route-geojson',
+        lengthId: 'admin-route-length',
+        submitId: 'admin-route-submit',
+        hintId: 'admin-route-hint',
+        errorId: 'admin-route-error',
+        locateId: 'admin-route-locate',
+        undoId: 'admin-route-undo',
+        clearId: 'admin-route-clear',
+        contextGeojson: proposalGeojson,
+        networkPlantGeojson: networkGeojson,
+        adminMode: true,
+    });
+
+    const map = window.AdminRouteAuthoringMap;
+    const toggle = document.getElementById('asset-pin-toggle');
+    const form = document.getElementById('asset-proposal-form');
+    const latitude = document.getElementById('asset-latitude');
+    const longitude = document.getElementById('asset-longitude');
+    const submit = document.getElementById('asset-proposal-submit');
+    const hint = document.getElementById('asset-pin-hint');
+    let pinMode = false;
+    let marker = null;
+    if (map && toggle) {
+        toggle.addEventListener('click', function() {
+            pinMode = !pinMode;
+            toggle.textContent = pinMode ? 'Cancel pinning' : 'Start pinning';
+            map.getContainer().style.cursor = pinMode ? 'crosshair' : '';
+        });
+        map.on('click', function(event) {
+            if (!pinMode) return;
+            latitude.value = event.latlng.lat.toFixed(7);
+            longitude.value = event.latlng.lng.toFixed(7);
+            if (marker) map.removeLayer(marker);
+            marker = L.marker(event.latlng).addTo(map).bindTooltip('Proposed closure').openTooltip();
+            submit.disabled = false;
+            hint.textContent = event.latlng.lat.toFixed(6) + ', ' + event.latlng.lng.toFixed(6) + ' — pending staff review';
+        });
+    }
+})();
+</script>
+{% endif %}
+{% endblock %}

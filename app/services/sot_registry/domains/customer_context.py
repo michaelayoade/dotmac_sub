@@ -45,10 +45,41 @@ _CUSTOMER_STATUS_FIELD = AutomationConditionField(
         "active",
         "blocked",
         "suspended",
+        "paused",
         "disabled",
         "canceled",
         "delinquent",
     ),
+)
+
+_CUSTOMER_PREVIOUS_STATUS_FIELD = AutomationConditionField(
+    key="previous_status",
+    label="Previous account status",
+    value_type=AutomationValueType.enum,
+    operators=(
+        AutomationOperator.equals,
+        AutomationOperator.not_equals,
+        AutomationOperator.in_values,
+        AutomationOperator.not_in_values,
+    ),
+    enum_values=(
+        "new",
+        "active",
+        "blocked",
+        "suspended",
+        "paused",
+        "disabled",
+        "canceled",
+        "delinquent",
+    ),
+)
+
+_CUSTOMER_ACTION_FIELD = AutomationConditionField(
+    key="action",
+    label="Status action",
+    value_type=AutomationValueType.enum,
+    operators=(AutomationOperator.equals, AutomationOperator.not_equals),
+    enum_values=("activate", "unsuspend", "suspend", "block", "disable"),
 )
 
 DOMAIN = DomainSOT(
@@ -897,8 +928,12 @@ DOMAIN = DomainSOT(
         SOTService(
             name="customer.portal_profile_commands",
             module="app.services.customer_portal_profile_commands",
-            owns=("customer portal profile update",),
+            owns=(
+                "customer minimum age policy",
+                "customer portal profile update",
+            ),
             depends_on=(
+                "control.settings_spec",
                 "customer.accounts",
                 "customer.identity_scope",
                 "events.dispatcher",
@@ -908,16 +943,31 @@ DOMAIN = DomainSOT(
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
+                        name="customer minimum age policy",
+                        role=OwnerRole.POLICY,
+                        input_names=("minimum customer age setting",),
+                    ),
+                    ConcernContract(
                         name="customer portal profile update",
                         role=OwnerRole.COMMAND_WRITER,
                         input_names=(
                             "typed authenticated customer profile command",
                             "locked canonical Subscriber account",
+                            "minimum customer age setting",
                         ),
                         canonical_writer="customer.portal_profile_commands",
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="minimum customer age setting",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "database-authoritative subscriber setting "
+                            "customer_minimum_age_years"
+                        ),
+                    ),
                     AuthorityInput(
                         name="typed authenticated customer profile command",
                         owner="customer.portal_profile_commands",
@@ -959,6 +1009,9 @@ DOMAIN = DomainSOT(
                         "customer.portal_profile_commands.invalid_region",
                         "customer.portal_profile_commands.invalid_lga",
                         "customer.portal_profile_commands.invalid_profile",
+                        "customer.portal_profile_commands.invalid_age_policy",
+                        "customer.portal_profile_commands.invalid_date_of_birth",
+                        "customer.portal_profile_commands.minimum_age_not_met",
                         "customer.portal_profile_commands.subscriber_not_found",
                         "customer.portal_profile_commands.invalid_biodata",
                     ),
@@ -967,6 +1020,8 @@ DOMAIN = DomainSOT(
                         "subscriber outside authenticated scope",
                         "unknown country code",
                         "invalid Nigerian state or FCT/LGA pairing",
+                        "invalid or unavailable minimum customer age policy",
+                        "future or underage date of birth",
                         "invalid profile or required biodata",
                     ),
                 ),
@@ -1004,6 +1059,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_customer_profile_location.py",
+                    "tests/test_customer_portal_profile_age_policy.py",
                     "tests/test_customer_portal_gaps.py",
                 ),
             ),
@@ -3149,7 +3205,11 @@ DOMAIN = DomainSOT(
                 entity_type="customer.account",
                 tenant_id_field="tenant_id",
                 entity_id_field="subscriber_id",
-                fields=(_CUSTOMER_STATUS_FIELD,),
+                fields=(
+                    _CUSTOMER_STATUS_FIELD,
+                    _CUSTOMER_PREVIOUS_STATUS_FIELD,
+                    _CUSTOMER_ACTION_FIELD,
+                ),
                 author_permission="customer:read",
                 runtime_enabled=True,
             ),
@@ -3200,6 +3260,20 @@ DOMAIN = DomainSOT(
                 fields=(),
                 author_permission="customer:read",
                 runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="customer.account.scheduled",
+                label="Customer account scheduled evaluation",
+                event_type="customer.account.scheduled",
+                event_schema_version=1,
+                entity_type="customer.account",
+                tenant_id_field="tenant_id",
+                entity_id_field="subscriber_id",
+                fields=(_CUSTOMER_STATUS_FIELD,),
+                author_permission="customer:read",
+                runtime_enabled=True,
+                scheduled=True,
+                schedule_adapter_key="customer.account",
             ),
         ),
         actions=(

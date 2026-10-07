@@ -452,6 +452,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "customer.financial_position",
         "access.subscription_lifecycle",
         "access.walled_garden_policy",
+        "access.test_connection",
     )
     assert sot_relationships.dependencies_for("customer.financial_position") == (
         "financial.credit_notes",
@@ -858,6 +859,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "access.radius_state",
         "access.radius_reject",
         "access.radius_target_registry",
+        "access.test_connection",
         "control.settings_spec",
     )
     assert sot_relationships.dependencies_for("communications.intents") == (

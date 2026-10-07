@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.http_query import OptionalDateQuery
 from app.models.billing import Payment
 from app.models.subscriber import Subscriber
 from app.schemas.billing import PaymentSettlementReconciliationRequest
@@ -50,8 +51,8 @@ def payments_list(
     status: str | None = Query(None),
     method: str | None = Query(None),
     search: str | None = Query(None),
-    start_date: date | None = Query(None),
-    end_date: date | None = Query(None),
+    start_date: OptionalDateQuery = None,
+    end_date: OptionalDateQuery = None,
     unallocated_only: bool = Query(False),
     db: Session = Depends(get_db),
 ):
@@ -109,8 +110,8 @@ def payments_export_csv(
     status: str | None = Query(None),
     method: str | None = Query(None),
     search: str | None = Query(None),
-    start_date: date | None = Query(None),
-    end_date: date | None = Query(None),
+    start_date: OptionalDateQuery = None,
+    end_date: OptionalDateQuery = None,
     unallocated_only: bool = Query(False),
     db: Session = Depends(get_db),
 ):
@@ -149,8 +150,8 @@ def payments_unallocated(
     status: str | None = Query(None),
     method: str | None = Query(None),
     search: str | None = Query(None),
-    start_date: date | None = Query(None),
-    end_date: date | None = Query(None),
+    start_date: OptionalDateQuery = None,
+    end_date: OptionalDateQuery = None,
     db: Session = Depends(get_db),
 ):
     return payments_list(

@@ -44,6 +44,7 @@ from app.models.billing import (
 )
 from app.models.customer_subledger import (
     CustomerPostingGroup,
+    CustomerSubledgerOpeningPosition,
     PostingCommandKind,
     PostingProducer,
     PostingSourceKind,
@@ -473,9 +474,40 @@ def _source_payments(
         )
     rows = query.all()
     account_remaining: dict[str, Decimal] = {}
+    boundary_by_currency: dict[str, datetime | None] = {}
     sources: list[tuple[Payment, Decimal]] = []
     for payment in rows:
         currency = (payment.currency or "NGN").upper()
+        if currency not in boundary_by_currency:
+            opening_at = db.scalar(
+                select(CustomerSubledgerOpeningPosition.occurred_at).where(
+                    CustomerSubledgerOpeningPosition.account_id
+                    == coerce_uuid(account_id),
+                    CustomerSubledgerOpeningPosition.currency == currency,
+                )
+            )
+            boundary_by_currency[currency] = max(
+                (
+                    value.replace(tzinfo=UTC) if value.tzinfo is None else value
+                    for value in (funding_position_at, opening_at)
+                    if value is not None
+                ),
+                default=None,
+            )
+        boundary = boundary_by_currency[currency]
+        # The approved opening already includes the economic effect of earlier
+        # payments. Their apparent unallocated envelope is not new cash.
+        if boundary is not None:
+            created_at = payment.created_at
+            if created_at is None:
+                continue
+            paid_at = payment.paid_at or created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+            if paid_at.tzinfo is None:
+                paid_at = paid_at.replace(tzinfo=UTC)
+            if created_at <= boundary and paid_at <= boundary:
+                continue
         if currency not in account_remaining:
             account_remaining[currency] = max(
                 Decimal("0.00"),
@@ -492,7 +524,7 @@ def _source_payments(
             PaymentAllocations.available_amount_at_reviewed_boundary_for_owner(
                 db,
                 str(payment.id),
-                funding_position_at=funding_position_at,
+                funding_position_at=boundary,
             ),
             account_remaining[currency],
         )

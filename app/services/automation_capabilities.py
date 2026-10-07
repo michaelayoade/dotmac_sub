@@ -100,6 +100,15 @@ def action_capability(key: str) -> AutomationActionCapability:
     return matches[0]
 
 
+def action_applies_to_entity(
+    action: AutomationActionCapability, entity_type: str
+) -> bool:
+    """Return whether an action can be attached to the trigger entity."""
+
+    target_types = action.target_types or (action.entity_type,)
+    return "*" in target_types or entity_type in target_types
+
+
 def _duplicates(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(key for key, count in Counter(values).items() if count > 1))
 
@@ -215,10 +224,14 @@ def capability_registry_errors() -> tuple[str, ...]:
             for field in trigger.fields:
                 errors.extend(_field_errors(trigger=trigger, field=field))
         for action in manifest.actions:
-            if action.entity_type not in manifest.target_types:
+            declared_targets = action.target_types or (action.entity_type,)
+            if any(
+                target != "*" and target not in manifest.target_types
+                for target in declared_targets
+            ):
                 errors.append(
-                    f"action {action.key!r} uses undeclared target "
-                    f"{action.entity_type!r}"
+                    f"action {action.key!r} uses undeclared target types "
+                    f"{declared_targets!r}"
                 )
             if action.input_schema_version < 1:
                 errors.append(f"action {action.key!r} has invalid schema version")
@@ -315,6 +328,7 @@ def require_valid_capability_registry() -> None:
 
 __all__ = [
     "AutomationCapabilityError",
+    "action_applies_to_entity",
     "action_capability",
     "all_module_manifests",
     "capability_registry_errors",

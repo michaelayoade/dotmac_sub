@@ -42,7 +42,7 @@ class QuoteMirror(Base):
     deposit_amount: Mapped[str] = mapped_column(String(32), nullable=False, default="0")
     deposit_percent: Mapped[int | None] = mapped_column()
     deposit_paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # covered|survey_required|out_of_area
+    # covered|survey_required|out_of_area|manual_review|technical_error
     feasibility_coverage: Mapped[str | None] = mapped_column(String(20))
     estimate_provisional: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False

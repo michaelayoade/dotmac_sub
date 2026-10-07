@@ -610,6 +610,83 @@ DOMAIN = DomainSOT(
                 ),
             ),
         ),
+        SOTService(
+            name="automation.scheduled_runs",
+            module="app.services.automation_scheduled",
+            owns=("scheduled automation run claims",),
+            depends_on=(
+                "automation.rule_definitions",
+                "automation.capability_registry",
+                "events.store",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="scheduled automation run claims",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "published scheduled automation rules",
+                            "scheduled automation claim rows",
+                        ),
+                        canonical_writer="automation.scheduled_runs",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="published scheduled automation rules",
+                        owner="automation.rule_definitions",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="published AutomationRuleVersion schedule declarations",
+                    ),
+                    AuthorityInput(
+                        name="scheduled automation claim rows",
+                        owner="automation.scheduled_runs",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="AutomationScheduledRun rows keyed by rule version and schedule slot",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="enqueue_scheduled_events owns one transaction for due slot claims and their durable target events; the task owns session lifecycle only",
+                    locking="the unique rule-version and slot identity rejects concurrent claims",
+                    idempotency="the same rule version and slot converge on one scheduled-run claim",
+                    retries="a later sweep may claim an unclaimed or expired slot after rollback",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "automation.scheduled_runs.invalid_schedule_time",
+                        *owner_command_boundary_error_codes(
+                            "automation.scheduled_runs"
+                        ),
+                    ),
+                    mapping_owner="automation task adapter",
+                    fail_closed_on=("duplicate or invalid scheduled slot identity",),
+                ),
+                events=EventContract(
+                    event_types=("custom",),
+                    schema_version=1,
+                    delivery_owner="events.store",
+                    compatibility="Custom target events name the claimed rule version and tenant; ordinary event-driven envelopes remain unchanged.",
+                    replay="AutomationScheduledRun rows reconstruct claim state for a schedule slot.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="automation.scheduled_runs",
+                    verification="scheduled-run migration and scheduler claim tests",
+                    cutover_gate="scheduled execution claims use the dedicated scheduled-run owner",
+                    fallback_retirement="no task or web adapter writes scheduled-run rows directly",
+                ),
+                steward="platform automation",
+                design_refs=(
+                    "docs/designs/AUTOMATION_CENTER_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_automation_scheduled.py",
+                    "tests/test_automation_runtime.py",
+                ),
+            ),
+        ),
     ),
     entrypoints=(
         "app.services.automation_capabilities",

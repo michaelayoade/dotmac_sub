@@ -170,7 +170,12 @@
                     <div>
                         <label class="{{ _lbl }}">Date of Birth</label>
                         <input type="date" name="date_of_birth"{% if individual_customer %} required{% endif %}
+                               max="{{ latest_allowed_date_of_birth }}"
+                               aria-describedby="date-of-birth-help"
                                value="{{ subscriber.date_of_birth.isoformat() if subscriber and subscriber.date_of_birth else '' }}" class="{{ _inp }}">
+                        <p id="date-of-birth-help" class="mt-2 text-xs text-stone-500 dark:text-stone-400">
+                            You must be at least {{ customer_minimum_age_years }} years old.
+                        </p>
                     </div>
                     <div>
                         <label class="{{ _lbl }}">Gender</label>

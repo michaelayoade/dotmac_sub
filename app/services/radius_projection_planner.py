@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import AccessState, Subscription, SubscriptionStatus
@@ -16,6 +17,7 @@ from app.services.access_resolution import (
     resolve_customer_access,
 )
 from app.services.radius_access_state import ACTIVE_STATUSES, BLOCKED_STATUSES
+from app.services.test_connection_policy import TestConnectionAccess
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class RadiusProjectionPlan:
     captive: bool
     block_reason: str | None
     billing_access_state: CustomerBillingAccessState
+    test_access: TestConnectionAccess | None = None
 
 
 @dataclass(frozen=True)
@@ -85,10 +88,12 @@ def plan_radius_projection(
     subscription,
     *,
     restriction_mode: AccessRestrictionMode | None = None,
+    test_access: TestConnectionAccess | None = None,
 ) -> RadiusProjectionPlan:
     decision = resolve_customer_access(
         subscription,
         access_restriction_mode=restriction_mode,
+        test_access=test_access,
     )
     state = decision.state
     mode = state.radius_mode
@@ -102,6 +107,7 @@ def plan_radius_projection(
         captive=mode == "captive",
         block_reason=state.access_block_reason,
         billing_access_state=state,
+        test_access=test_access,
     )
 
 
@@ -112,6 +118,8 @@ def _prefer_login_candidate(
     """Choose one deterministic owner for a login shared by multiple services."""
     if current is None:
         return candidate
+    if bool(candidate.plan.test_access) != bool(current.plan.test_access):
+        return candidate if candidate.plan.test_access else current
     current_active = current.subscription_status == SubscriptionStatus.active
     candidate_active = candidate.subscription_status == SubscriptionStatus.active
     if candidate_active != current_active:
@@ -122,12 +130,18 @@ def _prefer_login_candidate(
 def plan_login_radius_projections(
     db: Session,
     subscriptions: Iterable[Subscription] | None = None,
+    *,
+    include_test_access: bool = True,
 ) -> dict[str, LoginRadiusProjection]:
     """Resolve the exact per-login access modes consumed by projection and audit.
 
     This is the shared comparator boundary.  RADIUS writers and drift checks
     must not independently reinterpret subscriber or subscription statuses.
     """
+    from app.models.test_connection import TestConnectionGrant
+    from app.services.test_connection import TestConnectionQuery, current_access
+
+    now = datetime.now(UTC)
     if subscriptions is None:
         subscriptions = (
             db.execute(
@@ -136,7 +150,15 @@ def plan_login_radius_projections(
                     joinedload(Subscription.subscriber).joinedload(Subscriber.reseller)
                 )
                 .where(
-                    Subscription.status.in_(ACTIVE_STATUSES | BLOCKED_STATUSES),
+                    or_(
+                        Subscription.status.in_(ACTIVE_STATUSES | BLOCKED_STATUSES),
+                        Subscription.id.in_(
+                            select(TestConnectionGrant.subscription_id).where(
+                                TestConnectionGrant.ended_at.is_(None),
+                                TestConnectionGrant.expires_at > now,
+                            )
+                        ),
+                    ),
                     Subscription.login.isnot(None),
                 )
             )
@@ -145,6 +167,21 @@ def plan_login_radius_projections(
             .all()
         )
 
+    subscriptions = tuple(subscriptions)
+    access_by_id = (
+        {
+            access.subscription_id: access
+            for access in current_access(
+                db,
+                query=TestConnectionQuery(
+                    subscription_ids=tuple(sub.id for sub in subscriptions),
+                    evaluated_at=now,
+                ),
+            )
+        }
+        if include_test_access
+        else {}
+    )
     selected: dict[str, LoginRadiusProjection] = {}
     from app.services.walled_garden_policy import resolve_subscription_restriction
 
@@ -163,6 +200,7 @@ def plan_login_radius_projections(
             subscription_status=subscription.status,
             plan=plan_radius_projection(
                 subscription,
+                test_access=access_by_id.get(subscription.id),
                 restriction_mode=(
                     restriction.effective_mode if restriction is not None else None
                 ),

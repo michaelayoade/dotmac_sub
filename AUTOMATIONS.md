@@ -849,13 +849,6 @@ Supported events include:
   follow the correct template/window rules.
 - **Status:** Scheduled by default.
 
-### Reply reminders
-
-- **When:** The reminder schedule runs.
-- **If:** A conversation has reached a configured waiting threshold.
-- **Then:** The application creates the relevant staff/customer reminder.
-- **Status:** Scheduled by default.
-
 ### AI intake processing
 
 - **When:** A new AI-intake session is ready or the processing schedule runs.

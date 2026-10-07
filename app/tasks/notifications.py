@@ -1626,6 +1626,44 @@ def _notification_queue_operational_event(
     )
 
 
+@celery_app.task(name="app.tasks.notifications.materialize_customer_bulk_message")
+def materialize_customer_bulk_message(payload_json: str) -> dict[str, object]:
+    """Materialize a validated admin bulk-message request outside HTTP."""
+
+    try:
+        payload = json.loads(payload_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid customer bulk-message task payload") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Customer bulk-message task payload must be an object")
+
+    from app.services import web_customer_actions
+    from app.services.queue_adapter import enqueue_task
+
+    with db_session_adapter.owner_command_session() as session:
+        result = web_customer_actions.queue_bulk_message_from_payload(
+            session,
+            payload,
+        )
+
+    dispatch = enqueue_task(
+        "app.tasks.notifications.deliver_notification_queue",
+        queue="notifications",
+        correlation_id=str(result.get("impact_token") or "") or None,
+        source="admin_customers_bulk_send_materialized",
+    )
+    return {
+        "matched_count": int(str(result.get("matched_count") or 0)),
+        "created_count": int(str(result.get("created_count") or 0)),
+        "queued_count": int(str(result.get("queued_count") or 0)),
+        "suppressed_count": int(str(result.get("suppressed_count") or 0)),
+        "skipped_count": int(str(result.get("skipped_count") or 0)),
+        "delivery_dispatch_queued": dispatch.queued,
+        "delivery_dispatch_task_id": dispatch.task_id,
+        "delivery_dispatch_error": dispatch.error,
+    }
+
+
 @celery_app.task(name="app.tasks.notifications.deliver_notification_queue")
 def deliver_notification_queue() -> dict[str, int]:
     """Process queued notifications and retry failed ones."""

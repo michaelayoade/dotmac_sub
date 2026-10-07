@@ -194,6 +194,10 @@ DEFAULT_PERMISSIONS = [
     ("catalog:offer:write", "Manage catalog offers"),
     # Subscriptions
     ("subscription:read", "View subscriptions"),
+    (
+        "subscription:test_connection",
+        "Temporarily enable subscription connectivity testing",
+    ),
     ("subscription:create", "Create subscriptions"),
     ("subscription:update", "Update subscriptions"),
     (
@@ -573,6 +577,7 @@ ROLE_PERMISSIONS = {
         "reports:support:read",
     ],
     "customer_experience_manager": [
+        "subscription:test_connection",
         "customer:read",
         "reseller:read",
         "support:ticket:read",
@@ -583,6 +588,7 @@ ROLE_PERMISSIONS = {
         "reports:support:read",
     ],
     "finance_manager": [
+        "subscription:test_connection",
         "billing:invoice:read",
         "billing:invoice:create",
         "billing:invoice:update",

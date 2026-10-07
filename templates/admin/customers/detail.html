@@ -1362,6 +1362,13 @@
                     </a>
                 </div>
             </div>
+            {% set subscription_visibility = namespace(has_non_active=false) %}
+            {% for subscription in subscriptions %}
+            {% set subscription_status = subscription.status.value if subscription.status is not string and subscription.status else (subscription.status | default('pending')) %}
+            {% if subscription_status != 'active' %}
+            {% set subscription_visibility.has_non_active = true %}
+            {% endif %}
+            {% endfor %}
             {% if subscriptions %}
             <div class="divide-y divide-slate-100 dark:divide-slate-700">
                 {% if (stats.active_subscriptions | default(0)) == 0 %}
@@ -1519,6 +1526,18 @@
                                 {% endif %}
                                 {% if show_service_assignments %}
                                 {% set sub_conn = (connection_by_subscription or {}).get(subscription.id|string, {}) %}
+                                {% endif %}
+                                {% if can_test_connection %}
+                                <a href="/admin/customers/{{ customer_type }}/{{ subscription.subscriber_id }}/subscriptions/{{ subscription.id }}/test-connection" class="w-24 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-center text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300">Test Connection</a>
+                                {% set test_grant = (test_connection_by_subscription or {}).get(subscription.id|string) %}
+                                {% if test_grant %}
+                                <div class="w-24 text-center text-xs text-blue-700 dark:text-blue-300" role="status">
+                                    {% if test_grant.delivery_state == 'applied' %}Test access active{% elif test_grant.delivery_state == 'failed' %}Delivery failed{% else %}Applying test access{% endif %}
+                                    <br>Until {{ test_grant.expires_at.strftime('%d %b %H:%M UTC') }}
+                                </div>
+                                {% endif %}
+                                {% endif %}
+                                {% if show_service_assignments %}
                                 {% if sub_conn %}
                                 <div class="w-24 text-center">
                                     {{ status_presentation_badge(sub_conn.status_presentation, size="sm") }}
@@ -1531,7 +1550,7 @@
                 </div>
                 {% endfor %}
             </div>
-            {% if (stats.total_subscriptions | default(0)) > (stats.active_subscriptions | default(0)) %}
+            {% if subscription_visibility.has_non_active %}
             <div class="border-t border-slate-100 px-5 py-4 text-center dark:border-slate-700">
                 <button type="button"
                         @click="showAllSubscriptions = !showAllSubscriptions"
@@ -3310,6 +3329,15 @@ function customerDetail(config = {}) {
 
                 if (response.ok) {
                     const result = await response.json();
+                    if (result.accepted) {
+                        this.closeSendMessageModal();
+                        const matched = result.matched_count || 0;
+                        const planned = result.planned_queued_count || 0;
+                        const skipped = result.skipped_count || 0;
+                        const suppressed = result.planned_suppressed_count || 0;
+                        alert(`Bulk send accepted for ${matched} customer(s). ${planned} delivery request(s) are being queued in the background.${skipped ? ` ${skipped} skipped due to missing contact details.` : ''}${suppressed ? ` ${suppressed} suppressed by preferences, dedupe, or template conditions.` : ''}`);
+                        return;
+                    }
                     const dispatch = result.delivery_dispatch || {};
                     const deliveryMessage = dispatch.queued
                         ? ' Delivery has been started.'

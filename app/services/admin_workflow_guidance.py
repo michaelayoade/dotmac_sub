@@ -194,7 +194,10 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
         "Confirm that your role has Automation Center access before opening the hub.",
         "Choose Workflows, Client scripts, Server scripts, or Execution history for the task you need to complete.",
-        "In Workflows, choose the module and owner-produced event shown by the form; workflow is the user-facing name for a central rule.",
+        "In Workflows, choose the module and one or more owner-produced events shown by the form; workflow is the user-facing name for a central rule.",
+        "Use AND, OR, and NOT condition groups to express broad matches and exceptions, such as excluding a particular ticket status.",
+        "For system-backed condition values, type into the lookup field and choose a returned option; the list is loaded on demand from current system records and configuration.",
+        "For recurring work, choose a scheduled event, set an interval or cron cadence and time zone, and keep scheduled triggers together; add a notification action when an operator or customer needs an update.",
         "Add only declared conditions and typed actions, then save the workflow as a draft before activation.",
         "In Client scripts, bind browser JavaScript to one registered module target and form event; use the restricted form API.",
         "Open a script to inspect its active source and SHA-256 hash. Edit creates or replaces an unpublished draft version; it does not overwrite the active version.",
@@ -205,6 +208,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "If you have retry permission, continue a failed run; successful steps are skipped, and the retry result is recorded.",
         notes=(
             "Workflow and rule refer to the same central event-to-action mechanism; the technical /rules routes remain for compatibility.",
+            "To review repeated temporary access, choose Network Access Control Plane → Test Connection created, set the preceding 7-day count greater than 5, and select Notify Finance with the intended team. Expired grants remain in the creation count; queued email still requires delivery confirmation.",
             "The hub is a directory. Module ownership diagnostics are not part of the operator workspace.",
             "Run history is read-only, while continuing a failed run requires the separate retry permission.",
             "A target may be scriptable before it is workflow-executable; each mechanism has its own declared capability list.",
@@ -277,6 +281,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open the specific record before performing a state-changing action.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "Authorized staff can open Test Connection below the Invoice icon in All Subscriptions to grant temporary full service access for troubleshooting; review the configured system-wide duration and expiry before activation.",
             "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
             "The action requires permission to cancel payment intents and review payment proofs.",
             "Customer pages use a short-lived notification-choice snapshot; use the bulk notification setup workflow when provider templates need to be refreshed.",
@@ -286,6 +291,27 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "/admin/customers/{customer_type}/{customer_id}/**",
             "/admin/customers/{subscriber_id}/availability",
             "/admin/customers/{subscriber_id}/subscriptions/{subscription_id}/sla-review",
+        ),
+    ),
+    _guide(
+        "subscription-test-connection",
+        "Subscriptions",
+        "Test a customer's connection",
+        "Customer Experience Manager, Finance Manager, authorized engineers",
+        "Temporarily enable full subscription access while troubleshooting connectivity.",
+        (),
+        "In the customer's All Subscriptions list, open Test Connection below the Invoice icon on the affected subscription.",
+        "Review the administrator-configured system-wide duration and expected expiry before activation; initiators cannot override the duration for an individual subscription.",
+        "Check the prerequisites and activate only for the displayed configured duration. The Test Connection permission is required.",
+        "Check the delivery status: pending means network application is still underway; applied confirms delivery; failed requires investigation before treating service as restored.",
+        "Test connectivity during the displayed interval. Outstanding bills, prolonged debt, and a missing billing baseline do not restrict this temporary access.",
+        "At expiry, current normal subscription and billing rules apply automatically. Review Timeline for the initiating user, activation time, duration, and expected expiry.",
+        route_templates=(
+            "/admin/customers/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
+        ),
+        notes=(
+            "Test Connection does not pay invoices, change the billing baseline, or permanently change the subscription's commercial state.",
+            "Security holds and missing or ambiguous network provisioning remain blockers; the configured network must support automatic expiry before activation is enabled.",
         ),
     ),
     _guide(
@@ -650,6 +676,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "If the complete prepaid charge is unavailable, no renewal invoice is created and the billing date is not moved.",
         "Acknowledge duplicate risk only when the reviewed bank evidence proves the payment is distinct.",
         "Use allocation for existing unallocated value; it does not create new money.",
+        "Filter the Payments or Unallocated Payments list by customer, status, method, or dates. Leave either date blank to omit that boundary; leave both blank for all dates. Export CSV uses the same filters across the complete result.",
         notes=(
             "Use Payment Proof review for customer-uploaded transfer receipts; never bypass a duplicate warning by changing the reference.",
             "Do not create a manual invoice or manually change the next billing date to imitate a prepaid renewal.",
@@ -800,9 +827,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
 )
 
 
-# These guides complete the Help Center's Admin-sidebar inventory. They are not
-# matched by ``guidance_for_path``, so adding Help content never adds a new
-# contextual question-mark control to a page.
+# These guides complete the Help Center's Admin-sidebar inventory. They are
+# also available to contextual path lookup when they describe a concrete page.
 HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
     _guide(
         "workqueue",
@@ -944,13 +970,19 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
     _guide(
         "vendor-routes",
         "Vendors",
-        "Review vendor routes",
+        "Review and propose map routes and assets",
         "Network and fiber reviewers",
-        "Review proposed vendor routes before accepting them into network work.",
+        "Review vendor submissions and create staff-owned map proposals before accepting network work.",
         ("/admin/vendors/routes",),
-        "Filter the route queue and open the exact proposal.",
-        "Review geometry, endpoints, project scope, evidence, and existing network conflicts.",
-        "Approve or reject the route with a clear reason, then verify the resulting project state.",
+        "Filter the route queue or open Fiber Plant Map, then choose the exact route or asset proposal.",
+        "Review geometry, endpoints, project or work-order links when present, evidence, and existing network conflicts.",
+        "When creating a staff proposal, choose Propose Route or Asset; project and work order links are optional, and no vendor quote is required.",
+        "Approve or reject the pending proposal with a clear reason, then verify the resulting network or project state.",
+        route_templates=("/admin/network/fiber", "/admin/vendors/routes/new"),
+        notes=(
+            "Staff-owned proposals remain separate from vendor quote submissions and stay pending until an authorized reviewer decides.",
+            "If a work order already belongs to an installation project, linking the work order can populate that project association; otherwise the proposal may remain unscoped.",
+        ),
     ),
     _guide(
         "reports-overview",
@@ -1069,26 +1101,26 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("review-automation-access", "Review Automation Center access", 0),
         _action("choose-automation-workspace", "Choose the automation workspace", 1),
         _action("choose-automation-event", "Choose a module and event", 2),
-        _action("save-automation-workflow", "Save a workflow draft", 3),
-        _action("create-automation-client-script", "Create a client script draft", 4),
+        _action("save-automation-workflow", "Save a workflow draft", 3, 4, 5, 6),
+        _action("create-automation-client-script", "Create a client script draft", 7),
         _action(
             "inspect-automation-script",
             "Inspect the active script and draft version",
-            5,
+            8,
         ),
         _action(
             "control-automation-script-lifecycle",
             "Publish, pause, resume, or retire a script",
-            6,
+            9,
         ),
-        _action("create-automation-server-script", "Create a server script draft", 7),
+        _action("create-automation-server-script", "Create a server script draft", 10),
         _action(
             "review-automation-runtime-boundary",
             "Review isolated runtime and owner-command limits",
-            8,
+            11,
         ),
-        _action("review-automation-runs", "Review run history and failure details", 9),
-        _action("retry-automation-run", "Continue a failed automation run", 10),
+        _action("review-automation-runs", "Review run history and failure details", 12),
+        _action("retry-automation-run", "Continue a failed automation run", 13),
     ),
     "custom-fields-center": (
         _action("review-custom-field-access", "Review custom-field access", 0),
@@ -1141,6 +1173,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="subscriber:impersonate",
         ),
         _action("review-history", "Review customer history", 5, 6),
+    ),
+    "subscription-test-connection": (
+        _action("review-test-duration", "Review the Test Connection duration", 0, 1),
+        _action(
+            "activate-test-connection",
+            "Activate and verify Test Connection",
+            2,
+            3,
+            4,
+            permission="subscription:test_connection",
+        ),
+        _action("review-test-expiry", "Review expiry and account history", 5),
     ),
     "new-subscription": (
         _action("select-service", "Select the customer service", 0),
@@ -1419,6 +1463,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     ),
     "payments": (
         _action(
+            "filter-export-payments",
+            "Filter or export payments",
+            7,
+            permission="billing:payment:read",
+        ),
+        _action(
             "record-payment",
             "Record a payment",
             0,
@@ -1686,12 +1736,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("verify-vendor-review", "Verify the review result", 3),
     ),
     "vendor-routes": (
-        _action("find-vendor-route", "Find a vendor route", 0),
-        _action("review-vendor-route", "Review route evidence", 1),
+        _action("find-vendor-route", "Find a route or asset proposal", 0),
+        _action("review-vendor-route", "Review route or asset evidence", 1),
+        _action(
+            "create-admin-map-proposal",
+            "Create a staff map proposal",
+            2,
+            permission="network:fiber:write",
+        ),
         _action(
             "decide-vendor-route",
             "Approve or reject a route",
-            2,
+            3,
             permission="network:fiber:write",
         ),
     ),
@@ -1889,6 +1945,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         (
             "catalog-overview",
             "new-subscription",
+            "subscription-test-connection",
             "subscription-lifecycle",
             "service-access",
         ),
@@ -1998,7 +2055,7 @@ def guidance_for_path(path: str) -> AdminWorkflowGuidance | None:
     """Return the most-specific guide for an Admin page path."""
     matches = (
         (specificity, guide)
-        for guide in WORKFLOW_GUIDANCE
+        for guide in all_guidance()
         if (specificity := guide.match_specificity(path)) is not None
     )
     return max(matches, key=lambda match: match[0], default=(0, None))[1]

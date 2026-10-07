@@ -2,6 +2,7 @@ from app.tasks.admin_alerts import evaluate_infrastructure_alerts
 from app.tasks.ai_operations import expire_stale_insights
 from app.tasks.alert_evaluation import evaluate_alert_rules
 from app.tasks.arrangements import check_overdue_arrangements
+from app.tasks.automation import run_scheduled_automation_rules
 from app.tasks.autopay import charge_due_invoices
 from app.tasks.bandwidth import (
     aggregate_to_metrics as aggregate_bandwidth_to_metrics,
@@ -113,7 +114,11 @@ from app.tasks.network_operations import (
     cleanup_old_operations,
     publish_operation_metrics,
 )
-from app.tasks.notifications import deliver_notification, deliver_notification_queue
+from app.tasks.notifications import (
+    deliver_notification,
+    deliver_notification_queue,
+    materialize_customer_bulk_message,
+)
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
 from app.tasks.olt_firmware import rollback_firmware_task, upgrade_firmware_task
@@ -347,6 +352,7 @@ __all__ = [
     "deliver_notification_queue",
     "deliver_notification",
     "reconcile_submitted_email",
+    "materialize_customer_bulk_message",
     "observe_channel_health",
     "snapshot_mrr",
     "snapshot_ip_pool_utilization",
@@ -390,6 +396,7 @@ __all__ = [
     "authorize_ont_task",
     "evaluate_alert_rules",
     "evaluate_infrastructure_alerts",
+    "run_scheduled_automation_rules",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",
     "sync_inventory_devices_to_monitoring",

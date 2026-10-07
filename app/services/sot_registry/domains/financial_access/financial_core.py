@@ -339,6 +339,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "eligible invoice selection for evidenced account credit",
             "deterministic payment-credit source selection",
+            "approved-opening exclusion of already absorbed payment sources",
             "oldest-payable-debt application orchestration",
             "exact invoice payment-backed funding preview",
             "pre-issuance payment-credit reservation and atomic application",
@@ -371,6 +372,9 @@ SERVICES: tuple[SOTService, ...] = (
             "is still a draft, then consumes that exact reservation after the "
             "receivable is issued in the same transaction. The new invoice's own "
             "debit therefore cannot hide the funding that must settle it."
+            " A reviewed account opening bounds payment source selection even"
+            " when a generic caller omits an explicit funding boundary;"
+            " pre-opening payment room is historical evidence, not new credit."
         ),
     ),
 )

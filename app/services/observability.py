@@ -67,6 +67,7 @@ _STATE_SNAPSHOT_SPECS = {
     "network_operations": {"max_observations": 32, "ttl_seconds": 86_400},
     # Prepaid enforcement + transitional coverage-repair counts published by
     # every prepaid_balance_sweep run; snapshot age doubles as its heartbeat.
+    # 23 repair/sweep signals + 3 finance work-item backlog signals = 26.
     "prepaid_enforcement": {"max_observations": 32, "ttl_seconds": 7 * 86_400},
     "router_sot": {"max_observations": 16, "ttl_seconds": 7 * 86_400},
 }
@@ -447,6 +448,20 @@ def resolve_findings(
         db,
         managed_prefix=managed_prefix,
         active_fingerprints=active_fingerprints,
+    )
+
+
+def count_open_findings(
+    db: Session,
+    *,
+    managed_prefix: str,
+    overdue_at: datetime | None = None,
+) -> int:
+    """Count open findings under a managed prefix (optionally past their SLA)."""
+    return admin_alerts.count_open_alerts(
+        db,
+        managed_prefix=managed_prefix,
+        overdue_at=overdue_at,
     )
 
 

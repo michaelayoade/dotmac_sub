@@ -150,7 +150,7 @@ def _force_projection(
     monkeypatch.setattr(
         radius_population,
         "plan_login_radius_projections",
-        lambda _db, _rows=None: {login: projection},
+        lambda _db, _rows=None, *, include_test_access=True: {login: projection},
     )
 
 

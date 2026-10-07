@@ -263,7 +263,9 @@ class QuoteRequestCreate(BaseModel):
 
 
 class QuoteFeasibility(BaseModel):
-    coverage: str | None = None  # covered | survey_required | out_of_area
+    coverage: str | None = (
+        None  # covered | survey_required | out_of_area | manual_review | technical_error
+    )
     feasible: bool | None = None
     distance_meters: float | None = None
     nearest_fap_name: str | None = None

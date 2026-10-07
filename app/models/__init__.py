@@ -45,6 +45,7 @@ from app.models.automation import (  # noqa: F401
     AutomationRunRetry,
     AutomationRunRetryStatus,
     AutomationRunStatus,
+    AutomationScheduledRun,
     AutomationStepRun,
     AutomationStepStatus,
 )
@@ -1095,7 +1096,6 @@ from app.models.team_inbox import (  # noqa: F401
     InboxMessageTemplate,
     InboxQueueNotification,
     InboxReplyMacro,
-    InboxReplyReminder,
     InboxSavedFilter,
     InboxTeamRole,
     InboxTeamRoundRobinCursor,
@@ -1104,6 +1104,8 @@ from app.models.team_inbox import (  # noqa: F401
     TeamInboxChannelRoute,
     TeamInboxEmailRoute,
 )
+from app.models.test_connection import TestConnectionGrant  # noqa: F401
+from app.models.test_connection_review import TestConnectionFinanceReview  # noqa: F401
 from app.models.ticket_workflow import (  # noqa: F401
     SlaBreach,
     SlaBreachStatus,

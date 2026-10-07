@@ -107,7 +107,14 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: migrated database engine and a sessionmaker for independently committing
 #: checkout owners. These prove serialization without contaminating shared
 #: fixture state. No production construction allowance is added.
-TEST_FIXTURE_BASELINE_TOTAL = 165
+#: +2 from tests/integration/test_test_connection_finance.py: independently
+#: committing sessions prove same-customer creation serialization and rollback
+#: of a request and its outbox event. They use the shared, migrated PostgreSQL
+#: engine fixture; no production engine/session construction is introduced.
+#: +5 from tests/integration/test_subscription_test_connection.py: two
+#: disposable migrated engines and three real sessions prove additive RBAC
+#: migration and serialized subscription activation. Production remains unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 172
 
 
 def _baseline() -> dict[str, int]:

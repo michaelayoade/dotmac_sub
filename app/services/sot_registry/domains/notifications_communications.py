@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from app.services.automation_contracts import (
+    AutomationActionCapability,
+    AutomationActionInput,
     AutomationCatalogItem,
     AutomationCatalogState,
     AutomationDomainCapabilities,
+    AutomationValueType,
 )
 from app.services.sot_manifest import (
     AuthorityInput,
@@ -3333,43 +3336,6 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
-            name="communications.team_inbox_reply_reminders",
-            module="app.services.team_inbox_reply_reminders",
-            owns=("agent reply reminder scheduling and repeat delivery",),
-            depends_on=(
-                "communications.team_inbox_threads",
-                "communications.team_inbox_routing",
-                "communications.intents",
-                "control.settings_spec",
-            ),
-            contract=_team_inbox_contract(
-                service_name="communications.team_inbox_reply_reminders",
-                concerns=(
-                    (
-                        "agent reply reminder scheduling and repeat delivery",
-                        OwnerRole.COMMAND_WRITER,
-                    ),
-                ),
-                inputs=(
-                    AuthorityInput(
-                        name="assignment and message chronology",
-                        owner="communications.team_inbox_routing",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Active assignment plus latest inbound and agent outbound timestamps.",
-                    ),
-                    AuthorityInput(
-                        name="configured reminder intervals",
-                        owner="control.settings_spec",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source="Validated delay and repeat minute settings.",
-                    ),
-                ),
-                transaction_mode=TransactionMode.OWNER_MANAGED,
-                event_types=("team_inbox.reply_reminder_queued.v1",),
-                test_refs=("tests/test_team_inbox_reply_reminders.py",),
-            ),
-        ),
-        SOTService(
             name="communications.team_inbox_agent_introduction",
             module="app.services.team_inbox_agent_introduction",
             owns=(
@@ -5169,6 +5135,58 @@ DOMAIN = DomainSOT(
     "and response writes to communications.surveys. Admin inbox mutation "
     "routes delegate to the committed team-inbox command boundary.",
     automation=AutomationDomainCapabilities(
+        target_types=("automation.shared",),
+        actions=(
+            AutomationActionCapability(
+                key="communications.send_notification",
+                label="Send notification",
+                entity_type="automation.shared",
+                target_types=("*",),
+                command_owner="communications.notification_service",
+                command_name="queue_automation_notification",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="channel",
+                        label="Channel",
+                        value_type=AutomationValueType.enum,
+                        enum_values=("email", "in_app"),
+                    ),
+                    AutomationActionInput(
+                        key="recipient",
+                        label="Recipient",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="subject",
+                        label="Subject",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="body",
+                        label="Message body",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="body_format",
+                        label="Email body format",
+                        value_type=AutomationValueType.enum,
+                        required=False,
+                        enum_values=("plain_text", "html"),
+                    ),
+                    AutomationActionInput(
+                        key="target_url",
+                        label="In-app target URL",
+                        value_type=AutomationValueType.string,
+                        required=False,
+                    ),
+                ),
+                author_permission="notification:write",
+                runtime_scope="one automation notification",
+                idempotency="tenant/event/rule/version/step/recipient",
+                runtime_enabled=True,
+            ),
+        ),
         catalog_items=(
             AutomationCatalogItem(
                 key="communications.event_notifications",
@@ -5260,13 +5278,6 @@ DOMAIN = DomainSOT(
                 group="Team Inbox",
                 state=AutomationCatalogState.unavailable,
                 explanation="The provider reply window is checked by existing message delivery safeguards.",
-            ),
-            AutomationCatalogItem(
-                key="communications.reply_reminders",
-                label="Reply reminders",
-                group="Team Inbox",
-                state=AutomationCatalogState.unavailable,
-                explanation="Reminder timing and cancellation are owned by the reply-reminder service, not Center rules yet.",
             ),
             AutomationCatalogItem(
                 key="communications.ai_intake_processing",

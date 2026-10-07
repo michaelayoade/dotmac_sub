@@ -122,6 +122,67 @@ def test_definition_is_serialized_against_declared_contract(
     assert actions[0]["inputs"] == [{"key": "team_id", "value": str(team_id)}]
 
 
+def test_shared_action_can_be_attached_to_a_business_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    declaration = DomainSOT(
+        domain="test_shared_automation_domain",
+        services=(),
+        entrypoints=(),
+        rule="test only",
+        automation=AutomationDomainCapabilities(
+            target_types=("test.ticket",),
+            triggers=(
+                AutomationTriggerCapability(
+                    key="test.ticket.created",
+                    label="Ticket created",
+                    event_type="test.ticket.created",
+                    event_schema_version=1,
+                    entity_type="test.ticket",
+                    tenant_id_field="tenant_id",
+                    entity_id_field="ticket_id",
+                    fields=(),
+                    author_permission="support:ticket:read",
+                ),
+            ),
+            actions=(
+                AutomationActionCapability(
+                    key="communications.send_notification",
+                    label="Send notification",
+                    entity_type="automation.shared",
+                    target_types=("*",),
+                    command_owner="communications.notification_service",
+                    command_name="queue_automation_notification",
+                    input_schema_version=1,
+                    inputs=(),
+                    author_permission="notification:write",
+                    runtime_scope="one notification",
+                    idempotency="event/rule/step/recipient",
+                    runtime_enabled=True,
+                ),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        automation_capabilities, "DOMAIN_SOT_RELATIONSHIPS", (declaration,)
+    )
+
+    _version, _conditions, actions = automation_rules._validate_definition(
+        db=db_session,
+        trigger_key="test.ticket.created",
+        conditions=(),
+        actions=(
+            automation_rules.AutomationActionStep(
+                action_key="communications.send_notification", inputs=()
+            ),
+        ),
+        permission_keys=frozenset({"support:ticket:read", "notification:write"}),
+    )
+
+    assert actions[0]["action_key"] == "communications.send_notification"
+
+
 def test_definition_fails_without_module_permission(
     declared_capabilities: None,
     db_session: Session,

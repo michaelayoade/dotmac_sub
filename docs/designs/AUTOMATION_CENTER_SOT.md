@@ -55,20 +55,49 @@ the UI.
 
 ## Rule shape
 
-The first contract is deliberately bounded:
+Rules remain bounded by the closed capability registry:
 
-1. one versioned domain event trigger;
-2. a typed conjunction of declared conditions;
-3. an ordered list of declared typed actions.
+1. one or more compatible versioned triggers for the same target type;
+2. declared condition fields combined with nested AND, OR, and NOT groups;
+3. an ordered list of declared typed actions;
+4. an interval or five-field cron schedule and time zone when every selected
+   trigger declares scheduled execution support.
 
-Loops, arbitrary scripts, arbitrary HTTP requests, delays, schedules, and a
-general workflow DAG are not part of the first cut. Each can be introduced by
-a later capability contract without weakening the closed registry.
+Event-driven and scheduled triggers cannot be mixed in one rule. Existing
+single-trigger rules and flat conjunctions remain valid. Publication validates
+each selected trigger's schema version, common condition fields, action target
+compatibility, and authoritative permissions. Ticket-status conditions allow
+SLA rules to exclude statuses such as Waiting on Customer.
+
+Loops, arbitrary HTTP requests, delays, and a general workflow DAG remain
+outside the native rule contract. Governed scripts use the separate script
+contract below.
 
 Published rule versions are immutable. A change creates a new draft version
 and publication atomically changes the active version. Runtime execution pins
 the exact rule version, trigger schema version, action schema versions and
 event identity used for the decision.
+
+Scheduled rules require migrations `643_automation_multi_trigger_conditions`
+and `644_automation_scheduled_rules` plus the registered
+`app.tasks.automation.run_scheduled_automation_rules` task. The scheduler claims
+a rule-version/slot identity before emitting target events; replay of the same
+slot cannot emit the same work again. Target facts come from the declared
+module providers. Rule conditions and actions then use the same execution
+owner as event-driven rules.
+
+The scheduled-run command owns the slot claim and durable event transaction;
+the task closes the session only after that command commits. Target events
+carry the claimed rule-version UUID so two scheduled rules on the same entity
+cannot execute each other's slot emissions. Multi-hour intervals use their
+full interval bucket rather than an hourly bucket. Failure to stage an event
+rolls back the claim so the same slot remains retryable.
+
+All Project and Material Request triggers, including expanded and scheduled
+capabilities, reuse their canonical module permissions. Action failures retain
+the owning domain error's retryable classification through the execution
+outcome and event handler, including runs using multiple triggers or grouped
+conditions.
 
 ## Script shape
 
@@ -149,6 +178,17 @@ disabling a registered capability makes affected rules ineligible to execute.
 Script publication repeats target permissions and runtime readiness checks.
 The Center never grants a script arbitrary ORM access, imports, process access,
 network access, dynamic code evaluation, or a generic database writer.
+
+Material Request triggers, actions, and script delivery use the same
+`operations:material_request:read` and `operations:material_request:write`
+permissions as the owning staff workspace. Automation declarations must not
+invent a parallel material permission namespace that the RBAC catalogue cannot
+assign.
+
+Each script target must reuse the canonical read/write permissions owned by its
+module's form and command routes. The registry architecture test covers every
+automation-enabled admin target so a stale permission cannot turn the shared
+client-script validation gate into a form-specific submission failure.
 
 The admin shell is available at `/admin/automation`. The hub is a directory
 that links to focused `/workflows`, `/client-scripts/manage`,
@@ -279,6 +319,15 @@ scope. The hub therefore gives operators one inventory without creating two
 writers for the same decision.
 
 ## Deployment
+
+Network Access Control Plane exposes the `billing.test_connection.created`
+trigger and `count_7d` condition from native subscription Test Connection grants.
+The `billing.test_connection.notify_finance` action accepts a configured team,
+delegates to the typed Finance consequence owner, and queues personal in-app
+and email notices with customer context and replay-safe recipient snapshots.
+The generic notification action retains its existing fixed-input semantics.
+See `docs/designs/TEST_CONNECTION_FINANCE_ALERT.md`; native migration 645, Finance migration 646, and explicit
+operator workflow publication are required. No workflow is auto-activated.
 
 Schema changes are additive. Permissions are seeded as assignable and are not
 granted broadly. Migration 626 adds tenant-isolated script identities,
