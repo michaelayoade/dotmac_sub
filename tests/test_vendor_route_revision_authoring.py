@@ -274,6 +274,9 @@ def test_authoring_ui_draws_saves_and_submits_owned_revisions() -> None:
     assert "pop_site" in AUTHORING_JS
     assert "/static/css/vendor-route-authoring.css" in ADMIN_AUTHORING_TEMPLATE
     assert "/static/css/vendor-route-authoring.css" in ADMIN_ROUTE_VIEW_TEMPLATE
+    assert "route_control_class" in ADMIN_AUTHORING_TEMPLATE
+    assert "asset_control_class" in ADMIN_AUTHORING_TEMPLATE
+    assert ">network:fiber:write<" not in ADMIN_AUTHORING_TEMPLATE
     assert "applyPlantViewPreset" in AUTHORING_JS
     assert 'data-route-plant-filter="fdh_cabinet"' in TEMPLATE
     assert 'data-route-plant-filter="fiber_segment"' in TEMPLATE
