@@ -900,7 +900,9 @@ def reports_regional_performance(
         "report": report_data,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
-    return templates.TemplateResponse("admin/reports/regional_performance.html", context)
+    return templates.TemplateResponse(
+        "admin/reports/regional_performance.html", context
+    )
 
 
 @router.get(

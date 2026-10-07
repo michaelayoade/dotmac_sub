@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "649_customer_connection_type"
@@ -26,7 +27,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "ck_subscribers_connection_type", "subscribers", type_="check"
-    )
+    op.drop_constraint("ck_subscribers_connection_type", "subscribers", type_="check")
     op.drop_column("subscribers", "connection_type")

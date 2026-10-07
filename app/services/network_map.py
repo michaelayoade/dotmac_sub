@@ -30,8 +30,7 @@ from app.models.network import (
 )
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
-from app.services import customer_regions
-from app.services import settings_spec
+from app.services import customer_regions, settings_spec
 from app.services.device_operational_status import (
     DeviceOperationalState,
     annotate_operational_status,
@@ -558,9 +557,7 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         if nas_id is not None:
             nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                 (
-                    *nas_ids_by_subscriber.get(
-                        subscription.subscriber_id, frozenset()
-                    ),
+                    *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
                     nas_id,
                 )
             )

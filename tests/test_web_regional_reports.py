@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.services.web_reports import (
-    RegionalReportMoney,
     RegionalReportData,
+    RegionalReportMoney,
     RegionalReportRow,
     _regional_report_window,
     build_regional_report_csv,

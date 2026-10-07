@@ -104,7 +104,9 @@ def customer_region_save(
     submitted_region = None
     if region_id:
         try:
-            submitted_region = db.get(customer_regions.CustomerRegion, _optional_uuid(region_id))
+            submitted_region = db.get(
+                customer_regions.CustomerRegion, _optional_uuid(region_id)
+            )
         except (TypeError, ValueError):
             submitted_region = None
     form_values = {

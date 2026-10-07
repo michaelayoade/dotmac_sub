@@ -32,9 +32,8 @@ from app.models.network import (
 )
 from app.models.subscriber import Address, Subscriber
 from app.schemas.fiber_cost_items import FiberCostEstimate, FiberPricingState
-from app.services import customer_regions
+from app.services import customer_regions, fiber_cost_items, settings_spec
 from app.services import fiber_change_requests as change_request_service
-from app.services import fiber_cost_items, settings_spec
 from app.services.network.radius_sessions import (
     SubscriptionSessionSnapshot,
     subscription_session_snapshots,
@@ -233,7 +232,9 @@ def serialize_asset(asset) -> dict:
     return data
 
 
-def _customer_map_payload(db: Session, map_limit: int | None = None) -> dict[str, object]:
+def _customer_map_payload(
+    db: Session, map_limit: int | None = None
+) -> dict[str, object]:
     """Build the bounded customer/region layer shared by fiber map views."""
 
     if map_limit is None:
@@ -309,7 +310,9 @@ def _customer_map_payload(db: Session, map_limit: int | None = None) -> dict[str
             if snapshot_nas is not None:
                 nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                     (
-                        *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
+                        *nas_ids_by_subscriber.get(
+                            subscription.subscriber_id, frozenset()
+                        ),
                         snapshot_nas,
                     )
                 )
@@ -330,8 +333,7 @@ def _customer_map_payload(db: Session, map_limit: int | None = None) -> dict[str
     features: list[dict] = []
     for address in customer_addresses:
         subscriber_name = (
-            f"{address.first_name or ''} {address.last_name or ''}".strip()
-            or "Unknown"
+            f"{address.first_name or ''} {address.last_name or ''}".strip() or "Unknown"
         )
         connectivity = connectivity_by_subscriber.get(
             address.subscriber_id, inactive_connectivity
@@ -341,7 +343,9 @@ def _customer_map_payload(db: Session, map_limit: int | None = None) -> dict[str
             latitude=float(address.latitude),
             longitude=float(address.longitude),
             pop_site_id=address.pop_site_id,
-            nas_device_ids=nas_ids_by_subscriber.get(address.subscriber_id, frozenset()),
+            nas_device_ids=nas_ids_by_subscriber.get(
+                address.subscriber_id, frozenset()
+            ),
         )
         features.append(
             {
@@ -731,16 +735,16 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
             if snapshot.nas_device_id is not None:
                 nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                     (
-                        *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
+                        *nas_ids_by_subscriber.get(
+                            subscription.subscriber_id, frozenset()
+                        ),
                         snapshot.nas_device_id,
                     )
                 )
         if subscription.provisioning_nas_device_id is not None:
             nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
                 (
-                    *nas_ids_by_subscriber.get(
-                        subscription.subscriber_id, frozenset()
-                    ),
+                    *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
                     subscription.provisioning_nas_device_id,
                 )
             )

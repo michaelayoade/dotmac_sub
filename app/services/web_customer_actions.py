@@ -2630,7 +2630,9 @@ def create_customer_from_form(
                 "postal_code": _normalize_optional(form_data.get("postal_code")),
                 "country_code": _normalize_optional(form_data.get("country_code")),
                 "pop_site_id": _normalize_optional(form_data.get("pop_site_id")),
-                "connection_type": _normalize_optional(form_data.get("connection_type")),
+                "connection_type": _normalize_optional(
+                    form_data.get("connection_type")
+                ),
                 "status": form_data.get("status") or "active",
                 "is_active": form_data.get("is_active") == "true",
                 "marketing_opt_in": form_data.get("marketing_opt_in") == "true",

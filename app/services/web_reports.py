@@ -27,15 +27,15 @@ from app.models.subscriber import (
 from app.schemas.status_presentation import StatusTone
 from app.services import billing as billing_service
 from app.services import crm_reporting as crm_reporting_service
+from app.services import subscriber as subscriber_service
+from app.services import subscriber_growth
+from app.services import usage_summary as usage_summary_service
 from app.services.customer_regions import (
     DEFAULT_REGION_COLOR,
     RegionOption,
     customer_region_assignment_cte,
     list_regions,
 )
-from app.services import subscriber as subscriber_service
-from app.services import subscriber_growth
-from app.services import usage_summary as usage_summary_service
 from app.services.service_address import address_parts
 from app.services.ui_contracts import ChartProjection, ChartSeries, Kpi, StateValue
 
@@ -584,7 +584,12 @@ def _regional_report_window(
     end = parsed_end + timedelta(days=1) if parsed_end else default_end
     if end <= start:
         raise ValueError("The report end date must be on or after the start date")
-    return start, end, start.date().isoformat(), (end - timedelta(days=1)).date().isoformat()
+    return (
+        start,
+        end,
+        start.date().isoformat(),
+        (end - timedelta(days=1)).date().isoformat(),
+    )
 
 
 def get_regional_report_data(
@@ -634,10 +639,9 @@ def get_regional_report_data(
         for key in region_keys
     }
     connection_counts: dict[UUID | None, dict[str, int]] = {
-        key: {"wireless": 0, "wired": 0, "unspecified": 0}
-        for key in region_keys
+        key: {"wireless": 0, "wired": 0, "unspecified": 0} for key in region_keys
     }
-    active_services: dict[UUID | None, int] = {key: 0 for key in region_keys}
+    active_services: dict[UUID | None, int] = dict.fromkeys(region_keys, 0)
     money: dict[UUID | None, dict[str, list[Decimal]]] = {
         key: {} for key in region_keys
     }
@@ -748,7 +752,9 @@ def get_regional_report_data(
     )
     if region_id is not None:
         invoice_stmt = invoice_stmt.where(assignments.c.region_id == region_id)
-    for assigned_region, currency, billed, outstanding in db.execute(invoice_stmt).all():
+    for assigned_region, currency, billed, outstanding in db.execute(
+        invoice_stmt
+    ).all():
         if assigned_region not in money:
             continue
         values = money[assigned_region].setdefault(

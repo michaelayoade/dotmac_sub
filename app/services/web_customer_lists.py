@@ -55,8 +55,7 @@ from app.schemas.infrastructure import (
     InfrastructureSearch,
     InfrastructureType,
 )
-from app.services import customer_regions
-from app.services import infrastructure_catalogue
+from app.services import customer_regions, infrastructure_catalogue
 from app.services import support as support_service
 from app.services.billing_profile import effective_billing_mode_clause
 from app.services.customer_account_visibility import splynx_deleted_import_clause
@@ -1638,9 +1637,7 @@ def build_customers_index_context(
                 RadiusActiveSession.nas_device_id,
             )
             .filter(
-                RadiusActiveSession.subscriber_id.in_(
-                    [person.id for person in people]
-                ),
+                RadiusActiveSession.subscriber_id.in_([person.id for person in people]),
                 RadiusActiveSession.nas_device_id.isnot(None),
             )
             .all()
@@ -1656,23 +1653,21 @@ def build_customers_index_context(
                 subscriber_id=person.id,
                 latitude=(
                     primary_address.latitude
-                    if (primary_address := customer_regions.primary_geocoded_address(
-                        person.addresses
-                    ))
+                    if (
+                        primary_address := customer_regions.primary_geocoded_address(
+                            person.addresses
+                        )
+                    )
                     else None
                 ),
                 longitude=primary_address.longitude if primary_address else None,
                 pop_site_id=person.pop_site_id,
                 nas_device_ids=frozenset(
-                    (
-                        subscription.provisioning_nas_device_id
-                        for subscription in person.subscriptions
-                        if subscription.provisioning_nas_device_id is not None
-                    )
+                    subscription.provisioning_nas_device_id
+                    for subscription in person.subscriptions
+                    if subscription.provisioning_nas_device_id is not None
                 )
-                | frozenset(
-                    live_nas_by_subscriber.get(person.id, set())
-                ),
+                | frozenset(live_nas_by_subscriber.get(person.id, set())),
             )
             for person in people
         ),

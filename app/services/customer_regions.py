@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 from uuid import UUID
 
 from geoalchemy2.types import Geography
-from sqlalchemy import and_, case, cast, func, or_, select as db_select
+from sqlalchemy import and_, case, cast, func, or_
+from sqlalchemy import select as db_select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import CTE
 
@@ -114,7 +115,9 @@ def _validate_region_input(
     if normalized_mode == CustomerRegionMatchMode.nas.value and not nas_device_id:
         raise ValueError("Select a NAS when using the matching NAS overlap rule")
     if normalized_mode == CustomerRegionMatchMode.pop_site.value and not pop_site_id:
-        raise ValueError("Select a POP/site when using the matching POP/site overlap rule")
+        raise ValueError(
+            "Select a POP/site when using the matching POP/site overlap rule"
+        )
     return (
         normalized_name,
         float(latitude),
@@ -389,16 +392,20 @@ def customer_region_assignment_cte() -> CTE:
             Subscriber.pop_site_id.isnot(None),
         ),
     )
-    assignment_rank = func.row_number().over(
-        partition_by=Subscriber.id,
-        order_by=(
-            case((infrastructure_match, 0), else_=1),
-            mode_priority.desc(),
-            CustomerRegion.priority.desc(),
-            distance.asc(),
-            CustomerRegion.id.asc(),
-        ),
-    ).label("assignment_rank")
+    assignment_rank = (
+        func.row_number()
+        .over(
+            partition_by=Subscriber.id,
+            order_by=(
+                case((infrastructure_match, 0), else_=1),
+                mode_priority.desc(),
+                CustomerRegion.priority.desc(),
+                distance.asc(),
+                CustomerRegion.id.asc(),
+            ),
+        )
+        .label("assignment_rank")
+    )
     return (
         db_select(
             Subscriber.id.label("subscriber_id"),
@@ -414,6 +421,8 @@ def customer_region_assignment_cte() -> CTE:
         .where(within_radius)
         .cte("customer_region_assignments")
     )
+
+
 def customer_region_filter_clause(region_id: str | UUID | None):
     """Return the canonical customer-list predicate for a region filter.
 
@@ -455,9 +464,10 @@ def _distance_meters(
     lat1, lat2 = math.radians(latitude), math.radians(float(region.latitude))
     delta_lat = lat2 - lat1
     delta_lon = math.radians(float(region.longitude) - longitude)
-    value = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(
-        lat2
-    ) * math.sin(delta_lon / 2) ** 2
+    value = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
+    )
     return radius * 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value))
 
 
@@ -523,12 +533,14 @@ def assign_regions(
     return {
         context.subscriber_id: assignment
         for context in contexts
-        if (assignment := resolve_region(
-            regions,
-            latitude=context.latitude,
-            longitude=context.longitude,
-            pop_site_id=context.pop_site_id,
-            nas_device_ids=context.nas_device_ids,
-        ))
+        if (
+            assignment := resolve_region(
+                regions,
+                latitude=context.latitude,
+                longitude=context.longitude,
+                pop_site_id=context.pop_site_id,
+                nas_device_ids=context.nas_device_ids,
+            )
+        )
         is not None
     }

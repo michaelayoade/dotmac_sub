@@ -251,10 +251,6 @@ from app.models.connector import (  # noqa: F401
     ConnectorConfig,
     ConnectorType,
 )
-from app.models.customer_region import (  # noqa: F401
-    CustomerRegion,
-    CustomerRegionMatchMode,
-)
 from app.models.contracts import ContractSignature  # noqa: F401
 from app.models.crm_sync_failure import (  # noqa: F401
     CrmSyncFailure,
@@ -283,6 +279,10 @@ from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoffStatus,
 )
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
+from app.models.customer_region import (  # noqa: F401
+    CustomerRegion,
+    CustomerRegionMatchMode,
+)
 from app.models.customer_subledger import (  # noqa: F401
     CustomerPositionEffect,
     CustomerPostingGroup,

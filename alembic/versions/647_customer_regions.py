@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "647_customer_regions"
 down_revision = "646_test_connection_finance_review"

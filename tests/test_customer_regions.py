@@ -43,9 +43,7 @@ def test_region_assignment_prefers_nearest_center_by_default():
     nearer = _region(name="Gudu", latitude=9.0000, longitude=7.0000)
     farther = _region(name="Wuse", latitude=9.0050, longitude=7.0050)
 
-    assignment = resolve_region(
-        [farther, nearer], latitude=9.0002, longitude=7.0002
-    )
+    assignment = resolve_region([farther, nearer], latitude=9.0002, longitude=7.0002)
 
     assert assignment is not None
     assert assignment.name == "Gudu"
@@ -91,9 +89,7 @@ def test_primary_geocoded_address_is_deterministic():
     non_primary = SimpleNamespace(
         id=uuid4(), latitude=9.0, longitude=7.0, is_primary=False
     )
-    primary = SimpleNamespace(
-        id=uuid4(), latitude=9.1, longitude=7.1, is_primary=True
-    )
+    primary = SimpleNamespace(id=uuid4(), latitude=9.1, longitude=7.1, is_primary=True)
 
     assert primary_geocoded_address([non_primary, primary]) is primary
 

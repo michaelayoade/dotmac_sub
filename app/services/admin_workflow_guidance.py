@@ -1008,6 +1008,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Choose the current-month default or enter an inclusive date range, then optionally narrow the report to one configured region.",
         "Read revenue and collection figures as period-bound financial facts; customer status, connection type, active service, and region assignment are current-state values.",
         "Use the region link in the detail table to inspect the matching customer list, including the Unassigned row when location cleanup is needed.",
+        "Confirm the selected period, region, and customer-state totals before exporting the report.",
         "Export only the filtered scope you are authorized to use.",
         notes=(
             "Revenue is grouped using each customer's current winning region, so changing a radius, center, or overlap rule can change historical geographic grouping.",
