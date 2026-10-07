@@ -11,6 +11,7 @@ from __future__ import annotations
 import enum
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import NoReturn
@@ -139,7 +140,7 @@ class AccountCreditInvoiceReconciliationResult:
     replayed: bool
 
 
-def _fingerprint(payload: dict[str, object]) -> str:
+def _fingerprint(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
