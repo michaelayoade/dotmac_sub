@@ -8787,14 +8787,16 @@ def preview_reviewed_prepaid_sequence_funding_correction(
                 "invoice document or contract value is not exact", index=index
             )
         if index == 0:
+            line_subscription_id = line.subscription_id
             identity_ok = (
                 invoice.billing_period_start is not None
                 and invoice.billing_period_end is not None
                 and _utc(invoice.billing_period_start) == periods[index][0]
                 and _utc(invoice.billing_period_end) == periods[index][1]
-                and line.subscription_id == subscription.id
+                and line_subscription_id == subscription.id
             )
         elif index == 1:
+            line_subscription_id = line.subscription_id
             identity_ok = (
                 item.expected_current_period_start is not None
                 and item.expected_current_period_end is not None
@@ -8804,7 +8806,7 @@ def preview_reviewed_prepaid_sequence_funding_correction(
                 == _utc(item.expected_current_period_start)
                 and _utc(invoice.billing_period_end)
                 == _utc(item.expected_current_period_end)
-                and line.subscription_id == subscription.id
+                and line_subscription_id == subscription.id
             )
         else:
             identity_ok = (

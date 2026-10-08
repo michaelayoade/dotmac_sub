@@ -2557,6 +2557,40 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="reviewed invoice-sequence funding correction command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:prepaid_reconciliation:repair permission checked "
+                        "against the exact chronological invoice set, selected "
+                        "lines and periods, imported transaction and payment "
+                        "identities, payment allocations, opening position, "
+                        "post-repair credit, Finance approval, ticket, evidence "
+                        "digest, preview fingerprint, actor, reason, command, "
+                        "correlation, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical prepaid invoice documents",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked active invoice sequence, selected lines, exact "
+                        "service periods, balances, statuses, allocations, and "
+                        "settlement state"
+                    ),
+                ),
+                AuthorityInput(
+                    name="imported Splynx payment transaction",
+                    owner="external:splynx_import",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "retained imported billing transaction identity, source "
+                        "payment, customer, amount, transaction date, and active "
+                        "deletion state, read through its local mirror"
+                    ),
+                ),
+                AuthorityInput(
                     name="canonical paid prepaid coverage document",
                     owner="financial.invoices",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
