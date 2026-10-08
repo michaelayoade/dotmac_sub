@@ -549,9 +549,7 @@ def build_customer_ledger_view(
             amount=event.amount,
         )
 
-    credit_count = sum(
-        event.entry_type == LedgerEntryType.credit for event in events
-    )
+    credit_count = sum(event.entry_type == LedgerEntryType.credit for event in events)
     debit_count = sum(event.entry_type == LedgerEntryType.debit for event in events)
     net_amounts = dict(credit_amounts)
     for currency, amount in debit_amounts.items():
