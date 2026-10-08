@@ -310,7 +310,8 @@ def test_network_map_filters_bypass_none_only_for_selected_results() -> None:
     ) in source
     assert "function layersRequiredByFilters()" in source
     assert "function applyLayerFilterBypass(requiredLayers)" in source
-    assert "applyMapFilters();\n        fitAllBounds();" in source
+    assert "applyMapFilters();\n        scheduleFitAllBounds();" in source
+    assert "feature?.properties?.type === 'network_device'" in source
     assert "config.selected.size > 0 && config.selected.has(key)" in source
     assert (
         "directFilters.device.active && directFilters.device.selected.size > 0"

@@ -390,7 +390,12 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         )
 
     # Fiber Segments
-    segments = db.query(FiberSegment).filter(FiberSegment.is_active.is_(True)).all()
+    segment_count = (
+        db.query(func.count(FiberSegment.id))
+        .filter(FiberSegment.is_active.is_(True))
+        .scalar()
+        or 0
+    )
     segment_geoms: list[tuple[FiberSegment, str | None]] = []
     if db.bind is not None and db.bind.dialect.name != "sqlite":
         segment_geoms = (
@@ -715,7 +720,7 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         .scalar()
         or 0,
         support_structures=db.query(func.count(FiberSupportStructure.id)).scalar() or 0,
-        fiber_segments=len(segments),
+        fiber_segments=int(segment_count),
         customers=customer_total,
         customers_connected=connected_count,
         customers_not_connected=not_connected_count,

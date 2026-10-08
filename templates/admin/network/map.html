@@ -1486,6 +1486,20 @@
             map.fitBounds(fitBounds, { padding: [50, 50] });
         }
     }
+    let fitFrame = null;
+    const requestMapFrame = window.requestAnimationFrame
+        ? callback => window.requestAnimationFrame(callback)
+        : callback => window.setTimeout(callback, 0);
+    const cancelMapFrame = window.cancelAnimationFrame
+        ? frame => window.cancelAnimationFrame(frame)
+        : frame => window.clearTimeout(frame);
+    function scheduleFitAllBounds() {
+        if (fitFrame !== null) cancelMapFrame(fitFrame);
+        fitFrame = requestMapFrame(() => {
+            fitFrame = null;
+            fitAllBounds();
+        });
+    }
     const initialFocus = new URLSearchParams(window.location.search).get('focus');
     if (initialFocus === 'customers' && customerBounds.length > 0) {
         map.fitBounds(customerBounds, { padding: [50, 50] });
@@ -1521,7 +1535,7 @@
                     .every(id => !document.getElementById(id).checked);
                 applyMapFilters();
                 syncLayerBulkButtons();
-                fitAllBounds();
+                scheduleFitAllBounds();
             });
         }
     });
@@ -1545,7 +1559,7 @@
         });
         syncLayerBulkButtons();
         applyMapFilters();
-        fitAllBounds();
+        scheduleFitAllBounds();
     }
     layersAll.addEventListener('click', () => setAllLayers(true));
     layersNone.addEventListener('click', () => setAllLayers(false));
@@ -1676,7 +1690,7 @@
     }
 
     const deviceTypes = [...new Set(mapFeatures
-        .filter(feature => feature.properties.type === 'network_device' && feature.properties.device_type)
+        .filter(feature => feature?.properties?.type === 'network_device' && feature.properties.device_type)
         .map(feature => feature.properties.device_type))].sort();
     const deviceTypeSelect = document.getElementById('filter-device-type');
     deviceTypes.forEach(type => deviceTypeSelect.add(new Option(type.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase()), type)));
@@ -1690,7 +1704,7 @@
             button.setAttribute('aria-pressed', 'false'); button.textContent = 'Direct filter';
         });
         applyMapFilters();
-        fitAllBounds();
+        scheduleFitAllBounds();
     });
 
     function setupHealthDrilldown(card, kind, groups) {
