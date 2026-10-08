@@ -31,7 +31,7 @@ import json
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
-from enum import StrEnum
+from enum import Enum, StrEnum
 from typing import TYPE_CHECKING, NoReturn, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -8598,7 +8598,7 @@ def _reviewed_sequence_correction_query_fingerprint(
     def serialize(value: object) -> str:
         if isinstance(value, datetime):
             return _utc(value).isoformat()
-        if isinstance(value, StrEnum):
+        if isinstance(value, Enum):
             return value.value
         if isinstance(value, UUID):
             return str(value)
