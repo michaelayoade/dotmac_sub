@@ -82,6 +82,7 @@ _WRITE_TIER_VERBS = frozenset(
     {
         "accept",
         "activate",
+        "activation_override",  # Admits prepaid activation for a quarantined account.
         "admin",
         "apply",
         "archive",

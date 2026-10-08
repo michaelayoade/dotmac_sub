@@ -1232,6 +1232,20 @@ def activate_subscription(
         db,
         subscriber_id=str(subscription.subscriber_id),
     )
+    if subscription.billing_mode == BillingMode.prepaid:
+        # Fail closed before starting prepaid service on an account the
+        # prepaid funding quarantine would exclude from money enforcement.
+        from app.services.prepaid_activation_funding_guard import (
+            PrepaidActivationEntryPoint,
+            require_prepaid_activation_funding_admitted,
+        )
+
+        require_prepaid_activation_funding_admitted(
+            db,
+            account_id=subscription.subscriber_id,
+            entry_point=PrepaidActivationEntryPoint.subscription_activation,
+            subscription_id=subscription.id,
+        )
 
     # Sales-created service contracts are gated by the canonical provisioning
     # result.  Billing settlement may fund the pending Subscription, but it may

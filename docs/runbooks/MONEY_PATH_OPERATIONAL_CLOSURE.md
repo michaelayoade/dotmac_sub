@@ -94,7 +94,11 @@ legacy stock is remediation inventory; growth is the prevention failure.
 Acceptance is a signed complete-cohort artifact, zero materializer blockers,
 an audited materialization, and both the stock and growth signals returning to
 zero. A later increase in `prepaid_funding_quarantined` is a new regression even
-while an older cohort is still being reviewed.
+while an older cohort is still being reviewed. Prepaid activation for a legacy account
+without an opening is refused at the source by
+`financial.prepaid_activation_funding_guard`; an audited staff override is the
+only way past it and still counts in the signal (see the activation-guard
+section of `PREPAID_FUNDING_AUDIT_RESTORE.md`).
 
 ## 4. Missing or stale prepaid billing anchors
 

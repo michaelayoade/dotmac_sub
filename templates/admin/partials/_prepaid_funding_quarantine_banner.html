@@ -1,0 +1,70 @@
+{# Prepaid funding quarantine banner.
+   Context: prepaid_funding_quarantine (PrepaidFundingQuarantineBanner | None),
+   prepaid_funding_return_to (str). Every value comes from
+   financial.prepaid_activation_funding_guard via web_prepaid_activation_funding. #}
+{% set pfq_notice = request.query_params.get('prepaid_funding_notice') if request else None %}
+{% set pfq_error = request.query_params.get('prepaid_funding_error') if request else None %}
+{% if pfq_notice %}
+<div class="rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100" role="status" data-testid="prepaid-funding-notice">{{ pfq_notice }}</div>
+{% endif %}
+{% if pfq_error %}
+<div class="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-900 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100" role="alert" data-testid="prepaid-funding-error">{{ pfq_error }}</div>
+{% endif %}
+{% if prepaid_funding_quarantine %}
+{% set pfq = prepaid_funding_quarantine %}
+<section class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+         role="alert"
+         aria-labelledby="prepaid-funding-quarantine-title"
+         data-testid="prepaid-funding-quarantine-banner"
+         data-quarantine-reason="{{ pfq.reason_code }}">
+    <h2 id="prepaid-funding-quarantine-title" class="font-semibold">Prepaid funding quarantine</h2>
+    <p class="mt-1">
+        This account has no reviewed prepaid funding opening: {{ pfq.reason_summary }}.
+        {% if pfq.prepaid_exposure %}
+        Its prepaid service is excluded from every balance-based warning, suspension and restoration until the opening is captured.
+        {% else %}
+        Starting prepaid service is refused until the opening is captured.
+        {% endif %}
+    </p>
+    <p class="mt-2">
+        Clear it with
+        <a href="{{ pfq.runbook_url }}" class="font-medium underline" target="_blank" rel="noopener noreferrer">{{ pfq.runbook_path }}</a>.
+    </p>
+    {% if pfq.override_active %}
+    <p class="mt-2" data-testid="prepaid-funding-override-active">
+        Activation override recorded by <span class="font-mono text-xs">{{ pfq.override_granted_by }}</span>
+        at {{ pfq.override_granted_at }}: “{{ pfq.override_reason }}”. The account still counts in the quarantine signal.
+    </p>
+    {% if pfq.can_override %}
+    <form method="post" action="{{ pfq.revoke_url }}" class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="return_to" value="{{ prepaid_funding_return_to }}">
+        <label class="flex-1">
+            <span class="block text-xs font-medium">Revocation reason</span>
+            <input type="text" name="reason" required minlength="{{ pfq.min_reason_length }}" maxlength="1000"
+                   class="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-amber-700 dark:bg-slate-900 dark:text-slate-100">
+        </label>
+        <button type="submit" class="rounded-lg border border-amber-400 px-3 py-2 text-sm font-medium hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900/40">Revoke override</button>
+    </form>
+    {% endif %}
+    {% elif pfq.can_override %}
+    <details class="mt-3" data-testid="prepaid-funding-override-form">
+        <summary class="cursor-pointer font-medium">Record activation override</summary>
+        <form method="post" action="{{ pfq.grant_url }}" class="mt-2 space-y-2">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="return_to" value="{{ prepaid_funding_return_to }}">
+            <label class="block">
+                <span class="block text-xs font-medium">Why must prepaid service start before the opening review completes?</span>
+                <textarea name="reason" required minlength="{{ pfq.min_reason_length }}" maxlength="1000" rows="2"
+                          class="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-amber-700 dark:bg-slate-900 dark:text-slate-100"></textarea>
+            </label>
+            <label class="flex items-start gap-2">
+                <input type="checkbox" name="confirmed" value="yes" required class="mt-0.5">
+                <span>I understand the account stays excluded from prepaid enforcement and stays in the quarantine signal until its opening is captured.</span>
+            </label>
+            <button type="submit" class="rounded-lg bg-amber-600 px-3 py-2 text-sm font-medium text-white hover:bg-amber-700">Record override</button>
+        </form>
+    </details>
+    {% endif %}
+</section>
+{% endif %}

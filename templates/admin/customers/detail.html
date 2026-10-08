@@ -34,6 +34,7 @@
         {{ request.query_params.get('party_binding_success') }}. The customer can now be rechecked in the quote picker.
     </div>
     {% endif %}
+    {% include "admin/partials/_prepaid_funding_quarantine_banner.html" %}
     {% if map_data %}
     <!-- Leaflet CSS for the Overview map -->
     <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"

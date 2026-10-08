@@ -154,6 +154,11 @@ DEFAULT_PERMISSIONS = [
         "Repair one exact already-paid prepaid invoice's identity and coverage "
         "after reviewed evidence",
     ),
+    (
+        "billing:prepaid_funding:activation_override",
+        "Admit prepaid activation for a legacy account whose reviewed funding "
+        "opening is still missing (account stays funding-quarantined)",
+    ),
     # Billing - Credit Notes
     ("billing:extension:read", "View service extensions"),
     ("billing:extension:create", "Create service extensions"),
