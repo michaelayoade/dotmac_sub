@@ -8,9 +8,9 @@ Owner: `access.test_connection`; network projection writer: `access.radius_proje
 
 Authorized staff open Test Connection below Invoice in the customer detail
 page's All Subscriptions section. The action is outside the active-only Invoice
-condition. The form defaults to two hours, offers 1–4-hour suggestions and
-whole-hour custom values within the configured maximum (default 24 hours).
-It previews the selected duration and expected UTC expiry before submission.
+condition. It displays the administrator-configured system-wide duration and
+expected UTC expiry before submission. Initiators cannot override the duration
+for an individual customer or subscription.
 
 `subscription:test_connection` is granted to Customer Experience Manager and
 Finance Manager. Migration 645 grants it additively to existing named roles;
@@ -28,7 +28,10 @@ profile, addresses and routes, then returns to current ordinary policy.
 Explicit fraud/security holds remain effective. Canceled, hidden or archived
 services and absent/unusable provisioning cannot be repaired by this action.
 A provisioned pending, disabled or expired service can be tested. Shared
-logins are refused rather than granting another service/customer access.
+logins are evaluated against the selected subscription's network credential;
+obsolete historical subscriptions do not block a test, while an unassigned
+credential shared by another live subscription is refused rather than granting
+another service/customer access.
 The bounded network path requires RADIUS authentication against PostgreSQL;
 non-RADIUS/static-only services need a separate NAS-native deadline capability.
 The UI reports that prerequisite rather than claiming an activation succeeded.
@@ -108,10 +111,11 @@ reconciles; it never restores a saved pre-test commercial-state snapshot.
    access. This is a network capability attestation, not a financial-lifecycle
    enable/disable switch. Revoke the attestation if network topology/configuration
    changes invalidate the verified capability.
-5. Configure `test_connection_default_hours` and
-   `test_connection_maximum_hours` in the existing settings UI. The maximum is
-   bounded to 4–24 hours and per-activation duration to 1–maximum. Changing
-   defaults does not alter already committed grants.
+5. Configure `test_connection_default_hours` in the existing settings UI. This
+   is the system-wide duration shown to every initiator and used for every new
+   activation. `test_connection_maximum_hours` remains an administrator safety
+   bound for that setting. Changing the default does not alter already
+   committed grants.
 
 Activation remains unavailable until the network capability is verified.
 Rolling back application code during live tests requires first ending the
@@ -132,11 +136,11 @@ Protocol references: [FreeRADIUS SQL module](https://www.freeradius.org/radiusd/
 Screen `admin.subscription_test_connection` is a service-action editor for
 permission-authorized support/engineering and finance staff. Its read and
 command owner is `access.test_connection`; RBAC owns visibility and admission.
-The first viewport shows the service login, selected whole-hour duration,
+The first viewport shows the service login, configured whole-hour duration,
 expected UTC expiry, current delivery status when present, and any unmet
-prerequisites. Updating the duration is secondary; activating the displayed
-interval is the single primary action. The account timeline holds actor and
-interval evidence. The detail row links to the subscription's own account,
+prerequisites. The duration is read-only here; activating the displayed
+system-wide interval is the single primary action. The account timeline holds
+actor and interval evidence. The detail row links to the subscription's own account,
 including when a person/company detail aggregates multiple accounts.
 
 Unauthorized staff see no row action and both routes refuse their request.

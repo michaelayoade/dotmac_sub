@@ -365,7 +365,7 @@ def test_concurrent_activations_serialize_to_one_grant(cloned_database, monkeypa
                     return owner.activate_test_connection(
                         db,
                         command=owner.ActivateTestConnectionCommand(
-                            context, account_id, sub_id, actor_id, 2
+                            context, account_id, sub_id, actor_id
                         ),
                     ).grant_id
                 except owner.TestConnectionError as exc:

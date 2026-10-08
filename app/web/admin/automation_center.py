@@ -23,6 +23,7 @@ from app.models.automation_scripts import (
 )
 from app.services import (
     automation_capabilities,
+    automation_condition_lookups,
     automation_rules,
     automation_runtime,
     automation_script_runtime,
@@ -39,6 +40,7 @@ from app.services.auth_dependencies import (
 )
 from app.services.automation_contracts import (
     AutomationConditionField,
+    AutomationLookupKey,
     AutomationOperator,
     AutomationValueType,
 )
@@ -236,6 +238,7 @@ def _generic_form_context(
                     "value_type": field.value_type.value,
                     "operators": [operator.value for operator in field.operators],
                     "enum_values": list(field.enum_values),
+                    "lookup_key": field.lookup_key.value if field.lookup_key else None,
                 }
                 for field in item.fields
                 if field.key != "customer_id"
@@ -1164,6 +1167,30 @@ def search_rule_customers(
     return JSONResponse(
         jsonable_encoder(customer_search.search_response(db, q, limit=20))
     )
+
+
+@router.get(
+    "/condition-options/{lookup_key}",
+    dependencies=[
+        Depends(require_permission("automation:hub:read")),
+    ],
+)
+def search_rule_condition_options(
+    lookup_key: str,
+    q: str = Query(default="", max_length=120),
+    limit: int = Query(default=20, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """Return lazy, canonical options for a declared condition lookup."""
+
+    try:
+        key = AutomationLookupKey(lookup_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404, detail="Condition lookup not found"
+        ) from exc
+    options = automation_condition_lookups.lookup_options(db, key, q=q, limit=limit)
+    return JSONResponse(jsonable_encoder({"items": options}))
 
 
 @router.get("/client-scripts", response_class=JSONResponse)

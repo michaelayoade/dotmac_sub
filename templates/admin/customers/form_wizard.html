@@ -61,9 +61,9 @@
         </div>
 
         <!-- Step 3: Address -->
-        <div x-show="currentStep === 3" x-cloak class="space-y-6">
+                <div x-show="currentStep === 3" x-cloak class="space-y-6">
             {% include "admin/customers/_wizard_step_address.html" %}
-        </div>
+                </div>
 
         <!-- Step 4: Contacts (Business accounts only) -->
         <div x-show="currentStep === 4 && customerType === 'business'" x-cloak class="space-y-6">
@@ -174,6 +174,7 @@ function customerWizard() {
         region: '',
         postalCode: '',
         countryCode: '{{ default_country|default("NG") }}',
+        connectionType: '',
 
         // Form data - Contacts (for business accounts)
         contacts: [],
@@ -293,6 +294,7 @@ function customerWizard() {
                 region: this.region,
                 postal_code: this.postalCode,
                 country_code: this.countryCode,
+                connection_type: this.connectionType,
                 // Quick options
                 create_account: this.createAccount,
                 continue_to_subscription: this.continueToSubscription,

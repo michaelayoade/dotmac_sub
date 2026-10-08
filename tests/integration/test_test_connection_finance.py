@@ -103,7 +103,6 @@ def _command(
         subscriber_id=account_id,
         subscription_id=sub_id,
         actor_id=actor_id,
-        duration_hours=2,
         context=CommandContext(
             command_id=key,
             correlation_id=key,

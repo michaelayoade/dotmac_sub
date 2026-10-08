@@ -983,6 +983,7 @@ def test_customer_list_declares_search_filter_and_sort_capabilities():
         "pop_site_id",
         "infrastructure_type",
         "infrastructure_id",
+        "region_id",
     )
     assert CUSTOMER_LIST_DEFINITION.sortable_keys == (
         "name",

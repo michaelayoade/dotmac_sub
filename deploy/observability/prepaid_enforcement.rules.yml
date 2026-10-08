@@ -6,6 +6,14 @@
 # snapshot age is the runner heartbeat. System-wide billing never stops: an
 # account with contradictory evidence enters an owned, SLA-bound exception
 # workflow, and these alerts fire when any blocked class stops draining.
+#
+# Account-state signals (renewal_terms_unresolved, coverage_unresolved,
+# notice_suppressed, no_contact_route, delivery_unavailable) are the totals of
+# the last COMPLETE keyset cycle, which may span several budget-limited runs.
+# They change only when a cycle completes (cycle_totals_age_seconds is their
+# age) and are absent until the first complete cycle. Run-scoped signals
+# (accounts_processed, budget_deferred, warned, ...) describe one bounded run;
+# accounts_scanned is the candidate cohort size, not the processed count.
 groups:
   - name: prepaid_enforcement
     rules:

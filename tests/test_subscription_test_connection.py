@@ -95,7 +95,6 @@ def test_service(db_session, subscriber, subscription, monkeypatch):
         subscriber_id=account_id,
         subscription_id=subscription_id,
         actor_id=actor_id,
-        duration_hours=2,
     )
 
 
@@ -130,10 +129,6 @@ def test_request_replay_never_extends_the_grant(db_session, test_service):
     assert second.replayed
     assert second.grant_id == first.grant_id
     assert second.expires_at == first.expires_at
-    with pytest.raises(owner.TestConnectionError, match="already been used"):
-        owner.activate_test_connection(
-            db_session, command=replace(test_service, duration_hours=3)
-        )
 
 
 def test_overlapping_activation_is_refused(db_session, test_service):
@@ -146,19 +141,29 @@ def test_overlapping_activation_is_refused(db_session, test_service):
 
 
 @pytest.mark.parametrize("hours", [1, 2, 3, 4, 12, 24])
-def test_configured_duration_is_snapshotted(db_session, test_service, hours):
-    result = owner.activate_test_connection(
-        db_session, command=replace(test_service, duration_hours=hours)
+def test_configured_duration_is_snapshotted(
+    db_session, test_service, hours, monkeypatch
+):
+    monkeypatch.setattr(
+        owner,
+        "configuration",
+        lambda db: owner.TestConnectionConfiguration(hours, 24, True),
     )
+    result = owner.activate_test_connection(db_session, command=test_service)
     assert result.expires_at - result.activated_at == timedelta(hours=hours)
 
 
 @pytest.mark.parametrize("hours", [0, -1, 25])
-def test_duration_bounds_are_enforced_on_the_command(db_session, test_service, hours):
+def test_configured_duration_bounds_are_enforced(
+    db_session, test_service, hours, monkeypatch
+):
+    monkeypatch.setattr(
+        owner,
+        "configuration",
+        lambda db: owner.TestConnectionConfiguration(hours, 24, True),
+    )
     with pytest.raises(owner.TestConnectionError, match="between 1 and 24"):
-        owner.activate_test_connection(
-            db_session, command=replace(test_service, duration_hours=hours)
-        )
+        owner.activate_test_connection(db_session, command=test_service)
 
 
 @pytest.mark.parametrize(
@@ -323,6 +328,15 @@ def test_test_connection_button_follows_invoice_outside_its_active_condition():
     test = template.index("Test Connection</a>", invoice)
     assert "{% endif %}" in template[invoice:test]
     assert "{% if can_test_connection %}" in template[invoice:test]
+
+
+def test_test_connection_editor_uses_the_system_duration_only():
+    template = Path("templates/admin/customers/test_connection.html").read_text(
+        encoding="utf-8"
+    )
+    assert "Configured test duration" in template
+    assert 'name="duration_hours"' not in template
+    assert "Update duration" not in template
 
 
 def test_timeline_records_staff_and_the_complete_granted_interval(
@@ -552,7 +566,7 @@ def test_preview_defaults_to_two_hours_and_shows_expected_expiry(
     assert 7190 <= (preview.expected_expiry - datetime.now(UTC)).total_seconds() <= 7200
 
 
-def test_shared_login_is_refused_instead_of_granting_other_services(
+def test_obsolete_shared_login_does_not_block_selected_subscription(
     db_session, test_service
 ):
     subscription = db_session.get(owner.Subscription, test_service.subscription_id)
@@ -565,5 +579,28 @@ def test_shared_login_is_refused_instead_of_granting_other_services(
         )
     )
     db_session.commit()
-    with pytest.raises(owner.TestConnectionError, match="shared by multiple"):
+    result = owner.activate_test_connection(db_session, command=test_service)
+    assert result.duration_seconds == 7200
+
+
+def test_live_shared_login_without_subscription_ownership_is_refused(
+    db_session, test_service
+):
+    subscription = db_session.get(owner.Subscription, test_service.subscription_id)
+    credential = db_session.scalar(
+        select(AccessCredential).where(
+            AccessCredential.subscription_id == subscription.id
+        )
+    )
+    credential.subscription_id = None
+    db_session.add(
+        owner.Subscription(
+            subscriber_id=subscription.subscriber_id,
+            offer_id=subscription.offer_id,
+            login=subscription.login,
+            status=SubscriptionStatus.active,
+        )
+    )
+    db_session.commit()
+    with pytest.raises(owner.TestConnectionError, match="shared by multiple live"):
         owner.activate_test_connection(db_session, command=test_service)

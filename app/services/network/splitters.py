@@ -1,6 +1,7 @@
 """Splitter-related network services."""
 
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -46,11 +47,50 @@ from app.services.query_builders import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class FdhCabinetPageQuery:
+    """Typed pagination request for the active FDH cabinet ledger."""
+
+    page: int
+    per_page: int
+
+
+@dataclass(frozen=True, slots=True)
+class FdhCabinetPage:
+    """One deterministic page and its matching active-cabinet total."""
+
+    cabinets: tuple[FdhCabinet, ...]
+    total: int
+    page: int
+    total_pages: int
+
+
 class FdhCabinets(CRUDManager[FdhCabinet]):
     model = FdhCabinet
     not_found_detail = "FDH cabinet not found"
     soft_delete_field = "is_active"
     soft_delete_value = False
+
+    @staticmethod
+    def active_page(db: Session, query: FdhCabinetPageQuery) -> FdhCabinetPage:
+        """Read active cabinets and total from the same canonical scope."""
+        base_query = db.query(FdhCabinet).filter(FdhCabinet.is_active.is_(True))
+        total = base_query.count()
+        per_page = min(max(query.per_page, 10), 100)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(max(query.page, 1), total_pages)
+        cabinets = (
+            base_query.order_by(FdhCabinet.name, FdhCabinet.id)
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return FdhCabinetPage(
+            cabinets=tuple(cabinets),
+            total=total,
+            page=page,
+            total_pages=total_pages,
+        )
 
     @staticmethod
     def list(

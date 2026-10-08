@@ -202,6 +202,12 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Vendors, device types, alert groups",
             },
             {
+                "name": "Customer Regions",
+                "url": "/admin/customer-regions",
+                "description": "Radius, center coordinates, colors, and overlap rules",
+                "permission": "gis:map:view",
+            },
+            {
                 "name": "NAS Types",
                 "url": "/admin/system/config/nas-types",
                 "description": "Supported NAS vendor types",

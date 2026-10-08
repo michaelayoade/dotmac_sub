@@ -1209,7 +1209,7 @@ class AccountCreditApplications:
                     .filter(PaymentAllocation.is_active.is_(True))
                     .first()
                 )
-                if existing is not None and funding_position_at is not None:
+                if existing is not None:
                     previous = round_money(to_decimal(existing.amount))
                     allocation_result = (
                         PaymentAllocations.stage_increase_existing_at_reviewed_boundary(
@@ -1257,7 +1257,7 @@ class AccountCreditApplications:
                     amount=applied,
                     idempotency_suffix=(
                         f":topup:{payment.id}:{invoice.id}:{amount}"
-                        if existing is not None and funding_position_at is not None
+                        if existing is not None
                         else None
                     ),
                 )

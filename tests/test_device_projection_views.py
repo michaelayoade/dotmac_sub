@@ -8,6 +8,7 @@ web_network_core_devices_inventory.py.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.routing import APIRoute
@@ -143,6 +144,42 @@ def test_network_devices_filter_returns_rows_and_fresh_pagination(monkeypatch):
     assert context["htmx_target"] == "devices-content"
 
 
+def test_all_devices_search_ignores_stale_legacy_type_filter():
+    query = network_routes._build_device_query(
+        device_type="core",
+        type_filter="all",
+        search="Access",
+        status="working",
+        vendor="mikrotik",
+        lifecycle="current",
+        page=2,
+        per_page=25,
+    )
+
+    assert query.filter_value("type") == "all"
+    assert query.search == "Access"
+    assert query.filter_value("status") == "working"
+    assert query.filter_value("vendor") == "mikrotik"
+    assert query.filter_value("lifecycle") == "current"
+    assert query.page == 2
+
+
+def test_device_tabs_keep_hidden_type_filter_in_shared_alpine_state():
+    template = Path("templates/admin/network/devices/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert template.count('x-data="{ activeType:') == 1
+    assert (
+        '<input id="device-type-filter" x-ref="deviceTypeFilter" type="hidden" '
+        'name="type" x-model="activeType"' in template
+    )
+    assert (
+        "x-on:click=\"activeType = '{{ dt.value }}'; "
+        "$refs.deviceTypeFilter.value = '{{ dt.value }}'\"" in template
+    )
+
+
 # --- Read owner ---
 
 
@@ -190,6 +227,34 @@ def test_query_filters_sorts_and_paginates(db_session):
     assert total == 1
     assert rows[0]["status_presentation"].value == "not_working"
     assert rows[0]["status_presentation"].label == "Offline"
+
+
+def test_all_devices_search_returns_nas_access_device(db_session):
+    _proj(
+        db_session,
+        "nas-access",
+        name="Eagle FM Access",
+        device_type="nas",
+        vendor="mikrotik",
+    )
+    _proj(
+        db_session,
+        "core-unrelated",
+        name="Aggregation Core",
+        device_type="core",
+        vendor="mikrotik",
+    )
+
+    query = inventory.build_network_device_list_query(
+        device_type="all",
+        search="Access",
+    )
+    payload = inventory.devices_list_page_data(db_session, query)
+
+    assert payload["total"] == 1
+    assert [(row["name"], row["type"]) for row in payload["devices"]] == [
+        ("Eagle FM Access", "nas")
+    ]
 
 
 def test_archived_rows_are_hidden_by_default_and_queryable_explicitly(db_session):

@@ -265,7 +265,6 @@ def customer_test_connection_form(
     customer_type: Literal["person", "business"],
     customer_id: UUID,
     subscription_id: UUID,
-    duration_hours: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     from app.services.test_connection import (
@@ -281,7 +280,6 @@ def customer_test_connection_form(
             query=TestConnectionPreviewQuery(
                 subscriber_id=customer_id,
                 subscription_id=subscription_id,
-                duration_hours=duration_hours,
             ),
         )
     except DomainError as exc:
@@ -315,7 +313,6 @@ def customer_test_connection_activate(
     customer_type: Literal["person", "business"],
     customer_id: UUID,
     subscription_id: UUID,
-    duration_hours: int = Form(...),
     command_id: UUID = Form(...),
 ):
     from app.services.test_connection import (
@@ -348,7 +345,6 @@ def customer_test_connection_activate(
                     subscriber_id=customer_id,
                     subscription_id=subscription_id,
                     actor_id=actor_id,
-                    duration_hours=duration_hours,
                 ),
             )
     except DomainError as exc:
@@ -620,6 +616,7 @@ def customers_list(
     pop_site_id: str | None = None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    region_id: str | None = None,
     sort: Literal["created_at", "name", "status"] = Query("created_at"),
     direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     page: int = Query(1, ge=1),
@@ -646,6 +643,7 @@ def customers_list(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             sort_by=sort,
             sort_dir=direction,
             page=page,
@@ -866,6 +864,7 @@ async def customer_create(
     postal_code: str | None = Form(None),
     country_code: str | None = Form(None),
     pop_site_id: str | None = Form(None),
+    connection_type: str | None = Form(None),
     status: str | None = Form(None),
     is_active: str | None = Form(None),
     marketing_opt_in: str | None = Form(None),
@@ -924,6 +923,7 @@ async def customer_create(
             "postal_code": postal_code,
             "country_code": country_code,
             "pop_site_id": pop_site_id,
+            "connection_type": connection_type,
             "status": status,
             "is_active": is_active,
             "marketing_opt_in": marketing_opt_in,
@@ -2322,6 +2322,7 @@ def person_update(
     region: str | None = Form(None),
     postal_code: str | None = Form(None),
     country_code: str | None = Form(None),
+    connection_type: str | None = Form(None),
     marketing_opt_in: str | None = Form(None),
     notes: str | None = Form(None),
     account_start_date: str | None = Form(None),
@@ -2379,6 +2380,7 @@ def person_update(
             region=region,
             postal_code=postal_code,
             country_code=country_code,
+            connection_type=connection_type,
             marketing_opt_in=marketing_opt_in,
             notes=notes,
             account_start_date=account_start_date,
@@ -2466,6 +2468,7 @@ def business_update(
     tax_id: str | None = Form(None),
     domain: str | None = Form(None),
     website: str | None = Form(None),
+    connection_type: str | None = Form(None),
     business_notes: str | None = Form(None),
     business_account_start_date: str | None = Form(None),
     billing_enabled_override: str | None = Form(None),
@@ -2492,6 +2495,7 @@ def business_update(
             tax_id=tax_id,
             domain=domain,
             website=website,
+            connection_type=connection_type,
             org_notes=business_notes,
             org_account_start_date=business_account_start_date,
             billing_enabled_override=billing_enabled_override,
@@ -3578,6 +3582,7 @@ def export_customers(
     pop_site_id: str | None = None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    region_id: str | None = None,
     sort: Literal["created_at", "name", "status"] = Query("created_at"),
     direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     db: Session = Depends(get_db),
@@ -3594,6 +3599,7 @@ def export_customers(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             sort_by=sort,
             sort_dir=direction,
         )
