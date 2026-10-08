@@ -87,7 +87,7 @@ class CustomerLedgerQuery:
 
 @dataclass(frozen=True, slots=True)
 class CustomerLedgerEntryView:
-    id: str
+    id: str | UUID
     entry_type: LedgerEntryType
     source: LedgerSource
     amount: Decimal
@@ -122,6 +122,17 @@ class CustomerLedgerView:
     page_end: int
     previous_page_url: str | None
     next_page_url: str | None
+
+
+def _customer_financial_event_display_id(event: CustomerFinancialEvent) -> str | UUID:
+    """Keep legacy ledger links UUID-shaped while preserving canonical event IDs."""
+    prefix, _, raw_id = event.id.partition(":")
+    if prefix == "ledger":
+        try:
+            return UUID(raw_id)
+        except ValueError:
+            pass
+    return event.id
 
 
 def _customer_financial_event_detail_url(event: CustomerFinancialEvent) -> str:
@@ -589,7 +600,7 @@ def build_customer_ledger_view(
     for event in page_events:
         entries.append(
             CustomerLedgerEntryView(
-                id=event.id,
+                id=_customer_financial_event_display_id(event),
                 entry_type=event.entry_type,
                 source=event.source,
                 amount=event.amount,
