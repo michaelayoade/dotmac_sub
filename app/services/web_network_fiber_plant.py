@@ -11,7 +11,9 @@ from starlette.datastructures import FormData
 
 from app.models.fiber_change_request import FiberChangeRequestStatus
 from app.models.network import FiberTerminationPoint
+from app.schemas.network_map_asset_changes import NetworkAssetProposalStatus
 from app.services import fiber_change_requests as change_request_service
+from app.services import network_map_asset_changes
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services import web_network_fiber as web_network_fiber_service
@@ -36,6 +38,8 @@ def change_requests_page_data(
     *,
     bulk_status: str | None,
     skipped: str | None,
+    can_review_map_assets: bool = False,
+    map_asset_actor_id: str = "",
 ) -> dict[str, object]:
     requests = change_request_service.list_requests(
         db, status=FiberChangeRequestStatus.pending
@@ -44,9 +48,29 @@ def change_requests_page_data(
         str(req.id): web_network_fiber_service.has_change_request_conflict(db, req)
         for req in requests
     }
+    map_asset_proposals = network_map_asset_changes.list_proposals(
+        db,
+        status=NetworkAssetProposalStatus.pending,
+        limit=200,
+    )
+    map_asset_items = [
+        {
+            **proposal.to_transport(),
+            "can_review": can_review_map_assets
+            and str(proposal.requested_by_actor_id) != map_asset_actor_id,
+            "is_current_actor_proposer": (
+                str(proposal.requested_by_actor_id) == map_asset_actor_id
+            ),
+        }
+        for proposal in map_asset_proposals.proposals
+    ]
     return {
         "requests": requests,
         "conflicts": conflicts,
+        "map_asset_proposals": map_asset_items,
+        "map_asset_proposals_total": map_asset_proposals.total,
+        "map_asset_proposals_truncated": map_asset_proposals.truncated,
+        "can_review_map_assets": can_review_map_assets,
         "bulk_status": bulk_status,
         "skipped": skipped,
     }
