@@ -58,7 +58,7 @@ from app.services.network.ont_assignment_identity import (
     decline_assignment_identity_repair,
     execute_assignment_identity_repair,
 )
-from app.web.request_parsing import parse_form_data_sync, parse_json_body_sync
+from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
@@ -879,13 +879,15 @@ def fiber_change_requests_bulk_approve(request: Request, db: Session = Depends(g
     "/fiber-map/update-position",
     dependencies=[Depends(require_permission("network:fiber:write"))],
 )
-def update_asset_position(request: Request, db: Session = Depends(get_db)):
-    """Update position of FDH cabinet or splice closure via drag-and-drop."""
-    data: dict[str, object] = parse_json_body_sync(request)
-    payload, status_code = web_network_fiber_plant_service.update_asset_position_data(
-        db, data
+def update_asset_position():
+    """Retire the direct-write endpoint; movements now require review."""
+    return JSONResponse(
+        {
+            "error": "movement_review_required",
+            "message": "Submit a movement proposal for independent review.",
+        },
+        status_code=410,
     )
-    return JSONResponse(payload, status_code=status_code)
 
 
 @router.get(
@@ -984,9 +986,14 @@ def fiber_reports(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:fiber:read"))],
 )
-def fdh_cabinets_list(request: Request, db: Session = Depends(get_db)):
+def fdh_cabinets_list(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=100),
+    db: Session = Depends(get_db),
+):
     """List FDH cabinets."""
-    page_data = web_network_fdh_service.list_page_data(db)
+    page_data = web_network_fdh_service.list_page_data(db, page=page, per_page=per_page)
     context = _base_context(
         request, db, active_page="fdh-cabinets", active_menu="fiber"
     )

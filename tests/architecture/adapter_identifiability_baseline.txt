@@ -37,9 +37,8 @@ app/services/web_network_core_devices_views.py 59
 app/services/web_network_core_runtime.py 11
 app/services/web_network_cpes.py 12
 app/services/web_network_dns_threats.py 4
-app/services/web_network_fdh.py 8
-app/services/web_network_fiber.py 40
-app/services/web_network_fiber_plant.py 1
+app/services/web_network_fdh.py 7
+app/services/web_network_fiber.py 38
 app/services/web_network_ip_actions.py 2
 app/services/web_network_ipam_ledger.py 3
 app/services/web_network_monitoring.py 11

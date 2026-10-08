@@ -842,6 +842,12 @@
         }
 
         map.on("click", function (event) {
+            if (
+                typeof config.shouldAddRoutePoint === "function" &&
+                !config.shouldAddRoutePoint()
+            ) {
+                return;
+            }
             addPoint(event.latlng.lat, event.latlng.lng);
         });
         if (undoElement) {

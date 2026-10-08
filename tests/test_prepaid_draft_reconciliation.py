@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from inspect import getsource
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -90,6 +91,8 @@ from app.services.prepaid_draft_reconciliation import (
     ReviewedPrepaidInvoiceSequenceDisposition,
     ReviewedPrepaidInvoiceSequenceDocumentSelection,
     ReviewedPrepaidInvoiceSequenceQuery,
+    ReviewedPrepaidSequenceCorrectionDocument,
+    ReviewedPrepaidSequenceFundingCorrectionQuery,
     ReviewedPrepaidSettlementEvidenceSelection,
     SettleReviewedExistingPrepaidDraftCommand,
     adopt_funded_prepaid_proforma,
@@ -123,6 +126,60 @@ from tests.prepaid_funding_helpers import (
 
 START = datetime(2026, 7, 17, tzinfo=UTC)
 END = datetime(2026, 8, 17, tzinfo=UTC)
+
+
+def test_reviewed_sequence_correction_fingerprint_serializes_invoice_status() -> None:
+    document = ReviewedPrepaidSequenceCorrectionDocument(
+        invoice_id=uuid4(),
+        line_id=uuid4(),
+        service_period_start=START,
+        service_period_end=END,
+        expected_total=Decimal("150500.00"),
+        expected_status=InvoiceStatus.paid,
+    )
+    query = ReviewedPrepaidSequenceFundingCorrectionQuery(
+        subscription_id=uuid4(),
+        documents=(document,),
+        historical_payment_id=uuid4(),
+        splynx_transaction_id=uuid4(),
+        historical_existing_allocation_id=uuid4(),
+        opening_position_id=uuid4(),
+        displaced_payment_id=uuid4(),
+        displaced_allocation_id=uuid4(),
+        credit_target_invoice_id=uuid4(),
+        duplicate_void_invoice_id=uuid4(),
+        expected_historical_payment_amount=Decimal("451500.00"),
+        expected_displaced_payment_amount=Decimal("650000.00"),
+        expected_opening_credit=Decimal("150500.00"),
+        expected_post_repair_credit=Decimal("0.00"),
+        approval=ReviewedPrepaidInvoiceSequenceApproval(
+            approver_system_user_id=uuid4(),
+            approver_name="Reviewed operator",
+            ticket_reference="reviewed-sequence-regression",
+        ),
+    )
+
+    fingerprint = (
+        reconciliation_service._reviewed_sequence_correction_query_fingerprint(query)
+    )
+
+    assert len(fingerprint) == 64
+    assert fingerprint == (
+        reconciliation_service._reviewed_sequence_correction_query_fingerprint(query)
+    )
+
+
+def test_reviewed_sequence_allocates_displaced_payment_before_history() -> None:
+    source = getsource(reconciliation_service.correct_reviewed_prepaid_sequence_funding)
+
+    target_allocation = source.index(
+        "target_result = PaymentAllocations.stage_confirm("
+    )
+    historical_reclassification = source.index(
+        "PaymentAllocations.stage_confirm_reviewed_historical_reclassification_for_owner("
+    )
+
+    assert target_allocation < historical_reclassification
 
 
 def _draft(db, account, subscription, *, total: Decimal) -> Invoice:
