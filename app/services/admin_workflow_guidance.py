@@ -377,6 +377,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review each staged feature's name, geometry, suggested asset type, and blocker; correct classifications before submission.",
         "Submit eligible new point assets into the existing proposal review. Route geometry and other blocked features stay staged until their separate review is complete.",
         "On the fiber map, submit supported FDH and closure moves for review; the canonical map position changes only after approval.",
+        "On Fiber Change Requests, review pending Map V2 proposals in their separate queue. Only an independent reviewer with network:fiber:review can approve or reject; approval applies the proposed canonical asset change.",
         "On the FDH cabinet ledger, use the active-cabinet list and page controls to find a cabinet, then use its editor for non-location details.",
         notes=(
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",

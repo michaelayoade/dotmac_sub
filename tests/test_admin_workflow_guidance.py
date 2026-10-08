@@ -58,6 +58,18 @@ def test_getting_started_is_the_first_help_category() -> None:
     assert categories[:2] == ("Getting started", "Administration")
 
 
+def test_network_guidance_explains_independent_map_proposal_review() -> None:
+    guide = guidance_for_path("/admin/network/fiber-change-requests")
+
+    assert guide is not None
+    assert guide.id == "network-access"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "map v2 proposals" in content
+    assert "independent reviewer" in content
+    assert "network:fiber:review" in content
+    assert "canonical asset change" in content
+
+
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
     expected = {
         "/admin/dashboard": "admin-workspace",
