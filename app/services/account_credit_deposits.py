@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -62,6 +64,8 @@ from app.services.topup_intents import (
     stage_topup_intent_completion,
 )
 
+logger = logging.getLogger(__name__)
+
 PURPOSE = TopupIntentPurpose.account_credit_deposit.value
 ALLOCATION_POLICY = TopupAllocationPolicy.credit_only.value
 CREDIT_APPLICATION_POLICY = AccountCreditApplicationPolicy.pay_eligible_invoices.value
@@ -69,12 +73,40 @@ POLICY_VERSION = 1
 SUPPORTED_CURRENCY = "NGN"
 SETTLEMENT_SCOPE = "account-credit-deposit:settle"
 SETTLEMENT_PARTICIPANT_SCOPE = "account-credit-deposit:settle-participant"
+_SETTLEMENT_ATTEMPTS = 2
+_LOCK_TIMEOUT_SQLSTATE = "55P03"
 
 _SETTLE_COMMAND = OwnerCommandDefinition(
     owner="financial.account_credit_deposits",
     concern="verified Deposit Account Credit settlement command",
     name="settle_verified_account_credit_deposit",
 )
+
+
+def _is_lock_timeout(error: BaseException) -> bool:
+    """Return whether an error is PostgreSQL's statement lock timeout."""
+
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if (
+            getattr(current, "sqlstate", None) == _LOCK_TIMEOUT_SQLSTATE
+            or getattr(current, "pgcode", None) == _LOCK_TIMEOUT_SQLSTATE
+        ):
+            return True
+        for related in (
+            getattr(current, "orig", None),
+            current.__cause__,
+            current.__context__,
+        ):
+            if isinstance(related, BaseException):
+                pending.append(related)
+    return False
 
 
 class AccountCreditDepositSettlementSource(str, Enum):
@@ -665,16 +697,31 @@ class AccountCreditDeposits:
     ) -> DepositSettlementResult:
         """Settle verified receipt evidence in one owner-managed transaction."""
 
-        return execute_owner_command(
-            db,
-            definition=_SETTLE_COMMAND,
-            context=context,
-            operation=lambda: AccountCreditDeposits._settle_result(
-                db,
-                command=command,
-                context=context,
-            ),
-        )
+        for attempt in range(_SETTLEMENT_ATTEMPTS):
+            try:
+                return execute_owner_command(
+                    db,
+                    definition=_SETTLE_COMMAND,
+                    context=context,
+                    operation=lambda: AccountCreditDeposits._settle_result(
+                        db,
+                        command=command,
+                        context=context,
+                    ),
+                )
+            except Exception as exc:
+                if attempt + 1 >= _SETTLEMENT_ATTEMPTS or not _is_lock_timeout(exc):
+                    raise
+                logger.warning(
+                    "account_credit_deposit_settlement_lock_timeout_retry",
+                    extra={
+                        "intent_id": str(command.intent_id),
+                        "attempt": attempt + 1,
+                    },
+                )
+                time.sleep(0.05)
+
+        raise AssertionError("bounded settlement retry exhausted unexpectedly")
 
     @staticmethod
     def _settle_result(

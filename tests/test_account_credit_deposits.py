@@ -176,6 +176,51 @@ def _settle(db_session, *, intent_id, transaction):
     )
 
 
+def test_settle_verified_retries_once_after_postgres_lock_timeout(
+    monkeypatch, db_session
+):
+    from app.services import account_credit_deposits as deposits
+
+    command = SettleAccountCreditDepositCommand(
+        intent_id=UUID("00000000-0000-0000-0000-000000000001"),
+        provider_type="paystack",
+        external_transaction_id="external-lock-retry",
+        amount=Decimal("1000.00"),
+        currency="NGN",
+        provider_intent_id=UUID("00000000-0000-0000-0000-000000000001"),
+        source=AccountCreditDepositSettlementSource.customer_gateway_verify,
+    )
+    context = CommandContext.system(
+        actor="pytest:lock-retry",
+        scope=SETTLEMENT_SCOPE,
+        reason="Verify bounded lock-timeout retry",
+        idempotency_key="account-credit-deposit-lock-retry",
+    )
+    attempts = 0
+
+    class LockTimeoutError(Exception):
+        sqlstate = "55P03"
+
+    def fake_execute_owner_command(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise LockTimeoutError("canceling statement due to lock timeout")
+        return "settled"
+
+    monkeypatch.setattr(deposits, "execute_owner_command", fake_execute_owner_command)
+    monkeypatch.setattr(deposits.time, "sleep", lambda _seconds: None)
+
+    result = AccountCreditDeposits.settle_verified(
+        db_session,
+        command,
+        context=context,
+    )
+
+    assert result == "settled"
+    assert attempts == 2
+
+
 def test_intent_persists_typed_server_owned_contract(db_session, subscriber):
     provider = _provider(db_session)
     intent = _intent(db_session, subscriber, provider)
