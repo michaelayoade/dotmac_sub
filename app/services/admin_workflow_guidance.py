@@ -383,7 +383,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",
             "Map imports accept optional asset IDs when available and keep unsupported or sensitive features blocked for review.",
         ),
-        route_templates=("/admin/network",),
+        route_templates=("/admin/network/fiber-change-requests", "/admin/network"),
     ),
     _guide(
         "olt-operational-health",
@@ -1319,9 +1319,15 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="network:fiber:read",
         ),
         _action(
+            "review-fiber-change-proposals",
+            "Review Map V2 asset proposals",
+            8,
+            permission="network:fiber:review",
+        ),
+        _action(
             "find-fdh-cabinet",
             "Find an FDH cabinet",
-            8,
+            9,
             permission="network:fiber:read",
         ),
     ),
