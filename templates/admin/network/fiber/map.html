@@ -808,19 +808,46 @@
         return content;
     }
 
-    // Update marker position on server
-    async function updateMarkerPosition(type, id, lat, lng) {
+    // Submit marker movement for independent review; canonical coordinates
+    // remain unchanged until the proposal is approved.
+    async function submitMarkerMoveProposal(type, id, lat, lng, reason) {
         try {
-            const response = await fetch('/admin/network/fiber-map/update-position', {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content
+                || (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1]
+                || '';
+            const idempotencyKey = crypto.randomUUID
+                ? crypto.randomUUID()
+                : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (value) {
+                    const random = Math.random() * 16 | 0;
+                    return (value === 'x' ? random : (random & 3 | 8)).toString(16);
+                });
+            const response = await fetch('/admin/network/map-v2/proposals', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type, id, latitude: lat, longitude: lng })
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-CSRF-Token': decodeURIComponent(csrfToken)
+                },
+                body: JSON.stringify({
+                    asset_type: type,
+                    operation: 'move',
+                    asset_id: id,
+                    latitude: lat,
+                    longitude: lng,
+                    reason: reason,
+                    idempotency_key: idempotencyKey
+                })
             });
-            if (!response.ok) throw new Error('Failed to save position');
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(result.message || result.detail || result.error || 'Movement proposal failed');
+            }
+            alert('Movement submitted for review. A reviewer can approve it in Network Map V2. The map position will change after approval.');
             return true;
         } catch (e) {
-            console.error('Error saving position:', e);
-            alert('Failed to save position. Please try again.');
+            console.error('Error submitting marker movement:', e);
+            alert(e instanceof Error ? e.message : 'Could not submit movement. Please try again.');
             return false;
         }
     }
@@ -1352,7 +1379,7 @@
                     : (icons[p.type] || icons.splice_closure);
                 const marker = L.marker(coords, {
                     icon: icon,
-                    draggable: p.type !== 'customer'  // Customer locations are read-only here
+                    draggable: ['fdh_cabinet', 'splice_closure', 'fiber_access_point', 'support_structure'].includes(p.type)
                 });
                 marker._lastSavedLatLng = { lat: coords[0], lng: coords[1] };
 
@@ -1374,13 +1401,18 @@
                 marker.on('dragend', async function(e) {
                     dragCoords.classList.remove('active');
                     const pos = e.target.getLatLng();
-                    const success = await updateMarkerPosition(p.type, p.id, pos.lat, pos.lng);
-                    if (!success) {
-                        // Revert position on failure
-                        e.target.setLatLng(marker._lastSavedLatLng);
-                    } else {
-                        marker._lastSavedLatLng = { lat: pos.lat, lng: pos.lng };
+                    const reason = window.prompt(
+                        'Why should this asset be moved? Reviewers will see this reason.',
+                        'Correcting the recorded map location'
+                    );
+                    if (reason && reason.trim().length >= 3) {
+                        await submitMarkerMoveProposal(p.type, p.id, pos.lat, pos.lng, reason.trim());
+                    } else if (reason !== null) {
+                        alert('Enter a reason with at least three characters to submit this movement.');
                     }
+                    // A proposal is not a canonical move; keep the marker at
+                    // its approved location until a reviewer approves it.
+                    e.target.setLatLng(marker._lastSavedLatLng);
                 });
 
                 allMarkers.push(marker);

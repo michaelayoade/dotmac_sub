@@ -172,7 +172,6 @@ app/services/web_fup.py
 app/services/web_network_core_devices_forms.py
 app/services/web_network_core_devices_views.py
 app/services/web_network_fdh.py
-app/services/web_network_fiber_plant.py
 app/services/web_network_olt_profiles.py
 app/services/web_network_ont_actions/_common.py
 app/services/web_network_ont_actions/device_actions.py

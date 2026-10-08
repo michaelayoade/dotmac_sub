@@ -376,6 +376,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "On Network Map, use Import Map to stage a KML or KMZ file for review, or Export Map to download the permitted layers; staging does not change the canonical map.",
         "Review each staged feature's name, geometry, suggested asset type, and blocker; correct classifications before submission.",
         "Submit eligible new point assets into the existing proposal review. Route geometry and other blocked features stay staged until their separate review is complete.",
+        "On the fiber map, submit supported FDH and closure moves for review; the canonical map position changes only after approval.",
+        "On the FDH cabinet ledger, use the active-cabinet list and page controls to find a cabinet, then use its editor for non-location details.",
         notes=(
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",
             "Map imports accept optional asset IDs when available and keep unsupported or sensitive features blocked for review.",
@@ -1308,6 +1310,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Submit eligible point proposals",
             6,
             permission="network:fiber:import",
+        ),
+        _action(
+            "review-fiber-map-movement",
+            "Review fiber map movement",
+            7,
+            permission="network:fiber:read",
+        ),
+        _action(
+            "find-fdh-cabinet",
+            "Find an FDH cabinet",
+            8,
+            permission="network:fiber:read",
         ),
     ),
     "olt-operational-health": (
