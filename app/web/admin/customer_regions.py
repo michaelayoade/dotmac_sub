@@ -226,7 +226,7 @@ def customer_region_disable(
             ),
         )
     except (DomainError, ValueError, TypeError) as exc:
-        db.rollback()
+        db_session_adapter.discard_failed_transaction(db)
         error = exc.message if isinstance(exc, DomainError) else str(exc)
         return templates.TemplateResponse(
             "admin/customer_regions/index.html",
