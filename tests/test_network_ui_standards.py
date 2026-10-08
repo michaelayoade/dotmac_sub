@@ -325,7 +325,10 @@ def test_network_map_filters_bypass_none_only_for_selected_results() -> None:
     assert "if (key.startsWith('connected|'))" in source
     assert "if (key.startsWith('not_connected|'))" in source
     assert "if (map.hasLayer(group)) visible += 1;" in source
-    assert "!item.filteredOut && layers[item.layerName] && map.hasLayer(layers[item.layerName])" in source
+    assert (
+        "!item.filteredOut && layers[item.layerName] && map.hasLayer(layers[item.layerName])"
+        in source
+    )
     assert "All loaded assets" in source
 
 
