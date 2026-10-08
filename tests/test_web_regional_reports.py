@@ -14,7 +14,6 @@ from app.services.web_reports import (
     build_regional_report_csv,
 )
 
-
 REGIONAL_REPORT_TEMPLATE = Path("templates/admin/reports/regional_performance.html")
 
 
@@ -91,7 +90,7 @@ def test_regional_report_links_supported_customer_drilldowns_only():
     assert "{{ customer_filter }}&status=disabled" in template
     assert "{{ customer_filter }}&status=canceled" in template
     assert "{{ customer_filter }}&status=blocked" in template
-    assert "title=\"View customers in {{ row.name }}\"" in template
+    assert 'title="View customers in {{ row.name }}"' in template
     assert "&connection_type=" not in template
     assert "active_service=" not in template
 

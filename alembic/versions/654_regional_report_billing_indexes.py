@@ -11,8 +11,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "653_regional_report_billing_indexes"
-down_revision: str | None = "652_renewal_terms_record_permission"
+revision: str = "654_regional_report_billing_indexes"
+down_revision: str | None = "653_prepaid_activation_funding_overrides"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

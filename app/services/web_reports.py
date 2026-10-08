@@ -17,12 +17,14 @@ from sqlalchemy import (
     Numeric,
     String,
     and_,
-    cast as sa_cast,
     func,
     literal,
     or_,
     select,
     union_all,
+)
+from sqlalchemy import (
+    cast as sa_cast,
 )
 from sqlalchemy.orm import Session
 
@@ -811,37 +813,37 @@ def get_regional_report_data(
         payment_stmt = payment_stmt.where(region_filter)
     report_stmt = union_all(status_stmt, active_stmt, invoice_stmt, payment_stmt)
 
-    for row in db.execute(report_stmt).all():
-        assigned_region = row.region_id
+    for metric_row in db.execute(report_stmt).all():
+        assigned_region = metric_row.region_id
         if assigned_region not in status_counts:
             continue
-        if row.metric == "status":
-            status_key = row.dimension_a or "other"
+        if metric_row.metric == "status":
+            status_key = metric_row.dimension_a or "other"
             if status_key not in status_counts[assigned_region]:
                 status_key = "other"
-            status_counts[assigned_region][status_key] += int(row.value_one or 0)
-            connection_key = row.dimension_b or "unspecified"
+            status_counts[assigned_region][status_key] += int(metric_row.value_one or 0)
+            connection_key = metric_row.dimension_b or "unspecified"
             if connection_key not in {
                 CustomerConnectionType.wireless.value,
                 CustomerConnectionType.wired.value,
             }:
                 connection_key = "unspecified"
             connection_counts[assigned_region][connection_key] += int(
-                row.value_one or 0
+                metric_row.value_one or 0
             )
-        elif row.metric == "active_services":
+        elif metric_row.metric == "active_services":
             if assigned_region in active_services:
-                active_services[assigned_region] = int(row.value_one or 0)
-        elif row.metric in {"invoice", "payment"}:
+                active_services[assigned_region] = int(metric_row.value_one or 0)
+        elif metric_row.metric in {"invoice", "payment"}:
             values = money[assigned_region].setdefault(
-                str(row.currency or "NGN"),
+                str(metric_row.currency or "NGN"),
                 [Decimal("0"), Decimal("0"), Decimal("0")],
             )
-            if row.metric == "invoice":
-                values[0] += row.value_one or Decimal("0")
-                values[2] += row.value_two or Decimal("0")
+            if metric_row.metric == "invoice":
+                values[0] += metric_row.value_one or Decimal("0")
+                values[2] += metric_row.value_two or Decimal("0")
             else:
-                values[1] += row.value_one or Decimal("0")
+                values[1] += metric_row.value_one or Decimal("0")
 
     rows: list[RegionalReportRow] = []
     for region in regions:
