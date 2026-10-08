@@ -1122,6 +1122,7 @@
 
     // Store all features for search
     const allFeatures = [];
+    const mapFeatures = Array.isArray(mapData?.features) ? mapData.features : [];
     const bounds = [];
     const customerBounds = [];
 
@@ -1354,10 +1355,11 @@
     }
 
     // Process features
-    if (mapData.features) {
-        mapData.features.forEach(feature => {
-            const p = feature.properties;
-            const geom = feature.geometry;
+    if (mapFeatures.length > 0) {
+        mapFeatures.forEach(feature => {
+            const p = feature?.properties || {};
+            const geom = feature?.geometry;
+            if (!geom || !geom.type) return;
 
             if (geom.type === 'Point') {
                 const coords = [geom.coordinates[1], geom.coordinates[0]];
@@ -1471,7 +1473,7 @@
     function fitAllBounds() {
         const visibleBounds = [];
         allFeatures.filter(item => (
-            !item.filteredOut && map.hasLayer(layers[item.layerName])
+            !item.filteredOut && layers[item.layerName] && map.hasLayer(layers[item.layerName])
         )).forEach(item => {
             if (item.marker) visibleBounds.push(item.marker.getLatLng());
             else if (item.polyline) visibleBounds.push(...item.polyline.getLatLngs());
@@ -1517,7 +1519,9 @@
                 else map.removeLayer(layers[layerName]);
                 layersSuppressed = Object.keys(layerToggles)
                     .every(id => !document.getElementById(id).checked);
+                applyMapFilters();
                 syncLayerBulkButtons();
+                fitAllBounds();
             });
         }
     });
@@ -1540,7 +1544,8 @@
             else map.removeLayer(layers[layerName]);
         });
         syncLayerBulkButtons();
-        if (!enabled) applyMapFilters();
+        applyMapFilters();
+        fitAllBounds();
     }
     layersAll.addEventListener('click', () => setAllLayers(true));
     layersNone.addEventListener('click', () => setAllLayers(false));
@@ -1667,10 +1672,10 @@
             else if (group.hasLayer(asset)) group.removeLayer(asset);
         });
         const count = document.getElementById('map-filter-count');
-        count.textContent = visible === allFeatures.length ? 'All assets' : `${visible} of ${allFeatures.length}`;
+        count.textContent = visible === allFeatures.length ? 'All loaded assets' : `${visible} of ${allFeatures.length} loaded`;
     }
 
-    const deviceTypes = [...new Set(mapData.features
+    const deviceTypes = [...new Set(mapFeatures
         .filter(feature => feature.properties.type === 'network_device' && feature.properties.device_type)
         .map(feature => feature.properties.device_type))].sort();
     const deviceTypeSelect = document.getElementById('filter-device-type');
@@ -1685,6 +1690,7 @@
             button.setAttribute('aria-pressed', 'false'); button.textContent = 'Direct filter';
         });
         applyMapFilters();
+        fitAllBounds();
     });
 
     function setupHealthDrilldown(card, kind, groups) {
