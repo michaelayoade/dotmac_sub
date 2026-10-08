@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.fiber_change_request import FiberChangeRequestStatus
-from app.models.network import FiberTerminationPoint
+from app.services import fiber_topology as fiber_topology_service
 from app.services import fiber_change_requests as change_request_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_fiber as web_network_fiber_service
@@ -158,12 +157,9 @@ def as_built_activation_page_data(
     """
     from app.services.network import as_built_plant_projection
 
-    points = list(
-        db.scalars(
-            select(FiberTerminationPoint)
-            .where(FiberTerminationPoint.is_active.is_(True))
-            .order_by(FiberTerminationPoint.name.asc().nullslast())
-        )
+    points = fiber_topology_service.termination_point_options(
+        db,
+        fiber_topology_service.FiberTerminationPointOptionsQuery(active_only=True),
     )
     rows = as_built_plant_projection.awaiting_activation_queue(db)
     return {
@@ -171,10 +167,10 @@ def as_built_activation_page_data(
         "awaiting_activation_count": len(rows),
         "termination_points": [
             {
-                "id": str(point.id),
+                "id": str(point.point_id),
                 "label": "{} · {}".format(
-                    point.name or str(point.id)[:8],
-                    getattr(point.endpoint_type, "value", point.endpoint_type),
+                    point.name or str(point.point_id)[:8],
+                    point.endpoint_type.value,
                 ),
             }
             for point in points

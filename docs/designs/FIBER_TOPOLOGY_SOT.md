@@ -234,6 +234,12 @@ Operational cable integrity is a hard cutover invariant, not a map warning:
   retiring a segment cannot orphan another active segment, splitter branch,
   ONT, or customer-bearing path.
 
+The admin as-built activation picker reads active termination-point choices
+through `network.fiber_topology.termination_point_options`, a typed read-only
+query. The adapter formats those owner-produced identities for the form; the
+separate activation owner revalidates both exact endpoints and the entire
+component before changing the projected segment.
+
 Migration `361_fiber_plant_operational_integrity` now enforces the active-row
 shape at the database boundary and fails its preflight rather than silently
 deactivating or completing legacy rows. `network.fiber_asset_changes` owns the

@@ -121,6 +121,42 @@ class PassivePlantIntegrity:
     splitters_with_valid_declared_capacity: int
 
 
+@dataclass(frozen=True, slots=True)
+class FiberTerminationPointOptionsQuery:
+    """Typed query for the active termination-point choices shown to operators."""
+
+    active_only: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class FiberTerminationPointOption:
+    """Minimal owner-produced identity needed by a termination-point selector."""
+
+    point_id: uuid.UUID
+    name: str | None
+    endpoint_type: ODNEndpointType
+
+
+def termination_point_options(
+    db: Session, query: FiberTerminationPointOptionsQuery
+) -> tuple[FiberTerminationPointOption, ...]:
+    """Read explicit termination identities for operator selection."""
+    statement = select(FiberTerminationPoint)
+    if query.active_only:
+        statement = statement.where(FiberTerminationPoint.is_active.is_(True))
+    points = db.scalars(
+        statement.order_by(FiberTerminationPoint.name.asc().nullslast())
+    ).all()
+    return tuple(
+        FiberTerminationPointOption(
+            point_id=point.id,
+            name=point.name,
+            endpoint_type=point.endpoint_type,
+        )
+        for point in points
+    )
+
+
 @dataclass(frozen=True)
 class FiberTopologyFinding:
     code: str

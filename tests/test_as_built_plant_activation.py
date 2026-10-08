@@ -34,6 +34,7 @@ from app.models.vendor_routes import (
     InstallationProject,
 )
 from app.services import fiber_plant_api
+from app.services import web_network_fiber_plant
 from app.services.network import as_built_plant_projection as projection
 
 LINESTRING = '{"type": "LineString", "coordinates": [[7.49, 9.06], [7.50, 9.07]]}'
@@ -111,6 +112,25 @@ def _rooted_terminations(db_session) -> tuple[str, str]:
     db_session.add_all([upstream, downstream])
     db_session.commit()
     return str(upstream.id), str(downstream.id)
+
+
+def test_as_built_activation_picker_uses_active_owner_termination_options(
+    db_session,
+):
+    active_id, _ = _rooted_terminations(db_session)
+    inactive = FiberTerminationPoint(
+        name="Inactive selector option",
+        endpoint_type=ODNEndpointType.splice_closure,
+        is_active=False,
+    )
+    db_session.add(inactive)
+    db_session.commit()
+
+    data = web_network_fiber_plant.as_built_activation_page_data(db_session)
+
+    option_ids = {option["id"] for option in data["termination_points"]}
+    assert active_id in option_ids
+    assert str(inactive.id) not in option_ids
 
 
 def test_activation_binds_endpoints_and_puts_the_cable_in_service(db_session):
