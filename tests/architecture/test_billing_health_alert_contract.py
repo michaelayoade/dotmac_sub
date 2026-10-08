@@ -48,3 +48,16 @@ def test_prepaid_work_item_sla_alert_uses_the_overdue_observation() -> None:
     assert 'signal="work_items_overdue"} > 0' in source
     assert '"work_items_overdue"' in scheduled_source
     assert '"renewal_terms_work_items_open"' in scheduled_source
+
+
+def test_prepaid_coverage_quarantine_alert_links_the_finance_runbook() -> None:
+    source = PREPAID_RULES.read_text(encoding="utf-8")
+    runbook = "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
+    alert = source.split("- alert: PrepaidCoverageQuarantinedEvidence", 1)[1]
+    alert = alert.split("- alert:", 1)[0]
+
+    assert f'runbook: "{runbook}"' in alert
+    assert (ROOT / runbook).is_file()
+    assert (
+        ROOT / "scripts" / "billing" / "diagnose_prepaid_coverage_quarantine.py"
+    ).is_file()

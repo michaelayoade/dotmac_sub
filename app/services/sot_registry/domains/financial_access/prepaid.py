@@ -991,7 +991,11 @@ SERVICES: tuple[SOTService, ...] = (
             "A preview classifies the complete or selected prepaid cohort from "
             "structural evidence. The owner locks and rechecks the preview, "
             "creates only missing exact entitlements, and persists append-only "
-            "run/item evidence; ambiguity remains quarantined."
+            "run/item evidence; ambiguity remains quarantined. The read-only "
+            "app.services.prepaid_coverage_quarantine_review query explains each "
+            "blocking quarantine record by record (reusing this owner's "
+            "predicates) and names the reviewed owner, if any, that may correct "
+            "it; it never writes or infers a period from memo text."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1166,6 +1170,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             test_refs=(
                 "tests/test_prepaid_coverage_reconciliation.py",
+                "tests/test_prepaid_coverage_quarantine_review.py",
                 "tests/test_web_prepaid_coverage_reconciliation.py",
                 "tests/architecture/test_prepaid_threshold_boundary.py",
             ),
