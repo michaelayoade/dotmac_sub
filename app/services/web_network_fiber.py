@@ -819,44 +819,6 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
     }
 
 
-def update_asset_position(
-    db: Session,
-    *,
-    asset_type: str,
-    asset_id: str,
-    latitude: float,
-    longitude: float,
-) -> tuple[dict, int]:
-    """Update map position for a supported fiber asset."""
-    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-        return {"error": "Coordinates out of range"}, 400
-
-    asset: FdhCabinet | FiberSpliceClosure | None
-    if asset_type == "fdh_cabinet":
-        asset = db.query(FdhCabinet).filter(FdhCabinet.id == asset_id).first()
-    elif asset_type == "splice_closure":
-        asset = (
-            db.query(FiberSpliceClosure)
-            .filter(FiberSpliceClosure.id == asset_id)
-            .first()
-        )
-    else:
-        return {"error": "Invalid asset type"}, 400
-
-    if not asset:
-        return {"error": "Asset not found"}, 404
-
-    asset.latitude = latitude
-    asset.longitude = longitude
-    db.commit()
-    return {
-        "success": True,
-        "id": str(asset.id),
-        "latitude": latitude,
-        "longitude": longitude,
-    }, 200
-
-
 def find_nearest_cabinet_data(
     db: Session, *, lat: float, lng: float
 ) -> tuple[dict, int]:

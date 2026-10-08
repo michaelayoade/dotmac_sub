@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, cast
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -29,15 +30,35 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
     return value.strip() if isinstance(value, str) else default
 
 
-def list_page_data(db: Session) -> dict[str, object]:
+def list_page_data(
+    db: Session, *, page: int = 1, per_page: int = 50
+) -> dict[str, object]:
     """Return FDH cabinet list and summary stats."""
+    page = max(page, 1)
+    per_page = min(max(per_page, 10), 100)
+    active_filter = FdhCabinet.is_active.is_(True)
+    total = db.scalar(select(func.count(FdhCabinet.id)).where(active_filter)) or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
     cabinets = db.scalars(
         select(FdhCabinet)
-        .where(FdhCabinet.is_active.is_(True))
+        .where(active_filter)
         .order_by(FdhCabinet.name)
-        .limit(200)
+        .offset((page - 1) * per_page)
+        .limit(per_page)
     ).all()
-    return {"cabinets": cabinets, "stats": {"total": len(cabinets)}}
+    return {
+        "cabinets": cabinets,
+        "stats": {"total": total},
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
+        },
+    }
 
 
 def regions_for_forms(db: Session) -> list:
@@ -113,6 +134,26 @@ def parse_coordinates(
     return latitude, longitude
 
 
+def validate_coordinates(latitude_raw: str, longitude_raw: str) -> str | None:
+    """Validate an optional complete WGS84 coordinate pair."""
+    if not latitude_raw and not longitude_raw:
+        return None
+    if not latitude_raw or not longitude_raw:
+        return "Enter both latitude and longitude, or leave both blank."
+    try:
+        latitude = float(latitude_raw)
+        longitude = float(longitude_raw)
+    except ValueError:
+        return "Latitude and longitude must be valid numbers."
+    if not math.isfinite(latitude) or not math.isfinite(longitude):
+        return "Latitude and longitude must be finite numbers."
+    if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+        return (
+            "Coordinates must be within latitude -90 to 90 and longitude -180 to 180."
+        )
+    return None
+
+
 def create_cabinet(db: Session, values: dict[str, object]) -> FdhCabinet:
     """Create and persist a cabinet from parsed values."""
     latitude, longitude = parse_coordinates(
@@ -143,6 +184,9 @@ def create_cabinet_submission(
     """Handle FDH cabinet create form parsing/validation/create."""
     values = parse_form_values(form)
     error = validate_name(str(values["name"]))
+    error = error or validate_coordinates(
+        str(values["latitude_raw"]), str(values["longitude_raw"])
+    )
     if error:
         return {
             "cabinet": None,
@@ -196,6 +240,21 @@ def update_cabinet_submission(
     before_snapshot = model_to_dict(cabinet)
     values = parse_form_values(form)
     error = validate_name(str(values["name"]))
+    error = error or validate_coordinates(
+        str(values["latitude_raw"]), str(values["longitude_raw"])
+    )
+    if error is None:
+        proposed_latitude, proposed_longitude = parse_coordinates(
+            str(values["latitude_raw"]), str(values["longitude_raw"])
+        )
+        if (proposed_latitude, proposed_longitude) != (
+            cabinet.latitude,
+            cabinet.longitude,
+        ):
+            error = (
+                "Submit coordinate changes as a movement proposal from the fiber map "
+                "so they can be reviewed."
+            )
     if error:
         return {
             "error": error,

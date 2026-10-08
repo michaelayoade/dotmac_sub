@@ -84,6 +84,7 @@
 (function() {
     const proposalGeojson = {{ route_geojson | tojson | safe }};
     const networkGeojson = {{ network_geojson | tojson | safe }};
+    let pinMode = false;
     window.VendorRouteAuthoring.mount({
         mapId: 'admin-route-author-map',
         formId: 'admin-route-author-form',
@@ -98,6 +99,7 @@
         contextGeojson: proposalGeojson,
         networkPlantGeojson: networkGeojson,
         adminMode: true,
+        shouldAddRoutePoint: () => !pinMode,
     });
 
     const map = window.AdminRouteAuthoringMap;
@@ -107,7 +109,6 @@
     const longitude = document.getElementById('asset-longitude');
     const submit = document.getElementById('asset-proposal-submit');
     const hint = document.getElementById('asset-pin-hint');
-    let pinMode = false;
     let marker = null;
     if (map && toggle) {
         toggle.addEventListener('click', function() {

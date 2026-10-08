@@ -60,19 +60,19 @@
 
                     <div>
                         <label for="latitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Latitude</label>
-                        <input type="number" name="latitude" id="latitude" step="any" min="-90" max="90"
-                            value="{{ cabinet.latitude if cabinet and cabinet.latitude else '' }}"
+                        <input type="number" name="latitude" id="latitude" step="any" min="-90" max="90" {% if cabinet %}readonly{% endif %}
+                            value="{{ cabinet.latitude if cabinet and cabinet.latitude is not none else '' }}"
                             placeholder="-1.2921"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
                     </div>
 
                     <div>
                         <label for="longitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Longitude</label>
-                        <input type="number" name="longitude" id="longitude" step="any" min="-180" max="180"
-                            value="{{ cabinet.longitude if cabinet and cabinet.longitude else '' }}"
+                        <input type="number" name="longitude" id="longitude" step="any" min="-180" max="180" {% if cabinet %}readonly{% endif %}
+                            value="{{ cabinet.longitude if cabinet and cabinet.longitude is not none else '' }}"
                             placeholder="36.8219"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">GPS coordinates for map display</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{% if cabinet %}To move this cabinet, submit a movement proposal from the fiber map for review.{% else %}GPS coordinates for map display{% endif %}</p>
                     </div>
 
                     <div class="sm:col-span-2">
