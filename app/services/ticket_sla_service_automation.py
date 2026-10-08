@@ -35,9 +35,9 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
-from app.services.service_entitlements import (
-    PreviewPauseCompensationEntitlementQuery,
-    preview_pause_compensation_entitlement,
+from app.services.prepaid_service_coverage import (
+    PrepaidPauseCompensationCoverageQuery,
+    resolve_prepaid_pause_compensation_coverage,
 )
 
 OWNER = "support.ticket_sla_service_consequence"
@@ -432,19 +432,21 @@ def preview_ticket_service_resume(
         if previous_anchor is not None
         else None
     )
+    compensation_coverage_fingerprint: str | None = None
     if previous_anchor is None:
         blocking.append("billing_anchor_missing")
     elif subscription.billing_mode == BillingMode.prepaid:
-        compensation_preview = preview_pause_compensation_entitlement(
+        compensation_preview = resolve_prepaid_pause_compensation_coverage(
             db,
-            PreviewPauseCompensationEntitlementQuery(
+            PrepaidPauseCompensationCoverageQuery(
                 subscription_id=subscription.id,
                 account_id=subscription.subscriber_id,
                 pause_effective_at=effective_at,
                 captured_billing_anchor=previous_anchor,
             ),
         )
-        blocking.extend(compensation_preview.blocking_reasons)
+        blocking.extend(reason.value for reason in compensation_preview.blockers)
+        compensation_coverage_fingerprint = compensation_preview.fingerprint
     active_locks = account_lifecycle.get_active_locks(
         db, subscription_id=str(subscription.id)
     )
@@ -478,6 +480,9 @@ def preview_ticket_service_resume(
         ),
         "active_pause_cause_count": active_cause_count,
         "active_lock_ids": sorted(str(lock.id) for lock in active_locks),
+        "prepaid_compensation_coverage_fingerprint": (
+            compensation_coverage_fingerprint
+        ),
     }
     return TicketServicePauseResumePreview(
         cause_id=cause.id,

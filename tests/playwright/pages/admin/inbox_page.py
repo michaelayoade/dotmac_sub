@@ -42,7 +42,7 @@ class AdminInboxPage(BasePage):
 
     def expect_email_routes_loaded(self) -> None:
         expect(
-            self.page.get_by_role("heading", name="Mailbox routing", exact=True)
+            self.page.get_by_role("heading", name="Inbox settings", exact=True)
         ).to_be_visible()
 
     # --- responsive -----------------------------------------------------

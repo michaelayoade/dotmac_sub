@@ -22,10 +22,16 @@ from app.models.automation import (
     AutomationRuleStatus,
     AutomationRuleVersion,
 )
-from app.services import automation_actions, automation_capabilities, customer_search
+from app.services import (
+    automation_actions,
+    automation_capabilities,
+    automation_condition_lookups,
+    customer_search,
+)
 from app.services.automation_contracts import (
     AutomationActionCapability,
     AutomationConditionField,
+    AutomationLookupKey,
     AutomationOperator,
     AutomationValueType,
 )
@@ -753,6 +759,52 @@ def _validate_conditions(
     raise _error("condition_invalid", "The conditions are invalid.")
 
 
+def _validate_lookup_conditions(
+    db: Session,
+    value: object,
+    fields: Mapping[str, AutomationConditionField],
+) -> None:
+    """Reject hand-entered values that are not in a canonical lookup."""
+
+    if isinstance(value, list):
+        for item in value:
+            _validate_lookup_conditions(db, item, fields)
+        return
+    if not isinstance(value, Mapping):
+        return
+    if "field_key" not in value:
+        for item in (
+            value.get("children", ()) if isinstance(value.get("children"), list) else ()
+        ):
+            _validate_lookup_conditions(db, item, fields)
+        return
+    field = fields.get(str(value.get("field_key") or ""))
+    lookup_key = field.lookup_key if field is not None else None
+    operator = str(value.get("operator") or "")
+    if (
+        lookup_key is None
+        or lookup_key is AutomationLookupKey.customer
+        or operator
+        in {
+            AutomationOperator.is_empty.value,
+            AutomationOperator.is_not_empty.value,
+        }
+    ):
+        return
+    assert lookup_key is not None
+    raw = value.get("value")
+    values = raw if isinstance(raw, list) else (raw,)
+    if not all(
+        automation_condition_lookups.value_exists(db, lookup_key, item)
+        for item in values
+    ):
+        raise _error(
+            "condition_lookup_value_invalid",
+            "Choose a value from the system lookup results.",
+            field_key=field.key if field is not None else None,
+        )
+
+
 def _condition_fields_for_triggers(
     trigger_keys: tuple[str, ...],
 ) -> dict[str, AutomationConditionField]:
@@ -764,6 +816,7 @@ def _condition_fields_for_triggers(
                 existing.value_type != field.value_type
                 or existing.operators != field.operators
                 or existing.enum_values != field.enum_values
+                or existing.lookup_key != field.lookup_key
             ):
                 raise _error(
                     "condition_field_conflict",
@@ -1046,6 +1099,11 @@ def _validate_definition(
     for trigger in triggers:
         _require_permission(permission_keys, trigger.author_permission)
     serialized_conditions = _validate_conditions(selected_trigger_keys, conditions)
+    _validate_lookup_conditions(
+        db,
+        serialized_conditions,
+        _condition_fields_for_triggers(selected_trigger_keys),
+    )
     _validate_customer_targets(db, serialized_conditions)
     if not actions:
         raise _error("actions_required", "An automation rule requires an action.")

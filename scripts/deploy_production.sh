@@ -335,4 +335,13 @@ if [[ "${HOTFIX}" == "1" ]]; then
 fi
 
 export REPO_DIR DEPLOY_DIR
+# Production web health budget. A cold worker loads ~3,500 routes in 43-70 s at
+# full CPU, and a warm candidate starting next to the loaded live primary took
+# ~3.5 min to report ready on 2026-10-06 (run 37430270678 gave up at 180 s,
+# 31 s before the candidate became healthy). Both the warm candidate and the
+# replaced primary therefore get the same ten-minute window staging already
+# uses. The gates still require readiness and fail closed at the deadline;
+# Nginx keeps serving from the candidate (or the old primary) while they wait.
+export HEALTH_TIMEOUT_SECONDS=600
+export CANDIDATE_HEALTH_TIMEOUT_SECONDS=600
 bash "${REPO_DIR}/scripts/deploy.sh" "${DIGEST}"

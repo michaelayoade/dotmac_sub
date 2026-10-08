@@ -115,7 +115,7 @@ SERVICE = SOTService(
                 name="test configuration",
                 owner="control.settings_spec",
                 kind=AuthorityKind.CONTROL_INPUT,
-                source="declared radius test duration bounds and verified deadline capability",
+                source="declared system-wide radius test duration and safety bound plus verified deadline capability",
             ),
             AuthorityInput(
                 name="security evidence",
@@ -152,7 +152,7 @@ SERVICE = SOTService(
             mapping_owner="permission-gated customer web adapters and test-connection event adapter",
             fail_closed_on=(
                 "unverified network deadline",
-                "ambiguous login",
+                "live shared login without subscription ownership",
                 "explicit fraud hold",
                 "missing usable provisioning",
                 "out-of-scope subscription",

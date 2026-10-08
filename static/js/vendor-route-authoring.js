@@ -278,12 +278,17 @@
                     '<path d="M12 3a6 6 0 0 0-6 6c0 4.5 6 12 6 12s6-7.5 6-12a6 6 0 0 0-6-6zm0 8.5A2.5 2.5 0 1 1 12 6a2.5 2.5 0 0 1 0 5.5z"/>',
                 service_building:
                     '<path d="M4 21V5h10v4h6v12h-6v-4h-4v4zm4-12h2V7H8zm0 4h2v-2H8zm6 0h2v-2h-2zm0 4h2v-2h-2z"/>',
+                pop_site:
+                    '<path d="M5 21h14M7 21l2-12h6l2 12M10 9V3h4v6M8 14h8M9 18h6"/>',
             };
+            var markerType = paths[assetType] ? assetType : "fdh_cabinet";
             return window.L.divIcon({
                 className: "",
                 html:
-                    '<span class="vendor-plant-marker" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor">' +
-                    (paths[assetType] || paths.fdh_cabinet) +
+                    '<span class="route-authoring-plant-marker route-authoring-plant-marker--' +
+                    markerType +
+                    '" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor">' +
+                    paths[markerType] +
                     "</svg></span>",
                 iconSize: [28, 28],
                 iconAnchor: [14, 14],
@@ -837,6 +842,12 @@
         }
 
         map.on("click", function (event) {
+            if (
+                typeof config.shouldAddRoutePoint === "function" &&
+                !config.shouldAddRoutePoint()
+            ) {
+                return;
+            }
             addPoint(event.latlng.lat, event.latlng.lng);
         });
         if (undoElement) {

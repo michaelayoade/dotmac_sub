@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -11,7 +12,7 @@ from app.models.automation import (
     AutomationStepRun,
     AutomationStepStatus,
 )
-from app.services import automation_capabilities, automation_runtime
+from app.services import automation_actions, automation_capabilities, automation_runtime
 from app.services.automation_contracts import (
     AutomationConditionField,
     AutomationDomainCapabilities,
@@ -193,3 +194,87 @@ def test_run_history_list_contract_preserves_filter_and_page() -> None:
     assert query.filter_value("status") == "failed"
     assert query.offset == 25
     assert "status=failed" in query.url("/admin/automation/runs", page=3)
+
+
+def test_execute_prepared_run_releases_action_read_transaction_before_finishing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    event_id = uuid4()
+    run_id = uuid4()
+    step_id = uuid4()
+    sequence: list[str] = []
+
+    monkeypatch.setattr(
+        automation_runtime,
+        "claim_step",
+        lambda db, command: automation_runtime.StepClaimOutcome(
+            disposition=automation_runtime.StepClaimDisposition.execute,
+            attempt_count=1,
+        ),
+    )
+    monkeypatch.setattr(
+        automation_capabilities,
+        "action_capability",
+        lambda action_key: SimpleNamespace(runtime_scope="test:automation"),
+    )
+
+    def execute_action(db, command):
+        sequence.append("action")
+        return automation_actions.AutomationActionOutcome(
+            disposition=automation_actions.AutomationActionDisposition.succeeded,
+            outcome_code="test_succeeded",
+        )
+
+    monkeypatch.setattr(
+        automation_actions, "action_executor", lambda key: execute_action
+    )
+    monkeypatch.setattr(
+        automation_runtime.db_session_adapter,
+        "release_read_transaction",
+        lambda db: sequence.append("release"),
+    )
+
+    def finish_step(db, command):
+        sequence.append("finish")
+        assert command.succeeded is True
+        return automation_runtime.AutomationStepOutcome(
+            run_id=run_id,
+            step_id=step_id,
+            step_status=automation_runtime.AutomationStepStatus.succeeded,
+            run_status=automation_runtime.AutomationRunStatus.succeeded,
+        )
+
+    monkeypatch.setattr(automation_runtime, "finish_step", finish_step)
+
+    result = automation_runtime.execute_prepared_run(
+        Mock(spec=Session),
+        automation_runtime.ExecutePreparedAutomationRunCommand(
+            tenant_id=tenant_id,
+            run=automation_runtime.PreparedAutomationRun(
+                run_id=run_id,
+                rule_id=uuid4(),
+                rule_version_id=uuid4(),
+                event_id=event_id,
+                target=automation_actions.AutomationTargetReference(
+                    entity_type="test.ticket", entity_id=uuid4()
+                ),
+                steps=(
+                    automation_runtime.PreparedAutomationStep(
+                        step_id=step_id,
+                        step_index=0,
+                        action_key="test.action",
+                        inputs=(),
+                    ),
+                ),
+            ),
+            context=automation_runtime.CommandContext.system(
+                actor="test",
+                scope="test",
+                reason="test automation runtime",
+            ),
+        ),
+    )
+
+    assert sequence == ["action", "release", "finish"]
+    assert result.status is automation_runtime.AutomationRunStatus.succeeded

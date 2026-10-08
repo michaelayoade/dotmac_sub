@@ -196,7 +196,19 @@ def sync_alert(
     alert.severity = finding.severity
     alert.title = finding.title
     alert.summary = finding.summary
-    alert.details = _json_safe(finding.details)
+    details = _json_safe(finding.details)
+    previous_details = alert.details if isinstance(alert.details, dict) else {}
+    if (
+        not was_resolved
+        and isinstance(details, dict)
+        and "sla_due_at" in details
+        and previous_details.get("sla_due_at")
+    ):
+        # An SLA deadline is fixed when the work item opens. Recurring syncs
+        # of the same still-open finding must not push it forward, or the item
+        # can never become overdue; a resolved item that reopens starts fresh.
+        details["sla_due_at"] = previous_details["sla_due_at"]
+    alert.details = details
     alert.target_url = finding.target_url
     alert.last_seen_at = now
     alert.updated_at = now
@@ -233,6 +245,46 @@ def resolve_missing_alerts(
         alert.updated_at = now
         resolved += 1
     return resolved
+
+
+def count_open_alerts(
+    db: Session,
+    *,
+    managed_prefix: str,
+    overdue_at: datetime | None = None,
+) -> int:
+    """Count open alerts under a prefix, optionally only those past their SLA.
+
+    With ``overdue_at``, only alerts whose ``details["sla_due_at"]`` is a
+    parseable timestamp strictly before it are counted.
+    """
+    alerts = (
+        db.query(AdminAlert.details)
+        .filter(AdminAlert.fingerprint.like(f"{managed_prefix}%"))
+        .filter(AdminAlert.status != AlertStatus.resolved)
+        .all()
+    )
+    if overdue_at is None:
+        return len(alerts)
+    overdue = 0
+    for (details,) in alerts:
+        due_at = _parse_sla_due_at(details)
+        if due_at is not None and due_at < overdue_at:
+            overdue += 1
+    return overdue
+
+
+def _parse_sla_due_at(details: Any) -> datetime | None:
+    if not isinstance(details, dict):
+        return None
+    raw = details.get("sla_due_at")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def alerts_context(

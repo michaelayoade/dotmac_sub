@@ -22,6 +22,32 @@ class AutomationValueType(StrEnum):
     enum = "enum"
 
 
+class AutomationLookupKey(StrEnum):
+    """Canonical system-backed sources available to condition pickers."""
+
+    customer = "customer"
+    service_team = "service_team"
+    project = "project"
+    project_task = "project_task"
+    work_order = "work_order"
+    material_request = "material_request"
+    pipeline = "pipeline"
+    lead = "lead"
+    quote = "quote"
+    sales_order = "sales_order"
+    system_user = "system_user"
+    cx_handoff = "cx_handoff"
+    ticket_type = "ticket_type"
+    project_type = "project_type"
+    project_name = "project_name"
+    region = "region"
+    lead_source = "lead_source"
+    currency = "currency"
+    warehouse = "warehouse"
+    support_system = "support_system"
+    support_status = "support_status"
+
+
 class AutomationCatalogState(StrEnum):
     available = "available"
     unavailable = "unavailable"
@@ -85,6 +111,42 @@ class AutomationConditionField:
     operators: tuple[AutomationOperator, ...]
     enum_values: tuple[str, ...] = ()
     sensitive: bool = False
+    lookup_key: AutomationLookupKey | None = None
+
+    def __post_init__(self) -> None:
+        """Infer lookup metadata for canonical system references.
+
+        Domain declarations remain concise while the contract still exposes a
+        typed, explicit lookup capability to the authoring surface.
+        """
+
+        if self.lookup_key is not None:
+            return
+        lookup = {
+            "customer_id": AutomationLookupKey.customer,
+            "service_team_id": AutomationLookupKey.service_team,
+            "project_id": AutomationLookupKey.project,
+            "project_task_id": AutomationLookupKey.project_task,
+            "work_order_mirror_id": AutomationLookupKey.work_order,
+            "material_request_id": AutomationLookupKey.material_request,
+            "pipeline_id": AutomationLookupKey.pipeline,
+            "lead_id": AutomationLookupKey.lead,
+            "quote_id": AutomationLookupKey.quote,
+            "sales_order_id": AutomationLookupKey.sales_order,
+            "reviewer_system_user_id": AutomationLookupKey.system_user,
+            "cx_handoff_id": AutomationLookupKey.cx_handoff,
+            "ticket_type": AutomationLookupKey.ticket_type,
+            "project_type": AutomationLookupKey.project_type,
+            "project_name": AutomationLookupKey.project_name,
+            "region": AutomationLookupKey.region,
+            "lead_source": AutomationLookupKey.lead_source,
+            "currency": AutomationLookupKey.currency,
+            "source_warehouse_code": AutomationLookupKey.warehouse,
+            "support_system": AutomationLookupKey.support_system,
+            "support_status": AutomationLookupKey.support_status,
+        }.get(self.key)
+        if lookup is not None:
+            object.__setattr__(self, "lookup_key", lookup)
 
 
 @dataclass(frozen=True, slots=True)

@@ -46,7 +46,7 @@ class _Rows:
 class _CatalogSession:
     def __init__(
         self,
-        identity: tuple[object, ...] = ("app_user", "app_user", True, False, False),
+        identity: tuple[object, ...] = ("dotmac_app", "dotmac_app", True, False, False),
         catalog: tuple[object, ...] | None = (True, 5, False, False),
         fail_catalog: bool = False,
     ) -> None:

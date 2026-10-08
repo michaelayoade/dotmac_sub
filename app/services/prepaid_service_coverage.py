@@ -12,6 +12,8 @@ canonical reconciliation owner. They are not read-time coverage evidence.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -38,6 +40,13 @@ class PrepaidCoverageStatus(StrEnum):
     covered = "covered"
     uncovered_due = "uncovered_due"
     unresolved_projection = "unresolved_projection"
+
+
+class PrepaidPauseCompensationBlocker(StrEnum):
+    """Fail-closed reasons for preserving unused prepaid pause time."""
+
+    coverage_ambiguous = "prepaid_pause_coverage_ambiguous"
+    anchor_mismatch = "prepaid_pause_anchor_mismatch"
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +94,28 @@ class PrepaidCoveragePeriodHistory:
     issues: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class PrepaidPauseCompensationCoverageQuery:
+    """Exact coverage facts required before granting pause compensation."""
+
+    subscription_id: UUID
+    account_id: UUID
+    pause_effective_at: datetime
+    captured_billing_anchor: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class PrepaidPauseCompensationCoverageDecision:
+    """Typed, fingerprinted pause-compensation coverage decision."""
+
+    eligible: bool
+    blockers: tuple[PrepaidPauseCompensationBlocker, ...]
+    evidence: tuple[PrepaidCoverageInterval, ...]
+    coverage_end: datetime | None
+    currency: str | None
+    fingerprint: str
+
+
 def _as_utc(value: datetime) -> datetime:
     aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     return aware.astimezone(UTC)
@@ -105,6 +136,141 @@ def _covers_period(
         if cursor >= end:
             return True
     return cursor >= end
+
+
+def resolve_prepaid_pause_compensation_coverage(
+    db: Session,
+    query: PrepaidPauseCompensationCoverageQuery,
+) -> PrepaidPauseCompensationCoverageDecision:
+    """Resolve the exact coverage union needed to preserve paused prepaid time.
+
+    Funded entitlements and applied service-extension grants are both canonical
+    prepaid coverage. The unused interval from the pause effective time to the
+    captured anchor must be continuously covered, and that anchor must equal
+    the latest surviving coverage boundary. A prior funded entitlement remains
+    the currency provenance for the zero-value compensation entitlement.
+    """
+
+    effective_at = _as_utc(query.pause_effective_at)
+    anchor = _as_utc(query.captured_billing_anchor)
+    subscription = db.get(Subscription, query.subscription_id)
+
+    entitlements = []
+    extension_rows = []
+    if subscription is not None and subscription.subscriber_id == query.account_id:
+        entitlements = list(
+            db.scalars(
+                select(ServiceEntitlement)
+                .where(
+                    ServiceEntitlement.subscription_id == query.subscription_id,
+                    ServiceEntitlement.account_id == query.account_id,
+                    ServiceEntitlement.status == ServiceEntitlementStatus.active,
+                )
+                .order_by(
+                    ServiceEntitlement.ends_at.desc(),
+                    ServiceEntitlement.starts_at.desc(),
+                    ServiceEntitlement.id.desc(),
+                )
+            ).all()
+        )
+        extension_rows = list(
+            db.execute(
+                select(
+                    ServiceExtensionEntry.id,
+                    ServiceExtensionEntry.grant_starts_at,
+                    ServiceExtensionEntry.grant_ends_at,
+                )
+                .join(
+                    ServiceExtension,
+                    ServiceExtension.id == ServiceExtensionEntry.extension_id,
+                )
+                .where(
+                    ServiceExtensionEntry.subscription_id == query.subscription_id,
+                    ServiceExtension.status == ServiceExtensionStatus.applied,
+                    ServiceExtensionEntry.grant_starts_at.isnot(None),
+                    ServiceExtensionEntry.grant_ends_at.isnot(None),
+                )
+                .order_by(
+                    ServiceExtensionEntry.grant_ends_at.desc(),
+                    ServiceExtensionEntry.grant_starts_at.desc(),
+                    ServiceExtensionEntry.id.desc(),
+                )
+            ).all()
+        )
+
+    intervals = [
+        PrepaidCoverageInterval(
+            subscription_id=query.subscription_id,
+            source=PrepaidCoverageSource.funded_entitlement,
+            source_id=item.id,
+            starts_at=_as_utc(item.starts_at),
+            ends_at=_as_utc(item.ends_at),
+        )
+        for item in entitlements
+    ]
+    for row in extension_rows:
+        assert row.grant_starts_at is not None
+        assert row.grant_ends_at is not None
+        intervals.append(
+            PrepaidCoverageInterval(
+                subscription_id=query.subscription_id,
+                source=PrepaidCoverageSource.service_extension_grant,
+                source_id=row.id,
+                starts_at=_as_utc(row.grant_starts_at),
+                ends_at=_as_utc(row.grant_ends_at),
+            )
+        )
+    intervals.sort(
+        key=lambda item: (
+            item.starts_at,
+            item.ends_at,
+            item.source.value,
+            item.source_id,
+        )
+    )
+
+    coverage_end = max((item.ends_at for item in intervals), default=None)
+    currency = entitlements[0].currency if entitlements else None
+    blockers: list[PrepaidPauseCompensationBlocker] = []
+    if (
+        anchor <= effective_at
+        or currency is None
+        or not _covers_period(intervals, start=effective_at, end=anchor)
+    ):
+        blockers.append(PrepaidPauseCompensationBlocker.coverage_ambiguous)
+    if coverage_end != anchor:
+        blockers.append(PrepaidPauseCompensationBlocker.anchor_mismatch)
+
+    fingerprint_material = {
+        "subscription_id": str(query.subscription_id),
+        "account_id": str(query.account_id),
+        "pause_effective_at": effective_at.isoformat(),
+        "captured_billing_anchor": anchor.isoformat(),
+        "coverage_end": coverage_end.isoformat() if coverage_end else None,
+        "currency": currency,
+        "evidence": [
+            {
+                "source": item.source.value,
+                "source_id": str(item.source_id),
+                "starts_at": item.starts_at.isoformat(),
+                "ends_at": item.ends_at.isoformat(),
+            }
+            for item in intervals
+        ],
+    }
+    encoded = json.dumps(
+        fingerprint_material,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return PrepaidPauseCompensationCoverageDecision(
+        eligible=not blockers,
+        blockers=tuple(blockers),
+        evidence=tuple(intervals),
+        coverage_end=coverage_end,
+        currency=currency,
+        fingerprint=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    )
 
 
 def prepaid_coverage_history_for_period(

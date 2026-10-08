@@ -587,6 +587,48 @@ def test_customer_360_restore_action_is_permission_gated_and_reviewed() -> None:
     assert "`${lifecycleUrl}/execute`" in template
 
 
+def test_customer_360_view_more_is_available_for_paused_subscriptions(
+    db_session, subscriber, subscription, monkeypatch
+) -> None:
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.paused
+    db_session.commit()
+
+    monkeypatch.setattr(
+        customer_routes.web_notifications_service,
+        "customer_notification_picker_context",
+        lambda _db: {},
+    )
+    monkeypatch.setattr(
+        customer_routes.subscriber_party_binding_repair,
+        "resolve_repair_context",
+        lambda _db, *, subscriber_id: None,
+    )
+    import app.web.admin as admin_module
+
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+
+    request = _bare_request(f"/admin/customers/person/{subscriber.id}#subscriptions")
+    request.state.auth = {}
+    response = customer_routes.person_detail(
+        request=request,
+        customer_id=str(subscriber.id),
+        panel=None,
+        usage_period="current",
+        usage_page=1,
+        usage_per_page=25,
+        usage_view="chart",
+        db=db_session,
+    )
+    rendered = response.body.decode("utf-8")
+
+    assert f"/admin/catalog/subscriptions/{subscription.id}" in rendered
+    assert (
+        "x-text=\"showAllSubscriptions ? 'Show active only' : 'View more'\"" in rendered
+    )
+
+
 def test_customer_360_unsuspend_action_is_permission_gated_and_reviewed() -> None:
     template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
 

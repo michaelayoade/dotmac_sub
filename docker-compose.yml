@@ -51,6 +51,13 @@ services:
       GLITCHTIP_DSN: ${GLITCHTIP_DSN:-}
       GLITCHTIP_ENABLED: ${GLITCHTIP_ENABLED:-false}
       LOKI_URL: ${LOKI_URL:-}
+      # With more than one worker, Uvicorn's supervisor pings every worker and
+      # kills any that misses a single ping. Its built-in 5 s deadline killed
+      # CPU-starved workers mid-startup (a cold worker needs 43-70 s at full
+      # CPU) in a restart storm on 2026-10-06. Uvicorn >= 0.37 reads this as
+      # `--timeout-worker-healthcheck`; older images ignore it, so a rollback
+      # or a host-override `command:` can never be broken by it.
+      UVICORN_TIMEOUT_WORKER_HEALTHCHECK: ${UVICORN_TIMEOUT_WORKER_HEALTHCHECK:-60}
     env_file:
     - .env
     cap_add:
@@ -66,6 +73,8 @@ services:
     # Migrations are NOT run on boot: a half-applied / multi-head migration
     # state must never crash-loop the live app. Apply them as a controlled,
     # pre-deploy step instead: `make docker-migrate` (or `make prod-migrate`).
+    # Size the app with WEB_CONCURRENCY in .env rather than a host-override
+    # `command:`, so this command stays the single source of truth.
     command:
     - /bin/sh
     - -c
@@ -600,14 +609,27 @@ services:
     - ${FREERADIUS_BIND:-0.0.0.0:}1813:1813/udp
     - ${FREERADIUS_BIND:-0.0.0.0:}1822:1822/udp
     - ${FREERADIUS_BIND:-0.0.0.0:}1823:1823/udp
+    # Single-file overlays on the image's stock raddb tree (/etc/raddb is a
+    # symlink to /etc/freeradius in this image). This is the one allow-listed
+    # exception to "mount config as a directory"
+    # (tests/architecture/test_config_directory_mounts.py): a directory mount
+    # over /etc/freeradius, mods-enabled or sites-enabled would hide the stock
+    # modules, policies, certs and the inner-tunnel server this config relies
+    # on. A single-file mount pins the inode present at container start, but
+    # FreeRADIUS only reads these files at start anyway, and a restart
+    # re-resolves every source path. scripts/deploy.sh validates a changed
+    # config with `freeradius -XC` and then restarts this service. All are
+    # read-only: nothing writes them (the two dictionaries lacked `:ro` since
+    # the initial commit, not for any writer). See
+    # docs/runbooks/SERVICE_CONFIG_MOUNTS.md.
     volumes:
     - ./config/freeradius/radiusd.conf:/etc/freeradius/radiusd.conf:ro
     - ./config/freeradius/mods-enabled/sql:/etc/raddb/mods-enabled/sql:ro
     - ./config/freeradius/mods-enabled/sql_admin:/etc/raddb/mods-enabled/sql_admin:ro
     - ./config/freeradius/sites-enabled/default:/etc/raddb/sites-enabled/default:ro
     - ./config/freeradius/sites-enabled/admin-login:/etc/raddb/sites-enabled/admin-login:ro
-    - ./config/freeradius/dictionary.mikrotik:/etc/raddb/dictionary.mikrotik
-    - ./config/freeradius/dictionary:/etc/raddb/dictionary
+    - ./config/freeradius/dictionary.mikrotik:/etc/raddb/dictionary.mikrotik:ro
+    - ./config/freeradius/dictionary:/etc/raddb/dictionary:ro
     environment:
     - FREERADIUS_DB_HOST=${FREERADIUS_DB_HOST:?FREERADIUS_DB_HOST must be set}
     - FREERADIUS_DB_PORT=${FREERADIUS_DB_PORT:-5432}
@@ -701,11 +723,18 @@ services:
     cpus: 0.5
     pids_limit: 64
     volumes:
-    - ./config/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+    # Mount the DIRECTORY, never the single file. A single-file bind mount
+    # pins the inode that existed when the container was created; `git pull`
+    # replaces a changed file with a new inode, so the container silently
+    # keeps the old config (dotmac_erp PR #695: vmagent ran a two-week-old
+    # config that way). The directory holds only this file, so nothing else
+    # is exposed. scripts/deploy.sh restarts promtail when it changes. See
+    # docs/runbooks/SERVICE_CONFIG_MOUNTS.md.
+    - ./config/promtail:/etc/promtail:ro
     - promtail_positions:/positions
     - /var/run/docker.sock:/var/run/docker.sock:ro
     - /var/lib/docker/containers:/var/lib/docker/containers:ro
-    command: -config.file=/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/promtail-config.yml
   bandwidth-poller:
     image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_bandwidth_poller
@@ -846,7 +875,8 @@ services:
     - -promscrape.config=/etc/vmagent/config.yml
     - -remoteWrite.url=http://victoriametrics:8428/api/v1/write
     volumes:
-    - ./config/vmagent/config.yml:/etc/vmagent/config.yml:ro
+    # Directory mount, not a single file: see the promtail note above.
+    - ./config/vmagent:/etc/vmagent:ro
     depends_on:
       victoriametrics:
         condition: service_started

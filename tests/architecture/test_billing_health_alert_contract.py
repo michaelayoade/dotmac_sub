@@ -36,3 +36,15 @@ def test_prepaid_lock_contention_alert_uses_the_bounded_sweep_observation() -> N
     assert "PrepaidSweepLockContentionPersistent" in source
     assert 'signal="lock_deferred"} > 0' in source
     assert 'runbook: "docs/runbooks/DATABASE_TRANSACTION_PRESSURE.md"' in source
+
+
+def test_prepaid_work_item_sla_alert_uses_the_overdue_observation() -> None:
+    source = PREPAID_RULES.read_text(encoding="utf-8")
+    scheduled_source = (
+        ROOT / "app" / "services" / "collections" / "scheduled.py"
+    ).read_text(encoding="utf-8")
+
+    assert "PrepaidWorkItemsOverdue" in source
+    assert 'signal="work_items_overdue"} > 0' in source
+    assert '"work_items_overdue"' in scheduled_source
+    assert '"renewal_terms_work_items_open"' in scheduled_source

@@ -364,6 +364,13 @@ the same commit, tree, and digest. The deployment owner independently repeats
 the GitHub API decision for the image's full OCI revision before any database
 or service change.
 
+Because the staging deployment worktree is checked out at the candidate, a
+candidate that changes `config/freeradius`, `config/vmagent` or
+`config/promtail` is applied by that deploy. `scripts/deploy.sh` restarts the
+affected running services and validates FreeRADIUS config before restarting
+it. Manual Compose commands on the staging host need `-p dotmac_sub`. See
+[SERVICE_CONFIG_MOUNTS.md](SERVICE_CONFIG_MOUNTS.md).
+
 ## Production workflow activation
 
 The production workflows are manual and run no repository test suite.
