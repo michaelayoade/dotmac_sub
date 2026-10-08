@@ -174,3 +174,10 @@ same UUID; terminal preparation failures require a new preview and explicit
 operator confirmation. Do not directly edit receipt status, delete dedupe keys,
 or replay provider sends. Verify deployed uniqueness/concurrency and rollback
 on PostgreSQL migrated to the repository head before publication.
+
+The typed evaluation participant lives in
+`app/services/customer_bulk_message_evaluation.py`; customer scope and rendering
+helpers remain private collaborators in the customer adapter module. The receipt
+owner calls this participant directly. Its module has one declared owner, and
+the permanent dispatcher and materializer both declare receipt-based reliability
+contracts in `app/services/task_reliability.py`.

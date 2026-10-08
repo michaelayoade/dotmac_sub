@@ -37,7 +37,11 @@ def test_materialization_participant_cannot_commit_or_run_without_owner() -> Non
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in {"commit", "rollback", "begin_nested"}
         )
-    assert "owner_command_active" in source
+    evaluation = (ROOT / "app/services/customer_bulk_message_evaluation.py").read_text(
+        encoding="utf-8"
+    )
+    assert "owner_command_active" in evaluation
+    assert "_evaluate_bulk_message_domain(db=db, spec=spec)" in evaluation
     assert "class PreparedBulkMessageDispatch" not in source
 
 

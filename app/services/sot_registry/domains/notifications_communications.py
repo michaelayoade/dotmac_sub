@@ -265,7 +265,7 @@ DOMAIN = DomainSOT(
         ),
         SOTService(
             name="communications.customer_bulk_message_evaluation",
-            module="app.services.web_customer_actions",
+            module="app.services.customer_bulk_message_evaluation",
             owns=(
                 "customer bulk message preview",
                 "customer bulk message delivery materialization",

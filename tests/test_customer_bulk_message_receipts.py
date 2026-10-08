@@ -43,10 +43,10 @@ def _command():
 
 
 def _accept(db_session, monkeypatch, command):
-    from app.services import web_customer_actions
+    from app.services import customer_bulk_message_evaluation
 
     monkeypatch.setattr(
-        web_customer_actions,
+        customer_bulk_message_evaluation,
         "preview_bulk_message",
         lambda *, db, spec: BulkMessageCounts(
             matched_count=1, created_count=1, queued_count=1
@@ -61,13 +61,13 @@ def test_replay_returns_receipt_without_revalidating_changed_live_facts(
 ):
     command = _command()
     first = _accept(db_session, monkeypatch, command)
-    from app.services import web_customer_actions
+    from app.services import customer_bulk_message_evaluation
 
     def reject_live_preview(**_kwargs):
         raise AssertionError("Replay must not recalculate current impact")
 
     monkeypatch.setattr(
-        web_customer_actions, "preview_bulk_message", reject_live_preview
+        customer_bulk_message_evaluation, "preview_bulk_message", reject_live_preview
     )
     second = owner.accept(db=db_session, command=command)
     assert first == second
@@ -114,11 +114,11 @@ def test_claim_and_materialization_replay_are_noops(db_session, monkeypatch):
     claim = owner.claim(db=db_session, command=process)
     assert claim.state == BulkSendState.preparing
     assert owner.claim(db=db_session, command=process) is None
-    from app.services import web_customer_actions
+    from app.services import customer_bulk_message_evaluation
 
     calls = []
     monkeypatch.setattr(
-        web_customer_actions,
+        customer_bulk_message_evaluation,
         "materialize_bulk_message",
         lambda *, db, spec: (
             calls.append(spec)
@@ -147,7 +147,7 @@ def test_preparation_rollback_precedes_durable_failure(db_session, monkeypatch):
             context=command.context, request_id=command.request_id
         ),
     )
-    from app.services import web_customer_actions
+    from app.services import customer_bulk_message_evaluation
 
     def fail_participant(*, db, spec):
         db.add(
@@ -165,7 +165,7 @@ def test_preparation_rollback_precedes_durable_failure(db_session, monkeypatch):
         )
 
     monkeypatch.setattr(
-        web_customer_actions, "materialize_bulk_message", fail_participant
+        customer_bulk_message_evaluation, "materialize_bulk_message", fail_participant
     )
     with pytest.raises(DomainError):
         owner.materialize(

@@ -278,6 +278,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "For portal access, confirm the contact details and impersonate only when a valid support reason requires it.",
         "Use Timeline to review recent events, then open linked records for the detail behind a change.",
         "Open the specific record before performing a state-changing action.",
+        "After confirming a customer message, use the send status panel to follow recipient preparation and delivery. If confirmation is lost, keep the send reference and choose Check status before submitting another send.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
             "Authorized staff can open Test Connection below the Invoice icon in All Subscriptions to grant temporary full service access for troubleshooting; review the duration and expiry before activation.",
@@ -1033,6 +1034,8 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Search and open the exact notification record before editing or retrying anything.",
         "Create or edit templates and policies, choose the purpose that matches the customer message, preview the result, then save and verify it.",
         "For manual customer-page sends, suspended or blocked accounts may receive only account, billing, service, or credentials messages; canceled and disabled accounts receive none.",
+        "For customer bulk messages, Accepted and Preparing describe recipient preparation; queued delivery requests, provider submissions, confirmed deliveries, and failures appear separately in the send status panel.",
+        "A broker outage leaves an accepted request for automatic recovery. A failed preparation requires reviewing the reason and a new preview before another confirmed send.",
         "Review delivery failure evidence before retrying or canceling a queued notification.",
         "Before a controlled payment email adoption, review the receipt and invoice-paid comparison report, including both template IDs, purpose, conditions, and active state.",
         "An authorized operator can copy both reviewed payment email templates once, then rerun the comparison. Resolve conflicts before retrying; customer delivery uses the current templates until the separate cutover.",

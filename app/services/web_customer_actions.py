@@ -71,7 +71,6 @@ from app.services.bulk_actions import (
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
 from app.services.customer_bulk_message_contracts import (
-    BulkMessageCounts,
     BulkMessageEvaluation,
     BulkMessageSpec,
 )
@@ -1542,20 +1541,12 @@ def _bulk_message_impact_token(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def evaluate_bulk_message(
+def _evaluate_bulk_message_domain(
     db: Session, *, spec: BulkMessageSpec
 ) -> BulkMessageEvaluation:
-    """Typed boundary for preview and the flush-only materialization participant."""
+    """Translate legacy helper failures at its typed collaborator boundary."""
     from app.services.domain_errors import DomainError
-    from app.services.owner_commands import owner_command_active
 
-    if not spec.preview_only and not owner_command_active(
-        db, owner="communications.customer_bulk_messages"
-    ):
-        raise DomainError(
-            code="communications.customer_bulk_messages.command_required",
-            message="Bulk materialization requires its command owner.",
-        )
     try:
         return _evaluate_bulk_message(db=db, spec=spec)
     except HTTPException as exc:
@@ -1567,65 +1558,13 @@ def evaluate_bulk_message(
         ) from exc
 
 
-def preview_bulk_message(db: Session, *, spec: BulkMessageSpec) -> BulkMessageCounts:
-    result = evaluate_bulk_message(
-        db=db, spec=spec.model_copy(update={"preview_only": True})
-    )
-    if not spec.confirmed or not spec.expected_impact_token:
-        from app.services.domain_errors import DomainError
-
-        raise DomainError(
-            code="communications.customer_bulk_messages.invalid_command",
-            message="Preview the bulk message impact before confirming.",
-            retryable=False,
-        )
-    if not hmac.compare_digest(spec.expected_impact_token, result.impact_token):
-        from app.services.domain_errors import DomainError
-
-        raise DomainError(
-            code="communications.customer_bulk_messages.impact_changed",
-            message="The message impact changed. Review a new preview.",
-            retryable=False,
-        )
-    from app.services.domain_errors import DomainError
-
-    selection = spec.selection
-    if (
-        selection is None
-        or selection.expected_count is None
-        or not selection.expected_scope_token
-    ):
-        raise DomainError(
-            code="communications.customer_bulk_messages.invalid_command",
-            message="Preview the customer scope before confirming.",
-            retryable=False,
-        )
-    if selection.expected_count != result.matched_count or not hmac.compare_digest(
-        selection.expected_scope_token, result.scope_token
-    ):
-        raise DomainError(
-            code="communications.customer_bulk_messages.impact_changed",
-            message="The customer scope changed. Review a new preview.",
-            retryable=False,
-        )
-    return BulkMessageCounts.model_validate(result.model_dump())
-
-
-def materialize_bulk_message(
-    db: Session, *, spec: BulkMessageSpec
-) -> BulkMessageCounts:
-    result = evaluate_bulk_message(
-        db=db, spec=spec.model_copy(update={"preview_only": False})
-    )
-    return BulkMessageCounts.model_validate(result.model_dump())
-
-
 def queue_bulk_message_from_payload(
     db: Session, payload: dict[str, Any]
 ) -> dict[str, object]:
     """Legacy JSON adapter; every write now enters the same typed command owner."""
     from pydantic import ValidationError
 
+    from app.services.customer_bulk_message_evaluation import evaluate_bulk_message
     from app.services.customer_bulk_messages import (
         ImmediateBulkMessageCommand,
         materialize_immediate,

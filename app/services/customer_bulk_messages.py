@@ -170,7 +170,7 @@ def accept(db: Session, *, command: AcceptBulkMessageCommand) -> BulkSendReceipt
             )
         if receipt.counts.matched_count:
             return receipt
-        from app.services.web_customer_actions import preview_bulk_message
+        from app.services.customer_bulk_message_evaluation import preview_bulk_message
 
         counts = preview_bulk_message(db=db, spec=command.spec)
         receipt = receipt.model_copy(update={"counts": counts})
@@ -246,7 +246,9 @@ def materialize(
             or receipt.attempts != command.attempt
         ):
             return None
-        from app.services.web_customer_actions import materialize_bulk_message
+        from app.services.customer_bulk_message_evaluation import (
+            materialize_bulk_message,
+        )
 
         counts = materialize_bulk_message(db=db, spec=receipt.spec)
         receipt = receipt.model_copy(
@@ -306,7 +308,7 @@ class ImmediateBulkMessageCommand:
 def materialize_immediate(
     db: Session, *, command: ImmediateBulkMessageCommand
 ) -> BulkMessageEvaluation:
-    from app.services.web_customer_actions import evaluate_bulk_message
+    from app.services.customer_bulk_message_evaluation import evaluate_bulk_message
 
     def operation() -> BulkMessageEvaluation:
         return evaluate_bulk_message(db=db, spec=command.spec)

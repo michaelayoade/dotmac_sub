@@ -26,7 +26,7 @@
     /** @param {BulkSendStatus} status */
     const render = (status) => {
         const labels = {accepted: 'Accepted; waiting to prepare recipients', preparing: 'Preparing recipients', queued: 'Recipient preparation completed', failed: 'Recipient preparation failed'};
-        let text = `${labels[status.materialization_status]}. ${status.planned_queued_count} delivery requests; ${status.planned_suppressed_count} suppressed; ${status.skipped_count} skipped.`;
+        let text = `Matched ${status.matched_count} customer(s). ${labels[status.materialization_status]}. ${status.planned_queued_count} delivery requests; ${status.planned_suppressed_count} suppressed; ${status.skipped_count} skipped.`;
         if (status.materialization_status === 'queued') {
             text += ` ${status.delivered_count} delivered; ${status.submitted_count} awaiting provider confirmation; ${status.pending_count} pending; ${status.failed_count} failed; ${status.canceled_count} canceled.`;
         }

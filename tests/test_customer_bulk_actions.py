@@ -259,7 +259,11 @@ def test_customer_bulk_actions_sync_selection_from_checked_rows_before_submit():
     assert (
         "this.selectedIds.filter((item) => !visibleIds.has(item.id))" in page_template
     )
-    assert "Matched ${matched} customer(s)." in page_template
+    runtime = (REPO_ROOT / "static/js/customer-bulk-send.js").read_text(
+        encoding="utf-8"
+    )
+    assert "Matched ${status.matched_count} customer(s)." in runtime
+    assert "DotmacCustomerBulkSend.send" in page_template
     assert "skipped due to missing contact details" in page_template
     assert "excluded because they have open tickets" in page_template
     assert "suppressed by preferences, dedupe, or other template conditions" in (
