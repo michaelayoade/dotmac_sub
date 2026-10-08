@@ -1311,6 +1311,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             6,
             permission="network:fiber:import",
         ),
+        _action(
+            "review-fiber-map-movement",
+            "Review fiber map movement",
+            7,
+            permission="network:fiber:read",
+        ),
+        _action(
+            "find-fdh-cabinet",
+            "Find an FDH cabinet",
+            8,
+            permission="network:fiber:read",
+        ),
     ),
     "olt-operational-health": (
         _action("compare-olts", "Compare OLT health", 0),
