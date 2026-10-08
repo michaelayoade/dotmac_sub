@@ -63,54 +63,82 @@ def test_customer_bulk_message_preview_does_not_dispatch_delivery(monkeypatch):
     assert dispatch_calls == []
 
 
-def test_customer_bulk_message_confirmation_enqueues_materialization(monkeypatch):
-    prepared = web_customer_actions.PreparedBulkMessageDispatch(
-        payload_json='{"confirmed":true}',
-        matched_count=1205,
-        created_count=1205,
-        queued_count=1200,
-        suppressed_count=5,
-        skipped_count=0,
-        suppressed=(),
-        skipped=(),
+@pytest.mark.parametrize("broker_available", [True, False])
+def test_customer_bulk_message_confirmation_returns_durable_acceptance(
+    monkeypatch, broker_available
+):
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from app.services import customer_bulk_messages
+    from app.services.customer_bulk_message_contracts import (
+        BulkMessageCounts,
+        BulkMessageSpec,
+        BulkSendReceipt,
+        BulkSendState,
+        BulkSendStatus,
     )
-    dispatch_calls = []
+
+    actor_id, request_id = uuid4(), uuid4()
+    spec = BulkMessageSpec(
+        channel="email",
+        template_id=uuid4(),
+        confirmed=True,
+        expected_impact_token="impact-1",
+        customer_ids=(uuid4(),),
+    )
+    receipt = BulkSendReceipt(
+        request_id=request_id,
+        actor_id=actor_id,
+        fingerprint="fingerprint",
+        spec=spec,
+        accepted_at=datetime.now(UTC),
+        counts=BulkMessageCounts(
+            matched_count=1205, queued_count=1200, suppressed_count=5
+        ),
+    )
     monkeypatch.setattr(
-        customers_web.web_customer_actions_service,
-        "prepare_bulk_message_dispatch_from_payload",
-        lambda *, db, payload: prepared,
+        customers_web.db_session_adapter, "release_read_transaction", lambda _db: None
     )
-    monkeypatch.setattr(customers_web, "_get_actor_id", lambda _request: "actor-1")
+    monkeypatch.setattr(
+        customer_bulk_messages, "accept", lambda *, db, command: receipt
+    )
+    monkeypatch.setattr(
+        customer_bulk_messages,
+        "status",
+        lambda *, db, query: BulkSendStatus(
+            request_id=request_id,
+            materialization_status=BulkSendState.accepted,
+            matched_count=1205,
+            planned_queued_count=1200,
+            planned_suppressed_count=5,
+            skipped_count=0,
+            status_url=f"/admin/customers/bulk/send-message/{request_id}",
+        ),
+    )
+    monkeypatch.setattr(customers_web, "_get_actor_id", lambda _request: str(actor_id))
+    dispatch_calls = []
 
-    def _enqueue(task_name, **kwargs):
+    def enqueue(task_name, **kwargs):
         dispatch_calls.append((task_name, kwargs))
-        return QueueDispatchResult(queued=True, task_id="bulk-task-1")
+        return QueueDispatchResult(
+            queued=broker_available,
+            task_id="bulk-task-1",
+            error=None if broker_available else "broker unavailable",
+        )
 
-    monkeypatch.setattr(customers_web, "enqueue_task", _enqueue)
-
+    monkeypatch.setattr(customers_web, "enqueue_task", enqueue)
     response = customers_web.bulk_send_customer_message(
         request=None,
-        data={"confirmed": True, "expected_impact_token": "impact-1"},
+        data={**spec.model_dump(mode="json"), "request_id": str(request_id)},
         db=object(),
     )
-
     assert response.status_code == 202
     body = json.loads(response.body)
     assert body["accepted"] is True
+    assert body["request_id"] == str(request_id)
     assert body["planned_queued_count"] == 1200
-    assert body["materialization_dispatch"]["task_id"] == "bulk-task-1"
-    assert dispatch_calls == [
-        (
-            "app.tasks.notifications.materialize_customer_bulk_message",
-            {
-                "args": (prepared.payload_json,),
-                "queue": "celery",
-                "correlation_id": "impact-1",
-                "source": "admin_customers_bulk_send",
-                "actor_id": "actor-1",
-            },
-        )
-    ]
+    assert dispatch_calls[0][1]["args"] == (str(request_id),)
 
 
 def _confirmed_selected_scope(db_session, *customer_ids: str) -> dict[str, object]:
@@ -231,12 +259,15 @@ def test_customer_bulk_actions_sync_selection_from_checked_rows_before_submit():
     assert (
         "this.selectedIds.filter((item) => !visibleIds.has(item.id))" in page_template
     )
-    assert "Matched ${matched} customer(s)." in page_template
-    assert "skipped due to missing contact details" in page_template
-    assert "excluded because they have open tickets" in page_template
-    assert "suppressed by preferences, dedupe, or other template conditions" in (
-        page_template
+    runtime = (REPO_ROOT / "static/js/customer-bulk-send.js").read_text(
+        encoding="utf-8"
     )
+    assert "Matched ${status.matched_count} customer(s)." in runtime
+    assert "DotmacCustomerBulkSend.send" in page_template
+    assert "${status.skipped_count} skipped." in runtime
+    assert "${status.planned_suppressed_count} suppressed" in runtime
+    assert "messagePreviewOpenTicketCount()" in page_template
+    assert "messagePreviewOtherSuppressionCount()" in page_template
 
 
 def test_bulk_update_customers_requires_explicit_filtered_scope_preview_and_confirmation(

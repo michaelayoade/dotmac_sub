@@ -713,6 +713,13 @@ python scripts/billing/prepaid_coverage_reconcile.py \
   --reason "<reviewed evidence reason>"
 ```
 
+Enforcement-blocking quarantine opens one `prepaid-coverage:quarantine:<account>`
+finance work item per account. Finance resolves `malformed_paid_invoice_period`
+and `malformed_renewal_origin` with
+`docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md`, starting from the
+read-only `scripts/billing/diagnose_prepaid_coverage_quarantine.py`, which lists
+the exact records and the reviewed owner (if any) for each.
+
 Preview prepaid-lock cleanup from active lock evidence, not subscriber status,
 invoice status, or paid-through date:
 

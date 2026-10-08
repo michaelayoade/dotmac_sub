@@ -20,6 +20,8 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
+    customer_bulk_message_changed = "customer_bulk_message.changed"
+
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"
     field_work_order_note_created = "field_work_order_note.created"

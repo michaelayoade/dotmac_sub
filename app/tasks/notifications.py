@@ -1627,41 +1627,103 @@ def _notification_queue_operational_event(
 
 
 @celery_app.task(name="app.tasks.notifications.materialize_customer_bulk_message")
-def materialize_customer_bulk_message(payload_json: str) -> dict[str, object]:
-    """Materialize a validated admin bulk-message request outside HTTP."""
-
-    try:
-        payload = json.loads(payload_json)
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise ValueError("Invalid customer bulk-message task payload") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("Customer bulk-message task payload must be an object")
-
-    from app.services import web_customer_actions
+def materialize_customer_bulk_message(request_id: str) -> dict[str, object]:
+    """Consume one durable receipt; duplicate tasks are safe no-ops."""
+    from app.services import customer_bulk_messages
     from app.services.queue_adapter import enqueue_task
 
+    receipt_id = UUID(request_id)
+    context = CommandContext.system(
+        actor="system:customer_bulk_message",
+        scope=str(receipt_id),
+        reason="drain accepted customer bulk message",
+    )
     with db_session_adapter.owner_command_session() as session:
-        result = web_customer_actions.queue_bulk_message_from_payload(
-            session,
-            payload,
+        claimed = customer_bulk_messages.claim(
+            db=session,
+            command=customer_bulk_messages.ProcessBulkMessageCommand(
+                context=context,
+                request_id=receipt_id,
+            ),
         )
+    if claimed is None:
+        return {"request_id": request_id, "processed": False}
+    try:
+        with db_session_adapter.owner_command_session() as session:
+            completed = customer_bulk_messages.materialize(
+                db=session,
+                command=customer_bulk_messages.ProcessBulkMessageCommand(
+                    context=context,
+                    request_id=receipt_id,
+                    attempt=claimed.attempts,
+                ),
+            )
+    except Exception as exc:
+        from app.services.domain_errors import DomainError
 
-    dispatch = enqueue_task(
+        retryable = not isinstance(exc, DomainError) or exc.retryable
+        safe_message = (
+            exc.message
+            if isinstance(exc, DomainError)
+            else "Recipient preparation failed temporarily; automatic recovery is pending."
+        )
+        with db_session_adapter.owner_command_session() as session:
+            customer_bulk_messages.record_failure(
+                db=session,
+                command=customer_bulk_messages.RecordBulkMessageFailureCommand(
+                    context=context,
+                    request_id=receipt_id,
+                    attempt=claimed.attempts,
+                    retryable=retryable,
+                    message=safe_message,
+                ),
+            )
+        logger.warning(
+            "customer_bulk_message_preparation_failed",
+            extra={
+                "request_id": request_id,
+                "attempt": claimed.attempts,
+                "retryable": retryable,
+            },
+        )
+        return {"request_id": request_id, "processed": False, "retryable": retryable}
+    if completed is None:
+        return {"request_id": request_id, "processed": False}
+    enqueue_task(
         "app.tasks.notifications.deliver_notification_queue",
         queue="notifications",
-        correlation_id=str(result.get("impact_token") or "") or None,
-        source="admin_customers_bulk_send_materialized",
+        correlation_id=request_id,
+        source="customer_bulk_message_receipt",
     )
     return {
-        "matched_count": int(str(result.get("matched_count") or 0)),
-        "created_count": int(str(result.get("created_count") or 0)),
-        "queued_count": int(str(result.get("queued_count") or 0)),
-        "suppressed_count": int(str(result.get("suppressed_count") or 0)),
-        "skipped_count": int(str(result.get("skipped_count") or 0)),
-        "delivery_dispatch_queued": dispatch.queued,
-        "delivery_dispatch_task_id": dispatch.task_id,
-        "delivery_dispatch_error": dispatch.error,
+        "request_id": request_id,
+        "processed": True,
+        "queued_count": completed.counts.queued_count,
     }
+
+
+@celery_app.task(name="app.tasks.notifications.dispatch_customer_bulk_messages")
+def dispatch_customer_bulk_messages() -> dict[str, int]:
+    """Permanent dispatch outbox drain; pending work survives broker outages."""
+    from app.services import customer_bulk_messages
+    from app.services.queue_adapter import enqueue_task
+
+    with db_session_adapter.read_session() as session:
+        request_ids = customer_bulk_messages.due_requests(
+            db=session,
+            query=customer_bulk_messages.DueBulkMessagesQuery(now=datetime.now(UTC)),
+        )
+    dispatched = 0
+    for request_id in request_ids:
+        result = enqueue_task(
+            "app.tasks.notifications.materialize_customer_bulk_message",
+            args=(str(request_id),),
+            queue="celery",
+            correlation_id=str(request_id),
+            source="customer_bulk_message_outbox",
+        )
+        dispatched += int(result.queued)
+    return {"due": len(request_ids), "dispatched": dispatched}
 
 
 @celery_app.task(name="app.tasks.notifications.deliver_notification_queue")

@@ -113,7 +113,15 @@ def run_bundle_reconcile() -> dict[str, int]:
 # bounded so a large backlog cannot stall enforcement or interactive traffic.
 _COVERAGE_REPAIR_CHUNK = 200
 
-_QUARANTINE_FINDING_PREFIX = "prepaid-coverage:quarantine:"
+PREPAID_COVERAGE_QUARANTINE_FINDING_PREFIX = "prepaid-coverage:quarantine:"
+_QUARANTINE_FINDING_PREFIX = PREPAID_COVERAGE_QUARANTINE_FINDING_PREFIX
+#: Finance procedure and read-only diagnostic for blocking-quarantine items.
+PREPAID_COVERAGE_QUARANTINE_RUNBOOK = (
+    "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
+)
+PREPAID_COVERAGE_QUARANTINE_DIAGNOSTIC = (
+    "scripts/billing/diagnose_prepaid_coverage_quarantine.py"
+)
 #: Finance review window recorded on each blocking-quarantine work item.
 _QUARANTINE_SLA_HOURS = 72
 
@@ -349,8 +357,8 @@ def repair_prepaid_coverage_evidence(
     """
     from app.services.owner_commands import CommandContext
     from app.services.prepaid_coverage_reconciliation import (
+        ENFORCEMENT_BLOCKING_QUARANTINE_REASONS,
         CoverageReconciliationDecision,
-        CoverageReconciliationReason,
         PrepaidCoverageReconciliationError,
         ReconcilePrepaidCoverageCommand,
         preview_prepaid_coverage_reconciliation,
@@ -359,15 +367,7 @@ def repair_prepaid_coverage_evidence(
 
     # Quarantine reasons that also block adverse enforcement (the same
     # evidence classes resolve_prepaid_coverage_enforcement_blockers reports).
-    blocking_reasons: frozenset[CoverageReconciliationReason] = frozenset(
-        {
-            CoverageReconciliationReason.malformed_paid_invoice_period,
-            CoverageReconciliationReason.malformed_renewal_origin,
-            CoverageReconciliationReason.conflicting_financial_sources,
-            CoverageReconciliationReason.ambiguous_paid_invoice_lines,
-            CoverageReconciliationReason.ambiguous_renewal_adjustments,
-        }
-    )
+    blocking_reasons = ENFORCEMENT_BLOCKING_QUARANTINE_REASONS
 
     observed_at = now or datetime.now(UTC)
     if observed_at.tzinfo is None:
@@ -517,17 +517,23 @@ def _sync_quarantine_work_items(
                 source="prepaid_coverage_repair",
                 severity=AlertSeverity.warning,
                 title="Prepaid coverage evidence needs finance review",
+                # AdminAlert.summary is bounded at 255 characters.
                 summary=(
-                    "Contradictory or malformed financial evidence blocks "
-                    "adverse enforcement for this account. Review the "
-                    "reconciliation run evidence and correct the source "
-                    "records; the account must never be auto-suspended from "
-                    "ambiguous debt."
+                    "Malformed or contradictory financial evidence blocks "
+                    "adverse enforcement; never auto-suspend. Follow "
+                    f"{PREPAID_COVERAGE_QUARANTINE_RUNBOOK} "
+                    f"(run {PREPAID_COVERAGE_QUARANTINE_DIAGNOSTIC})."
                 ),
                 details={
                     "owner": "financial-billing",
                     "account_id": str(account_id),
                     "reason_codes": sorted(reasons_by_account[account_id]),
+                    "runbook": PREPAID_COVERAGE_QUARANTINE_RUNBOOK,
+                    "diagnostic_command": (
+                        "poetry run python -m "
+                        "scripts.billing.diagnose_prepaid_coverage_quarantine "
+                        f"--account-id {account_id}"
+                    ),
                     "sla_due_at": (
                         now + timedelta(hours=_QUARANTINE_SLA_HOURS)
                     ).isoformat(),

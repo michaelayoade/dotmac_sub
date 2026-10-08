@@ -119,6 +119,22 @@ class CoverageReconciliationReason(StrEnum):
     )
 
 
+#: Quarantine reasons that also block adverse enforcement (the same evidence
+#: classes ``resolve_prepaid_coverage_enforcement_blockers`` reports). Each one
+#: opens a finance work item until the source evidence is corrected.
+ENFORCEMENT_BLOCKING_QUARANTINE_REASONS: frozenset[CoverageReconciliationReason] = (
+    frozenset(
+        {
+            CoverageReconciliationReason.malformed_paid_invoice_period,
+            CoverageReconciliationReason.malformed_renewal_origin,
+            CoverageReconciliationReason.conflicting_financial_sources,
+            CoverageReconciliationReason.ambiguous_paid_invoice_lines,
+            CoverageReconciliationReason.ambiguous_renewal_adjustments,
+        }
+    )
+)
+
+
 class PrepaidCoverageReconciliationError(DomainError):
     """Stable fail-closed reconciliation error."""
 
@@ -318,6 +334,36 @@ def _parse_adjustment_origin(
     return subscription_id, starts_at, ends_at
 
 
+def parse_prepaid_renewal_origin_ref(
+    value: str | None,
+) -> tuple[UUID, datetime, datetime] | None:
+    """Return the exact ``<subscription>:<start>:<end>`` this owner accepts.
+
+    Read-only view of the same parser the preview and enforcement-blocker
+    query apply, so a diagnostic can explain a ``malformed_renewal_origin``
+    quarantine without re-implementing (and drifting from) the contract.
+    """
+    return _parse_adjustment_origin(value)
+
+
+def split_prepaid_renewal_origin_ref(
+    value: str | None,
+) -> tuple[str, str, str] | None:
+    """Return the raw subscription/start/end parts when the shape matches."""
+    match = _ORIGIN_REF_PATTERN.fullmatch(value or "")
+    if match is None:
+        return None
+    return match.group("subscription"), match.group("starts"), match.group("ends")
+
+
+def is_malformed_paid_invoice_period(
+    starts_at: datetime | None,
+    ends_at: datetime | None,
+) -> bool:
+    """The exact ``malformed_paid_invoice_period`` predicate this owner applies."""
+    return starts_at is None or ends_at is None or _utc(ends_at) <= _utc(starts_at)
+
+
 def _subscriptions(
     db: Session,
     subscription_ids: tuple[UUID, ...] | None,
@@ -424,7 +470,11 @@ def _paid_invoice_evidence(
             continue
         starts_at = invoice.billing_period_start
         ends_at = invoice.billing_period_end
-        if starts_at is None or ends_at is None or _utc(ends_at) <= _utc(starts_at):
+        if (
+            starts_at is None
+            or ends_at is None
+            or is_malformed_paid_invoice_period(starts_at, ends_at)
+        ):
             malformed.add(subscription_id)
             continue
         normalized_start = _utc(starts_at)
@@ -584,7 +634,7 @@ def resolve_prepaid_coverage_enforcement_blockers(
             subscription_id = UUID(row.subscription_id)
             starts_at = row.starts_at
             ends_at = row.ends_at
-            if starts_at is None or ends_at is None or _utc(ends_at) <= _utc(starts_at):
+            if is_malformed_paid_invoice_period(starts_at, ends_at):
                 malformed_invoice_subscriptions.add(subscription_id)
             elif _utc(starts_at) <= observed_at < _utc(ends_at):
                 invoice_counts[subscription_id] += 1
@@ -1261,6 +1311,7 @@ def reconcile_prepaid_service_coverage(
 
 
 __all__ = [
+    "ENFORCEMENT_BLOCKING_QUARANTINE_REASONS",
     "CoverageReconciliationDecision",
     "CoverageReconciliationReason",
     "CoverageReconciliationSource",
@@ -1270,6 +1321,9 @@ __all__ = [
     "PrepaidCoverageReconciliationPreviewItem",
     "PrepaidCoverageReconciliationResult",
     "ReconcilePrepaidCoverageCommand",
+    "is_malformed_paid_invoice_period",
+    "parse_prepaid_renewal_origin_ref",
+    "split_prepaid_renewal_origin_ref",
     "preview_prepaid_coverage_reconciliation",
     "preview_prepaid_coverage_reconciliation_for_invoice",
     "reconcile_prepaid_service_coverage",

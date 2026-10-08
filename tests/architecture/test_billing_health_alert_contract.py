@@ -58,6 +58,12 @@ def _alert_block(source: str, name: str) -> str:
 
 def test_finance_work_item_alerts_share_the_work_item_owner_and_runbook() -> None:
     """Alerts and the work items they summarise name one owner and runbook."""
+    from app.services.collections.scheduled import (
+        PREPAID_COVERAGE_QUARANTINE_RUNBOOK,
+    )
+    from app.services.prepaid_coverage_quarantine_review import (
+        RUNBOOK as QUARANTINE_REVIEW_RUNBOOK,
+    )
     from app.services.prepaid_renewal_terms_backfill import (
         RENEWAL_TERMS_RUNBOOK,
         RENEWAL_TERMS_WORK_ITEM_OWNER,
@@ -71,10 +77,20 @@ def test_finance_work_item_alerts_share_the_work_item_owner_and_runbook() -> Non
         assert f'runbook: "{RENEWAL_TERMS_RUNBOOK}"' in block
     quarantine = _alert_block(source, "PrepaidCoverageQuarantinedEvidence")
     assert f"owner: {RENEWAL_TERMS_WORK_ITEM_OWNER}" in quarantine
+    assert f'runbook: "{PREPAID_COVERAGE_QUARANTINE_RUNBOOK}"' in quarantine
+    assert (ROOT / PREPAID_COVERAGE_QUARANTINE_RUNBOOK).is_file()
+    # The quarantine work item names the same owner and runbook as its alert.
+    scheduled_source = (
+        ROOT / "app" / "services" / "collections" / "scheduled.py"
+    ).read_text(encoding="utf-8")
+    assert f'"owner": "{RENEWAL_TERMS_WORK_ITEM_OWNER}"' in scheduled_source
+    assert QUARANTINE_REVIEW_RUNBOOK == PREPAID_COVERAGE_QUARANTINE_RUNBOOK
 
     # One label vocabulary: work items never use the retired spelling.
     for path in (ROOT / "app").rglob("*.py"):
         assert '"finance-billing"' not in path.read_text(encoding="utf-8"), path
+    for path in (ROOT / "docs" / "runbooks").glob("*.md"):
+        assert "`finance-billing`" not in path.read_text(encoding="utf-8"), path
     # Every alert runbook annotation points at a real file.
     for rules in (ROOT / "deploy" / "observability").glob("*.rules.yml"):
         for line in rules.read_text(encoding="utf-8").splitlines():
@@ -83,3 +99,16 @@ def test_finance_work_item_alerts_share_the_work_item_owner_and_runbook() -> Non
                 target = stripped.split(":", 1)[1].strip().strip('"')
                 if not target.startswith("http"):
                     assert (ROOT / target).is_file(), (rules.name, target)
+
+
+def test_prepaid_coverage_quarantine_alert_links_the_finance_runbook() -> None:
+    source = PREPAID_RULES.read_text(encoding="utf-8")
+    runbook = "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
+    alert = source.split("- alert: PrepaidCoverageQuarantinedEvidence", 1)[1]
+    alert = alert.split("- alert:", 1)[0]
+
+    assert f'runbook: "{runbook}"' in alert
+    assert (ROOT / runbook).is_file()
+    assert (
+        ROOT / "scripts" / "billing" / "diagnose_prepaid_coverage_quarantine.py"
+    ).is_file()
