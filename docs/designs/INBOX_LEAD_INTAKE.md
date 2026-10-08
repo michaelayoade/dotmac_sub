@@ -5,7 +5,7 @@
 
 ## Purpose
 
-Lead intake turns a final qualifying classification for an unknown prospect in
+Lead intake turns a confident qualifying classification for an unknown prospect in
 a supported Meta Inbox conversation into a Party-first Lead. Lead creation does
 not depend on sending or completing a form. The form is optional enrichment for
 identity and service-location details. Neither path creates a Subscriber,
@@ -14,7 +14,7 @@ activates service, or grants marketing consent.
 The owner controls three concerns:
 
 1. immutable, versioned individual and organization form templates;
-2. atomic materialization of a final classified sales candidate into Party,
+2. atomic materialization of a confident classified sales candidate into Party,
    Lead, exact Inbox participant binding, conversation-to-Lead provenance,
    optional Sales routing, internal note, audit evidence, and `lead.created`;
 3. optional invitation eligibility, expiry, delivery, and revocation; and
@@ -28,13 +28,20 @@ or update the Sales-owned records directly.
 
 ## Classified-candidate contract
 
-When `ai.intake` persists a final, no-follow-up `new_connection` or
+When `ai.intake` persists a confident `new_connection` or
 `coverage_request` classification for a WhatsApp, Facebook Messenger, or
 Instagram DM message with a known individual/organization type, it stages
 `ai.intake_lead_candidate_classified` in the same transaction. The event uses a
 message-derived deterministic ID and contains only the typed classification,
 operator tenant ID, message/conversation IDs, provider/model labels, and
-allowlisted PII-free Meta referral fields. The Sales handler validates the
+allowlisted PII-free Meta referral fields. Capture precedes further clarification
+and engine routing: awaiting-follow-up and follow-up-limit fallback outcomes may
+capture a candidate when both intent and individual/organization confidence meet
+the configured threshold. Unknown customer type, low confidence, unavailable
+classification, greetings, and complaints do not qualify. Linked Subscribers
+are excluded. The Sales owner revalidates customer identity and confidence.
+Later intent changes never retract the durable candidate or its Lead link.
+The Sales handler validates the
 tenant before entering its owner; a cross-tenant event is a permanent,
 reviewable refusal. Meta referral data is acquisition evidence, not a
 standalone Lead decision.
@@ -123,9 +130,15 @@ the provider account scope captured on the inbound message and the durable
 notification queue. Delivery records never store the public token separately
 from the outbound message body already required for transport.
 
-Operators diagnose drift by comparing final qualifying classification metadata,
+Operators diagnose drift by comparing qualifying classification metadata,
 the durable candidate event, active Lead link, immutable Lead origin, exact
 participant binding, optional invitation link, and Lead event/audit record.
+The resolution gate and repair scan recognise `ai_lead_candidate_event_id` even
+while clarification remains active or routing changes the intake status. Durable
+dispatcher retries own failed materialization; resolution remains blocked while
+the candidate lacks a Lead link. Historical final classifications remain eligible
+for the existing bounded repair command. Ambiguous historical enquiries require
+staff identification rather than fabricated customer type or confidence.
 Replaying the candidate consequence or a completed form command returns the same
 deterministic Party and Lead identities. Historical repair is report-first and
 must re-enter this owner; operators must not manually insert Lead/link rows.

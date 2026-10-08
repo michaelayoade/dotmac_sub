@@ -514,7 +514,7 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         notes=(
             "The general ai.intake owner classifies and routes every eligible "
-            "customer message. Only its final high-confidence sales result is "
+            "customer message. Its first high-confidence sales result is "
             "handed to this owner through a durable event. This owner atomically "
             "creates and links the provisional Party-first Lead whether or not a "
             "form is configured or delivered. A form is optional profile enrichment."
@@ -580,7 +580,8 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.DERIVED_PROJECTION,
                     source=(
                         "durable ai.intake_lead_candidate_classified event carrying "
-                        "a final new-connection or coverage classification, customer "
+                        "a confident new-connection or coverage classification captured "
+                        "before clarification or routing, customer "
                         "type, operator tenant identity, message identity, and "
                         "allowlisted Meta attribution"
                     ),

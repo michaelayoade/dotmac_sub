@@ -234,7 +234,7 @@ def _stage_lead_candidate_classified(
     outcome: AiIntakeOutcome,
     metadata: dict[str, object],
 ) -> None:
-    """Stage the durable, idempotent Sales handoff for a final sales result."""
+    """Capture confident sales evidence before clarification or routing can lose it."""
 
     classification = outcome.classification
     if (
@@ -244,11 +244,23 @@ def _stage_lead_candidate_classified(
             InboxChannelType.facebook_messenger.value,
             InboxChannelType.instagram_dm.value,
         }
-        or outcome.status is not AiIntakeStatus.classified
+        or outcome.status
+        not in {
+            AiIntakeStatus.classified,
+            AiIntakeStatus.awaiting_follow_up,
+            AiIntakeStatus.fallback,
+        }
         or classification is None
-        or classification.requires_follow_up
         or classification.intent.value not in LEAD_IDENTITY_REQUIRED_INTENTS
         or classification.party_type.value == LeadIntakePartyType.unknown.value
+        or conversation.subscriber_id is not None
+    ):
+        return
+    config = db.get(AiIntakeConfig, outcome.config_id) if outcome.config_id else None
+    threshold = float(config.confidence_threshold) if config else 0.75
+    if (
+        classification.confidence < threshold
+        or classification.party_type_confidence < threshold
     ):
         return
     event_id = uuid5(inbound.id, "ai-intake-lead-candidate-classified-v1")
@@ -3952,11 +3964,14 @@ def _process_one_session(
             }
             for item in decision.state.tool_executions[-6:]
         ]
-        if decision.state.current_intent:
+        # Keep the evidence that staged Sales capture stable for repair and
+        # resolution checks. Engine state separately records later routing intent.
+        sales_candidate_staged = bool(metadata.get("ai_lead_candidate_event_id"))
+        if decision.state.current_intent and not sales_candidate_staged:
             metadata["ai_intent"] = decision.state.current_intent
-        if decision.state.category:
+        if decision.state.category and not sales_candidate_staged:
             metadata["ai_category"] = decision.state.category
-        if decision.state.confidence is not None:
+        if decision.state.confidence is not None and not sales_candidate_staged:
             metadata["ai_confidence"] = decision.state.confidence
         if decision.state.destination_team_id:
             metadata["ai_department_team_id"] = decision.state.destination_team_id

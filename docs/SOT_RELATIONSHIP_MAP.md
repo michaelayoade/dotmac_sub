@@ -23,6 +23,13 @@ lists or service declarations.
 
 ## Lead creation-date query ownership
 
+Inbox sales capture remains owned by `ai.intake` (evidence and transactional
+candidate event) and `sales.lead_intake` (identity validation and materialization).
+Confident qualifying evidence is captured before clarification and routing.
+`ai_lead_candidate_event_id` is the durable drift signal consumed by the existing
+resolution gate and bounded Sales repair owner; later intent changes do not
+retract it. See `docs/designs/INBOX_LEAD_INTAKE.md`.
+
 `sales.service` owns `LeadListDateRange` and `normalize_lead_date_range`.
 `Lead.created_at` is the authoritative timestamp. One normalized UTC date
 scope flows through the existing Lead predicates to rows, count, and summary.
