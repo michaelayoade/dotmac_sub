@@ -203,6 +203,118 @@ DOMAIN = DomainSOT(
     services=(
         *PAYMENT_EMAIL_SERVICES,
         SOTService(
+            name="communications.customer_bulk_messages",
+            module="app.services.customer_bulk_messages",
+            owns=(
+                "durable customer bulk message admission and materialization",
+                "customer bulk message receipt and delivery status",
+            ),
+            depends_on=(
+                "communications.customer_bulk_message_evaluation",
+                "events.dispatcher",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.customer_bulk_messages",
+                concerns=(
+                    (
+                        "durable customer bulk message admission and materialization",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                    (
+                        "customer bulk message receipt and delivery status",
+                        OwnerRole.RESOLVER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="bulk send receipts",
+                        owner="communications.customer_bulk_messages",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="system_jobs rows scoped to job_type customer_bulk_message",
+                    ),
+                    AuthorityInput(
+                        name="confirmed message impact",
+                        owner="communications.customer_bulk_message_evaluation",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="typed drift-bound audience and materialization counts",
+                    ),
+                ),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                transaction_contract=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="Each public command enters execute_owner_command once; receipt completion and notification materialization commit atomically.",
+                    locking="Existing unique job_type/job_id constraint arbitrates acceptance; row locks serialize replay; skip-locked claims avoid concurrent materialization.",
+                    idempotency="Actor-scoped UUID and canonical request fingerprint replay a receipt before impact revalidation; changed inputs fail closed.",
+                    retries="Permanent 60-second outbox drain recovers broker failures and 15-minute stale leases; three bounded preparation attempts; notification retries retain their owner.",
+                ),
+                event_types=("customer_bulk_message.changed",),
+                domain_error_codes=(
+                    "communications.customer_bulk_messages.idempotency_conflict",
+                    "communications.customer_bulk_messages.impact_changed",
+                    "communications.customer_bulk_messages.command_required",
+                ),
+                design_refs=(
+                    "docs/designs/LIFECYCLE_COMMUNICATIONS_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_customer_bulk_message_receipts.py",
+                    "tests/architecture/test_customer_bulk_message_receipt_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="communications.customer_bulk_message_evaluation",
+            module="app.services.customer_bulk_message_evaluation",
+            owns=(
+                "customer bulk message preview",
+                "customer bulk message delivery materialization",
+            ),
+            depends_on=(
+                "communications.intents",
+                "communications.customer_policy",
+                "customer.identity_scope",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.customer_bulk_message_evaluation",
+                concerns=(
+                    ("customer bulk message preview", OwnerRole.RESOLVER),
+                    (
+                        "customer bulk message delivery materialization",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="typed message specification",
+                        owner="communications.customer_bulk_messages",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="BulkMessageSpec with preview scope and impact evidence",
+                    ),
+                    AuthorityInput(
+                        name="recipient policy decisions",
+                        owner="communications.customer_policy",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="authoritative cohort policy query",
+                    ),
+                ),
+                transaction_mode=TransactionMode.PARTICIPANT,
+                transaction_contract=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Preview reads persisted templates; materialization is flush-only inside communications.customer_bulk_messages.",
+                    locking="Host receipt lock serializes each request; communication intent uniqueness retains recipient deduplication.",
+                    idempotency="Existing impact-token/subscriber communication-intent identity replays delivery rows.",
+                    retries="Host owner rolls back before recording preparation failure; scope or template drift fails closed.",
+                ),
+                event_types=("communication_intent.planned",),
+                design_refs=("docs/designs/LIFECYCLE_COMMUNICATIONS_SOT.md",),
+                test_refs=(
+                    "tests/test_customer_bulk_actions.py",
+                    "tests/architecture/test_customer_bulk_message_receipt_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="communication.document_delivery",
             module="app.services.document_delivery",
             owns=(

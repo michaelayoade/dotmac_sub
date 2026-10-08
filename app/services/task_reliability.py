@@ -468,14 +468,24 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "idempotency key, failed lookups are logged, and the next scheduled "
         "sweep retries unresolved emails.",
     ),
+    "app.tasks.notifications.dispatch_customer_bulk_messages": _c(
+        "notifications",
+        SWEEP,
+        GUARDED,
+        STATUS,
+        "The permanent receipt outbox sweep redispatches accepted and expired-lease "
+        "request UUIDs. Broker failure leaves the receipt due for a later sweep; "
+        "duplicate wakeups cannot bypass receipt row locks or attempt guards.",
+    ),
     "app.tasks.notifications.materialize_customer_bulk_message": _c(
         "notifications",
-        NONE,
+        STATE,
         GUARDED,
-        LOG,
-        "Admin bulk-message materialization is atomic and uses deterministic "
-        "per-customer communication-intent dedupe keys. A replay either returns "
-        "the existing deliveries or fails closed when the impact token drifted.",
+        STATUS,
+        "Receipt claims, bounded preparation attempts and durable failure state "
+        "own recovery. Materialization and receipt completion commit together; "
+        "the outbox sweep recovers stale leases without Celery autoretry. "
+        "Status is visible through the actor-scoped customer send status panel.",
     ),
     "app.tasks.oauth.check_token_health": _c("integrations", SWEEP, IDEMP, HEALTH),
     "app.tasks.oauth.refresh_expiring_tokens": _c(

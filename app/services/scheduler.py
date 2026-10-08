@@ -31,6 +31,7 @@ PERMANENT_LIFECYCLE_TASKS = frozenset(
         "app.tasks.vacation_holds.resume_expired_holds",
         "app.tasks.enforcement.reconcile_billing_approval_drift",
         "app.tasks.notifications.deliver_notification_queue",
+        "app.tasks.notifications.dispatch_customer_bulk_messages",
         "app.tasks.events.dispatch_pending_events",
         "app.tasks.events.retry_failed_events",
         "app.tasks.events.mark_stale_processing_events",
