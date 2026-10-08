@@ -850,7 +850,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/surveys",),
         "Search or filter the survey list, then open a survey to review its questions and response status.",
         "Choose New Survey, enter its name and purpose, add the required questions, and save it.",
-        "Open the saved survey to copy its public response link, activate or close collection, and review responses.",
+        "Open the saved survey to copy its public response link or activate or close collection. Read the feedback report for satisfaction, reliability, downtime, and improvement priorities. Each chart shows its answer count and excluded or missing answers; percentages describe submitted answers, not unique customers. Expand an individual submission to read its answers, including answers to removed questions. The report includes all saved submissions; the response list shows the latest 200.",
         "Export responses only when the intended audience and date range are correct.",
     ),
     _guide(
