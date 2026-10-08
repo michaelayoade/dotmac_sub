@@ -774,7 +774,9 @@ def get_regional_report_data(
             null_string.label("dimension_b"),
             sa_cast(
                 func.coalesce(
-                    func.sum(Payment.amount - func.coalesce(Payment.refunded_amount, 0)),
+                    func.sum(
+                        Payment.amount - func.coalesce(Payment.refunded_amount, 0)
+                    ),
                     Decimal("0"),
                 ),
                 Numeric,
