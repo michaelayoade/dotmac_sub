@@ -15,7 +15,7 @@ from app.models.provisioning import (
     ServiceOrder,
     ServiceOrderStatus,
 )
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.services import crm_reporting, provisioning_managers, web_reports
 from app.services.sot_registry.registry import registry_validation_errors
 from app.services.ui_contracts import ChartProjection
@@ -376,6 +376,7 @@ def test_churn_reasons_come_from_native_subscription_cancellation(
 ):
     from app.models.catalog import SubscriptionStatus
 
+    subscription.subscriber.user_type = UserType.customer
     subscription.status = SubscriptionStatus.canceled
     subscription.canceled_at = datetime.now(UTC)
     subscription.cancel_reason = "Moved away"
