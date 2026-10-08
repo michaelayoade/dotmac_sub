@@ -12,7 +12,10 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "658_regional_report_billing_indexes"
-down_revision: str | None = "653_prepaid_activation_funding_overrides"
+down_revision: tuple[str, str] = (
+    "653_prepaid_activation_funding_overrides",
+    "657_purchase_prepaid_sweep_merge",
+)
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
