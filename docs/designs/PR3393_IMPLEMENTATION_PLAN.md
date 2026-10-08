@@ -145,8 +145,9 @@ Disabling a feature must stop new admission/proposal collection while preserving
 The feature implementation was published as `1b22c07f9` after approval.
 On 8 October, current main at `b5466fb76` was integrated locally with the tested
 CI corrections. Guide-count and native-head conflicts retain both sides' work.
-Filename prefixes 651 through 654 preserve the published purchase revision
-identities; additive merge revision 655 joins them with main's native 650 head.
+Filename prefixes 659, 660, 654, and 656 preserve the published purchase
+revision identities without colliding with current main; additive merge
+revision 655 joins them with main's native 650 head.
 The combined corrections remain unpublished pending approval. Full CI for the
 combined commit, PostgreSQL predecessor rehearsals, provider and staging
 acceptance remain release gates.
@@ -158,8 +159,8 @@ After publication of `418f9031e`, all six GitHub workflows passed, including CI
 and E2E. Main then advanced to `634e222bc` with prepaid sweep cycle totals.
 Preserve that migration and the complete purchase history through additive,
 schema-neutral merge revision `657_purchase_prepaid_sweep_merge`. Rename only
-the conflicting purchase filename from 651 to 656; its original revision ID,
-parents and SQL remain unchanged. Keep the effective native-head assertion and
+the conflicting purchase filenames to 659 and 660; their original revision
+IDs, parents and SQL remain unchanged. Keep the effective native-head assertion and
 prefix-collision guard strict. The purchase/outage implementation and approved
 manual Finance posting policy are preserved; validate positive enabled purchase
 settlement and approved grants as well as replay, held-cash, pause, extension,

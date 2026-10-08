@@ -199,7 +199,7 @@ Both `billing.prepaid_period_purchase_enabled` and
 `billing.outage_compensation_enabled` default to false. Schema deployment and
 historical overlap/reconciliation checks precede enabling either writer.
 
-Purchase migration filenames 652, 653, 654 and 656 have distinct prefixes;
+Purchase migration filenames 659, 660, 654 and 656 have distinct prefixes;
 main's 651 sweep-metric migration is retained. Their existing revision identities and parent links remain
 unchanged: `636_service_period_purchase_contract`,
 `637_prepaid_period_purchase_intent_contract`, `646_prepaid_purchase_safety`, and
