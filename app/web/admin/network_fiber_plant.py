@@ -778,12 +778,18 @@ def ont_identity_review_execute(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:fiber:read"))],
 )
-def fiber_change_requests(request: Request, db: Session = Depends(get_db)):
+def fiber_change_requests(
+    request: Request,
+    db: Session = Depends(get_db),
+    auth: dict[str, object] = Depends(require_permission("network:fiber:read")),
+):
     """Review pending vendor fiber change requests."""
     page_data = web_network_fiber_plant_service.change_requests_page_data(
         db,
         bulk_status=request.query_params.get("bulk"),
         skipped=request.query_params.get("skipped"),
+        can_review_map_assets=can(request, "network:fiber:review"),
+        map_asset_actor_id=str(auth.get("principal_id") or ""),
     )
     context = _base_context(
         request, db, active_page="fiber-change-requests", active_menu="fiber"

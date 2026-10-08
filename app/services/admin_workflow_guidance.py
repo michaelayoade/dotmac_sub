@@ -377,12 +377,13 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review each staged feature's name, geometry, suggested asset type, and blocker; correct classifications before submission.",
         "Submit eligible new point assets into the existing proposal review. Route geometry and other blocked features stay staged until their separate review is complete.",
         "On the fiber map, submit supported FDH and closure moves for review; the canonical map position changes only after approval.",
+        "On Fiber Change Requests, review pending Map V2 proposals in their separate queue. Only an independent reviewer with network:fiber:review can approve or reject; approval applies the proposed canonical asset change.",
         "On the FDH cabinet ledger, use the active-cabinet list and page controls to find a cabinet, then use its editor for non-location details.",
         notes=(
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",
             "Map imports accept optional asset IDs when available and keep unsupported or sensitive features blocked for review.",
         ),
-        route_templates=("/admin/network",),
+        route_templates=("/admin/network/fiber-change-requests", "/admin/network"),
     ),
     _guide(
         "olt-operational-health",
@@ -1318,9 +1319,15 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="network:fiber:read",
         ),
         _action(
+            "review-fiber-change-proposals",
+            "Review Map V2 asset proposals",
+            8,
+            permission="network:fiber:review",
+        ),
+        _action(
             "find-fdh-cabinet",
             "Find an FDH cabinet",
-            8,
+            9,
             permission="network:fiber:read",
         ),
     ),
