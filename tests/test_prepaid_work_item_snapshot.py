@@ -31,7 +31,7 @@ def _record(db, fingerprint: str, due_at: datetime) -> None:
             severity=AlertSeverity.warning,
             title="Prepaid work item",
             summary="Needs finance review.",
-            details={"owner": "finance-billing", "sla_due_at": due_at.isoformat()},
+            details={"owner": "financial-billing", "sla_due_at": due_at.isoformat()},
         ),
     )
 

@@ -21,6 +21,15 @@ Subcommands::
     poetry run python -m scripts.billing.billing_target_shadow correct-legacy-renewal-tax-invoice --account <id> --subscription <id> --adjustment <id> --entitlement <id> --expected-invoice-total <amount> --expected-remaining-credit <amount> --preview-fingerprint <sha256> --actor user:<id> --reason <approval-ref> --idempotency-key <key>
     poetry run python -m scripts.billing.billing_target_shadow preview-unused-prepaid-renewal-correction --account <id> --subscription <id> --adjustment <id> --entitlement <id>
     poetry run python -m scripts.billing.billing_target_shadow correct-unused-prepaid-renewal --account <id> --subscription <id> --adjustment <id> --entitlement <id> --preview-fingerprint <sha256> --actor user:<id> --reason <approval-ref> --idempotency-key <key>
+    poetry run python -m scripts.billing.billing_target_shadow correct-renewal-terms --subscription <id> --action apply_reviewed_term --source finance_review --expected-amount <amount> --amount <amount> --reference <ref> --actor <system-user-uuid> --idempotency-key <key>
+    poetry run python -m scripts.billing.billing_target_shadow request-renewal-term-record --subscription <id> --amount <amount> --expected-current-amount none --reason <text> --evidence-ref <ref> --evidence-sha256 <sha256> --actor <system-user-uuid> --idempotency-key <key>
+    poetry run python -m scripts.billing.billing_target_shadow approve-renewal-term-record --request <request-id> --amount <amount> --approver <different-system-user-uuid> --idempotency-key <key>
+    poetry run python -m scripts.billing.billing_target_shadow list-renewal-term-record-requests [--subscription <id>] [--include-recorded]
+
+The renewal-term commands take real staff identities (SystemUser UUIDs)
+resolved against the ``billing:renewal_terms:record`` grant; a reviewed
+record needs two different staff members. See
+docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md.
 
 Preview commands are read-only. Explicit capture, correction, execution, and
 authority-activation commands make only their documented owner-controlled
@@ -329,6 +338,187 @@ def _cmd_audit_renewal_terms(db, args) -> int:
     return 0
 
 
+def _uuid_arg(value: str) -> UUID:
+    try:
+        return UUID(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("identifier must be a UUID") from exc
+
+
+def _staff_uuid(value: str) -> UUID:
+    """A real staff principal: a ``SystemUser`` id, never a free-text label."""
+    try:
+        return UUID(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "staff identity must be a SystemUser UUID"
+        ) from exc
+
+
+def _money_arg(value: str) -> Decimal:
+    from decimal import InvalidOperation
+
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as exc:
+        raise argparse.ArgumentTypeError("amount must be a decimal") from exc
+    if not parsed.is_finite():
+        raise argparse.ArgumentTypeError("amount must be finite")
+    return parsed
+
+
+def _expected_amount_arg(value: str) -> Decimal | None:
+    """``none`` states the stored price is NULL; otherwise the stored value."""
+    if value.strip().lower() == "none":
+        return None
+    return _money_arg(value)
+
+
+def _renewal_term_record_permission_granted(db, *, system_user_id: UUID) -> bool:
+    """Resolve a real staff principal's RBAC grant for renewal-term records.
+
+    Mirrors ``scripts/billing/reconcile_prepaid_drafts.py``: the staff UUID
+    is resolved against its actual role grants through ``has_permission``;
+    a missing or deactivated account never resolves.
+    """
+    from app.models.system_user import SystemUser
+    from app.services.auth_dependencies import has_permission
+    from app.services.prepaid_renewal_terms_backfill import (
+        RENEWAL_TERM_RECORD_PERMISSION,
+    )
+    from app.services.system_user_assignments import system_user_role_names
+
+    system_user = db.get(SystemUser, system_user_id)
+    if system_user is None or not system_user.is_active:
+        return False
+    auth = {
+        "principal_id": str(system_user_id),
+        "principal_type": "system_user",
+        "roles": set(system_user_role_names(db, system_user_id)),
+    }
+    return has_permission(auth, db, RENEWAL_TERM_RECORD_PERMISSION)
+
+
+def _staff_context(
+    reason: str, *, idempotency_key: str, system_user_id: UUID
+) -> CommandContext:
+    from app.services.prepaid_renewal_terms_backfill import (
+        RENEWAL_TERM_RECORD_PERMISSION,
+    )
+
+    return _context(
+        reason,
+        idempotency_key=idempotency_key,
+        actor=f"user:{system_user_id}",
+        scope=RENEWAL_TERM_RECORD_PERMISSION,
+    )
+
+
+def _record_result_payload(result) -> dict:
+    return {
+        "request_id": result.request_id,
+        "subscription_id": result.subscription_id,
+        "status": result.status.value,
+        "previous_amount": result.previous_amount,
+        "new_amount": result.new_amount,
+        "work_item_resolved": result.work_item_resolved,
+        "remaining_reasons": list(result.remaining_reasons),
+        "replayed": result.replayed,
+    }
+
+
+def _cmd_request_renewal_term_record(db, args) -> int:
+    from app.services.prepaid_renewal_terms_backfill import (
+        RequestRenewalTermRecordCommand,
+        request_reviewed_renewal_term_record,
+    )
+
+    granted = _renewal_term_record_permission_granted(db, system_user_id=args.actor)
+    db.commit()  # the owner boundary requires a transaction-free session
+    result = request_reviewed_renewal_term_record(
+        db,
+        RequestRenewalTermRecordCommand(
+            subscription_id=args.subscription,
+            reviewed_amount=args.amount,
+            expected_current_amount=args.expected_current_amount,
+            reason=args.reason,
+            evidence_reference=args.evidence_ref,
+            evidence_sha256=args.evidence_sha256,
+            requested_by=args.actor,
+            permission_granted=granted,
+        ),
+        context=_staff_context(
+            args.reason,
+            idempotency_key=args.idempotency_key,
+            system_user_id=args.actor,
+        ),
+    )
+    _emit({**_record_result_payload(result), "price_changed": False})
+    return 0
+
+
+def _cmd_approve_renewal_term_record(db, args) -> int:
+    from app.services.prepaid_renewal_terms_backfill import (
+        ApproveRenewalTermRecordCommand,
+        approve_reviewed_renewal_term_record,
+    )
+
+    granted = _renewal_term_record_permission_granted(db, system_user_id=args.approver)
+    db.commit()  # the owner boundary requires a transaction-free session
+    result = approve_reviewed_renewal_term_record(
+        db,
+        ApproveRenewalTermRecordCommand(
+            request_id=args.request,
+            approved_amount=args.amount,
+            approved_by=args.approver,
+            permission_granted=granted,
+        ),
+        context=_staff_context(
+            f"four-eyes approval of renewal-term record request {args.request}",
+            idempotency_key=args.idempotency_key,
+            system_user_id=args.approver,
+        ),
+    )
+    _emit({**_record_result_payload(result), "price_changed": not result.replayed})
+    return 0
+
+
+def _cmd_list_renewal_term_record_requests(db, args) -> int:
+    from app.services.prepaid_renewal_terms_backfill import (
+        list_renewal_term_record_requests,
+    )
+
+    rows = list_renewal_term_record_requests(
+        db,
+        subscription_id=args.subscription,
+        include_recorded=args.include_recorded,
+    )
+    _emit(
+        {
+            "count": len(rows),
+            "requests": [
+                {
+                    "request_id": row.request_id,
+                    "subscription_id": row.subscription_id,
+                    "account_id": row.account_id,
+                    "decision": row.decision.value,
+                    "reviewed_amount": row.reviewed_amount,
+                    "expected_current_amount": row.expected_current_amount,
+                    "reason": row.reason,
+                    "evidence_reference": row.evidence_reference,
+                    "evidence_sha256": row.evidence_sha256,
+                    "requested_by": row.requested_by,
+                    "requested_at": row.requested_at,
+                    "status": row.status.value,
+                    "approved_by": row.approved_by,
+                }
+                for row in rows
+            ],
+        }
+    )
+    return 0
+
+
 def _cmd_correct_renewal_terms(db, args) -> int:
     from decimal import Decimal
 
@@ -339,6 +529,14 @@ def _cmd_correct_renewal_terms(db, args) -> int:
         correct_prepaid_renewal_terms,
     )
 
+    # A correction is attributable to a real, permitted staff member — never
+    # the anonymous ``operator:billing_target_shadow`` label it once used.
+    if not _renewal_term_record_permission_granted(db, system_user_id=args.actor):
+        raise SystemExit(
+            "correct-renewal-terms: --actor must be an active staff user "
+            "holding billing:renewal_terms:record"
+        )
+    db.commit()  # the owner boundary requires a transaction-free session
     result = correct_prepaid_renewal_terms(
         db,
         CorrectRenewalTermsCommand(
@@ -354,9 +552,10 @@ def _cmd_correct_renewal_terms(db, args) -> int:
             review_reference=args.reference,
             reviewed_amount=(Decimal(args.amount) if args.amount is not None else None),
         ),
-        context=_context(
+        context=_staff_context(
             "bound correction of a backfilled prepaid renewal term",
             idempotency_key=args.idempotency_key,
+            system_user_id=args.actor,
         ),
     )
     _emit(
@@ -1193,8 +1392,69 @@ def main() -> int:
     p.add_argument("--audit-fingerprint", default=None)
     p.add_argument("--amount", default=None)
     p.add_argument("--reference", default=None)
+    p.add_argument(
+        "--actor",
+        required=True,
+        type=_staff_uuid,
+        help="SystemUser UUID of the staff member making the correction",
+    )
     p.add_argument("--idempotency-key", required=True)
     p.set_defaults(func=_cmd_correct_renewal_terms)
+
+    p = sub.add_parser(
+        "request-renewal-term-record",
+        help=(
+            "step 1/2: propose a finance-reviewed renewal amount for a "
+            "never-restored prepaid subscription (changes no price)"
+        ),
+    )
+    p.add_argument("--subscription", required=True, type=_uuid_arg)
+    p.add_argument("--amount", required=True, type=_money_arg)
+    p.add_argument(
+        "--expected-current-amount",
+        required=True,
+        type=_expected_amount_arg,
+        help="the stored unit_price: 'none' when NULL, else its value",
+    )
+    p.add_argument("--reason", required=True)
+    p.add_argument("--evidence-ref", required=True)
+    p.add_argument("--evidence-sha256", required=True)
+    p.add_argument(
+        "--actor",
+        required=True,
+        type=_staff_uuid,
+        help="SystemUser UUID of the requesting staff member",
+    )
+    p.add_argument("--idempotency-key", required=True)
+    p.set_defaults(func=_cmd_request_renewal_term_record)
+
+    p = sub.add_parser(
+        "approve-renewal-term-record",
+        help="step 2/2: a DIFFERENT staff member approves and applies a request",
+    )
+    p.add_argument("--request", required=True, type=_uuid_arg)
+    p.add_argument(
+        "--amount",
+        required=True,
+        type=_money_arg,
+        help="restate the requested amount being approved",
+    )
+    p.add_argument(
+        "--approver",
+        required=True,
+        type=_staff_uuid,
+        help="SystemUser UUID of the approving staff member",
+    )
+    p.add_argument("--idempotency-key", required=True)
+    p.set_defaults(func=_cmd_approve_renewal_term_record)
+
+    p = sub.add_parser(
+        "list-renewal-term-record-requests",
+        help="read-only: pending (or all) renewal-term record requests",
+    )
+    p.add_argument("--subscription", default=None, type=_uuid_arg)
+    p.add_argument("--include-recorded", action="store_true")
+    p.set_defaults(func=_cmd_list_renewal_term_record_requests)
 
     p = sub.add_parser(
         "verify-prepaid-forward",

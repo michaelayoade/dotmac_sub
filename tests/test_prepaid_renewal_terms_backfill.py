@@ -179,7 +179,7 @@ def test_conflicting_amounts_become_a_finance_work_item_not_a_write(
         .one()
     )
     assert alert.status.value == "open"
-    assert alert.details["owner"] == "finance-billing"
+    assert alert.details["owner"] == "financial-billing"
     assert alert.details["sla_due_at"]
     assert alert.details["decision"] == "ambiguous_amounts"
 
@@ -233,17 +233,10 @@ def test_work_item_summary_fits_admin_alert_schema():
 
     from app.services import prepaid_renewal_terms_backfill as module
 
-    source = inspect.getsource(module._sync_evidence_work_items)
-    assert "summary=(" in source
-    from app.models.network_monitoring import AlertSeverity  # noqa: F401
-
-    summary = (
-        "Active prepaid subscription with no frozen contracted "
-        "amount; paid-invoice evidence is missing or conflicting. "
-        "Record the price via a reviewed staff correction — never "
-        "inferred from the catalog."
-    )
-    assert len(summary) <= 255
+    source = inspect.getsource(module._record_evidence_work_item)
+    assert "summary=WORK_ITEM_SUMMARIES[next_action]" in source
+    for summary in module.WORK_ITEM_SUMMARIES.values():
+        assert len(summary) <= 255
 
 
 def test_suspended_subscription_is_repaired_from_paid_evidence(
@@ -728,7 +721,7 @@ def test_scheduled_runner_opens_a_work_item_instead_of_inventing_an_amount(
         .one()
     )
     assert alert.status.value == "open"
-    assert alert.details["owner"] == "finance-billing"
+    assert alert.details["owner"] == "financial-billing"
 
 
 def test_scheduled_runner_is_a_noop_when_nothing_is_blocked(db_session):

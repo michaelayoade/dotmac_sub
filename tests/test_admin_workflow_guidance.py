@@ -42,6 +42,26 @@ def test_automation_center_guidance_explains_the_read_only_boundary() -> None:
     assert "custom fields" in content
 
 
+def test_survey_guidance_explains_report_scope_and_individual_answers() -> None:
+    guide = guidance_for_path("/admin/surveys/survey-id")
+
+    assert guide is not None
+    assert guide.id == "surveys"
+    content = " ".join(guide.steps).lower()
+    for phrase in (
+        "feedback report",
+        "satisfaction",
+        "reliability",
+        "excluded or missing answers",
+        "not unique customers",
+        "expand an individual submission",
+        "removed questions",
+        "all saved submissions",
+        "latest 200",
+    ):
+        assert phrase in content
+
+
 def test_subscription_lifecycle_guide_includes_plan_changes() -> None:
     guide = guidance_for_path("/admin/catalog/subscriptions/123")
     assert guide is not None
@@ -56,6 +76,18 @@ def test_getting_started_is_the_first_help_category() -> None:
     categories = guidance_categories()
 
     assert categories[:2] == ("Getting started", "Administration")
+
+
+def test_network_guidance_explains_independent_map_proposal_review() -> None:
+    guide = guidance_for_path("/admin/network/fiber-change-requests")
+
+    assert guide is not None
+    assert guide.id == "network-access"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "map v2 proposals" in content
+    assert "independent reviewer" in content
+    assert "network:fiber:review" in content
+    assert "canonical asset change" in content
 
 
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:

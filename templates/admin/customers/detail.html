@@ -14,6 +14,7 @@
 {% endblock %}
 
 {% block content %}
+{% include "admin/customers/_bulk_send_status.html" %}
 <script type="application/json" id="customer-detail-config">{{ detail_config | tojson }}</script>
 <div x-data="customerDetail()" class="space-y-6">
     {% if request.query_params.get('service_change_message') %}
@@ -3257,7 +3258,8 @@ function customerDetail(config = {}) {
         async queueMessage(event = null) {
             event?.preventDefault?.();
             event?.stopPropagation?.();
-            if (!this.customerId || !this.sendMessageForm.templateId) return;
+            if (this.messageLoading || !this.customerId || !this.sendMessageForm.templateId) return;
+            window.DotmacCustomerBulkSend.startPreview();
             const template = this.selectedTemplate();
             if (!template) {
                 this.syncTemplateForChannel();
@@ -3319,56 +3321,22 @@ function customerDetail(config = {}) {
                 }
                 if (!confirm(previewMessageParts.join(' '))) return;
 
-                const response = await fetch('/admin/customers/bulk/send-message', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
-                    },
-                    body: JSON.stringify({
-                        ...payload,
-                        selection: {
-                            ...payload.selection,
-                            expected_count: preview.matched_count || 0,
-                            expected_scope_token: preview.scope_token
-                        },
-                        expected_impact_token: preview.impact_token,
-                        confirmed: true
-                    })
+                const result = await window.DotmacCustomerBulkSend.send({
+                    ...payload,
+                    selection: {...payload.selection,
+                        expected_count: preview.matched_count || 0,
+                        expected_scope_token: preview.scope_token},
+                    expected_impact_token: preview.impact_token,
+                    confirmed: true
+                }, {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    ...(csrfToken ? {'X-CSRF-Token': csrfToken} : {})
                 });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    if (result.accepted) {
-                        this.closeSendMessageModal();
-                        const matched = result.matched_count || 0;
-                        const planned = result.planned_queued_count || 0;
-                        const skipped = result.skipped_count || 0;
-                        const suppressed = result.planned_suppressed_count || 0;
-                        alert(`Bulk send accepted for ${matched} customer(s). ${planned} delivery request(s) are being queued in the background.${skipped ? ` ${skipped} skipped due to missing contact details.` : ''}${suppressed ? ` ${suppressed} suppressed by preferences, dedupe, or template conditions.` : ''}`);
-                        return;
-                    }
-                    const dispatch = result.delivery_dispatch || {};
-                    const deliveryMessage = dispatch.queued
-                        ? ' Delivery has been started.'
-                        : (result.queued_count ? ' Delivery is queued, but the dispatcher could not be started automatically.' : '');
-                    this.closeSendMessageModal();
-                    const suppressed = result.suppressed || [];
-                    const openTicketExcluded = suppressed.filter((item) => item.reason_code === 'open_ticket');
-                    const openTicketExcludedCount = result.suppression_counts?.open_ticket ?? openTicketExcluded.length;
-                    const otherSuppressed = Math.max((result.suppressed_count || 0) - openTicketExcludedCount, 0);
-                    const openTicketNames = openTicketExcluded.slice(0, 10).map((item) => item.name).join(', ');
-                    const openTicketMore = openTicketExcludedCount > openTicketExcluded.length ? `, and ${openTicketExcludedCount - openTicketExcluded.length} more` : '';
-                    const skippedCount = result.skipped_count ?? result.skipped?.length ?? 0;
-                    alert(`Queued ${result.queued_count || 0} notification(s).${deliveryMessage}${openTicketExcludedCount ? ` ${openTicketExcludedCount} excluded because they have open tickets: ${openTicketNames}${openTicketMore}.` : ''}${otherSuppressed ? ` ${otherSuppressed} suppressed by preferences, dedupe, or other template conditions.` : ''}${skippedCount ? ` ${skippedCount} customer(s) were skipped due to missing contact details.` : ''}`);
-                } else {
-                    const error = await response.json().catch(() => ({}));
-                    alert(error.detail || 'Failed to queue the message. Please try again.');
-                }
+                if (result.materialization_status === 'failed') throw new Error(result.error || 'Recipient preparation failed. Check send status.');
+                this.closeSendMessageModal();
             } catch (error) {
-                console.error('Customer message send failed:', error);
-                alert('An error occurred. Please try again.');
+                alert(error.message);
             } finally {
                 this.messageLoading = false;
             }

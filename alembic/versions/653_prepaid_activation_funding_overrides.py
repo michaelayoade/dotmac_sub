@@ -14,8 +14,8 @@ so no existing role gains the bypass implicitly.
 
 Purely additive; downgrade drops the table and unseeds the permission.
 
-Revision ID: 652_prepaid_activation_funding_overrides
-Revises: 651_prepaid_sweep_cycle_totals
+Revision ID: 653_prepaid_activation_funding_overrides
+Revises: 652_renewal_terms_record_permission
 Create Date: 2026-10-08
 """
 
@@ -30,8 +30,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "652_prepaid_activation_funding_overrides"
-down_revision: str | None = "651_prepaid_sweep_cycle_totals"
+revision: str = "653_prepaid_activation_funding_overrides"
+down_revision: str | None = "652_renewal_terms_record_permission"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

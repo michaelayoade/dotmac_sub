@@ -145,6 +145,11 @@ DEFAULT_PERMISSIONS = [
         "Confirm reviewed billing reconciliation corrections",
     ),
     (
+        "billing:renewal_terms:record",
+        "Request or approve a finance-reviewed prepaid renewal-term record "
+        "(four-eyes; requester and approver must differ)",
+    ),
+    (
         "billing:prepaid_reconciliation:repair",
         "Repair one exact already-paid prepaid invoice's identity and coverage "
         "after reviewed evidence",
@@ -625,6 +630,7 @@ ROLE_PERMISSIONS = {
         "billing:arrangement:write",
         "billing:treatment:read",
         "billing:treatment:write",
+        "billing:renewal_terms:record",
         "billing:batch:read",
         "billing:batch:write",
         "billing:import:write",
