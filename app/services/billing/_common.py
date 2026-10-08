@@ -246,6 +246,41 @@ def get_account_credit_balance(
     return round_money(to_decimal(credit_total) - to_decimal(debit_total))
 
 
+def get_reserved_purchase_credit_balance(
+    db: Session,
+    account_id: object,
+    *,
+    currency: str | None = "NGN",
+    after: datetime | None = None,
+) -> Decimal:
+    """Receipt-backed money held for exact purchase settlement or recovery."""
+    from app.services.billing.payments import _payment_unallocated_credit_remaining
+
+    query = db.query(Payment).filter(
+        Payment.account_id == coerce_uuid(account_id),
+        Payment.is_active.is_(True),
+        Payment.status.in_([PaymentStatus.succeeded, PaymentStatus.partially_refunded]),
+        Payment.reserved_for_purchase_id.is_not(None),
+    )
+    if currency is not None:
+        query = query.filter(Payment.currency == currency.upper())
+    if after is not None:
+        query = query.filter(payment_crosses_reviewed_position_boundary(after))
+    return round_money(
+        sum(
+            (
+                max(
+                    Decimal("0.00"),
+                    _payment_unallocated_credit_remaining(db, payment)
+                    - to_decimal(payment.refunded_amount),
+                )
+                for payment in query.all()
+            ),
+            Decimal("0.00"),
+        )
+    )
+
+
 def get_spendable_account_credit_balance(
     db: Session,
     account_id: str,
@@ -265,6 +300,9 @@ def get_spendable_account_credit_balance(
         account_id,
         currency=currency,
         after=after,
+    )
+    credit_balance -= get_reserved_purchase_credit_balance(
+        db, account_id, currency=currency, after=after
     )
     if credit_balance <= Decimal("0.00"):
         return Decimal("0.00")

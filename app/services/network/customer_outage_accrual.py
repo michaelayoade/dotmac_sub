@@ -32,7 +32,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import (
@@ -301,3 +303,35 @@ def intervals_for_subscription(
             | (CustomerOutageInterval.ended_at >= since)
         )
     return query.order_by(CustomerOutageInterval.started_at).all()
+
+
+@dataclass(frozen=True, slots=True)
+class OutagePurchaseAdmissionQuery:
+    subscription_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class OutagePurchaseAdmission:
+    blocking_interval_ids: tuple[UUID, ...]
+
+    @property
+    def allowed(self) -> bool:
+        return not self.blocking_interval_ids
+
+
+def resolve_outage_purchase_admission(
+    db: Session, query: OutagePurchaseAdmissionQuery
+) -> OutagePurchaseAdmission:
+    """Provisional recovery remains an interruption until accrual finalizes it."""
+    ids = tuple(
+        db.scalars(
+            select(CustomerOutageInterval.id)
+            .where(
+                CustomerOutageInterval.subscription_id == query.subscription_id,
+                CustomerOutageInterval.state == "confirmed_unavailable",
+                CustomerOutageInterval.finalized_at.is_(None),
+            )
+            .order_by(CustomerOutageInterval.id)
+        ).all()
+    )
+    return OutagePurchaseAdmission(ids)

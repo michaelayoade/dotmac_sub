@@ -1510,6 +1510,23 @@ def finalize_invoice_application_for_owner(
 ) -> None:
     """Flush-only participant for a typed non-Payment invoice application."""
 
+    try:
+        _finalize_invoice_application(db, invoice, effective_at=effective_at)
+    except HTTPException as exc:
+        raise DomainError(
+            code="financial.payments.invoice_application_rejected",
+            message="Payment owner rejected invoice application finalization.",
+            details={"invoice_id": str(invoice.id), "reason": str(exc.detail)},
+            retryable=False,
+        ) from exc
+
+
+def _finalize_invoice_application(
+    db: Session,
+    invoice: Invoice,
+    *,
+    effective_at: datetime,
+) -> None:
     decision = resolve_payment_allocation_finalization(db, invoice)
     if decision.mode is PaymentAllocationFinalizationMode.historical_debt:
         _finalize_historical_debt_payment_effects(db, invoice)
@@ -2358,6 +2375,7 @@ class Payments(ListResponseMixin):
         currency: str,
         memo: str,
         paid_at: datetime | None = None,
+        reserved_for_purchase_id: UUID | None = None,
     ) -> PaymentCreationResult:
         """Stage verified provider money before any invoice allocation.
 
@@ -2411,6 +2429,7 @@ class Payments(ListResponseMixin):
             settlement = payment.settlement
             if (
                 payment.account_id != account_id
+                or payment.reserved_for_purchase_id != reserved_for_purchase_id
                 or payment.status != PaymentStatus.succeeded
                 or payment.currency != code
                 or round_money(to_decimal(payment.amount)) != gross
@@ -2456,6 +2475,7 @@ class Payments(ListResponseMixin):
             status=PaymentStatus.succeeded,
             paid_at=paid_at or datetime.now(UTC),
             auto_allocate_on_settlement=False,
+            reserved_for_purchase_id=reserved_for_purchase_id,
             creation_preview_fingerprint=settlement_fingerprint,
             external_id=external,
             memo=memo,
@@ -4713,6 +4733,13 @@ def _build_payment_allocation_preview(
         raise HTTPException(
             status_code=400, detail="Invoice does not belong to payment account"
         )
+    if payment.reserved_for_purchase_id is not None and str(
+        (invoice.metadata_ or {}).get("prepaid_period_purchase_id", "")
+    ) != str(payment.reserved_for_purchase_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Payment is reserved for another service-period purchase",
+        )
     _validate_invoice_currency(invoice, payment.currency)
     _assert_invoice_allocatable(invoice)
     existing = (
@@ -4820,6 +4847,7 @@ def _build_reviewed_historical_payment_allocation_preview(
         or payment.status is not PaymentStatus.succeeded
         or payment.account_id is None
         or payment.account_id != invoice.account_id
+        or payment.reserved_for_purchase_id is not None
         or payment.refunds
         or payment.reversal is not None
     ):
@@ -5240,6 +5268,7 @@ class PaymentAllocations(ListResponseMixin):
             or payment.settlement is None
             or payment.refunds
             or payment.reversal is not None
+            or payment.reserved_for_purchase_id is not None
         ):
             return Decimal("0.00")
         payment_available = _payment_unallocated_credit_remaining(db, payment)
@@ -7001,7 +7030,18 @@ class Refunds:
                     _finalize_invoice_payment_effects(db, invoice)
 
             from app.services.account_lifecycle import compute_account_status
+            from app.services.purchase_payment_recovery_state import (
+                PurchasePaymentRecoveryCommand,
+                stage_purchase_payment_recovery,
+            )
 
+            stage_purchase_payment_recovery(
+                db,
+                PurchasePaymentRecoveryCommand(
+                    payment_id=payment.id,
+                    evidence_ref=f"payment:{payment.id}:{payment.status.value}",
+                ),
+            )
             compute_account_status(db, str(payment.account_id))
             if stage_audit:
                 _stage_refund_audit(
@@ -7920,7 +7960,18 @@ class PaymentReversals:
                     _finalize_invoice_payment_effects(db, invoice)
 
             from app.services.account_lifecycle import compute_account_status
+            from app.services.purchase_payment_recovery_state import (
+                PurchasePaymentRecoveryCommand,
+                stage_purchase_payment_recovery,
+            )
 
+            stage_purchase_payment_recovery(
+                db,
+                PurchasePaymentRecoveryCommand(
+                    payment_id=payment.id,
+                    evidence_ref=f"payment:{payment.id}:{payment.status.value}",
+                ),
+            )
             compute_account_status(db, str(payment.account_id))
             if stage_audit:
                 _stage_reversal_audit(

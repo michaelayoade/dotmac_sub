@@ -1454,6 +1454,7 @@ class FundingChangeEvaluationDisposition(enum.StrEnum):
 
     evaluated = "evaluated"
     consolidated_invoice_allocation = "consolidated_invoice_allocation"
+    purchase_settlement = "purchase_settlement"
 
 
 @dataclass(frozen=True)
@@ -1925,6 +1926,11 @@ def evaluate_prepaid_service_after_settlement(
             payment_id=str(payment.id),
             event_account_id=str(account_id),
             payment_account_id=str(payment.account_id),
+        )
+    if payment.reserved_for_purchase_id is not None:
+        return FundingChangeEvaluation(
+            payment_id=payment.id,
+            disposition=FundingChangeEvaluationDisposition.purchase_settlement,
         )
     if payment.status != PaymentStatus.succeeded or not payment.is_active:
         _error(

@@ -107,6 +107,7 @@ from app.web.admin.payment_configuration_actions import (
 from app.web.admin.prepaid_activation_funding import (
     router as prepaid_activation_funding_router,
 )
+from app.web.admin.period_purchase_review import router as period_purchase_review_router
 from app.web.admin.projects import router as projects_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
@@ -268,6 +269,10 @@ router.include_router(
 )
 router.include_router(
     billing_extensions_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
+    period_purchase_review_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(

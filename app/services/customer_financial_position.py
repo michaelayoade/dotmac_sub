@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.services.common import coerce_uuid
 from app.services.invoice_collectibility import (
     collection_blocking_balance,
@@ -313,7 +313,11 @@ def prepaid_available_balance(
         if currency is None
         else normalize_prepaid_currency(currency)
     )
-    return verified_prepaid_funding_balance(db, account_id, currency=unit)
+    from app.services.billing._common import get_reserved_purchase_credit_balance
+
+    return verified_prepaid_funding_balance(db, account_id, currency=unit) - (
+        get_reserved_purchase_credit_balance(db, account_id, currency=unit)
+    )
 
 
 def prepaid_available_balances(
@@ -339,7 +343,35 @@ def prepaid_available_balances(
     account_uuids = sorted(
         {coerce_uuid(account_id) for account_id in account_ids}, key=str
     )
-    return verified_prepaid_funding_balances(db, account_uuids, currency=unit)
+    from app.services.billing._common import get_reserved_purchase_credit_balance
+
+    balances = verified_prepaid_funding_balances(db, account_uuids, currency=unit)
+    # Keep the common flag-off/no-purchase cohort lane bounded. Only accounts
+    # with actual reservation facts need the exact per-receipt envelope read.
+    reserved_accounts = set(
+        db.scalars(
+            select(Payment.account_id)
+            .where(
+                Payment.account_id.in_(account_uuids),
+                Payment.reserved_for_purchase_id.is_not(None),
+                Payment.is_active.is_(True),
+                Payment.status.in_(
+                    [PaymentStatus.succeeded, PaymentStatus.partially_refunded]
+                ),
+                Payment.currency == unit,
+            )
+            .distinct()
+        ).all()
+    )
+    return {
+        account_id: balance
+        - (
+            get_reserved_purchase_credit_balance(db, account_id, currency=unit)
+            if account_id in reserved_accounts
+            else Decimal("0.00")
+        )
+        for account_id, balance in balances.items()
+    }
 
 
 def _oldest_due_invoice(invoices: list[Invoice], now: datetime) -> Invoice | None:

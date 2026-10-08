@@ -669,6 +669,24 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=("Do not manually edit billing dates to undo an extension.",),
     ),
     _guide(
+        "service-period-review",
+        "Billing",
+        "Review prepaid payments and outage proposals",
+        "Finance reviewers and approvers",
+        "Resolve held prepaid purchase money and approve evidenced outage time.",
+        ("/admin/billing/service-period-review",),
+        "Open Service period review from Service Extensions. Confirm the account, subscription, provider reference, age, and reason for review.",
+        "Compare collected, refunded, and held amounts with provider evidence. Held purchase money is reserved for that purchase and is separate from available account credit.",
+        "Use the permitted purchase recovery action with a clear reason only after reviewing the current evidence. Verified unpaid failures may release checkout; unknown outcomes and late captures require review.",
+        "For an outage proposal, review the finalized downtime, funded coverage, previous time credits, proposed seconds, and resulting service date. An authorized approver must be different from the maker and enter a clear approval reason.",
+        "Confirm only the current reviewed proposal, then verify the resulting purchase or outage state and customer billing history. If the evidence changed, reload and review again.",
+        notes=(
+            "An outage event creates a proposal; it does not grant service time before Finance approval.",
+            "Recovery does not charge the customer again or manufacture a refund. Use the existing provider-confirmed refund workflow when needed.",
+            "Unclear historical extension credits require reviewed attestation before another overlapping award.",
+        ),
+    ),
+    _guide(
         "payments",
         "Payments",
         "Record and allocate payments",
@@ -1551,6 +1569,22 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("verify-extension", "Verify extension history", 3),
     ),
+    "service-period-review": (
+        _action("review-held-receipt", "Review held purchase money", 0, 1),
+        _action(
+            "recover-purchase",
+            "Recover a reviewed purchase",
+            2,
+            permission="billing:prepaid_reconciliation:repair",
+        ),
+        _action(
+            "approve-outage",
+            "Approve an outage proposal",
+            3,
+            permission="billing:outage_compensation:approve",
+        ),
+        _action("verify-period-review", "Verify the reviewed result", 4),
+    ),
     "payments": (
         _action(
             "filter-export-payments",
@@ -2074,6 +2108,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "invoice",
             "credit",
             "service-extension",
+            "service-period-review",
             "payments",
             "payment-proofs",
             "payment-reconciliation",
@@ -2184,6 +2219,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),
+    "service-period-review": ("billing:extension:read",),
     "payments": ("billing:payment:read",),
     "payment-proofs": ("billing:proof:read",),
     "payment-reconciliation": ("billing:ledger:read",),

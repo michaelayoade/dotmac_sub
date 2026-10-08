@@ -295,6 +295,18 @@ def revoke_prepaid_entitlements_for_unpaid_invoice(
         )
         entitlement.metadata_ = metadata
     db.flush()
+    from app.services.outage_compensation import (
+        RevokeOutageCompensationFundingCommand,
+        stage_revoke_outage_compensation_funding,
+    )
+
+    stage_revoke_outage_compensation_funding(
+        db,
+        RevokeOutageCompensationFundingCommand(
+            source_entitlement_ids=tuple(item.id for item in entitlements),
+            evidence_ref=f"invoice:{invoice.id}:no-longer-paid",
+        ),
+    )
     logger.info(
         "Revoked %d prepaid entitlement(s) for invoice %s (status=%s)",
         len(entitlements),

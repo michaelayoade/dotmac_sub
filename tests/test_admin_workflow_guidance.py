@@ -366,9 +366,37 @@ def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     assert "billingHelpOpen" not in billing
 
 
+def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> None:
+    guide = guidance_for_path("/admin/billing/service-period-review")
+    assert guide is not None
+    assert guide.id == "service-period-review"
+    assert (
+        guidance_for_path(
+            "/admin/billing/service-period-review/outage/decision-id/approve"
+        )
+        is guide
+    )
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    for requirement in (
+        "held purchase money",
+        "provider evidence",
+        "unknown outcomes",
+        "different from the maker",
+        "before finance approval",
+        "evidence changed",
+    ):
+        assert requirement in content
+    actions = {action.id: action for action in help_actions_for(guide)}
+    assert actions["approve-outage"].permission == "billing:outage_compensation:approve"
+    assert (
+        actions["recover-purchase"].permission
+        == "billing:prepaid_reconciliation:repair"
+    )
+
+
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 58
+    assert len(guides) == 59
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id

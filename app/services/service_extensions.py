@@ -1308,10 +1308,9 @@ def _iter_scope_subscriptions(
             db.scalars(
                 select(Subscription.id)
                 .where(*filters)
-                .order_by(Subscription.id)
+                .order_by(Subscription.subscriber_id, Subscription.id)
                 .limit(batch_size)
                 .offset(offset)
-                .with_for_update()
             ).all()
         )
         if not ids:
@@ -1320,11 +1319,15 @@ def _iter_scope_subscriptions(
             db.scalars(
                 select(Subscription)
                 .where(Subscription.id.in_(ids))
-                .order_by(Subscription.id)
-                .with_for_update()
+                .order_by(Subscription.subscriber_id, Subscription.id)
             ).all()
         )
-        yield from subscriptions
+        from app.services.billing._common import lock_account
+
+        for subscription in subscriptions:
+            lock_account(db, str(subscription.subscriber_id))
+            db.refresh(subscription, with_for_update=True)
+            yield subscription
         offset += len(ids)
 
 
@@ -2405,6 +2408,34 @@ def apply_service_extension(
                 extension.scope_type == ServiceExtensionScope.subscribers
             ),
         ):
+            from app.services.compensated_service_time import (
+                StageTimeCreditCommand,
+                TimeCreditQuery,
+                TimeCreditSource,
+                resolve_compensated_service_time,
+                stage_compensated_service_time,
+            )
+            from app.services.outage_interval_algebra import (
+                TimeInterval,
+                intersect_seconds,
+            )
+
+            clock = (
+                TimeInterval(
+                    _as_utc(extension.window_start), _as_utc(extension.window_end)
+                ),
+            )
+            history = resolve_compensated_service_time(
+                db, TimeCreditQuery(subscription.id)
+            )
+            if intersect_seconds(clock, history.credited) or any(
+                intersect_seconds(clock, (item.interval,))
+                for item in history.unresolved
+            ):
+                _error(
+                    "time_credit_conflict",
+                    "This outage window has previous or unresolved compensation; review the exact remaining downtime before applying another extension.",
+                )
             previous = subscription.next_billing_at
             if previous is None:
                 skipped += 1
@@ -2428,18 +2459,28 @@ def apply_service_extension(
                     evidence_ref=f"service-extension:{extension.id}",
                 ),
             )
-            db.add(
-                ServiceExtensionEntry(
-                    extension_id=extension.id,
+            entry = ServiceExtensionEntry(
+                extension_id=extension.id,
+                subscription_id=subscription.id,
+                subscriber_id=subscription.subscriber_id,
+                previous_next_billing_at=previous,
+                grant_starts_at=interval.starts_at,
+                grant_ends_at=interval.ends_at,
+                anchor_basis=interval.anchor_basis,
+                new_next_billing_at=interval.ends_at,
+                created_at=now,
+            )
+            db.add(entry)
+            db.flush()
+            stage_compensated_service_time(
+                db,
+                StageTimeCreditCommand(
                     subscription_id=subscription.id,
-                    subscriber_id=subscription.subscriber_id,
-                    previous_next_billing_at=previous,
-                    grant_starts_at=interval.starts_at,
-                    grant_ends_at=interval.ends_at,
-                    anchor_basis=interval.anchor_basis,
-                    new_next_billing_at=interval.ends_at,
-                    created_at=now,
-                )
+                    source=TimeCreditSource.extension,
+                    source_id=entry.id,
+                    ranges=clock,
+                    evidence_ref=f"service-extension:{extension.id}",
+                ),
             )
             if subscription.status == SubscriptionStatus.suspended:
                 if _resume_billing_suspension(db, subscription, extension):

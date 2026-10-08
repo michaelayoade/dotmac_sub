@@ -490,12 +490,14 @@ def test_sequential_extensions_compose_from_latest_grant_end(
     )
 
     entries: list[ServiceExtensionEntry] = []
-    for reason in ("First correction", "Second correction"):
+    for ordinal, reason in enumerate(("First correction", "Second correction")):
         extension = _create(
             db_session,
             reason=reason,
-            window_start=_WIN_START,
-            window_end=_WIN_END,
+            window_start=_WIN_START
+            + ordinal * (_WIN_END - _WIN_START + timedelta(seconds=1)),
+            window_end=_WIN_END
+            + ordinal * (_WIN_END - _WIN_START + timedelta(seconds=1)),
             days=10,
             scope_type=ServiceExtensionScope.subscribers,
             subscriber_ids=[str(subscriber.id)],
@@ -1581,3 +1583,38 @@ def test_anchor_projection_repair_is_bounded_and_idempotent(
         .count()
         == 1
     )
+
+
+def test_duplicate_outage_window_does_not_grant_again(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    monkeypatch.setattr(svc, "_now_utc", lambda: datetime(2026, 7, 24, 12, tzinfo=UTC))
+    _sub(
+        db_session,
+        subscriber,
+        catalog_offer,
+        next_billing_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    first = _create(
+        db_session,
+        reason="Reviewed outage",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=1,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[str(subscriber.id)],
+    )
+    _apply(db_session, first.id, actor_id="approver-1")
+    second = _create(
+        db_session,
+        reason="Same outage replay under another key",
+        window_start=_WIN_START,
+        window_end=_WIN_END,
+        days=1,
+        scope_type=ServiceExtensionScope.subscribers,
+        subscriber_ids=[str(subscriber.id)],
+    )
+    with pytest.raises(
+        svc.ServiceExtensionError, match="previous or unresolved compensation"
+    ):
+        _apply(db_session, second.id, actor_id="approver-1")
