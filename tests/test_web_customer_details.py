@@ -71,6 +71,7 @@ from app.models.system_user import SystemUser, SystemUserType
 from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services.credential_crypto import encrypt_credential
 from app.services.customer_financial_ledger import CustomerFinancialEvent
+from app.services.web_billing_ledger import CustomerLedgerQuery
 from app.services.web_customer_details import (
     CustomerDetailNetworkQuery,
     build_business_detail_snapshot,
@@ -78,7 +79,6 @@ from app.services.web_customer_details import (
     build_person_detail_snapshot,
     reveal_customer_pppoe_password,
 )
-from app.services.web_billing_ledger import CustomerLedgerQuery
 from app.web.admin import customers as customer_routes
 
 
