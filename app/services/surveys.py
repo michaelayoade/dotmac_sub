@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -144,6 +145,259 @@ class TriggerSurveyInvitationsCommand:
 class SurveyAnswer:
     key: str
     value: str
+
+
+@dataclass(frozen=True)
+class SurveyResponseReviewQuery:
+    survey_id: UUID
+
+
+@dataclass(frozen=True)
+class SurveyReportQuery:
+    survey_id: UUID
+
+
+class SurveyReportKind(StrEnum):
+    satisfaction = "satisfaction"
+    reliability = "reliability"
+    distribution = "distribution"
+    text = "text"
+
+
+@dataclass(frozen=True)
+class SurveyReportBucket:
+    label: str
+    count: int
+    percentage: Decimal | None
+
+
+@dataclass(frozen=True)
+class SurveyQuestionReport:
+    key: str
+    label: str
+    kind: SurveyReportKind
+    denominator: int
+    unanswered: int
+    excluded: int
+    unrecognized: int
+    buckets: tuple[SurveyReportBucket, ...]
+
+
+@dataclass(frozen=True)
+class SurveyReport:
+    total_responses: int
+    questions: tuple[SurveyQuestionReport, ...]
+    satisfaction: SurveyQuestionReport | None
+
+
+_SATISFACTION_SCALE = (
+    "1 — Very dissatisfied",
+    "2 — Dissatisfied",
+    "3 — Neither satisfied nor dissatisfied",
+    "4 — Satisfied",
+    "5 — Very satisfied",
+)
+_RELIABILITY_SCALE = (
+    "1 — Very unreliable",
+    "2 — Unreliable",
+    "3 — Neither reliable nor unreliable",
+    "4 — Reliable",
+    "5 — Very reliable",
+)
+
+
+def build_survey_report(
+    *,
+    questions: tuple[SurveyQuestion, ...],
+    submissions: Iterable[tuple[SurveyAnswer, ...]],
+) -> SurveyReport:
+    """Classify only declared scales; never guess sentiment from customer text."""
+    counts: dict[str, dict[str, int]] = {question.key: {} for question in questions}
+    total = 0
+    for submission in submissions:
+        total += 1
+        for answer in submission:
+            if answer.key in counts and answer.value:
+                values = counts[answer.key]
+                values[answer.value] = values.get(answer.value, 0) + 1
+    reports: list[SurveyQuestionReport] = []
+    for question in questions:
+        values = counts[question.key]
+        answered = sum(values.values())
+        options = tuple(question.options or ())
+        kind = SurveyReportKind.distribution
+        excluded_values: tuple[str, ...] = ()
+        groups: tuple[tuple[str, tuple[str, ...]], ...]
+        if (
+            question.key == "service_satisfaction"
+            and question.type == SurveyQuestionType.multiple_choice
+            and options == _SATISFACTION_SCALE + ("Haven't contacted customer service",)
+        ):
+            kind = SurveyReportKind.satisfaction
+            groups = (
+                ("Satisfied", _SATISFACTION_SCALE[3:]),
+                ("Neutral", _SATISFACTION_SCALE[2:3]),
+                ("Dissatisfied", _SATISFACTION_SCALE[:2]),
+            )
+            excluded_values = ("Haven't contacted customer service",)
+        elif (
+            question.key == "internet_reliability"
+            and question.type == SurveyQuestionType.multiple_choice
+            and options == _RELIABILITY_SCALE + ("Not sure",)
+        ):
+            kind = SurveyReportKind.reliability
+            groups = (
+                ("Reliable", _RELIABILITY_SCALE[3:]),
+                ("Neutral", _RELIABILITY_SCALE[2:3]),
+                ("Unreliable", _RELIABILITY_SCALE[:2]),
+            )
+            excluded_values = ("Not sure",)
+        elif question.type == SurveyQuestionType.free_text:
+            kind = SurveyReportKind.text
+            groups = ()
+        else:
+            if question.type == SurveyQuestionType.rating:
+                options = tuple(str(value) for value in range(1, 6))
+            elif question.type == SurveyQuestionType.nps:
+                options = tuple(str(value) for value in range(11))
+            groups = tuple((option, (option,)) for option in options)
+        recognized = {value for _, members in groups for value in members}
+        denominator = sum(values.get(value, 0) for value in recognized)
+        excluded = sum(values.get(value, 0) for value in excluded_values)
+        report = SurveyQuestionReport(
+            key=question.key,
+            label=question.label,
+            kind=kind,
+            denominator=answered if kind == SurveyReportKind.text else denominator,
+            unanswered=total - answered,
+            excluded=excluded,
+            unrecognized=(
+                0
+                if kind == SurveyReportKind.text
+                else answered - denominator - excluded
+            ),
+            buckets=tuple(
+                SurveyReportBucket(
+                    label=label,
+                    count=sum(values.get(value, 0) for value in members),
+                    percentage=(
+                        (
+                            Decimal(sum(values.get(value, 0) for value in members))
+                            * 100
+                            / denominator
+                        ).quantize(Decimal("0.1"))
+                        if denominator
+                        else None
+                    ),
+                )
+                for label, members in groups
+            ),
+        )
+        reports.append(report)
+    return SurveyReport(
+        total_responses=total,
+        questions=tuple(reports),
+        satisfaction=next(
+            (
+                report
+                for report in reports
+                if report.kind == SurveyReportKind.satisfaction
+            ),
+            None,
+        ),
+    )
+
+
+def survey_report(db: Session, *, query: SurveyReportQuery) -> SurveyReport:
+    """Aggregate every saved submission, independently of the recent-response cap."""
+    survey = get_survey(db, query.survey_id)
+    rows = (
+        db.query(SurveyResponse)
+        .filter(SurveyResponse.survey_id == query.survey_id)
+        .yield_per(500)
+    )
+    return build_survey_report(
+        questions=tuple(_validated_questions(survey)),
+        submissions=(
+            tuple(
+                SurveyAnswer(key=key, value=value)
+                for key, value in (row.responses or {}).items()
+            )
+            for row in rows
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class SurveyAnswerReview:
+    key: str
+    label: str
+    value: str | None
+    question_removed: bool = False
+
+
+@dataclass(frozen=True)
+class SurveyResponseReview:
+    response_id: UUID
+    submitted_at: datetime
+    answers: tuple[SurveyAnswerReview, ...]
+    rating: int | None
+    nps_value: int | None
+
+    @property
+    def submitted_label(self) -> str:
+        return self.submitted_at.strftime("%d %b %Y, %H:%M UTC")
+
+    @property
+    def submitted_iso(self) -> str:
+        return self.submitted_at.isoformat()
+
+
+def review_response(
+    *, questions: tuple[SurveyQuestion, ...], response: SurveyResponse
+) -> SurveyResponseReview:
+    """Project saved answers without losing answers to removed questions."""
+    saved = response.responses or {}
+    current_keys = {question.key for question in questions}
+    answers = tuple(
+        SurveyAnswerReview(
+            key=question.key, label=question.label, value=saved.get(question.key)
+        )
+        for question in questions
+    ) + tuple(
+        SurveyAnswerReview(key=key, label=key, value=value, question_removed=True)
+        for key, value in saved.items()
+        if key not in current_keys
+    )
+    submitted_at = response.created_at
+    if submitted_at.tzinfo is None:
+        submitted_at = submitted_at.replace(tzinfo=UTC)
+    return SurveyResponseReview(
+        response_id=response.id,
+        submitted_at=submitted_at.astimezone(UTC),
+        answers=answers,
+        rating=response.rating,
+        nps_value=response.nps_value,
+    )
+
+
+def response_reviews(
+    db: Session, *, query: SurveyResponseReviewQuery
+) -> tuple[SurveyResponseReview, ...]:
+    """Read the latest 200 submissions in stable newest-first order."""
+    survey = get_survey(db, query.survey_id)
+    questions = tuple(_validated_questions(survey))
+    responses = (
+        db.query(SurveyResponse)
+        .filter(SurveyResponse.survey_id == query.survey_id)
+        .order_by(SurveyResponse.created_at.desc(), SurveyResponse.id.desc())
+        .limit(200)
+        .all()
+    )
+    return tuple(
+        review_response(questions=questions, response=response)
+        for response in responses
+    )
 
 
 @dataclass(frozen=True)

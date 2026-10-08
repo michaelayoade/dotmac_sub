@@ -24,21 +24,67 @@
   {% if error %}<div role="alert" class="rounded-lg border border-rose-300 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">{{ error }}</div>{% endif %}
 
   <div class="grid gap-4 md:grid-cols-3">
-    <div class="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"><p class="text-sm text-slate-500 dark:text-slate-400">Responses</p><p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ survey.total_responses }}</p></div>
-    <div class="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"><p class="text-sm text-slate-500 dark:text-slate-400">Questions</p><p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ survey.questions|length }}</p></div>
-    <div class="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"><p class="text-sm text-slate-500 dark:text-slate-400">Status</p><p class="mt-2 font-semibold capitalize text-slate-900 dark:text-white">{{ survey.status.value }}</p></div>
+    <div class="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"><p class="text-sm text-slate-600 dark:text-slate-300">Responses received</p><p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ report.total_responses }}</p><p class="mt-1 text-xs text-slate-600 dark:text-slate-300">{{ survey.status.value|capitalize }} · {{ survey.questions|length }} questions</p></div>
+    {% if report.satisfaction %}
+    {% for bucket in [report.satisfaction.buckets[0], report.satisfaction.buckets[2]] %}
+    <div class="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"><p class="text-sm text-slate-600 dark:text-slate-300">{{ bucket.label }} with customer service</p><p class="mt-1 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ bucket.percentage|string + '%' if bucket.percentage is not none else '—' }}</p><p class="mt-1 text-xs text-slate-600 dark:text-slate-300">{{ bucket.count }} of {{ report.satisfaction.denominator }} service ratings</p></div>
+    {% endfor %}
+    {% endif %}
   </div>
 
-  <div class="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-    <h2 class="font-semibold text-slate-900 dark:text-white">Recent responses</h2>
+  <section aria-labelledby="report-heading" class="space-y-5">
+    <div><h2 id="report-heading" class="text-lg font-semibold text-slate-900 dark:text-white">Customer feedback report</h2><p class="mt-1 text-sm text-slate-600 dark:text-slate-300">All saved submissions. Percentages describe eligible answers, not all customers or verified unique people. Labels reflect the current survey.</p></div>
+    {% if report.total_responses %}
+    <div class="grid gap-x-8 gap-y-6 lg:grid-cols-2">
+      {% for question in report.questions %}
+      <section aria-labelledby="report-question-{{ loop.index }}" class="min-w-0 border-t border-slate-200 pt-4 dark:border-slate-700">
+        <h3 id="report-question-{{ loop.index }}" class="text-sm font-semibold text-slate-900 dark:text-white">{{ question.label }}</h3>
+        <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">{{ question.denominator }} {{ 'ratings' if question.kind.value in ['satisfaction', 'reliability'] else 'answers' }} · {{ question.unanswered }} not answered{% if question.excluded %} · {{ question.excluded }} {{ 'haven’t contacted customer service' if question.kind.value == 'satisfaction' else 'not sure' }} (excluded){% endif %}{% if question.unrecognized %} · {{ question.unrecognized }} answers outside current options (excluded){% endif %}</p>
+        {% if question.kind.value in ['satisfaction', 'reliability'] and question.denominator %}
+        <div class="mt-4 flex h-6 overflow-hidden rounded bg-slate-100 dark:bg-slate-700" aria-hidden="true">
+          {% for bucket in question.buckets %}<div class="{{ 'bg-emerald-600' if loop.index == 1 else ('bg-slate-400' if loop.index == 2 else 'bg-rose-600') }}" style="width:{{ bucket.percentage }}%"></div>{% endfor %}
+        </div>
+        <dl class="mt-3 grid grid-cols-3 gap-2">
+          {% for bucket in question.buckets %}<div><dt class="text-xs text-slate-600 dark:text-slate-300">{{ bucket.label }}</dt><dd class="mt-1 text-lg font-semibold tabular-nums text-slate-900 dark:text-white">{{ bucket.percentage }}%</dd><dd class="text-xs text-slate-600 dark:text-slate-300">{{ bucket.count }} responses</dd></div>{% endfor %}
+        </dl>
+        {% elif question.kind.value == 'text' %}
+        <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">Written feedback is available in individual responses below.</p>
+        {% elif question.denominator %}
+        <dl class="mt-3 space-y-3">
+          {% for bucket in question.buckets %}<div><div class="flex justify-between gap-3 text-sm"><dt class="min-w-0 break-words text-slate-700 dark:text-slate-200">{{ bucket.label }}</dt><dd class="shrink-0 tabular-nums text-slate-900 dark:text-white">{{ bucket.percentage }}% · {{ bucket.count }}</dd></div><div class="mt-1 h-2 overflow-hidden rounded bg-slate-100 dark:bg-slate-700" aria-hidden="true"><div class="h-full bg-teal-600 dark:bg-teal-400" style="width:{{ bucket.percentage }}%"></div></div></div>{% endfor %}
+        </dl>
+        {% else %}<p class="mt-3 text-sm text-slate-600 dark:text-slate-300">No ratings available for this question yet.</p>{% endif %}
+      </section>
+      {% endfor %}
+    </div>
+    {% else %}<p class="text-sm text-slate-600 dark:text-slate-300">No responses yet. The report will appear when feedback is submitted.</p>{% endif %}
+  </section>
+
+  <details class="border-t border-slate-200 pt-4 dark:border-slate-700">
+    <summary class="cursor-pointer rounded text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:text-white">Individual responses (latest {{ responses|length }})</summary>
+  <section aria-labelledby="responses-heading">
+    <h2 id="responses-heading" class="font-semibold text-slate-900 dark:text-white">Recent responses</h2>
+    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Latest {{ responses|length }} submissions, newest first. Times are shown in UTC.</p>
     <div class="mt-4 space-y-3">
       {% for response in responses %}
-      <div class="rounded-lg bg-slate-50 p-4 dark:bg-slate-900/50">
-        <div class="flex justify-between gap-4"><span class="text-sm font-medium text-slate-900 dark:text-white">Rating: {{ response.rating or "—" }}</span><span class="text-xs text-slate-500 dark:text-slate-400">{{ response.created_at }}</span></div>
-        <pre class="mt-2 whitespace-pre-wrap break-words text-xs text-slate-600 dark:text-slate-300">{{ response.responses|tojson(indent=2) }}</pre>
-      </div>
+      <article class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Submitted <time datetime="{{ response.submitted_iso }}">{{ response.submitted_label }}</time></h3>
+        {% if response.rating is not none or response.nps_value is not none %}
+        <p class="mt-2 text-sm text-slate-700 dark:text-slate-200">{% if response.rating is not none %}Rating: {{ response.rating }}/5{% endif %}{% if response.nps_value is not none %} <span>NPS: {{ response.nps_value }}/10</span>{% endif %}</p>
+        {% endif %}
+        <dl class="mt-3 divide-y divide-slate-200 dark:divide-slate-700">
+          {% for answer in response.answers %}
+          <div class="grid gap-1 py-3 sm:grid-cols-2 sm:gap-6">
+            <dt class="break-words text-sm text-slate-600 dark:text-slate-300">{{ answer.label }}{% if answer.question_removed %}<span class="mt-1 block text-xs">Earlier question — original wording unavailable</span>{% endif %}</dt>
+            <dd class="whitespace-pre-wrap break-words text-sm font-medium text-slate-900 dark:text-white">{{ answer.value if answer.value is not none and answer.value != '' else 'Not answered' }}</dd>
+          </div>
+          {% else %}<p class="py-3 text-sm text-slate-600 dark:text-slate-300">No answers recorded.</p>{% endfor %}
+        </dl>
+        <details class="mt-3 text-xs text-slate-600 dark:text-slate-300"><summary class="cursor-pointer rounded focus:outline-none focus:ring-2 focus:ring-teal-500">Response reference</summary><p class="mt-2 break-all">{{ response.response_id }}</p></details>
+      </article>
       {% else %}<p class="text-sm text-slate-500 dark:text-slate-400">No responses yet.</p>{% endfor %}
     </div>
-  </div>
+  </section>
+  </details>
 </div>
 {% endblock %}
