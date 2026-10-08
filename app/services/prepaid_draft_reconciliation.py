@@ -9143,29 +9143,6 @@ def correct_reviewed_prepaid_sequence_funding(
             )
         )
         monthly = round_money(command.query.documents[0].expected_total)
-        settlement = Payments.stage_reviewed_splynx_prepaid_settlement_reconstruction(
-            db,
-            ReviewedSplynxPrepaidSettlementReconstruction(
-                account_id=current.account_id,
-                payment_id=command.query.historical_payment_id,
-                splynx_transaction_id=command.query.splynx_transaction_id,
-                existing_allocation_id=command.query.historical_existing_allocation_id,
-                expected_payment_amount=command.query.expected_historical_payment_amount,
-                expected_existing_allocation_amount=monthly,
-                expected_new_allocation_amount=monthly,
-                opening_carried_amount=command.query.expected_opening_credit,
-                currency="NGN",
-                preview_fingerprint=current.fingerprint,
-                ticket_reference=command.query.approval.ticket_reference,
-                approver_name=command.query.approval.approver_name,
-                reason=command.context.reason,
-            ),
-        )
-        first_invoice = db.get(Invoice, command.query.documents[0].invoice_id)
-        if first_invoice is None:
-            _error("incomplete_repair", "First invoice disappeared.")
-        finalize_reviewed_document_settlement_for_owner(db, first_invoice)
-
         displaced_invoice = db.get(Invoice, command.query.documents[1].invoice_id)
         displaced_line = db.get(InvoiceLine, command.query.documents[1].line_id)
         displaced_selection = command.query.documents[1]
@@ -9236,6 +9213,31 @@ def correct_reviewed_prepaid_sequence_funding(
                 ),
             ),
         )
+        # The displaced current payment has its own exact settlement and target.
+        # Stage it before reconstructing historical settlement evidence, which
+        # changes the account-wide available-credit projection.
+        settlement = Payments.stage_reviewed_splynx_prepaid_settlement_reconstruction(
+            db,
+            ReviewedSplynxPrepaidSettlementReconstruction(
+                account_id=current.account_id,
+                payment_id=command.query.historical_payment_id,
+                splynx_transaction_id=command.query.splynx_transaction_id,
+                existing_allocation_id=command.query.historical_existing_allocation_id,
+                expected_payment_amount=command.query.expected_historical_payment_amount,
+                expected_existing_allocation_amount=monthly,
+                expected_new_allocation_amount=monthly,
+                opening_carried_amount=command.query.expected_opening_credit,
+                currency="NGN",
+                preview_fingerprint=current.fingerprint,
+                ticket_reference=command.query.approval.ticket_reference,
+                approver_name=command.query.approval.approver_name,
+                reason=command.context.reason,
+            ),
+        )
+        first_invoice = db.get(Invoice, command.query.documents[0].invoice_id)
+        if first_invoice is None:
+            _error("incomplete_repair", "First invoice disappeared.")
+        finalize_reviewed_document_settlement_for_owner(db, first_invoice)
         historical_request = PaymentAllocationPreviewRequest(
             payment_id=command.query.historical_payment_id,
             invoice_id=reassigned.id,
