@@ -11,23 +11,36 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, TypedDict, cast
 from urllib.parse import urlencode
+from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.billing import PaymentStatus
-from app.models.subscriber import AccountStatus, Subscriber, SubscriberCategory
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
+from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.subscriber import (
+    AccountStatus,
+    CustomerConnectionType,
+    Subscriber,
+    SubscriberCategory,
+)
 from app.schemas.status_presentation import StatusTone
 from app.services import billing as billing_service
 from app.services import crm_reporting as crm_reporting_service
 from app.services import subscriber as subscriber_service
 from app.services import subscriber_growth
 from app.services import usage_summary as usage_summary_service
+from app.services.customer_regions import (
+    DEFAULT_REGION_COLOR,
+    RegionOption,
+    customer_region_assignment_cte,
+    list_regions,
+)
 from app.services.service_address import address_parts
 from app.services.ui_contracts import ChartProjection, ChartSeries, Kpi, StateValue
+from app.timezone import APP_TIMEZONE
 
 if TYPE_CHECKING:
-    from app.models.billing import Payment
     from app.models.provisioning import InstallAppointment
     from app.services.provisioning_managers import TechnicianReportRow
 
@@ -87,6 +100,56 @@ class RevenueReportData:
     revenue_chart: ChartProjection
 
 
+@dataclass(frozen=True, slots=True)
+class RegionalReportMoney:
+    """Regional financial totals kept separate by currency."""
+
+    currency: str
+    billed: Decimal
+    collected: Decimal
+    outstanding: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class RegionalReportRow:
+    """One bounded report row for a configured region or unassigned customers."""
+
+    region_id: str | None
+    name: str
+    color: str
+    is_unassigned: bool
+    total_customers: int
+    active_services: int
+    active_customers: int
+    suspended_customers: int
+    disabled_customers: int
+    canceled_customers: int
+    blocked_customers: int
+    other_customers: int
+    wireless_customers: int
+    wired_customers: int
+    unspecified_customers: int
+    money: tuple[RegionalReportMoney, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RegionalReportData:
+    """Typed presentation projection for the regional performance report."""
+
+    rows: tuple[RegionalReportRow, ...]
+    currency_totals: tuple[RegionalReportMoney, ...]
+    region_options: tuple[RegionOption, ...]
+    date_from: str
+    date_to: str
+    selected_region_id: str | None
+    configured_region_count: int
+    total_customers: int
+    total_active_services: int
+    unassigned_customers: int
+    primary_currency: str | None
+    primary_collected_max: Decimal
+
+
 class CustomerGrowthSeries(TypedDict):
     labels: list[str]
     total: list[int]
@@ -134,8 +197,12 @@ class ChurnReportData:
     cancelled_count: int
     at_risk_count: int
     churn_reasons: Mapping[str, int]
-    recent_cancellations: tuple[Subscriber, ...]
+    recent_cancellations: tuple[subscriber_growth.RecentChurnEvent, ...]
     churn_chart: ChartProjection
+    period: str
+    status_filter: str
+    date_from: str
+    date_to: str
 
 
 class TechnicianReportData(TypedDict):
@@ -505,6 +572,415 @@ def _percent_change(
     return round(((current_value - previous_value) / previous_value) * 100, 1)
 
 
+def _regional_report_window(
+    *, date_from: str | None, date_to: str | None
+) -> tuple[datetime, datetime, str, str]:
+    """Resolve an inclusive report window, defaulting to the current month."""
+
+    from app.services.common import parse_date_filter
+
+    now = datetime.now(UTC)
+    default_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    default_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+        days=1
+    )
+    start = parse_date_filter(date_from) or default_start
+    parsed_end = parse_date_filter(date_to)
+    end = parsed_end + timedelta(days=1) if parsed_end else default_end
+    if end <= start:
+        raise ValueError("The report end date must be on or after the start date")
+    return (
+        start,
+        end,
+        start.date().isoformat(),
+        (end - timedelta(days=1)).date().isoformat(),
+    )
+
+
+def get_regional_report_data(
+    db: Session,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    region_id: UUID | None = None,
+) -> RegionalReportData:
+    """Aggregate regional customer and billing facts without loading customers.
+
+    Customer assignment is resolved once in the canonical SQL CTE. The four
+    grouped queries below then operate on that bounded relation: account
+    statuses, active services, invoices, and successful collections.
+    """
+
+    start, end, effective_from, effective_to = _regional_report_window(
+        date_from=date_from, date_to=date_to
+    )
+    regions = list_regions(db, include_inactive=False)
+    region_options = tuple(
+        RegionOption(id=region.id, name=region.name, color=region.color)
+        for region in regions
+    )
+    visible_clause = subscriber_service.visible_subscriber_clause()
+    # Keep the expensive spatial winner relation bounded to one materialized
+    # read per aggregate statement. The report deliberately uses grouped SQL
+    # rather than loading the customer cohort into Python.
+    assignments = customer_region_assignment_cte().prefix_with("MATERIALIZED")
+    winning_assignment = assignments.c.assignment_rank == 1
+
+    region_keys: tuple[UUID | None, ...]
+    if region_id is not None:
+        region_keys = (region_id,)
+    else:
+        region_keys = tuple(region.id for region in regions) + (None,)
+
+    status_counts: dict[UUID | None, dict[str, int]] = {
+        key: {
+            "active": 0,
+            "suspended": 0,
+            "disabled": 0,
+            "canceled": 0,
+            "blocked": 0,
+            "other": 0,
+        }
+        for key in region_keys
+    }
+    connection_counts: dict[UUID | None, dict[str, int]] = {
+        key: {"wireless": 0, "wired": 0, "unspecified": 0} for key in region_keys
+    }
+    active_services: dict[UUID | None, int] = dict.fromkeys(region_keys, 0)
+    money: dict[UUID | None, dict[str, list[Decimal]]] = {
+        key: {} for key in region_keys
+    }
+
+    status_stmt = (
+        select(
+            assignments.c.region_id,
+            Subscriber.status,
+            Subscriber.connection_type,
+            func.count(func.distinct(Subscriber.id)),
+        )
+        .select_from(Subscriber)
+        .join(
+            assignments,
+            and_(
+                assignments.c.subscriber_id == Subscriber.id,
+                winning_assignment,
+            ),
+            isouter=True,
+        )
+        .where(visible_clause)
+        .group_by(
+            assignments.c.region_id,
+            Subscriber.status,
+            Subscriber.connection_type,
+        )
+    )
+    if region_id is not None:
+        status_stmt = status_stmt.where(assignments.c.region_id == region_id)
+    for assigned_region, status_value, connection_type_value, count in db.execute(
+        status_stmt
+    ).all():
+        if assigned_region not in status_counts:
+            continue
+        status_key = getattr(status_value, "value", None) or "other"
+        if status_key not in status_counts[assigned_region]:
+            status_key = "other"
+        status_counts[assigned_region][status_key] += int(count or 0)
+        connection_key = (
+            getattr(connection_type_value, "value", None)
+            or str(connection_type_value or "")
+            or "unspecified"
+        )
+        if connection_key not in {
+            CustomerConnectionType.wireless.value,
+            CustomerConnectionType.wired.value,
+        }:
+            connection_key = "unspecified"
+        connection_counts[assigned_region][connection_key] += int(count or 0)
+
+    active_stmt = (
+        select(
+            assignments.c.region_id,
+            func.count(func.distinct(Subscription.subscriber_id)),
+        )
+        .select_from(Subscription)
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .join(
+            assignments,
+            and_(
+                assignments.c.subscriber_id == Subscription.subscriber_id,
+                winning_assignment,
+            ),
+            isouter=True,
+        )
+        .where(visible_clause, Subscription.status == SubscriptionStatus.active)
+        .group_by(assignments.c.region_id)
+    )
+    if region_id is not None:
+        active_stmt = active_stmt.where(assignments.c.region_id == region_id)
+    for assigned_region, count in db.execute(active_stmt).all():
+        if assigned_region in active_services:
+            active_services[assigned_region] = int(count or 0)
+
+    invoice_statuses = (
+        InvoiceStatus.issued,
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.paid,
+        InvoiceStatus.overdue,
+    )
+    invoice_stmt = (
+        select(
+            assignments.c.region_id,
+            Invoice.currency,
+            func.coalesce(func.sum(Invoice.total), Decimal("0")),
+            func.coalesce(func.sum(Invoice.balance_due), Decimal("0")),
+        )
+        .select_from(Invoice)
+        .join(Subscriber, Subscriber.id == Invoice.account_id)
+        .join(
+            assignments,
+            and_(
+                assignments.c.subscriber_id == Invoice.account_id,
+                winning_assignment,
+            ),
+            isouter=True,
+        )
+        .where(
+            visible_clause,
+            Invoice.is_active.is_(True),
+            Invoice.is_proforma.is_(False),
+            Invoice.status.in_(invoice_statuses),
+            Invoice.issued_at.isnot(None),
+            Invoice.issued_at >= start,
+            Invoice.issued_at < end,
+        )
+        .group_by(assignments.c.region_id, Invoice.currency)
+    )
+    if region_id is not None:
+        invoice_stmt = invoice_stmt.where(assignments.c.region_id == region_id)
+    for assigned_region, currency, billed, outstanding in db.execute(
+        invoice_stmt
+    ).all():
+        if assigned_region not in money:
+            continue
+        values = money[assigned_region].setdefault(
+            str(currency or "NGN"), [Decimal("0"), Decimal("0"), Decimal("0")]
+        )
+        values[0] += billed or Decimal("0")
+        values[2] += outstanding or Decimal("0")
+
+    payment_stmt = (
+        select(
+            assignments.c.region_id,
+            Payment.currency,
+            func.coalesce(
+                func.sum(Payment.amount - func.coalesce(Payment.refunded_amount, 0)),
+                Decimal("0"),
+            ),
+        )
+        .select_from(Payment)
+        .join(Subscriber, Subscriber.id == Payment.account_id, isouter=True)
+        .join(
+            assignments,
+            and_(
+                assignments.c.subscriber_id == Payment.account_id,
+                winning_assignment,
+            ),
+            isouter=True,
+        )
+        .where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+            Payment.paid_at.isnot(None),
+            Payment.paid_at >= start,
+            Payment.paid_at < end,
+            or_(Subscriber.id.is_(None), visible_clause),
+        )
+        .group_by(assignments.c.region_id, Payment.currency)
+    )
+    if region_id is not None:
+        payment_stmt = payment_stmt.where(assignments.c.region_id == region_id)
+    for assigned_region, currency, collected in db.execute(payment_stmt).all():
+        if assigned_region not in money:
+            continue
+        values = money[assigned_region].setdefault(
+            str(currency or "NGN"), [Decimal("0"), Decimal("0"), Decimal("0")]
+        )
+        values[1] += collected or Decimal("0")
+
+    rows: list[RegionalReportRow] = []
+    for region in regions:
+        if region_id is not None and region.id != region_id:
+            continue
+        counts = status_counts.get(region.id, {})
+        connection_breakdown = connection_counts.get(region.id, {})
+        rows.append(
+            RegionalReportRow(
+                region_id=str(region.id),
+                name=region.name,
+                color=region.color or DEFAULT_REGION_COLOR,
+                is_unassigned=False,
+                total_customers=sum(counts.values()),
+                active_services=active_services.get(region.id, 0),
+                active_customers=counts.get("active", 0),
+                suspended_customers=counts.get("suspended", 0),
+                disabled_customers=counts.get("disabled", 0),
+                canceled_customers=counts.get("canceled", 0),
+                blocked_customers=counts.get("blocked", 0),
+                other_customers=counts.get("other", 0),
+                wireless_customers=connection_breakdown.get("wireless", 0),
+                wired_customers=connection_breakdown.get("wired", 0),
+                unspecified_customers=connection_breakdown.get("unspecified", 0),
+                money=tuple(
+                    RegionalReportMoney(
+                        currency=currency,
+                        billed=values[0],
+                        collected=values[1],
+                        outstanding=values[2],
+                    )
+                    for currency, values in sorted(money.get(region.id, {}).items())
+                ),
+            )
+        )
+
+    if region_id is None:
+        unassigned_counts = status_counts.get(None, {})
+        unassigned_connection_breakdown = connection_counts.get(None, {})
+        rows.append(
+            RegionalReportRow(
+                region_id=None,
+                name="Unassigned",
+                color="#94a3b8",
+                is_unassigned=True,
+                total_customers=sum(unassigned_counts.values()),
+                active_services=active_services.get(None, 0),
+                active_customers=unassigned_counts.get("active", 0),
+                suspended_customers=unassigned_counts.get("suspended", 0),
+                disabled_customers=unassigned_counts.get("disabled", 0),
+                canceled_customers=unassigned_counts.get("canceled", 0),
+                blocked_customers=unassigned_counts.get("blocked", 0),
+                other_customers=unassigned_counts.get("other", 0),
+                wireless_customers=unassigned_connection_breakdown.get("wireless", 0),
+                wired_customers=unassigned_connection_breakdown.get("wired", 0),
+                unspecified_customers=unassigned_connection_breakdown.get(
+                    "unspecified", 0
+                ),
+                money=tuple(
+                    RegionalReportMoney(
+                        currency=currency,
+                        billed=values[0],
+                        collected=values[1],
+                        outstanding=values[2],
+                    )
+                    for currency, values in sorted(money.get(None, {}).items())
+                ),
+            )
+        )
+
+    totals: dict[str, list[Decimal]] = {}
+    for row in rows:
+        for item in row.money:
+            values = totals.setdefault(
+                item.currency, [Decimal("0"), Decimal("0"), Decimal("0")]
+            )
+            values[0] += item.billed
+            values[1] += item.collected
+            values[2] += item.outstanding
+    currency_totals = tuple(
+        RegionalReportMoney(
+            currency=currency,
+            billed=values[0],
+            collected=values[1],
+            outstanding=values[2],
+        )
+        for currency, values in sorted(totals.items())
+    )
+    primary_currency = currency_totals[0].currency if currency_totals else None
+    primary_collected_max = max(
+        (
+            item.collected
+            for row in rows
+            for item in row.money
+            if item.currency == primary_currency
+        ),
+        default=Decimal("0"),
+    )
+    total_customers = sum(row.total_customers for row in rows)
+    return RegionalReportData(
+        rows=tuple(rows),
+        currency_totals=currency_totals,
+        region_options=region_options,
+        date_from=effective_from,
+        date_to=effective_to,
+        selected_region_id=str(region_id) if region_id else None,
+        configured_region_count=len(regions),
+        total_customers=total_customers,
+        total_active_services=sum(row.active_services for row in rows),
+        unassigned_customers=next(
+            (row.total_customers for row in rows if row.is_unassigned), 0
+        ),
+        primary_currency=primary_currency,
+        primary_collected_max=primary_collected_max,
+    )
+
+
+def build_regional_report_csv(data: RegionalReportData) -> str:
+    """Serialize the same regional projection shown in the report table."""
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "region",
+            "currency",
+            "billed",
+            "collected",
+            "outstanding",
+            "total_customers",
+            "active_services",
+            "active_customers",
+            "suspended_customers",
+            "disabled_customers",
+            "canceled_customers",
+            "blocked_customers",
+            "other_customers",
+            "wireless_customers",
+            "wired_customers",
+            "unspecified_customers",
+        ]
+    )
+    for row in data.rows:
+        money_rows = row.money or (
+            RegionalReportMoney(
+                currency="",
+                billed=Decimal("0"),
+                collected=Decimal("0"),
+                outstanding=Decimal("0"),
+            ),
+        )
+        for item in money_rows:
+            writer.writerow(
+                [
+                    row.name,
+                    item.currency,
+                    item.billed,
+                    item.collected,
+                    item.outstanding,
+                    row.total_customers,
+                    row.active_services,
+                    row.active_customers,
+                    row.suspended_customers,
+                    row.disabled_customers,
+                    row.canceled_customers,
+                    row.blocked_customers,
+                    row.other_customers,
+                    row.wireless_customers,
+                    row.wired_customers,
+                    row.unspecified_customers,
+                ]
+            )
+    return output.getvalue()
+
+
 def get_revenue_report_data(db: Session) -> RevenueReportData:
     """Compose the revenue report from the billing reporting read owners.
 
@@ -864,44 +1340,76 @@ def build_subscribers_export_csv(
     return content
 
 
-def get_churn_report_data(db: Session) -> ChurnReportData:
+def _churn_filter_url(
+    *,
+    status: str,
+    period: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> str:
+    if not date_from and not date_to and not period:
+        return _customers_report_cohort_url(status=status)
+    params = urlencode(
+        {
+            key: value
+            for key, value in {
+                "status": status,
+                "period": period,
+                "date_from": date_from,
+                "date_to": date_to,
+            }.items()
+            if value
+        }
+    )
+    return f"/admin/reports/churn?{params}#churn-summary"
+
+
+def get_churn_report_data(
+    db: Session,
+    *,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    period: str | None = None,
+) -> ChurnReportData:
     """Compose the churn report from the subscriber growth/churn read owner.
 
     Counts, the monthly churn series, and the recent-cancellation list are
     owned by app.services.subscriber_growth; this function assembles and
     presents.
     """
-    summary = subscriber_growth.churn_summary(db=db)
+    status_filter = subscriber_growth.normalize_churn_status(status)
+    period_filter = period or ("custom" if date_from or date_to else "")
+    filter_kwargs = {
+        key: value
+        for key, value in {
+            "status": status_filter,
+            "date_from": date_from,
+            "date_to": date_to,
+        }.items()
+        if value is not None
+    }
+    if filter_kwargs:
+        summary = subscriber_growth.churn_summary(db=db, **filter_kwargs)
+    else:
+        # Preserve the narrow call shape for lightweight report doubles and
+        # keep the unfiltered path identical to the historical report.
+        summary = subscriber_growth.churn_summary(db=db)
     total_subscribers = summary.total
     at_risk_count = summary.at_risk_count
-    # KPI-parity: the Cancellations tile drills into the strict
-    # ``status=canceled`` customer cohort, and that list (_load_report_subscribers)
-    # filters strictly on ``Subscriber.status``.
-    # churn_summary()'s ``cancelled_count`` uses the wider derived-cancelled rule
-    # (``status == canceled`` OR ``status IS NULL AND not is_active``), so it can
-    # exceed the drill-down. Count with the same strict rule the linked list
-    # uses so the headline value equals the list it links to.
-    cancelled_count = int(
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause(),
-                Subscriber.status == AccountStatus.canceled,
-            )
-        )
-        or 0
+    # KPI-parity: churn_summary() uses the strict persisted status rule that
+    # drives the selected event/date window, so the Cancellations tile cannot
+    # silently ignore the active report filters.
+    cancelled_count = summary.cancelled_count
+    active_count = summary.active_count
+    event_count = (
+        at_risk_count
+        if status_filter == AccountStatus.suspended.value
+        else cancelled_count
+        if status_filter == AccountStatus.canceled.value
+        else summary.churn_count or cancelled_count + at_risk_count
     )
-    active_count = int(
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause(),
-                Subscriber.status == AccountStatus.active,
-            )
-        )
-        or 0
-    )
-    churn_rate = (
-        (cancelled_count / total_subscribers * 100) if total_subscribers > 0 else 0
-    )
+    churn_rate = (event_count / total_subscribers * 100) if total_subscribers > 0 else 0
     # Retention is the strict active share, not the complement of cancellations
     # (which also includes suspended and other non-cancelled states).
     retention_rate = (
@@ -931,16 +1439,22 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
         "cancelled": Kpi(
             label="Cancellations",
             value=StateValue.present(cancelled_count),
-            cohort_url=_customers_report_cohort_url(
-                status=AccountStatus.canceled.value
+            cohort_url=_churn_filter_url(
+                status=AccountStatus.canceled.value,
+                period=period_filter,
+                date_from=date_from,
+                date_to=date_to,
             ),
             tone=StatusTone.negative,
         ),
         "at_risk": Kpi(
             label="At Risk",
             value=StateValue.present(at_risk_count),
-            cohort_url=_customers_report_cohort_url(
-                status=AccountStatus.suspended.value
+            cohort_url=_churn_filter_url(
+                status=AccountStatus.suspended.value,
+                period=period_filter,
+                date_from=date_from,
+                date_to=date_to,
             ),
             tone=StatusTone.warning,
         ),
@@ -951,20 +1465,59 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
             tone=StatusTone.positive,
         ),
     }
-    churn_reasons = dict(crm_reporting_service.subscription_churn_reason_counts(db=db))
-    monthly_churn = subscriber_growth.monthly_churn_series(db=db)
+    if status_filter == AccountStatus.suspended.value:
+        churn_reasons = {}
+    elif date_from or date_to:
+        churn_start, churn_end = subscriber_growth.churn_window(
+            date_from=date_from, date_to=date_to
+        )
+        churn_reasons = dict(
+            crm_reporting_service.subscription_churn_reason_counts(
+                db=db,
+                date_from=churn_start,
+                date_to=churn_end,
+            )
+        )
+    else:
+        churn_reasons = dict(
+            crm_reporting_service.subscription_churn_reason_counts(db=db)
+        )
+    if filter_kwargs:
+        monthly_churn = subscriber_growth.monthly_churn_series(
+            db=db,
+            status=status_filter,
+            date_from=date_from,
+            date_to=date_to,
+            population_total=total_subscribers,
+        )
+    else:
+        monthly_churn = subscriber_growth.monthly_churn_series(db=db)
+    chart_event_label = (
+        "Cancellations"
+        if status_filter == AccountStatus.canceled.value
+        else "Suspensions"
+        if status_filter == AccountStatus.suspended.value
+        else "Churn events"
+    )
+    empty_event_label = (
+        "cancellations"
+        if status_filter == AccountStatus.canceled.value
+        else "suspensions"
+        if status_filter == AccountStatus.suspended.value
+        else "cancellations or suspensions"
+    )
     churn_chart = (
         ChartProjection.present(
             labels=monthly_churn.labels,
             series=(
                 ChartSeries(label="Churn rate", values=monthly_churn.rates),
-                ChartSeries(label="Cancellations", values=monthly_churn.counts),
+                ChartSeries(label=chart_event_label, values=monthly_churn.counts),
             ),
             as_of=datetime.now(UTC),
         )
-        if any(monthly_churn.counts)
+        if monthly_churn.labels and total_subscribers > 0
         else ChartProjection.empty(
-            "No cancellations were recorded in the last six months."
+            f"No {empty_event_label} were recorded in the selected period."
         )
     )
     return ChurnReportData(
@@ -975,66 +1528,129 @@ def get_churn_report_data(db: Session) -> ChurnReportData:
         at_risk_count=at_risk_count,
         churn_reasons=churn_reasons,
         recent_cancellations=tuple(
-            subscriber_growth.recent_cancellations(db=db, limit=10)
+            subscriber_growth.recent_cancellations(
+                db=db,
+                limit=10,
+                status=status_filter,
+                date_from=date_from,
+                date_to=date_to,
+            )
         ),
         churn_chart=churn_chart,
+        period=period_filter,
+        status_filter=status_filter or "",
+        date_from=date_from or "",
+        date_to=date_to or "",
     )
 
 
-def build_churn_export_csv(db: Session, days: int | None = None) -> str:
-    # Export the complete visible cohort.  The old CRUD-list path silently
-    # capped this regulatory/operational artifact at 5,000 subscribers.
-    all_subscribers = _load_report_subscribers(db)
-    if days:
-        cutoff = datetime.now(UTC) - timedelta(days=days)
-        all_subscribers = [
+def build_churn_export_csv(
+    db: Session,
+    days: int | None = None,
+    *,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str:
+    # Keep export semantics identical to the page: both read from the same
+    # normalized lifecycle-event projection instead of loading every
+    # subscriber and applying the date filter in Python.
+    status_filter = subscriber_growth.normalize_churn_status(status)
+    if days and not date_from:
+        now = datetime.now(UTC).astimezone(APP_TIMEZONE)
+        date_from = (now - timedelta(days=days - 1)).date().isoformat()
+        date_to = date_to or now.date().isoformat()
+    summary = subscriber_growth.churn_summary(
+        db=db,
+        status=status_filter,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    events = subscriber_growth.recent_cancellations(
+        db=db,
+        limit=None,
+        status=status_filter,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    # Keep lightweight report doubles and genuinely empty databases useful
+    # without reintroducing the production full-table path. Real legacy rows
+    # are already represented by the fallback branch in _churn_event_source.
+    if not events and summary.total == 0:
+        legacy_subscribers = _load_report_subscribers(db)
+        legacy_rows = [
             sub
-            for sub in all_subscribers
-            if (updated_at := subscriber_service.get_effective_updated_at(sub))
-            is not None
-            and updated_at >= cutoff
+            for sub in legacy_subscribers
+            if status_filter is None
+            or _derive_subscriber_status(sub).value == status_filter
         ]
-    total_subscribers = len(all_subscribers)
-    derived_status_by_id = {
-        sub.id: _derive_subscriber_status(sub) for sub in all_subscribers
-    }
-    cancelled_subscribers = [
-        sub
-        for sub in all_subscribers
-        if derived_status_by_id[sub.id] == AccountStatus.canceled
-    ]
-    at_risk_subscribers = [
-        sub
-        for sub in all_subscribers
-        if derived_status_by_id[sub.id] == AccountStatus.suspended
-    ]
-    active_subscribers = [
-        sub
-        for sub in all_subscribers
-        if derived_status_by_id[sub.id] == AccountStatus.active
-    ]
-    churn_rate = (
-        (len(cancelled_subscribers) / total_subscribers * 100)
-        if total_subscribers > 0
-        else 0
+        if legacy_rows:
+            cancelled_count = sum(
+                _derive_subscriber_status(sub) == AccountStatus.canceled
+                for sub in legacy_rows
+            )
+            at_risk_count = sum(
+                _derive_subscriber_status(sub) == AccountStatus.suspended
+                for sub in legacy_rows
+            )
+            active_count = sum(
+                _derive_subscriber_status(sub) == AccountStatus.active
+                for sub in legacy_rows
+            )
+            summary = subscriber_growth.ChurnSummary(
+                total=len(legacy_rows),
+                cancelled_count=cancelled_count,
+                at_risk_count=at_risk_count,
+                active_count=active_count,
+                churn_count=(
+                    cancelled_count
+                    if status_filter == AccountStatus.canceled.value
+                    else at_risk_count
+                    if status_filter == AccountStatus.suspended.value
+                    else cancelled_count + at_risk_count
+                ),
+            )
+            events = [
+                subscriber_growth.RecentChurnEvent(
+                    subscriber=sub,
+                    status=_derive_subscriber_status(sub).value,
+                    occurred_at=(
+                        subscriber_service.get_effective_updated_at(sub)
+                        or datetime.now(UTC)
+                    ),
+                )
+                for sub in legacy_rows
+                if _derive_subscriber_status(sub)
+                in (AccountStatus.canceled, AccountStatus.suspended)
+            ]
+    total_subscribers = summary.total
+    event_count = (
+        summary.at_risk_count
+        if status_filter == AccountStatus.suspended.value
+        else summary.cancelled_count
+        if status_filter == AccountStatus.canceled.value
+        else summary.churn_count
     )
+    churn_rate = (event_count / total_subscribers * 100) if total_subscribers else 0
     retention_rate = (
-        (len(active_subscribers) / total_subscribers * 100)
-        if total_subscribers > 0
-        else 0
+        (summary.active_count / total_subscribers * 100) if total_subscribers else 0
     )
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["metric", "value"])
     writer.writerow(["total_subscribers", total_subscribers])
-    writer.writerow(["cancelled_count", len(cancelled_subscribers)])
-    writer.writerow(["at_risk_count", len(at_risk_subscribers)])
+    writer.writerow(["cancelled_count", summary.cancelled_count])
+    writer.writerow(["at_risk_count", summary.at_risk_count])
     writer.writerow(["churn_rate_percent", f"{churn_rate:.2f}"])
     writer.writerow(["retention_rate_percent", f"{retention_rate:.2f}"])
     writer.writerow(["report_window_days", days or ""])
+    writer.writerow(["status_filter", status_filter or "all"])
+    writer.writerow(["date_from", date_from or ""])
+    writer.writerow(["date_to", date_to or ""])
     writer.writerow([])
     writer.writerow(["subscriber_id", "name", "status", "updated_at"])
-    for sub in cancelled_subscribers:
+    for event in events:
+        sub = event.subscriber
         name = (
             sub.company_name
             if sub.category == SubscriberCategory.business
@@ -1046,13 +1662,8 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
             [
                 str(sub.id),
                 name,
-                derived_status_by_id[sub.id].value,
-                (
-                    updated_at.isoformat()
-                    if (updated_at := subscriber_service.get_effective_updated_at(sub))
-                    is not None
-                    else ""
-                ),
+                event.status,
+                (event.occurred_at.isoformat() if event.occurred_at else ""),
             ]
         )
     content = output.getvalue()

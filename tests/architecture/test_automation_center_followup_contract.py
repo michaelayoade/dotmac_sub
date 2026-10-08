@@ -27,6 +27,31 @@ def test_workflow_builder_controls_have_visible_capability_states_and_serializat
     assert "JSON.stringify(actions)" in template
 
 
+def test_condition_operator_selection_and_system_lookups_are_preserved() -> None:
+    template = _source("templates/admin/automation/rule_builder.html")
+    route = _source("app/web/admin/automation_center.py")
+    contracts = _source("app/services/automation_contracts.py")
+    lookups = _source("app/services/automation_condition_lookups.py")
+
+    assert (
+        'row.addEventListener("change", (event) => { if (event.target === operator)'
+        in template
+    )
+    assert "initial.operator = operator.value" in template
+    assert 'operator.value = ""; refresh()' in template
+    assert "window.initTypeaheadFields" in template
+    assert '"lookup_key": field.lookup_key.value' in route
+    assert '"/condition-options/{lookup_key}"' in route
+    assert "class AutomationLookupKey" in contracts
+    assert "value_exists" in lookups
+
+
+def test_automation_email_action_commits_through_notification_owner() -> None:
+    actions = _source("app/services/automation_actions.py")
+    assert "Notifications.create_internal_notification" in actions
+    assert "queue_staff_notification" not in actions
+
+
 def test_focused_workspaces_and_lifecycle_actions_are_reachable() -> None:
     route = _source("app/web/admin/automation_center.py")
     hub = _source("templates/admin/automation/index.html")

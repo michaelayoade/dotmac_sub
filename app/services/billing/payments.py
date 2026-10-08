@@ -52,6 +52,7 @@ from app.models.catalog import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.idempotency import IdempotencyKey
+from app.models.splynx_transaction import SplynxBillingTransaction
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
     BankAccountCreate,
@@ -118,6 +119,7 @@ from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.locking import lock_for_update
+from app.services.owner_commands import owner_command_active
 from app.services.response import ListResponseMixin
 from app.services.service_entitlements import (
     ensure_prepaid_entitlements_for_paid_invoice,
@@ -263,6 +265,25 @@ class ReviewedLegacyAllocationConsumptionEvidence:
     allocation_id: UUID
     invoice_ledger_entry_id: UUID
     expected_amount: Decimal
+    preview_fingerprint: str
+    ticket_reference: str
+    approver_name: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedSplynxPrepaidSettlementReconstruction:
+    """Exact carried-source facts for one missing historical settlement."""
+
+    account_id: UUID
+    payment_id: UUID
+    splynx_transaction_id: UUID
+    existing_allocation_id: UUID
+    expected_payment_amount: Decimal
+    expected_existing_allocation_amount: Decimal
+    expected_new_allocation_amount: Decimal
+    opening_carried_amount: Decimal
+    currency: str
     preview_fingerprint: str
     ticket_reference: str
     approver_name: str
@@ -2995,6 +3016,187 @@ class Payments(ListResponseMixin):
             ) from exc
 
     @staticmethod
+    def stage_reviewed_splynx_prepaid_settlement_reconstruction(
+        db: Session,
+        evidence: ReviewedSplynxPrepaidSettlementReconstruction,
+    ) -> PaymentSettlement:
+        """Rebuild missing structural settlement rows from exact Splynx facts.
+
+        The payment and its carried residual already crossed the approved opening.
+        Every appended ledger row is therefore non-position evidence.  The opening
+        residual is represented as prepaid consumption so it cannot also remain
+        reusable on the Payment after the reviewed invoice allocations are linked.
+        """
+
+        if not owner_command_active(db, owner="financial.prepaid_draft_reconciliation"):
+            raise DomainError(
+                code="financial.payments.owner_context_required",
+                message="Historical Splynx settlement reconstruction requires the prepaid reconciliation owner.",
+                retryable=False,
+            )
+        lock_account(db, str(evidence.account_id))
+        payment = lock_for_update(db, Payment, evidence.payment_id)
+        allocation = lock_for_update(
+            db, PaymentAllocation, evidence.existing_allocation_id
+        )
+        source = lock_for_update(
+            db, SplynxBillingTransaction, evidence.splynx_transaction_id
+        )
+        amount = round_money(evidence.expected_payment_amount)
+        allocated = round_money(evidence.expected_existing_allocation_amount)
+        planned = round_money(evidence.expected_new_allocation_amount)
+        carried = round_money(evidence.opening_carried_amount)
+        currency = evidence.currency.strip().upper()
+        fingerprint = evidence.preview_fingerprint.strip().lower()
+        if payment is not None and payment.settlement is not None:
+            settlement = payment.settlement
+            if (
+                settlement.preview_fingerprint != fingerprint
+                or allocation is None
+                or allocation.ledger_entry_id is None
+                or allocation.consumption_ledger_entry_id is None
+            ):
+                raise DomainError(
+                    code="financial.payments.splynx_settlement_reconstruction_conflict",
+                    message="Existing settlement evidence belongs to a different reviewed repair.",
+                    retryable=False,
+                )
+            return settlement
+        if (
+            payment is None
+            or allocation is None
+            or source is None
+            or payment.account_id != evidence.account_id
+            or payment.status is not PaymentStatus.succeeded
+            or not payment.is_active
+            or payment.refunds
+            or payment.reversal is not None
+            or payment.splynx_payment_id is None
+            or source.subscriber_id != evidence.account_id
+            or source.splynx_payment_id != payment.splynx_payment_id
+            or source.entry_type != "credit"
+            or source.deleted
+            or round_money(to_decimal(payment.amount)) != amount
+            or round_money(to_decimal(source.amount)) != amount
+            or (payment.currency or "NGN").upper() != currency
+            or allocation.payment_id != payment.id
+            or not allocation.is_active
+            or round_money(to_decimal(allocation.amount)) != allocated
+            or allocation.ledger_entry_id is not None
+            or allocation.consumption_ledger_entry_id is not None
+            or planned <= Decimal("0.00")
+            or carried <= Decimal("0.00")
+            or round_money(allocated + planned + carried) != amount
+            or len(fingerprint) != 64
+            or not evidence.ticket_reference.strip()
+            or not evidence.approver_name.strip()
+            or not evidence.reason.strip()
+        ):
+            raise DomainError(
+                code="financial.payments.splynx_settlement_evidence_rejected",
+                message="Reviewed Splynx settlement evidence is not exact.",
+                retryable=False,
+            )
+        invoice = lock_for_update(db, Invoice, allocation.invoice_id)
+        if invoice is None or invoice.account_id != evidence.account_id:
+            raise DomainError(
+                code="financial.payments.splynx_settlement_evidence_rejected",
+                message="Existing allocation invoice evidence is incomplete.",
+                retryable=False,
+            )
+        effective_at = payment.paid_at or payment.created_at
+        envelope = LedgerEntry(
+            account_id=evidence.account_id,
+            invoice_id=None,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=amount,
+            currency=currency,
+            memo=f"Reviewed Splynx payment envelope {payment.id}",
+            affects_customer_position=False,
+            effective_date=effective_at,
+        )
+        invoice_entry = LedgerEntry(
+            account_id=evidence.account_id,
+            invoice_id=invoice.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=allocated,
+            currency=currency,
+            memo=f"Reviewed historical allocation for payment {payment.id}",
+            affects_customer_position=False,
+            effective_date=effective_at,
+        )
+        allocation_consumption = LedgerEntry(
+            account_id=evidence.account_id,
+            invoice_id=None,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.other,
+            amount=allocated,
+            currency=currency,
+            memo=f"{_PAYMENT_ALLOCATION_CONSUMPTION_MEMO_PREFIX} {invoice.id}",
+            affects_customer_position=False,
+            effective_date=effective_at,
+        )
+        opening_consumption = LedgerEntry(
+            account_id=evidence.account_id,
+            invoice_id=None,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            amount=carried,
+            currency=currency,
+            memo=f"Reviewed payment residual carried into approved opening {payment.id}",
+            affects_customer_position=False,
+            effective_date=effective_at,
+        )
+        db.add_all(
+            (envelope, invoice_entry, allocation_consumption, opening_consumption)
+        )
+        db.flush()
+        allocation.ledger_entry_id = invoice_entry.id
+        allocation.consumption_ledger_entry_id = allocation_consumption.id
+        settlement = PaymentSettlement(
+            payment_id=payment.id,
+            unallocated_ledger_entry_id=envelope.id,
+            prepaid_ledger_entry_id=opening_consumption.id,
+            amount=amount,
+            unallocated_amount=amount,
+            prepaid_amount=carried,
+            currency=currency,
+            origin=PaymentSettlementOrigin.system,
+            preview_fingerprint=fingerprint,
+            idempotency_key=f"splynx-prepaid-settlement:{payment.id}",
+        )
+        db.add(settlement)
+        db.flush()
+        db.expire(payment, ["settlement"])
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                actor_type=AuditActorType.system,
+                action="reconstruct_reviewed_splynx_prepaid_settlement",
+                entity_type="payment",
+                entity_id=str(payment.id),
+                metadata_={
+                    "settlement_id": str(settlement.id),
+                    "splynx_transaction_id": str(source.id),
+                    "existing_allocation_id": str(allocation.id),
+                    "opening_carried_amount": str(carried),
+                    "preview_fingerprint": fingerprint,
+                    "ticket_reference": evidence.ticket_reference.strip(),
+                    "approver_name": evidence.approver_name.strip(),
+                    "money_effect": "none_structural_evidence_only",
+                },
+            ),
+        )
+        db.flush()
+        return settlement
+
+    @staticmethod
     def reconcile_settlement_evidence(
         db: Session,
         payment_id: str,
@@ -5309,15 +5511,14 @@ class PaymentAllocations(ListResponseMixin):
         payment_id: UUID,
         invoice_id: UUID,
         amount: Decimal,
-        funding_position_at: datetime,
+        funding_position_at: datetime | None,
     ) -> PaymentAllocationResult:
         """Top up an existing allocation from newly evidenced payment credit.
 
         A payment/invoice pair is unique, so a second allocation row cannot
         represent a later top-up. Settlement-driven account-credit recovery
         increases the existing allocation and its paired ledger entries
-        atomically, using the same reviewed funding boundary as the normal
-        allocation owner.
+        atomically, using the supplied funding boundary when one is available.
         """
         payment = lock_for_update(db, Payment, payment_id)
         invoice = lock_for_update(db, Invoice, invoice_id)

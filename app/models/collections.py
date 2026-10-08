@@ -270,6 +270,12 @@ class PrepaidSweepCycleState(Base):
     One row per runner. The sweep processes accounts in stable key order and
     checkpoints the last processed key, so every account is visited exactly
     once per cycle regardless of how many bounded runs a cycle takes.
+
+    ``cycle_outcomes`` maps account id -> non-ok outcome observed in the
+    in-progress cycle (last write wins, so a re-processed account is counted
+    once). NULL means the cycle began before tallying and is never published.
+    ``last_cycle_totals`` holds the per-outcome account counts of the last
+    COMPLETED cycle; only those are published as enforcement state.
     TRANSITIONAL: retired with prepaid_balance_sweep at the ADR 0007 durable
     timer cutover.
     """
@@ -285,6 +291,11 @@ class PrepaidSweepCycleState(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
     cycles_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cycle_outcomes: Mapped[dict[str, str] | None] = mapped_column(JSON, default=dict)
+    last_cycle_totals: Mapped[dict[str, int] | None] = mapped_column(JSON)
+    last_cycle_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

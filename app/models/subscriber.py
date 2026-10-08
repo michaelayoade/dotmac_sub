@@ -55,6 +55,13 @@ class ContactMethod(enum.Enum):
     push = "push"
 
 
+class CustomerConnectionType(enum.Enum):
+    """Customer last-mile medium used for regional connectivity reporting."""
+
+    wireless = "wireless"
+    wired = "wired"
+
+
 class SubscriberStatus(enum.Enum):
     """Account status — mirrors the imported customer status lifecycle.
 
@@ -237,6 +244,11 @@ class Subscriber(Base):
             unique=True,
             postgresql_where=text("crm_subscriber_id IS NOT NULL"),
         ),
+        Index(
+            "ix_subscribers_churn_status_updated_at",
+            "status",
+            "updated_at",
+        ),
         CheckConstraint(
             "(party_id IS NULL AND party_bound_at IS NULL AND "
             "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
@@ -311,6 +323,9 @@ class Subscriber(Base):
     # Service location (POP site determines the NAS/IP pool for provisioning)
     pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pop_sites.id", ondelete="SET NULL"), index=True
+    )
+    connection_type: Mapped[CustomerConnectionType | None] = mapped_column(
+        Enum(CustomerConnectionType, native_enum=False, length=16)
     )
 
     # === Account Fields (from Subscriber + SubscriberAccount) ===

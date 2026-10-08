@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.models.admin_alert import AdminAlert, AdminNotification
 from app.models.network_monitoring import AlertSeverity, AlertStatus
@@ -171,3 +171,98 @@ def test_alert_categories_include_cross_app_drift(db_session):
     )
 
     assert "cross_app_drift" in ctx["categories"]
+
+
+def _sla_finding(
+    sla_due_at: datetime,
+    *,
+    fingerprint: str = "prepaid-coverage:quarantine:acct-1",
+    reason_codes: tuple[str, ...] = (),
+) -> admin_alerts.AlertFinding:
+    return admin_alerts.AlertFinding(
+        fingerprint=fingerprint,
+        category="prepaid_enforcement",
+        source="prepaid_coverage_repair",
+        severity=AlertSeverity.warning,
+        title="Prepaid coverage evidence needs finance review",
+        summary="Contradictory evidence blocks enforcement.",
+        details={
+            "owner": "finance-billing",
+            "reason_codes": list(reason_codes),
+            "sla_due_at": sla_due_at.isoformat(),
+        },
+    )
+
+
+def test_sync_alert_keeps_sla_deadline_of_still_open_item(db_session):
+    _admin_user(db_session)
+    first_due = datetime(2026, 7, 31, 4, 1, tzinfo=UTC)
+
+    assert admin_alerts.sync_alert(db_session, _sla_finding(first_due)) == "opened"
+    db_session.commit()
+    # A later scheduled run recomputes now + SLA; the still-open item keeps its
+    # original deadline while the rest of the details still refresh.
+    later = _sla_finding(
+        first_due + timedelta(days=60), reason_codes=("conflicting_amounts",)
+    )
+    assert admin_alerts.sync_alert(db_session, later) == "updated"
+    db_session.commit()
+
+    alert = db_session.query(AdminAlert).one()
+    assert alert.details["sla_due_at"] == first_due.isoformat()
+    assert alert.details["reason_codes"] == ["conflicting_amounts"]
+
+
+def test_sync_alert_reopened_item_gets_fresh_sla_deadline(db_session):
+    _admin_user(db_session)
+    first_due = datetime(2026, 7, 31, 4, 1, tzinfo=UTC)
+    admin_alerts.sync_alert(db_session, _sla_finding(first_due))
+    db_session.commit()
+    admin_alerts.resolve_missing_alerts(
+        db_session,
+        managed_prefix="prepaid-coverage:quarantine:",
+        active_fingerprints=set(),
+    )
+    db_session.commit()
+
+    fresh_due = first_due + timedelta(days=60)
+    assert admin_alerts.sync_alert(db_session, _sla_finding(fresh_due)) == "opened"
+    db_session.commit()
+
+    alert = db_session.query(AdminAlert).one()
+    assert alert.status == AlertStatus.open
+    assert alert.details["sla_due_at"] == fresh_due.isoformat()
+
+
+def test_count_open_alerts_counts_only_open_items_past_their_deadline(db_session):
+    _admin_user(db_session)
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    prefix = "prepaid-coverage:quarantine:"
+    for suffix, due in (
+        ("overdue", now - timedelta(hours=1)),
+        ("not-yet-due", now + timedelta(hours=1)),
+        ("resolved-overdue", now - timedelta(days=2)),
+    ):
+        admin_alerts.sync_alert(
+            db_session, _sla_finding(due, fingerprint=f"{prefix}{suffix}")
+        )
+    # Other owners' prefixes are never counted.
+    admin_alerts.sync_alert(
+        db_session,
+        _sla_finding(now - timedelta(days=2), fingerprint="other:prefix:overdue"),
+    )
+    db_session.commit()
+    admin_alerts.resolve_missing_alerts(
+        db_session,
+        managed_prefix=prefix,
+        active_fingerprints={f"{prefix}overdue", f"{prefix}not-yet-due"},
+    )
+    db_session.commit()
+
+    assert admin_alerts.count_open_alerts(db_session, managed_prefix=prefix) == 2
+    assert (
+        admin_alerts.count_open_alerts(
+            db_session, managed_prefix=prefix, overdue_at=now
+        )
+        == 1
+    )

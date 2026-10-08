@@ -78,6 +78,18 @@ def test_getting_started_is_the_first_help_category() -> None:
     assert categories[:2] == ("Getting started", "Administration")
 
 
+def test_network_guidance_explains_independent_map_proposal_review() -> None:
+    guide = guidance_for_path("/admin/network/fiber-change-requests")
+
+    assert guide is not None
+    assert guide.id == "network-access"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "map v2 proposals" in content
+    assert "independent reviewer" in content
+    assert "network:fiber:review" in content
+    assert "canonical asset change" in content
+
+
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
     expected = {
         "/admin/dashboard": "admin-workspace",
@@ -259,7 +271,7 @@ def test_project_infrastructure_guide_is_linked_and_searchable() -> None:
 
 
 def test_vendor_route_guidance_covers_optional_admin_proposals() -> None:
-    guide = guidance_for_path("/admin/vendors/routes/new")
+    guide = guidance_for_path("/admin/network/fiber-map/new")
     fiber_map_guide = guidance_for_path("/admin/network/fiber")
 
     assert guide is not None
@@ -356,7 +368,7 @@ def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 55
+    assert len(guides) == 58
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id

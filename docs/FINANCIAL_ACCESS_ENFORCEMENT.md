@@ -372,6 +372,18 @@ result and it does not make the whole sweep wait for PostgreSQL's lock timeout.
 The sweep publishes the bounded `lock_deferred` signal, and persistent deferral
 is a database-pressure alert requiring correlation with the blocking owner.
 
+One sweep coverage cycle (a keyset pass over the whole candidate cohort) can
+span several budget-limited runs, so a run's own outcome counters describe
+only its slice. The sweep therefore tallies each account's outcome per cycle
+in `prepaid_sweep_cycle_state` (keyed by account, last write wins, written in
+the same transaction as the cursor) and the account-state signals
+`renewal_terms_unresolved`, `coverage_unresolved`, `notice_suppressed`,
+`no_contact_route`, and `delivery_unavailable` publish the last COMPLETED
+cycle's totals. They change only when a cycle completes
+(`cycle_totals_age_seconds`), never on a partial run; cycle progress stays on
+`cycle_remaining`/`cycle_age_seconds`, the run's work on
+`accounts_processed`, and `accounts_scanned` is the cohort size.
+
 ### Postpaid
 
 Postpaid dunning:
@@ -668,9 +680,15 @@ The initial billing treatment is selected by the immutable Automation rule as
 `extend_by_effective_pause_duration`. Pause records the canonical billing
 anchor but does not move it. Authorized manual resume after Ticket resolution
 computes `[effective_at, resumed_at)` in exact seconds and moves the anchor by
-that duration through the existing compare-and-set billing-anchor writer.
-Changed or missing anchor evidence fails closed. Event replay returns the
-existing cause, and resume replay never moves the anchor twice.
+that duration through the existing compare-and-set billing-anchor writer. For
+prepaid service, resume consumes the typed
+`financial.prepaid_service_coverage` decision: funded entitlements and applied
+`financial.service_extensions` grant intervals may form one continuous
+coverage union through the captured anchor. The zero-value pause-compensation
+entitlement records the exact coverage fingerprint and never duplicates or
+rewrites an extension grant. Changed, discontinuous, or missing anchor evidence
+fails closed. Event replay returns the existing cause, and resume replay never
+moves the anchor twice.
 
 Independent enforcement locks can be added while paused. Releasing the Ticket
 cause closes the episode only when no other pause cause remains; an outstanding

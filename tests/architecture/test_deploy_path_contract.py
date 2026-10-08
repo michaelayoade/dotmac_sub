@@ -228,3 +228,80 @@ def test_openbao_initializer_provisions_settings_keyring_once() -> None:
     assert "already contains a different settings keyring" in initializer
     assert "seed_settings_encryption_keyring\n" in initializer
     assert "seed_optional_group settings/crypto" not in initializer
+
+
+def _app_service() -> dict:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    return compose["services"]["app"]
+
+
+def test_app_bounds_uvicorn_worker_liveness_ping_through_the_environment() -> None:
+    """Uvicorn's multiprocess supervisor kills any worker that misses one ping.
+
+    Its built-in 5-second deadline killed CPU-starved production workers
+    mid-startup in a restart storm (2026-10-06). The deadline is supplied as
+    Uvicorn's own `UVICORN_*` option environment variable rather than a CLI
+    flag: the production host override replaces the app `command:`, and an
+    image older than Uvicorn 0.37 (a rollback target) would refuse an unknown
+    flag but ignores an unknown variable.
+    """
+
+    service = _app_service()
+    environment = service["environment"]
+    match = re.fullmatch(
+        r"\$\{UVICORN_TIMEOUT_WORKER_HEALTHCHECK:-(\d+)\}",
+        str(environment["UVICORN_TIMEOUT_WORKER_HEALTHCHECK"]),
+    )
+    assert match, environment["UVICORN_TIMEOUT_WORKER_HEALTHCHECK"]
+    assert int(match.group(1)) >= 60
+
+    command = service["command"]
+    assert command[:2] == ["/bin/sh", "-c"], command
+    assert "uvicorn app.main:app" in command[2]
+    assert "--workers ${WEB_CONCURRENCY:-1}" in command[2]
+    assert "--timeout-worker-healthcheck" not in command[2]
+
+
+def test_locked_uvicorn_reads_the_worker_healthcheck_deadline_from_env(
+    monkeypatch,
+) -> None:
+    """`--timeout-worker-healthcheck` first shipped in Uvicorn 0.37.0.
+
+    Prove the locked Uvicorn turns the compose variable into the supervisor
+    deadline, instead of trusting the version number alone.
+    """
+
+    import uvicorn
+    from uvicorn.config import Config
+    from uvicorn.main import main as uvicorn_cli
+
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    pin = re.search(r'"uvicorn\[standard\]==([0-9.]+)"', pyproject)
+    assert pin, "uvicorn[standard] must stay an exact pin"
+    lock = (ROOT / "poetry.lock").read_text(encoding="utf-8")
+    assert f'name = "uvicorn"\nversion = "{pin.group(1)}"' in lock
+    assert tuple(int(part) for part in pin.group(1).split(".")) >= (0, 37, 0)
+    assert uvicorn.__version__ == pin.group(1)
+
+    monkeypatch.setenv("UVICORN_TIMEOUT_WORKER_HEALTHCHECK", "60")
+    context = uvicorn_cli.make_context(
+        "uvicorn", ["app.main:app", "--workers", "6"], resilient_parsing=False
+    )
+    assert context.params["timeout_worker_healthcheck"] == 60
+    assert context.params["workers"] == 6
+    config = Config(app="app.main:app", workers=6, timeout_worker_healthcheck=60)
+    assert config.timeout_worker_healthcheck == 60
+
+
+def test_deploy_web_gates_require_readiness_within_production_budget() -> None:
+    deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
+    adapter = (ROOT / "scripts/deploy_production.sh").read_text(encoding="utf-8")
+
+    assert "/api/v1/health/ready" in deploy
+    assert '"${CANDIDATE_HEALTH_TIMEOUT_SECONDS}" "${CANDIDATE_READY_URL}"' in deploy
+    assert '"${HEALTH_TIMEOUT_SECONDS}" "${READY_URL}"' in deploy
+    assert "export HEALTH_TIMEOUT_SECONDS=600" in adapter
+    assert "export CANDIDATE_HEALTH_TIMEOUT_SECONDS=600" in adapter
+    assert adapter.index("export HEALTH_TIMEOUT_SECONDS=600") < adapter.index(
+        'bash "${REPO_DIR}/scripts/deploy.sh"'
+    )

@@ -5,9 +5,11 @@ import logging
 import math
 from collections import Counter
 from collections.abc import Sequence
+from typing import cast
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import case, func
+from sqlalchemy import select as db_select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import Subscription
@@ -29,7 +31,7 @@ from app.models.network import (
 )
 from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
-from app.services import settings_spec
+from app.services import customer_regions, settings_spec
 from app.services.device_operational_status import (
     DeviceOperationalState,
     annotate_operational_status,
@@ -488,18 +490,37 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         map_limit = int(str(map_limit_raw)) if map_limit_raw is not None else None
     except (TypeError, ValueError):
         map_limit = None
-    if map_limit is not None and map_limit <= 0:
-        map_limit = None
+    # Keep the marker/session payload bounded even when a legacy setting is
+    # blank or has an unsafe value. Plant features remain independent.
+    map_limit = min(max(map_limit or 2000, 1), 5000)
+
+    primary_address_id = (
+        db_select(Address.id)
+        .where(
+            Address.subscriber_id == Subscriber.id,
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+        )
+        .order_by(
+            case((Address.is_primary.is_(True), 0), else_=1),
+            Address.id.asc(),
+        )
+        .limit(1)
+        .correlate(Subscriber)
+        .scalar_subquery()
+    )
 
     mapped_addresses = (
         db.query(Address.id, Address.subscriber_id, Subscriber.status)
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
         .filter(
+            Address.id == primary_address_id,
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
             Subscriber.is_active.is_(True),
         )
         .order_by(Address.id)
+        .limit(map_limit)
         .all()
     )
     customer_total = len(mapped_addresses)
@@ -529,6 +550,37 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
             snapshots_by_subscriber.setdefault(subscription.subscriber_id, []).append(
                 snapshot
             )
+    nas_ids_by_subscriber: dict[UUID, frozenset[UUID]] = {
+        subscriber_id: frozenset() for subscriber_id in mapped_subscriber_ids
+    }
+    for subscription in subscriptions:
+        nas_id = cast(UUID | None, subscription.provisioning_nas_device_id)
+        if nas_id is not None:
+            nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                (
+                    *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
+                    nas_id,
+                )
+            )
+        snapshot = snapshot_by_subscription.get(subscription.id)
+        snapshot_nas_id = (
+            cast(UUID | None, snapshot.nas_device_id) if snapshot is not None else None
+        )
+        if snapshot_nas_id is not None:
+            nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                (
+                    *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
+                    snapshot_nas_id,
+                )
+            )
+    pop_site_rows = cast(
+        list[tuple[UUID, UUID | None]],
+        db.query(Subscriber.id, Subscriber.pop_site_id)
+        .filter(Subscriber.id.in_(mapped_subscriber_ids))
+        .all(),
+    )
+    pop_site_by_subscriber: dict[UUID, UUID | None] = dict(pop_site_rows)
+    configured_regions = customer_regions.list_regions(db, include_inactive=False)
     connectivity_by_subscriber = {
         subscriber_id: resolve_customer_connectivity(snapshots)
         for subscriber_id, snapshots in snapshots_by_subscriber.items()
@@ -579,14 +631,15 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
         )
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
         .filter(
+            Address.id == primary_address_id,
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
             Subscriber.is_active.is_(True),
         )
         .order_by(Address.id)
+        .limit(map_limit)
     )
-    if map_limit is not None:
-        customer_addresses_query = customer_addresses_query.limit(map_limit)
+    # ``mapped_addresses`` is already the bounded, deterministic marker set.
     customer_addresses = customer_addresses_query.all()
 
     for addr in customer_addresses:
@@ -604,6 +657,13 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
             addr.subscriber_id,
             inactive_connectivity,
         )
+        region = customer_regions.resolve_region(
+            configured_regions,
+            latitude=float(addr.latitude),
+            longitude=float(addr.longitude),
+            pop_site_id=pop_site_by_subscriber.get(addr.subscriber_id),
+            nas_device_ids=nas_ids_by_subscriber.get(addr.subscriber_id, frozenset()),
+        )
         features.append(
             NetworkMapFeature(
                 geometry=_point(addr.longitude, addr.latitude),
@@ -615,6 +675,8 @@ def build_network_map_projection(*, db: Session) -> NetworkMapProjection:
                     city=addr.city or "",
                     subscriber_id=addr.subscriber_id,
                     customer_status=addr.customer_status,
+                    customer_region_name=region.name if region else None,
+                    customer_region_color=region.color if region else None,
                     customer_route_kind=(
                         NetworkMapCustomerRouteKind.business
                         if is_business

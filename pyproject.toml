@@ -1,12 +1,12 @@
 [project]
 name = "dotmac_sm"
-version = "9.16.1"
+version = "9.18.3"
 description = "Subscriber management API and web UI"
 authors = [{name = "DotMac", email = "engineering@dotmac.local"}]
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "fastapi==0.111.0",
-    "uvicorn[standard]==0.30.1",
+    "uvicorn[standard]==0.37.0",
     "sqlalchemy==2.0.31",
     "psycopg[binary]==3.1.19",
     "alembic==1.13.2",
@@ -29,7 +29,7 @@ dependencies = [
     "cryptography==42.0.8",
     "paramiko==3.4.1",
     "ncclient==0.6.15",
-    "routeros-api==0.17.0",
+    "routeros-api==0.21.0",
     "pyrad==2.4",
     "geoalchemy2==0.14.7",
     "shapely==2.0.4",

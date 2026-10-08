@@ -15,6 +15,60 @@
     </div>
     {% endif %}
 
+    <section class="rounded-xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-800 dark:bg-violet-950/30">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Map asset proposals</h2>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Pending changes submitted from Network Map V2. Approval updates the canonical asset; rejection records the decision without changing it.</p>
+            </div>
+            <a href="/admin/network/map-v2" class="rounded-md border border-violet-300 px-3 py-2 text-xs font-semibold text-violet-800 hover:bg-white dark:border-violet-700 dark:text-violet-200 dark:hover:bg-slate-800">Open Network Map V2</a>
+        </div>
+        {% if not can_review_map_assets %}
+        <p class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">You can view these proposals, but your account does not have <code>network:fiber:review</code>. Ask an administrator to grant this permission to an independent reviewer.</p>
+        {% endif %}
+        <div id="map-proposal-feedback" class="mt-3 hidden rounded-lg p-3 text-sm" role="status" aria-live="polite"></div>
+        <div class="mt-3 space-y-3">
+            {% for proposal in map_asset_proposals %}
+            <article class="rounded-lg border border-violet-200 bg-white p-3 dark:border-violet-800 dark:bg-slate-900" data-map-proposal-id="{{ proposal.id }}" data-proposal-sha256="{{ proposal.proposal_sha256 }}">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">{{ proposal.operation|replace('_', ' ')|title }} {{ proposal.asset_type|replace('_', ' ')|title }}{% if proposal.after.name %}: {{ proposal.after.name }}{% endif %}</h3>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Submitted by {{ proposal.requested_by_actor_label }} · {{ proposal.created_at|app_datetime('%Y-%m-%d %H:%M', '-') }}</p>
+                    </div>
+                    <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Pending</span>
+                </div>
+                <p class="mt-2 text-sm text-slate-700 dark:text-slate-200">{{ proposal.request_reason }}</p>
+                <div class="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+                    <div class="rounded bg-slate-50 p-2 dark:bg-slate-800"><strong>Before:</strong>
+                        {% if proposal.before %}{{ proposal.before.name or '—' }} · {{ proposal.before.latitude }}, {{ proposal.before.longitude }}{% else %}New asset{% endif %}
+                    </div>
+                    <div class="rounded bg-slate-50 p-2 dark:bg-slate-800"><strong>Proposed:</strong>
+                        {{ proposal.after.name or '—' }} · {{ proposal.after.latitude }}, {{ proposal.after.longitude }}
+                    </div>
+                </div>
+                {% if proposal.can_review %}
+                <div class="mt-3">
+                    <label class="block text-xs font-medium text-slate-700 dark:text-slate-200">Review comments (required, at least 3 characters)
+                        <textarea data-review-notes rows="2" minlength="3" maxlength="1000" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 text-sm dark:border-slate-600 dark:bg-slate-800"></textarea>
+                    </label>
+                    <div class="mt-2 flex gap-2">
+                        <button type="button" data-map-review-action="approve" class="rounded bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700">Approve and apply</button>
+                        <button type="button" data-map-review-action="reject" class="rounded bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700">Reject</button>
+                    </div>
+                </div>
+                {% elif proposal.is_current_actor_proposer %}
+                <p class="mt-3 text-xs text-amber-700 dark:text-amber-300">You submitted this proposal. Another user with <code>network:fiber:review</code> must review it.</p>
+                {% endif %}
+            </article>
+            {% else %}
+            <p class="rounded-lg border border-dashed border-violet-300 bg-white/70 p-4 text-sm text-slate-600 dark:border-violet-700 dark:bg-slate-900/50 dark:text-slate-300">No pending Map V2 proposals.</p>
+            {% endfor %}
+        </div>
+        {% if map_asset_proposals_truncated %}
+        <p class="mt-3 text-xs text-amber-800 dark:text-amber-200">Showing the latest 200 of {{ map_asset_proposals_total }} pending proposals. Use Network Map V2 to view proposal history.</p>
+        {% endif %}
+    </section>
+
     <form method="post" action="/admin/network/fiber-change-requests/bulk-approve" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         {% include "components/forms/csrf_input.html" %}
         <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
@@ -89,6 +143,46 @@
 
 <script>
     (function() {
+        const feedback = document.getElementById('map-proposal-feedback');
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        document.querySelectorAll('[data-map-review-action]').forEach((button) => {
+            button.addEventListener('click', async () => {
+                const card = button.closest('[data-map-proposal-id]');
+                const notes = card.querySelector('[data-review-notes]').value.trim();
+                const action = button.dataset.mapReviewAction;
+                if (notes.length < 3) {
+                    feedback.textContent = 'Review comments must contain at least three characters.';
+                    feedback.className = 'mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-200';
+                    feedback.classList.remove('hidden');
+                    return;
+                }
+                const actionLabel = action === 'approve' ? 'apply this change to the canonical network asset' : 'reject this proposal';
+                if (!window.confirm(`Are you sure you want to ${actionLabel}?`)) return;
+                button.disabled = true;
+                feedback.textContent = 'Saving review decision…';
+                feedback.className = 'mt-3 rounded-lg border border-violet-200 bg-white p-3 text-sm text-slate-700 dark:border-violet-800 dark:bg-slate-900 dark:text-slate-200';
+                feedback.classList.remove('hidden');
+                try {
+                    const response = await fetch(`/admin/network/map-v2/proposals/${encodeURIComponent(card.dataset.mapProposalId)}/${action}`, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                        body: JSON.stringify({
+                            expected_proposal_sha256: card.dataset.proposalSha256,
+                            review_notes: notes,
+                            idempotency_key: crypto.randomUUID()
+                        })
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.message || 'The review decision was refused.');
+                    window.location.reload();
+                } catch (error) {
+                    feedback.textContent = error.message || 'The review decision failed.';
+                    feedback.className = 'mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-200';
+                    button.disabled = false;
+                }
+            });
+        });
         const selectAll = document.getElementById('select-all');
         if (!selectAll) return;
         selectAll.addEventListener('change', () => {

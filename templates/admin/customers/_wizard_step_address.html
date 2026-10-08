@@ -60,6 +60,17 @@
                 </select>
             </div>
         </div>
+
+        <div class="max-w-md">
+            <label for="connection_type" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 block">Connection Type</label>
+            <select id="connection_type" x-model="connectionType"
+                    class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                <option value="">Not specified</option>
+                <option value="wireless">Wireless</option>
+                <option value="wired">Wired</option>
+            </select>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional radio or fibre/cable classification for regional reporting.</p>
+        </div>
     </div>
 
     <div class="mt-6 rounded-xl bg-slate-100 dark:bg-slate-900/50 p-6 text-center border-2 border-dashed border-slate-300 dark:border-slate-700"

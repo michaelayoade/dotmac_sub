@@ -20,6 +20,17 @@ the same pull request. `scripts/architecture/workflow_guidance_gate.py` is run
 by the required **Workflow Guidance Gate** CI job and fails a PR that changes
 `app/web/admin` without changing the guidance registry.
 
+## Churn analysis
+
+Use `/admin/reports/churn` to review subscriber churn within a defined calendar
+window. Start with Last 1 month or Last 3 months, or choose Custom range and
+provide both dates. Event type narrows the report to cancellations,
+suspensions, or both. The KPI totals, monthly trend, recent-event list, reasons,
+and CSV export all use the selected scope; do not compare an exported cohort
+with an unfiltered page. Historical rows without trusted lifecycle evidence are
+shown through the compatibility fallback and should be backfilled before being
+treated as a complete historical event record.
+
 ## Automation Center authoring
 
 Use `/admin/automation` as the starting point. Choose the mechanism before

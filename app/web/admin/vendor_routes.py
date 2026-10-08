@@ -83,10 +83,17 @@ def _redirect(project_id: str, message: str) -> RedirectResponse:
     )
 
 
-def _authoring_redirect(message: str) -> RedirectResponse:
-    return RedirectResponse(
-        f"/admin/vendors/routes/new?message={message}", status_code=303
+def _authoring_redirect(
+    message: str,
+    *,
+    return_to: str,
+) -> RedirectResponse:
+    destination = (
+        "/admin/network/fiber-map/new"
+        if return_to == "fiber_map"
+        else "/admin/vendors/routes/new"
     )
+    return RedirectResponse(f"{destination}?message={message}", status_code=303)
 
 
 def _optional_scope(
@@ -163,8 +170,12 @@ def create_standalone_admin_suggested_route(
 ):
     """Submit an admin route proposal without requiring project context."""
 
-    _create_admin_route_request(request, parse_form_data_sync(request), db)
-    return _authoring_redirect("Suggested route submitted for review")
+    form = parse_form_data_sync(request)
+    _create_admin_route_request(request, form, db)
+    return _authoring_redirect(
+        "Suggested route submitted for review",
+        return_to=str(form.get("return_to") or ""),
+    )
 
 
 @router.post(
@@ -271,8 +282,12 @@ def create_standalone_admin_asset_proposal(
 ):
     """Submit an admin asset proposal without requiring project context."""
 
-    _create_admin_asset_proposal(request, parse_form_data_sync(request), db)
-    return _authoring_redirect("Asset proposal submitted for review")
+    form = parse_form_data_sync(request)
+    _create_admin_asset_proposal(request, form, db)
+    return _authoring_redirect(
+        "Asset proposal submitted for review",
+        return_to=str(form.get("return_to") or ""),
+    )
 
 
 @router.post(

@@ -580,10 +580,9 @@ def _send_automation_notification(
     """Queue an email or staff in-app notification from a typed rule step."""
 
     from app.models.notification import NotificationChannel
-    from app.services.staff_notifications import (
-        queue_staff_notification,
-        queue_staff_push,
-    )
+    from app.schemas.notification import NotificationCreate
+    from app.services.notification import Notifications
+    from app.services.staff_notifications import queue_staff_push
 
     values = {item.key: item.value for item in command.inputs}
     channel = str(values.get("channel") or "").strip().casefold()
@@ -637,17 +636,19 @@ def _send_automation_notification(
     if body_format == "html":
         metadata["body_html"] = body
         metadata["body_text"] = body
-    notification = queue_staff_notification(
+    notification = Notifications.create_internal_notification(
         db,
-        channel=NotificationChannel.email,
-        recipient=recipient,
-        subject=subject,
-        body=body,
-        event_type="automation.rule.notification",
-        category="automation",
-        audience_type=command.target.entity_type,
-        audience_id=command.target.entity_id,
-        metadata=metadata,
+        NotificationCreate(
+            channel=NotificationChannel.email,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            event_type="automation.rule.notification",
+            category="automation",
+            audience_type=command.target.entity_type,
+            audience_id=command.target.entity_id,
+            metadata_=metadata,
+        ),
     )
     if notification is None:
         raise AutomationActionExecutorError(

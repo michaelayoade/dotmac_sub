@@ -37,6 +37,7 @@ from app.web.admin.catalog_settings import router as catalog_settings_router
 from app.web.admin.configuration import router as configuration_router
 from app.web.admin.crm_referrals import router as crm_referrals_router
 from app.web.admin.custom_fields import router as custom_fields_router
+from app.web.admin.customer_regions import router as customer_regions_router
 from app.web.admin.customer_retention import router as customer_retention_router
 from app.web.admin.customers import contacts_router
 from app.web.admin.customers import router as customers_router
@@ -203,6 +204,7 @@ router.include_router(dashboard_router)
 router.include_router(automation_center_router)
 router.include_router(custom_fields_router)
 router.include_router(customer_retention_router)
+router.include_router(customer_regions_router)
 router.include_router(help_center_router)
 router.include_router(meta_connection_router)
 router.include_router(surveys_router)

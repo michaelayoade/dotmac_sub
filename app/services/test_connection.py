@@ -58,7 +58,7 @@ TEST_CONNECTION_FORM = register(
         consequences=(
             FormConsequence(
                 key="access",
-                label="Full subscription access for the selected duration.",
+                label="Full subscription access for the configured system duration.",
             ),
             FormConsequence(
                 key="expiry",
@@ -178,7 +178,6 @@ def access_for_subscription(
 class TestConnectionPreviewQuery:
     subscriber_id: UUID
     subscription_id: UUID
-    duration_hours: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,9 +209,7 @@ def preview_test_connection(
             "subscription_not_found", "Subscription does not belong to this customer."
         )
     config = configuration(db)
-    hours = (
-        config.default_hours if query.duration_hours is None else query.duration_hours
-    )
+    hours = config.default_hours
     if not 1 <= hours <= config.maximum_hours:
         raise _error(
             "invalid_duration",
@@ -312,7 +309,6 @@ class ActivateTestConnectionCommand:
     subscriber_id: UUID
     subscription_id: UUID
     actor_id: UUID
-    duration_hours: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,22 +339,16 @@ def _outcome(
 def _validate_network_identity(db: Session, subscription: Subscription) -> None:
     from app.services.credential_crypto import decrypt_credential
     from app.services.external_radius_targets import active_external_radius_targets
+    from app.services.radius_access_state import (
+        TERMINATED_STATUSES,
+        UNPROVISIONED_STATUSES,
+    )
 
     login = str(subscription.login or "").strip()
     if not login:
         raise _error(
             "network_not_ready",
             "This service needs a provisioned RADIUS login before connectivity testing.",
-        )
-    siblings = db.scalars(
-        select(Subscription.id).where(
-            Subscription.login == login, Subscription.id != subscription.id
-        )
-    ).all()
-    if siblings:
-        raise _error(
-            "ambiguous_login",
-            "This login is shared by multiple subscriptions. Separate the service credentials before testing.",
         )
     credential = db.scalar(
         select(AccessCredential).where(
@@ -375,6 +365,19 @@ def _validate_network_identity(db: Session, subscription: Subscription) -> None:
             "network_not_ready",
             "This service has no usable, uniquely owned network credential.",
         )
+    if credential.subscription_id is None:
+        siblings = db.scalars(
+            select(Subscription.id).where(
+                Subscription.login == login,
+                Subscription.id != subscription.id,
+                ~Subscription.status.in_(TERMINATED_STATUSES | UNPROVISIONED_STATUSES),
+            )
+        ).all()
+        if siblings:
+            raise _error(
+                "ambiguous_login",
+                "This login is shared by multiple live subscriptions. Select the subscription with its own network credential before testing.",
+            )
     try:
         password = decrypt_credential(credential.secret_hash)
     except Exception as exc:
@@ -503,7 +506,6 @@ def activate_test_connection(
             if (
                 previous.subscription_id != command.subscription_id
                 or previous.actor_id != command.actor_id
-                or previous.duration_seconds != command.duration_hours * 3600
             ):
                 raise _error(
                     "idempotency_conflict",
@@ -525,7 +527,8 @@ def activate_test_connection(
                 "deadline_not_verified",
                 "Network test-expiry enforcement must be verified in RADIUS settings before activation.",
             )
-        if not 1 <= command.duration_hours <= config.maximum_hours:
+        duration_hours = config.default_hours
+        if not 1 <= duration_hours <= config.maximum_hours:
             raise _error(
                 "invalid_duration",
                 f"Choose a duration between 1 and {config.maximum_hours} hours.",
@@ -581,8 +584,8 @@ def activate_test_connection(
             actor_label=actor_label,
             command_id=command.context.command_id,
             activated_at=now,
-            expires_at=now + timedelta(hours=command.duration_hours),
-            duration_seconds=command.duration_hours * 3600,
+            expires_at=now + timedelta(hours=duration_hours),
+            duration_seconds=duration_hours * 3600,
             delivery_state="pending",
         )
         db.add(grant)

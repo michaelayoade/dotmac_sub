@@ -20,6 +20,11 @@ from app.models.billing import (
 )
 from app.models.catalog import BillingMode, Subscription
 from app.services.common import round_money, to_decimal
+from app.services.prepaid_service_coverage import (
+    PrepaidPauseCompensationBlocker,
+    PrepaidPauseCompensationCoverageQuery,
+    resolve_prepaid_pause_compensation_coverage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,56 +39,6 @@ class GrantPauseCompensationEntitlementCommand:
     pause_effective_at: datetime
     starts_at: datetime
     ends_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class PreviewPauseCompensationEntitlementQuery:
-    subscription_id: UUID
-    account_id: UUID
-    pause_effective_at: datetime
-    captured_billing_anchor: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class PreviewPauseCompensationEntitlementOutcome:
-    eligible: bool
-    blocking_reasons: tuple[str, ...]
-
-
-def preview_pause_compensation_entitlement(
-    db: Session,
-    query: PreviewPauseCompensationEntitlementQuery,
-) -> PreviewPauseCompensationEntitlementOutcome:
-    """Validate prepaid coverage needed for an exact pause compensation grant."""
-
-    entitlements = tuple(
-        db.scalars(
-            select(ServiceEntitlement).where(
-                ServiceEntitlement.subscription_id == query.subscription_id,
-                ServiceEntitlement.account_id == query.account_id,
-                ServiceEntitlement.status == ServiceEntitlementStatus.active,
-            )
-        ).all()
-    )
-    effective_at = _ensure_utc(query.pause_effective_at)
-    anchor = _ensure_utc(query.captured_billing_anchor)
-    covering = tuple(
-        item
-        for item in entitlements
-        if _ensure_utc(item.starts_at) <= effective_at < _ensure_utc(item.ends_at)
-    )
-    blocking: list[str] = []
-    if len(covering) != 1:
-        blocking.append("prepaid_pause_coverage_ambiguous")
-    if (
-        not entitlements
-        or max(_ensure_utc(item.ends_at) for item in entitlements) != anchor
-    ):
-        blocking.append("prepaid_pause_anchor_mismatch")
-    return PreviewPauseCompensationEntitlementOutcome(
-        eligible=not blocking,
-        blocking_reasons=tuple(blocking),
-    )
 
 
 def grant_pause_compensation_entitlement(
@@ -138,33 +93,25 @@ def grant_pause_compensation_entitlement(
             "Pause compensation requires the matching prepaid subscription"
         )
 
-    active_entitlements = tuple(
-        db.scalars(
-            select(ServiceEntitlement)
-            .where(
-                ServiceEntitlement.subscription_id == command.subscription_id,
-                ServiceEntitlement.account_id == command.account_id,
-                ServiceEntitlement.status == ServiceEntitlementStatus.active,
-            )
-            .with_for_update()
-        ).all()
+    coverage = resolve_prepaid_pause_compensation_coverage(
+        db,
+        PrepaidPauseCompensationCoverageQuery(
+            subscription_id=command.subscription_id,
+            account_id=command.account_id,
+            pause_effective_at=command.pause_effective_at,
+            captured_billing_anchor=command.starts_at,
+        ),
     )
-    covering = tuple(
-        entitlement
-        for entitlement in active_entitlements
-        if _ensure_utc(entitlement.starts_at)
-        <= _ensure_utc(command.pause_effective_at)
-        < _ensure_utc(entitlement.ends_at)
-    )
-    if len(covering) != 1:
+    if PrepaidPauseCompensationBlocker.coverage_ambiguous in coverage.blockers:
         raise ValueError(
-            "Prepaid pause compensation requires exactly one entitlement at pause time"
+            "Prepaid pause compensation requires continuous authoritative coverage"
         )
-    latest_end = max(_ensure_utc(item.ends_at) for item in active_entitlements)
-    if latest_end != _ensure_utc(command.starts_at):
+    if PrepaidPauseCompensationBlocker.anchor_mismatch in coverage.blockers:
         raise ValueError(
-            "Prepaid entitlement evidence does not match the captured billing anchor"
+            "Prepaid coverage evidence does not match the captured billing anchor"
         )
+    if not coverage.eligible or coverage.currency is None:
+        raise ValueError("Prepaid pause compensation coverage requires review")
 
     entitlement = ServiceEntitlement(
         account_id=command.account_id,
@@ -173,11 +120,12 @@ def grant_pause_compensation_entitlement(
         starts_at=command.starts_at,
         ends_at=command.ends_at,
         amount_funded=0,
-        currency=covering[0].currency,
+        currency=coverage.currency,
         status=ServiceEntitlementStatus.active,
         metadata_={
             "source": "subscription_pause_compensation",
             "pause_episode_id": str(command.pause_episode_id),
+            "coverage_fingerprint": coverage.fingerprint,
         },
     )
     db.add(entitlement)

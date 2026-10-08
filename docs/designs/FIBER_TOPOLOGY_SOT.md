@@ -77,6 +77,23 @@ Coordinates and spatial projections remain owned by `gis.spatial_sync`. Fiber
 topology owns what an asset is and how it connects; GIS owns where its approved
 spatial projection is stored.
 
+## Admin fiber-map asset movement
+
+Dragging an FDH cabinet or splice-closure marker on `/admin/network/fiber-map`
+submits a typed `move` proposal to `network.map_asset_change_governance`.
+The coordinator records the before/after snapshot and delegates an approved
+movement to `network.fiber_asset_changes`. The map keeps rendering the approved
+coordinates until review is complete; a submitted proposal is not a saved
+canonical move. The legacy `/fiber-map/update-position` direct-write endpoint
+returns `410 Gone`. FDH edit forms may update descriptive fields, but coordinate
+changes use the same reviewed movement flow. Invalid or incomplete coordinate
+pairs are returned as form validation errors before a write is attempted.
+
+The map is an adapter: it does not commit asset coordinates, rewrite route
+geometry, or infer connectivity from the proposed point. Movement proposals
+that require topology review remain blocked by the canonical owner until a
+separate route-impact contract exists.
+
 The admin Assign Subscriber modal resolves subscription choices only from the
 exact selected Subscriber identifier. It displays all of that Subscriber's
 subscriptions with an explicit Active or Inactive/current-status indicator;
@@ -216,6 +233,12 @@ Operational cable integrity is a hard cutover invariant, not a map warning:
 - Construction is root-first and retirement is leaf-first. Activating or
   retiring a segment cannot orphan another active segment, splitter branch,
   ONT, or customer-bearing path.
+
+The admin as-built activation picker reads active termination-point choices
+through `network.fiber_topology.termination_point_options`, a typed read-only
+query. The adapter formats those owner-produced identities for the form; the
+separate activation owner revalidates both exact endpoints and the entire
+component before changing the projected segment.
 
 Migration `361_fiber_plant_operational_integrity` now enforces the active-row
 shape at the database boundary and fails its preflight rather than silently

@@ -42,6 +42,7 @@ from app.models.network import (
     DeviceStatus as CPEDeviceStatus,
 )
 from app.models.network_monitoring import NetworkDevice, PopSite
+from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
@@ -54,7 +55,7 @@ from app.schemas.infrastructure import (
     InfrastructureSearch,
     InfrastructureType,
 )
-from app.services import infrastructure_catalogue
+from app.services import customer_regions, infrastructure_catalogue
 from app.services import support as support_service
 from app.services.billing_profile import effective_billing_mode_clause
 from app.services.customer_account_visibility import splynx_deleted_import_clause
@@ -112,6 +113,7 @@ CUSTOMER_LIST_DEFINITION = ListDefinition(
             "infrastructure_type", "Infrastructure type", filterable=True
         ),
         ListFieldDefinition("infrastructure_id", "Infrastructure", filterable=True),
+        ListFieldDefinition("region_id", "Region", filterable=True),
         ListFieldDefinition("created_at", "Created", sortable=True),
     ),
     default_sort="created_at",
@@ -130,6 +132,7 @@ _LEGACY_CUSTOMER_TABLE_PARAMS = frozenset(
         "pop_site_id",
         "infrastructure_type",
         "infrastructure_id",
+        "region_id",
         "q",
         "search",
         "sort_by",
@@ -456,6 +459,7 @@ def build_customer_list_query(
     pop_site_id: str | None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    region_id: str | None = None,
     billing_mode: str | None = None,
     sort_by: CustomerListSort = "created_at",
     sort_dir: SortDirection = "desc",
@@ -511,6 +515,7 @@ def build_customer_list_query(
                 else None
             ),
             "infrastructure_id": normalized_infrastructure_id,
+            "region_id": _uuid_filter(region_id, "region_id"),
         },
         sort_by=sort_by,
         sort_dir=sort_dir,
@@ -582,6 +587,7 @@ def build_customer_list_query_from_legacy_params(
             request_params.get("infrastructure_type") or ""
         ).strip(),
         infrastructure_id=str(request_params.get("infrastructure_id") or "").strip(),
+        region_id=str(request_params.get("region_id") or "").strip(),
         sort_by=sort_by,
         sort_dir=cast(SortDirection, raw_sort_dir),
         page=(offset // limit) + 1,
@@ -873,6 +879,7 @@ def _apply_customer_filters(
     pop_site_id: str | None,
     infrastructure_type: str | None,
     infrastructure_id: str | None,
+    region_id: str | None,
 ):
     normalized_customer_type = _normalize_customer_type(customer_type)
     status_filter = _status_filter_clause(status)
@@ -1042,6 +1049,9 @@ def _apply_customer_filters(
             ),
             Subscriber.subscriptions.any(_active_subscription_clause()),
         )
+    region_clause = customer_regions.customer_region_filter_clause(region_id)
+    if region_clause is not None:
+        query = query.filter(region_clause)
     return query
 
 
@@ -1056,6 +1066,7 @@ def customer_scope_query(
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
     billing_mode: str | None = None,
+    region_id: str | None = None,
     include_related: bool = True,
 ):
     query = db.query(Subscriber)
@@ -1072,6 +1083,7 @@ def customer_scope_query(
                 OntAssignment.ont_unit
             ),
             selectinload(Subscriber.channels),
+            selectinload(Subscriber.addresses),
         )
     query = query.filter(_customer_user_clause()).filter(
         not_(splynx_deleted_import_clause())
@@ -1086,6 +1098,7 @@ def customer_scope_query(
         pop_site_id=pop_site_id,
         infrastructure_type=infrastructure_type,
         infrastructure_id=infrastructure_id,
+        region_id=region_id,
     )
 
 
@@ -1108,6 +1121,7 @@ def build_customer_list_page(
     pop_site_id = list_query.filter_value("pop_site_id")
     infrastructure_type = list_query.filter_value("infrastructure_type")
     infrastructure_id = list_query.filter_value("infrastructure_id")
+    region_id = list_query.filter_value("region_id")
     query = customer_scope_query(
         db,
         search=search,
@@ -1118,6 +1132,7 @@ def build_customer_list_page(
         pop_site_id=pop_site_id,
         infrastructure_type=infrastructure_type,
         infrastructure_id=infrastructure_id,
+        region_id=region_id,
         include_related=include_related,
     )
     total = (
@@ -1131,6 +1146,7 @@ def build_customer_list_page(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             include_related=False,
         )
         .order_by(None)
@@ -1161,6 +1177,7 @@ def list_customers_for_scope(
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
     billing_mode: str | None = None,
+    region_id: str | None = None,
 ) -> list[Subscriber]:
     return (
         customer_scope_query(
@@ -1173,6 +1190,7 @@ def list_customers_for_scope(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             include_related=True,
         )
         .order_by(Subscriber.created_at.desc())
@@ -1193,6 +1211,7 @@ def build_customer_export_query(
     sort_by: CustomerListSort,
     sort_dir: SortDirection,
     billing_mode: str | None = None,
+    region_id: str | None = None,
 ) -> CustomerExportQuery:
     """Normalize the export request onto the canonical customer-list scope."""
 
@@ -1206,6 +1225,7 @@ def build_customer_export_query(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             sort_by=sort_by,
             sort_dir=sort_dir,
             page=1,
@@ -1464,6 +1484,7 @@ def build_customer_csv_export(
         pop_site_id=list_query.filter_value("pop_site_id"),
         infrastructure_type=list_query.filter_value("infrastructure_type"),
         infrastructure_id=list_query.filter_value("infrastructure_id"),
+        region_id=list_query.filter_value("region_id"),
         include_related=True,
     )
     if export_query.targets is None:
@@ -1534,6 +1555,7 @@ def active_customer_filter_count(
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
     billing_mode: str | None = None,
+    region_id: str | None = None,
 ) -> int:
     return sum(
         1
@@ -1545,6 +1567,7 @@ def active_customer_filter_count(
             nas_id,
             pop_site_id,
             infrastructure_type and infrastructure_id,
+            region_id,
         )
         if str(value or "").strip()
     )
@@ -1572,6 +1595,7 @@ def build_customers_index_context(
     pop_site_id = list_query.filter_value("pop_site_id")
     infrastructure_type = list_query.filter_value("infrastructure_type")
     infrastructure_id = list_query.filter_value("infrastructure_id")
+    region_id = list_query.filter_value("region_id")
     people = page.query.all()
     chargeability_by_account = resolve_customer_chargeability(
         db,
@@ -1603,6 +1627,62 @@ def build_customers_index_context(
         infrastructure_type=infrastructure_type,
         infrastructure_id=infrastructure_id,
     )
+    region_options = customer_regions.region_options(db)
+    region_by_id = {str(option.id): option for option in region_options}
+    live_nas_by_subscriber: dict[UUID, set[UUID]] = {}
+    if people:
+        for subscriber_id, nas_device_id in (
+            db.query(
+                RadiusActiveSession.subscriber_id,
+                RadiusActiveSession.nas_device_id,
+            )
+            .filter(
+                RadiusActiveSession.subscriber_id.in_([person.id for person in people]),
+                RadiusActiveSession.nas_device_id.isnot(None),
+            )
+            .all()
+        ):
+            if subscriber_id is not None and nas_device_id is not None:
+                live_nas_by_subscriber.setdefault(subscriber_id, set()).add(
+                    nas_device_id
+                )
+    region_assignments = customer_regions.assign_regions(
+        db,
+        (
+            customer_regions.RegionCustomerContext(
+                subscriber_id=person.id,
+                latitude=(
+                    primary_address.latitude
+                    if (
+                        primary_address := customer_regions.primary_geocoded_address(
+                            person.addresses
+                        )
+                    )
+                    else None
+                ),
+                longitude=primary_address.longitude if primary_address else None,
+                pop_site_id=person.pop_site_id,
+                nas_device_ids=frozenset(
+                    subscription.provisioning_nas_device_id
+                    for subscription in person.subscriptions
+                    if subscription.provisioning_nas_device_id is not None
+                )
+                | frozenset(live_nas_by_subscriber.get(person.id, set())),
+            )
+            for person in people
+        ),
+    )
+    for customer in customers:
+        assignment = region_assignments.get(UUID(customer["id"]))
+        customer["region"] = (
+            {
+                "id": str(assignment.id),
+                "name": assignment.name,
+                "color": assignment.color,
+            }
+            if assignment is not None
+            else None
+        )
 
     return {
         "customers": customers,
@@ -1628,6 +1708,36 @@ def build_customers_index_context(
         "pop_site_id": pop_site_id or "",
         "infrastructure_type": infrastructure_type or "",
         "infrastructure_id": infrastructure_id or "",
+        "region_id": region_id or "",
+        "region_options": [
+            {"value": str(option.id), "label": option.name, "color": option.color}
+            for option in region_options
+        ]
+        + [
+            {
+                "value": customer_regions.UNASSIGNED_REGION_FILTER,
+                "label": "Unassigned",
+                "color": "#94a3b8",
+            }
+        ],
+        "selected_region": (
+            {
+                "id": str(selected_region.id),
+                "label": selected_region.name,
+                "color": selected_region.color,
+            }
+            if (selected_region := region_by_id.get(str(region_id))) is not None
+            else (
+                {
+                    "id": customer_regions.UNASSIGNED_REGION_FILTER,
+                    "label": "Unassigned",
+                    "color": "#94a3b8",
+                }
+                if str(region_id or "").strip().lower()
+                == customer_regions.UNASSIGNED_REGION_FILTER
+                else None
+            )
+        ),
         "selected_infrastructure": (
             {
                 "id": str(selected_infrastructure.id),
@@ -1646,5 +1756,6 @@ def build_customers_index_context(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
         ),
     }

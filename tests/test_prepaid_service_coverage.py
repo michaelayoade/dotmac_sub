@@ -20,6 +20,8 @@ from app.models.service_extension import (
 from app.services.prepaid_service_coverage import (
     PrepaidCoverageSource,
     PrepaidCoverageStatus,
+    PrepaidPauseCompensationCoverageQuery,
+    resolve_prepaid_pause_compensation_coverage,
     resolve_prepaid_service_coverage,
 )
 
@@ -114,3 +116,65 @@ def test_applied_extension_covers_only_its_exact_granted_interval(
     assert current.evidence is not None
     assert current.evidence.source == PrepaidCoverageSource.service_extension_grant
     assert after_grant.status == PrepaidCoverageStatus.uncovered_due
+
+
+def test_pause_compensation_accepts_entitlement_plus_applied_extension_union(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    entitlement_end = NOW - timedelta(days=3)
+    captured_anchor = NOW + timedelta(days=6)
+    subscription.next_billing_at = captured_anchor
+    entitlement = ServiceEntitlement(
+        account_id=subscriber_account.id,
+        subscription_id=subscription.id,
+        status=ServiceEntitlementStatus.active,
+        starts_at=entitlement_end - timedelta(days=30),
+        ends_at=entitlement_end,
+        amount_funded=Decimal("18812.50"),
+        currency="NGN",
+    )
+    extension = ServiceExtension(
+        reason="reviewed cabinet outage compensation",
+        window_start=NOW - timedelta(days=20),
+        window_end=NOW - timedelta(days=9),
+        days=9,
+        scope_type=ServiceExtensionScope.subscribers,
+        scope_subscriber_ids=[str(subscriber_account.id)],
+        status=ServiceExtensionStatus.applied,
+        applied_at=NOW - timedelta(days=8),
+    )
+    db_session.add_all((entitlement, extension))
+    db_session.flush()
+    entry = ServiceExtensionEntry(
+        extension_id=extension.id,
+        subscription_id=subscription.id,
+        subscriber_id=subscriber_account.id,
+        previous_next_billing_at=entitlement_end,
+        grant_starts_at=entitlement_end,
+        grant_ends_at=captured_anchor,
+        anchor_basis=ServiceExtensionAnchorBasis.existing_billing_anchor,
+        new_next_billing_at=captured_anchor,
+    )
+    db_session.add(entry)
+    db_session.commit()
+
+    decision = resolve_prepaid_pause_compensation_coverage(
+        db_session,
+        PrepaidPauseCompensationCoverageQuery(
+            subscription_id=subscription.id,
+            account_id=subscriber_account.id,
+            pause_effective_at=NOW,
+            captured_billing_anchor=captured_anchor,
+        ),
+    )
+
+    assert decision.eligible
+    assert decision.blockers == ()
+    assert decision.coverage_end == captured_anchor
+    assert decision.currency == "NGN"
+    assert {item.source for item in decision.evidence} == {
+        PrepaidCoverageSource.funded_entitlement,
+        PrepaidCoverageSource.service_extension_grant,
+    }
+    assert len(decision.fingerprint) == 64

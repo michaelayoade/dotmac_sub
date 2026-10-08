@@ -5,6 +5,7 @@ the AI gateway the way test_ai_engine does.
 """
 
 from datetime import UTC, datetime
+from html import unescape
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -97,6 +98,13 @@ def test_ncc_explicit_window_uses_lagos_reporting_days():
     assert end == datetime(2026, 9, 6, 22, 59, 59, 999999, tzinfo=UTC)
 
 
+def test_ncc_explicit_window_accepts_common_operator_date_formats():
+    start, end = reports_web._ncc_complaints_window("31-08-2026", "06/09/2026")
+
+    assert start == datetime(2026, 8, 30, 23, 0, tzinfo=UTC)
+    assert end == datetime(2026, 9, 6, 22, 59, 59, 999999, tzinfo=UTC)
+
+
 def test_ncc_complaints_page_renders_twenty_rows_and_pagination(
     db_session, monkeypatch
 ):
@@ -128,6 +136,59 @@ def test_ncc_complaints_page_renders_twenty_rows_and_pagination(
     assert "Rendered complaint 20" not in body
     assert "Showing 1 to 20 of 21 complaints" in body
     assert "Page 2" in body
+
+
+def test_ncc_complaints_page_tolerates_stale_per_page_values(db_session, monkeypatch):
+    _stub_admin(monkeypatch)
+    monkeypatch.setattr(reports_web, "can", lambda request, permission: False)
+    for index in range(21):
+        db_session.add(
+            Ticket(
+                title=f"Stale page size complaint {index:02d}",
+                status="open",
+                priority="normal",
+                created_at=datetime(2026, 8, 1, 9, index, tzinfo=UTC),
+            )
+        )
+    db_session.commit()
+
+    response = reports_web.reports_ncc_complaints(
+        _request(),
+        date_from="2026-08-01",
+        date_to="2026-08-31",
+        page=1,
+        per_page=25,
+        db=db_session,
+    )
+    body = response.body.decode()
+
+    assert "Stale page size complaint 00" in body
+    assert "Stale page size complaint 19" in body
+    assert "Stale page size complaint 20" not in body
+    assert "Showing 1 to 20 of 21 complaints" in body
+
+
+def test_ncc_complaints_page_canonicalises_date_filter_values(db_session, monkeypatch):
+    _stub_admin(monkeypatch)
+    request = _request()
+    request.state.auth = {"permission_keys": {"reports:ncc:export"}}
+
+    response = reports_web.reports_ncc_complaints(
+        request,
+        date_from="01/08/2026",
+        date_to="31-08-2026",
+        page=1,
+        per_page=20,
+        db=db_session,
+    )
+    body = unescape(response.body.decode())
+
+    assert 'name="date_from" value="2026-08-01"' in body
+    assert 'name="date_to" value="2026-08-31"' in body
+    assert "export?date_from=2026-08-01" in body
+    assert "date_to=2026-08-31" in body
+    assert "01/08/2026" not in body
+    assert "31-08-2026" not in body
 
 
 def test_ncc_regulatory_pack_json_has_all_three_returns(db_session):
