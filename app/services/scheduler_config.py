@@ -1080,6 +1080,13 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=vacation_hold_resume_interval,
         )
+        _sync_scheduled_task(
+            session,
+            name="customer_bulk_message_outbox",
+            task_name="app.tasks.notifications.dispatch_customer_bulk_messages",
+            enabled=True,
+            interval_seconds=60,
+        )
         notification_queue_interval_seconds = resolve_integer(
             session, SettingDomain.notification, "notification_queue_interval_seconds"
         )

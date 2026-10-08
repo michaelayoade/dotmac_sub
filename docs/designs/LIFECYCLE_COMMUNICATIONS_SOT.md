@@ -105,3 +105,79 @@ Disabled and canceled subscribers never receive customer communication. Their ac
 - The notification queue UI and health signals distinguish future-scheduled
   rows from due queued rows. Only due rows older than the configured stale
   threshold produce backlog findings.
+
+## Durable customer bulk-message receipts
+
+`communications.customer_bulk_messages` owns admission, replay, preparation
+leases, failure evidence, and status for manual customer bulk sends. The existing
+`system_jobs` unique `(job_type, job_id)` constraint is the migrated persistence
+boundary: this owner exclusively writes `job_type=customer_bulk_message` rows.
+The receipt is the durable dispatch outbox, not a Celery result projection.
+No new schema is introduced. The typed `BulkMessageSpec` binds confirmation to
+current scope and impact; `BulkSendReceipt` persists the specification, actor,
+canonical fingerprint, attempts, counts, and resulting notification identifiers.
+
+Acceptance commits before the best-effort worker wakeup. Broker unavailability
+therefore returns accepted status, never an instruction to submit another send.
+Repeated actor/request UUIDs return the existing receipt before rechecking current
+facts; changed specifications fail closed. A permanent 60-second drain dispatches
+accepted rows and recovers preparation leases older than 15 minutes. Row locks
+and skip-locked execution exclude overlapping workers. Preparation is bounded to
+three attempts; permanent scope/template drift fails without automatic resending.
+Materialization and receipt completion share one owner transaction. The evaluator
+is a typed flush-only participant; template-registry synchronization is not run
+as a side effect of preview/admission. Existing communication-intent deduplication
+continues to own per-recipient replay. Notification delivery/retry remains owned
+by the existing delivery outbox consumer.
+
+Every receipt transition stages `customer_bulk_message.changed` version-1
+record-only audit evidence in the same transaction, containing only the request
+UUID, state and attempt. Dispatch work is represented by the receipt row itself.
+Receipt status is a fresh owner query, scoped to the admitting actor and send
+permission. Delivery counters come from its linked notifications; retryable
+failed attempts remain pending, and provider-submitted messages remain distinct
+from delivered messages. Missing receipts and denied access never imply an
+accepted send. A stale preparation lease is the drift signal; the permanent
+receipt drain is the idempotent repair path and this owner is the repair owner.
+
+### Customer send status page contract
+
+Both the admin Customers list and customer detail screen serve operators sending
+confirmed template messages. A shared status panel supports the decision whether
+to wait, investigate failure, or start a new send. Its first-viewport information
+is receipt state, intended counts, live delivery counts, a send reference and a
+Check status action. The backend receipt/query owner provides all state meaning.
+The browser saves its UUID before submission, retains it across uncertain
+responses/reload, and checks the receipt after a lost or malformed confirmation.
+It never retries a POST automatically. A same-interaction retry uses the same
+UUID; starting a new confirmed interaction gets a new UUID only after previous
+acceptance is known. An unresolved earlier interaction blocks changed-message
+submission. Loading, explicit rejection, unknown outcome, preparing, queued,
+failed preparation, pending provider confirmation and terminal delivery counts
+remain distinct. The responsive panel uses an ARIA live status and a keyboard
+accessible Check status button; receipt payloads/customer lists are not stored
+in browser storage. Audit investigation is through the request UUID.
+
+### Rollout and existing work
+
+Drain pre-change `materialize_customer_bulk_message` tasks before deploying this
+transport change: legacy tasks carry payload JSON, whereas new tasks carry a
+receipt UUID. Verify existing delivery outbox rows continue draining; do not
+recreate old sends to manufacture receipts. For a historic ambiguous browser
+response, correlate task acceptance and notification lineage in logs before
+sending again. Never infer whole-campaign success from a worker SUCCESS event.
+
+After rollout, verify the permanent `customer_bulk_message_outbox` schedule is
+present/enabled and the generic worker consumes the `celery` queue. For stuck
+receipts, restore worker/broker/database health and let the drain recover the
+same UUID; terminal preparation failures require a new preview and explicit
+operator confirmation. Do not directly edit receipt status, delete dedupe keys,
+or replay provider sends. Verify deployed uniqueness/concurrency and rollback
+on PostgreSQL migrated to the repository head before publication.
+
+The typed evaluation participant lives in
+`app/services/customer_bulk_message_evaluation.py`; customer scope and rendering
+helpers remain private collaborators in the customer adapter module. The receipt
+owner calls this participant directly. Its module has one declared owner, and
+the permanent dispatcher and materializer both declare receipt-based reliability
+contracts in `app/services/task_reliability.py`.

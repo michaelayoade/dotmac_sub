@@ -220,12 +220,21 @@ def survey_detail(request: Request, survey_id: str, db: Session = Depends(get_db
         survey = survey_service.get_survey(db, survey_id)
     except survey_service.SurveyDomainError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
-    responses = survey_service.list_responses(
-        db, survey_id=survey.id, limit=200, offset=0
+    responses = survey_service.response_reviews(
+        db, query=survey_service.SurveyResponseReviewQuery(survey_id=survey.id)
     )
     return templates.TemplateResponse(
         "admin/surveys/detail.html",
-        _context(request, db, survey=survey, responses=responses, error=None),
+        _context(
+            request,
+            db,
+            survey=survey,
+            responses=responses,
+            report=survey_service.survey_report(
+                db, query=survey_service.SurveyReportQuery(survey_id=survey.id)
+            ),
+            error=None,
+        ),
     )
 
 
@@ -338,11 +347,20 @@ def _transition_response(
         if exc.kind == "not_found":
             raise HTTPException(status_code=404, detail=exc.message) from exc
         survey = survey_service.get_survey(db, survey_id)
-        responses = survey_service.list_responses(db, survey_id=survey.id, limit=200)
+        responses = survey_service.response_reviews(
+            db, query=survey_service.SurveyResponseReviewQuery(survey_id=survey.id)
+        )
         return templates.TemplateResponse(
             "admin/surveys/detail.html",
             _context(
-                request, db, survey=survey, responses=responses, error=exc.message
+                request,
+                db,
+                survey=survey,
+                responses=responses,
+                report=survey_service.survey_report(
+                    db, query=survey_service.SurveyReportQuery(survey_id=survey.id)
+                ),
+                error=exc.message,
             ),
             status_code=409,
         )

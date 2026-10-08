@@ -25,6 +25,66 @@ and lifecycle state. `New Survey` is its single page-level primary action.
 Mobile keeps identity, state, and actions reachable without horizontal page
 scrolling; the table itself uses a bounded horizontal work surface when needed.
 
+### Response review page contract
+
+The decision layer is a feedback report owned by
+`communications.surveys.survey_report`, with typed `SurveyReportQuery`,
+`SurveyReport`, question reports and count/percentage buckets. It aggregates
+every persisted submission, independently of the 200-row recent-response limit.
+No report sample data enters the application. Because public submissions do not
+establish unique customer identity, counts are submissions and percentages are
+of eligible answers, never of all customers or verified unique people.
+
+The Customer Service Week `service_satisfaction` and `internet_reliability`
+questions have explicitly supported ordered multiple-choice scales. Only an
+exact match to those scales enables three-way sentiment grouping (positive 4/5,
+neutral 3, negative 1/2). Service's `Haven't contacted customer service` and
+reliability's `Not sure` are excluded and separately counted. Other multiple
+choice, rating and NPS questions show option distributions; free text remains in
+individual responses. Unsupported edited scales never infer sentiment from
+labels or arbitrary customer text. Current options determine eligible answers;
+unknown historical options and missing answers are separately disclosed.
+
+Each distribution shows its own denominator and percentages rounded to one
+decimal place; zero eligible answers show no percentage. Rounding may make a
+displayed sum differ slightly from 100%. Summary service percentages appear
+only for the supported scale. Charts are server-rendered, with the same textual
+values accessible without color or JavaScript. Mobile stacks report panels.
+Individual responses are collapsed below the report. Report freshness is the
+database read transaction; it has no persisted cache. Rerunning the owner query
+is the idempotent rebuild path. No sentiment writes, schema migration, new
+export, notification, or identity attribution is added.
+
+The Survey detail page serves customer-service administrators reviewing feedback.
+`communications.surveys.response_reviews` accepts `SurveyResponseReviewQuery` and
+returns immutable `SurveyResponseReview` rows; templates do not interpret saved
+JSON. The first viewport keeps Survey identity, status, response count and Edit
+with the beginning of recent submissions. Each submission presents a UTC time
+and ordered question/answer pairs. Desktop uses two columns; mobile stacks each
+answer below its question. Missing answers say `Not answered`; absent rating/NPS
+fields are hidden, and a recorded NPS of zero remains visible.
+
+This is a bounded recent-response detail surface, displaying the latest 200 rows
+ordered by submission time and UUID descending. It explicitly shows how many are
+displayed. Search, filters, bulk actions and export are outside this slice.
+Answers are non-public customer feedback, visible under existing admin access;
+no new public endpoint or identity inference is introduced. Raw response UUIDs
+are available through a collapsed reference disclosure. Empty state says
+`No responses yet`; existing error handling and authorization remain in place.
+
+Labels come from the current Survey definition; historical question wording is
+not stored. Saved keys absent from that definition remain visible under their
+original key with `Earlier question — original wording unavailable`. Editing a
+Survey never discards those saved answers. The review projection is rebuilt on
+each request, has no cache or stored derived copy, and uses no mutation, audit
+write or external side effect. Owner repair is simply rerunning the query.
+All labels and answers use Jinja autoescaping. Tests cover removed questions,
+missing answers, UTC conversion, zero NPS and unsafe HTML.
+
+UI review: information ownership, desktop/mobile depth, empty states, semantic
+markup, dark-mode contrast and progressive disclosure are addressed. New actions,
+filters, exports, async operations and database migrations are not applicable.
+
 ## Typed content
 
 Editable Survey fields are `name`, `description`, `trigger_type`,

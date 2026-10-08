@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -15,12 +16,216 @@ from app.models.comms import (
     SurveyStatus,
     SurveyTriggerType,
 )
-from app.schemas.comms import SurveyCreate, SurveyUpdate
+from app.schemas.comms import SurveyCreate, SurveyQuestion, SurveyUpdate
 from app.services import surveys
 from app.services.owner_commands import CommandContext
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _report_service_question() -> SurveyQuestion:
+    return SurveyQuestion(
+        key="service_satisfaction",
+        type="multiple_choice",
+        label="Service?",
+        options=[
+            "1 — Very dissatisfied",
+            "2 — Dissatisfied",
+            "3 — Neither satisfied nor dissatisfied",
+            "4 — Satisfied",
+            "5 — Very satisfied",
+            "Haven't contacted customer service",
+        ],
+    )
+
+
+def test_survey_report_excludes_unrated_answers_and_preserves_denominators() -> None:
+    report = surveys.build_survey_report(
+        questions=(_report_service_question(),),
+        submissions=(
+            (surveys.SurveyAnswer("service_satisfaction", value),)
+            for value in (
+                "4 — Satisfied",
+                "5 — Very satisfied",
+                "2 — Dissatisfied",
+                "3 — Neither satisfied nor dissatisfied",
+                "Haven't contacted customer service",
+                "Old option",
+                "",
+            )
+        ),
+    )
+    assert report.total_responses == 7
+    assert report.satisfaction is not None
+    assert report.satisfaction.denominator == 4
+    assert report.satisfaction.excluded == 1
+    assert report.satisfaction.unrecognized == 1
+    assert report.satisfaction.unanswered == 1
+    assert [b.count for b in report.satisfaction.buckets] == [2, 1, 1]
+    assert [b.percentage for b in report.satisfaction.buckets] == [50, 25, 25]
+
+
+def test_survey_report_uses_all_submissions_and_optional_question_scope() -> None:
+    questions = (
+        _report_service_question(),
+        SurveyQuestion(
+            key="improvement",
+            type="multiple_choice",
+            label="Improve?",
+            options=["Speed", "Support"],
+            required=False,
+        ),
+    )
+    report = surveys.build_survey_report(
+        questions=questions,
+        submissions=(
+            (surveys.SurveyAnswer("service_satisfaction", "4 — Satisfied"),)
+            for _ in range(250)
+        ),
+    )
+    assert report.total_responses == 250
+    assert report.satisfaction is not None
+    assert report.satisfaction.buckets[0].count == 250
+    assert report.questions[1].unanswered == 250
+    assert all(b.percentage is None for b in report.questions[1].buckets)
+
+
+def test_survey_report_does_not_guess_sentiment_from_changed_options() -> None:
+    report = surveys.build_survey_report(
+        questions=(
+            SurveyQuestion(
+                key="service_satisfaction",
+                type="multiple_choice",
+                label="Service?",
+                options=["Great", "Poor"],
+            ),
+        ),
+        submissions=((surveys.SurveyAnswer("service_satisfaction", "Poor"),),),
+    )
+    assert report.satisfaction is None
+    assert report.questions[0].kind == surveys.SurveyReportKind.distribution
+    assert report.questions[0].buckets[1].percentage == 100
+
+
+def test_survey_report_has_no_percentages_without_ratings() -> None:
+    report = surveys.build_survey_report(
+        questions=(_report_service_question(),),
+        submissions=(
+            (
+                surveys.SurveyAnswer(
+                    "service_satisfaction", "Haven't contacted customer service"
+                ),
+            ),
+        ),
+    )
+    assert report.satisfaction is not None
+    assert report.satisfaction.denominator == 0
+    assert all(b.percentage is None for b in report.satisfaction.buckets)
+
+
+def test_survey_report_reliability_excludes_not_sure_and_rounds_percentages() -> None:
+    question = SurveyQuestion(
+        key="internet_reliability",
+        type="multiple_choice",
+        label="Reliable?",
+        options=[
+            "1 — Very unreliable",
+            "2 — Unreliable",
+            "3 — Neither reliable nor unreliable",
+            "4 — Reliable",
+            "5 — Very reliable",
+            "Not sure",
+        ],
+    )
+    report = surveys.build_survey_report(
+        questions=(question,),
+        submissions=(
+            (surveys.SurveyAnswer("internet_reliability", value),)
+            for value in (
+                "4 — Reliable",
+                "4 — Reliable",
+                "1 — Very unreliable",
+                "Not sure",
+            )
+        ),
+    )
+    reliability = report.questions[0]
+    assert reliability.kind == surveys.SurveyReportKind.reliability
+    assert reliability.excluded == 1
+    assert reliability.denominator == 3
+    assert str(reliability.buckets[0].percentage) == "66.7"
+    assert str(reliability.buckets[2].percentage) == "33.3"
+
+
+def test_response_review_preserves_removed_answers_and_current_order() -> None:
+    response = SurveyResponse(
+        id=uuid4(),
+        survey_id=uuid4(),
+        created_at=datetime(2026, 10, 6, 13, tzinfo=timezone(timedelta(hours=1))),
+        responses={"removed": "Old answer", "service": "Satisfied"},
+        nps_value=0,
+    )
+    review = surveys.review_response(
+        questions=(
+            SurveyQuestion(key="service", type="free_text", label="Customer service?"),
+            SurveyQuestion(key="optional", type="free_text", label="Anything else?"),
+        ),
+        response=response,
+    )
+    assert review.submitted_at == datetime(2026, 10, 6, 12, tzinfo=UTC)
+    assert [answer.key for answer in review.answers] == [
+        "service",
+        "optional",
+        "removed",
+    ]
+    assert review.answers[0].label == "Customer service?"
+    assert review.answers[1].value is None
+    assert review.answers[2].question_removed
+    assert review.answers[2].value == "Old answer"
+    assert review.nps_value == 0
+
+
+def test_response_review_empty_answers_and_legacy_timestamp() -> None:
+    response = SurveyResponse(
+        id=uuid4(),
+        survey_id=uuid4(),
+        created_at=datetime(2026, 10, 6),
+        responses=None,
+    )
+    review = surveys.review_response(questions=(), response=response)
+    assert review.answers == ()
+    assert review.submitted_at.tzinfo is UTC
+
+
+def test_response_review_template_escapes_answers() -> None:
+    from jinja2 import Environment, FileSystemLoader
+
+    environment = Environment(
+        loader=FileSystemLoader(ROOT / "templates"), autoescape=True
+    )
+    source = (ROOT / "templates/admin/surveys/detail.html").read_text(encoding="utf-8")
+    section_start = source.index('<section aria-labelledby="responses-heading">')
+    section_end = source.index("</section>", section_start) + len("</section>")
+    section = source[section_start:section_end]
+    response = SurveyResponse(
+        id=uuid4(),
+        survey_id=uuid4(),
+        created_at=datetime(2026, 10, 6, tzinfo=UTC),
+        responses={"service": "<script>alert(1)</script>"},
+    )
+    review = surveys.review_response(
+        questions=(
+            SurveyQuestion(key="service", type="free_text", label="<b>Service?</b>"),
+        ),
+        response=response,
+    )
+    rendered = environment.from_string(section).render(responses=(review,))
+    assert "<script>" not in rendered
+    assert "&lt;script&gt;" in rendered
+    assert "&lt;b&gt;Service?&lt;/b&gt;" in rendered
+    assert "Rating:" not in rendered
+    assert "06 Oct 2026, 00:00 UTC" in rendered
 
 
 def _context(label: str, *, key: str | None = None) -> CommandContext:

@@ -20,6 +20,21 @@ def test_survey_owner_has_complete_typed_contract() -> None:
     assert service.contract.transaction.mode.value == "owner_managed"
 
 
+def test_survey_review_has_one_owner_and_no_raw_answer_rendering() -> None:
+    service = service_relationship("communications.surveys")
+    assert "survey response review" in service.owns
+    assert service.contract is not None
+    assert any(p.name == "survey response review" for p in service.contract.projections)
+    adapter = _source("app/web/admin/surveys.py")
+    assert "SurveyResponseReviewQuery" in adapter
+    assert "SurveyReportQuery" in adapter
+    assert "survey feedback report" in service.owns
+    assert "list_responses" not in adapter
+    template = _source("templates/admin/surveys/detail.html")
+    assert "response.responses|tojson" not in template
+    assert "|safe" not in template
+
+
 def test_retired_comms_survey_writers_cannot_return() -> None:
     source = _source("app/services/comms.py")
 

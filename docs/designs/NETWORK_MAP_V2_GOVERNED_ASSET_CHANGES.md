@@ -78,18 +78,25 @@ Proposal previews are presentation overlays only. A dashed movement guide is
 labelled as proposed movement and is never inserted into a fibre/topology
 layer or persisted as route geometry.
 
-## V2 page contract
+## V2 and review-queue page contract
 
-- Screen: `admin.network.map_v2_asset_changes`; map workbench embedded only in
-  `/admin/network/map-v2`.
+- Screens: `admin.network.map_v2_asset_changes` in `/admin/network/map-v2` and
+  the independent-review queue embedded in `/admin/network/fiber-change-requests`.
 - Audience: network operators proposing exact passive-plant changes and
   independently authorized reviewers approving or rejecting them.
+- The review queue reads pending proposal evidence from this owner alongside
+  legacy Fiber Change Requests. It does not convert proposals into
+  `FiberChangeRequest` records or use the legacy approval commands.
 - Read owners: `ui.network_map_projection` for map facts and
   `network.map_asset_change_governance` for bounded proposal/history state.
 - Mutation owner: `network.map_asset_change_governance` coordinates review;
   `network.fiber_asset_changes` remains the canonical asset writer.
 - First viewport: the existing V2 map, governance availability, pending count,
-  and permission-appropriate proposal/review actions.
+  and permission-appropriate proposal/review actions; the change-request page
+  leads with pending V2 proposals before the legacy request table.
+- Review controls explain when `network:fiber:review` is missing and when the
+  current actor is the proposer. The backend continues to enforce independent
+  review and the separately assignable permission.
 - States: loading, empty proposal queue, missing migrated canonical assets,
   unsupported asset type, validation failure, stale proposal, topology-review
   required, rejected, and applied remain distinct.

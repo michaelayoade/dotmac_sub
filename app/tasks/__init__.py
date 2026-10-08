@@ -117,6 +117,7 @@ from app.tasks.network_operations import (
 from app.tasks.notifications import (
     deliver_notification,
     deliver_notification_queue,
+    dispatch_customer_bulk_messages,
     materialize_customer_bulk_message,
 )
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
@@ -350,6 +351,7 @@ __all__ = [
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_notification_queue",
+    "dispatch_customer_bulk_messages",
     "deliver_notification",
     "reconcile_submitted_email",
     "materialize_customer_bulk_message",
