@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -17,7 +17,11 @@ from app.schemas.network import SplitterCreate, SplitterUpdate
 from app.services import catalog as catalog_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid
-from app.services.network.splitters import splitters as splitter_service
+from app.services.network.splitters import (
+    FdhCabinetPageQuery,
+    FdhCabinets,
+    splitters as splitter_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,29 +38,22 @@ def list_page_data(
     db: Session, *, page: int = 1, per_page: int = 50
 ) -> dict[str, object]:
     """Return FDH cabinet list and summary stats."""
-    page = max(page, 1)
-    per_page = min(max(per_page, 10), 100)
-    active_filter = FdhCabinet.is_active.is_(True)
-    total = db.scalar(select(func.count(FdhCabinet.id)).where(active_filter)) or 0
-    total_pages = max(1, (total + per_page - 1) // per_page)
-    page = min(page, total_pages)
-    cabinets = db.scalars(
-        select(FdhCabinet)
-        .where(active_filter)
-        .order_by(FdhCabinet.name)
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-    ).all()
+    result = FdhCabinets.active_page(
+        db,
+        FdhCabinetPageQuery(page=page, per_page=per_page),
+    )
+    total = result.total
+    cabinets = result.cabinets
     return {
         "cabinets": cabinets,
         "stats": {"total": total},
         "pagination": {
-            "page": page,
-            "per_page": per_page,
+            "page": result.page,
+            "per_page": min(max(per_page, 10), 100),
             "total": total,
-            "total_pages": total_pages,
-            "has_prev": page > 1,
-            "has_next": page < total_pages,
+            "total_pages": result.total_pages,
+            "has_prev": result.page > 1,
+            "has_next": result.page < result.total_pages,
         },
     }
 

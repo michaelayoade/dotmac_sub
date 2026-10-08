@@ -843,7 +843,7 @@
             if (!response.ok) {
                 throw new Error(result.message || result.detail || result.error || 'Movement proposal failed');
             }
-            alert('Movement submitted for review. A reviewer can approve it in Network Map V2; the map position will change after approval.');
+            alert('Movement submitted for review. A reviewer can approve it in Network Map V2. The map position will change after approval.');
             return true;
         } catch (e) {
             console.error('Error submitting marker movement:', e);
