@@ -37,6 +37,13 @@ def _optional_uuid(value: str | None) -> UUID | None:
     return UUID(normalized) if normalized else None
 
 
+def _safe_optional_uuid(value: str | None) -> UUID | None:
+    try:
+        return _optional_uuid(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get(
     "",
     response_class=HTMLResponse,
@@ -74,7 +81,11 @@ def customer_region_edit(
             request,
             db,
             regions=customer_regions.list_regions(db),
-            infrastructure_options=customer_regions.infrastructure_options(db),
+            infrastructure_options=customer_regions.infrastructure_options(
+                db,
+                nas_device_id=region.nas_device_id,
+                pop_site_id=region.pop_site_id,
+            ),
             match_modes=customer_regions.REGION_MATCH_MODES,
             error=None,
             editing_region=region,
@@ -171,7 +182,11 @@ def customer_region_save(
                 request,
                 db,
                 regions=customer_regions.list_regions(db),
-                infrastructure_options=customer_regions.infrastructure_options(db),
+                infrastructure_options=customer_regions.infrastructure_options(
+                    db,
+                    nas_device_id=_safe_optional_uuid(nas_device_id),
+                    pop_site_id=_safe_optional_uuid(pop_site_id),
+                ),
                 match_modes=customer_regions.REGION_MATCH_MODES,
                 error=error,
                 editing_region=submitted_region,

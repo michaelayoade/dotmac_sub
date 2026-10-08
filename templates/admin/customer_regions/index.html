@@ -71,8 +71,10 @@
                 <div><label for="region-color" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Region color</label><input id="region-color" name="color" type="color" value="{{ values.get('color', editing_region.color if editing_region else '#0ea5e9') }}" class="h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-600 dark:bg-slate-900"></div>
                 <div><label for="region-match-mode" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Overlap rule</label><select id="region-match-mode" name="match_mode" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"><option value="nearest" {% if values.get('match_mode', editing_region.match_mode if editing_region else 'nearest') == 'nearest' %}selected{% endif %}>Nearest center</option><option value="nas" {% if values.get('match_mode', editing_region.match_mode if editing_region else 'nearest') == 'nas' %}selected{% endif %}>Matching NAS</option><option value="pop_site" {% if values.get('match_mode', editing_region.match_mode if editing_region else 'nearest') == 'pop_site' %}selected{% endif %}>Matching POP/site</option><option value="manual" {% if values.get('match_mode', editing_region.match_mode if editing_region else 'nearest') == 'manual' %}selected{% endif %}>Manual priority</option></select></div>
                 <div class="grid grid-cols-2 gap-3"><div><label for="region-priority" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Priority</label><input id="region-priority" name="priority" type="number" value="{{ values.get('priority', editing_region.priority if editing_region else 0) }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></div><div class="flex items-end pb-2"><label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300"><input name="is_active" type="checkbox" value="true" {% if values.get('is_active', not editing_region or editing_region.is_active) %}checked{% endif %} class="rounded border-slate-300 text-amber-600"> Active</label></div></div>
-                <div id="region-nas-field" class="hidden"><label for="region-nas" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">NAS</label><select id="region-nas" name="nas_device_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"><option value="">Select NAS</option>{% for option in infrastructure_options.nas %}<option value="{{ option.id }}" {% if values.get('nas_device_id', editing_region.nas_device_id|string if editing_region and editing_region.nas_device_id else '') == option.id %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select></div>
-                <div id="region-pop-field" class="hidden"><label for="region-pop" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">POP/site</label><select id="region-pop" name="pop_site_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"><option value="">Select POP/site</option>{% for option in infrastructure_options.pop_site %}<option value="{{ option.id }}" {% if values.get('pop_site_id', editing_region.pop_site_id|string if editing_region and editing_region.pop_site_id else '') == option.id %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select></div>
+                {% set selected_nas_id = values.get('nas_device_id', editing_region.nas_device_id|string if editing_region and editing_region.nas_device_id else '') %}
+                {% set selected_pop_site_id = values.get('pop_site_id', editing_region.pop_site_id|string if editing_region and editing_region.pop_site_id else '') %}
+                <div id="region-nas-field" class="hidden"><label for="region-nas" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">NAS</label><div class="relative" data-typeahead-url="/api/v1/search/nas-devices" data-typeahead-min="2" data-typeahead-limit="20" data-typeahead-validate-selection="true"><input id="region-nas" type="search" data-typeahead-input value="{{ infrastructure_options.nas[0].name if infrastructure_options.nas else '' }}" placeholder="Search NAS name or address" autocomplete="off" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"><input type="hidden" name="nas_device_id" data-typeahead-hidden value="{{ selected_nas_id }}"><div data-typeahead-results></div></div></div>
+                <div id="region-pop-field" class="hidden"><label for="region-pop" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">POP/site</label><div class="relative" data-typeahead-url="/api/v1/search/pop-sites" data-typeahead-min="2" data-typeahead-limit="20" data-typeahead-validate-selection="true"><input id="region-pop" type="search" data-typeahead-input value="{{ infrastructure_options.pop_site[0].name if infrastructure_options.pop_site else '' }}" placeholder="Search POP/site" autocomplete="off" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"><input type="hidden" name="pop_site_id" data-typeahead-hidden value="{{ selected_pop_site_id }}"><div data-typeahead-results></div></div></div>
                 <div><label for="region-notes" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Notes</label><textarea id="region-notes" name="notes" rows="2" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">{{ values.get('notes', editing_region.notes if editing_region else '') }}</textarea></div>
                 <div class="flex gap-2"><button type="submit" class="flex-1 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700">{{ 'Update region' if editing_region else 'Save region' }}</button>{% if editing_region %}<a href="/admin/customer-regions" class="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-300">Cancel</a>{% endif %}</div>
             </form>
@@ -84,21 +86,28 @@
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script>
 (() => {
+    const mapContainer = document.getElementById('region-editor-map');
     const lat = document.getElementById('region-latitude');
     const lng = document.getElementById('region-longitude');
     const radius = document.getElementById('region-radius');
     const color = document.getElementById('region-color');
-    const map = L.map('region-editor-map').setView([9.0765, 7.3986], 11);
+    const mode = document.getElementById('region-match-mode');
+    if (!mapContainer || !lat || !lng || !radius || !color || !mode || typeof L === 'undefined') return;
+    const map = L.map(mapContainer).setView([9.0765, 7.3986], 11);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
     let marker;
     let circle;
+    let hasFittedCircle = false;
     function redraw() {
         const latitude = Number(lat.value), longitude = Number(lng.value), meters = Number(radius.value || 300);
         if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
         const point = [latitude, longitude];
         if (!marker) marker = L.marker(point, { draggable: true }).addTo(map).on('dragend', () => { const value = marker.getLatLng(); lat.value = value.lat.toFixed(6); lng.value = value.lng.toFixed(6); redraw(); }); else marker.setLatLng(point);
         if (!circle) circle = L.circle(point, { radius: meters, color: color.value || '#0ea5e9', fillColor: color.value || '#0ea5e9', fillOpacity: 0.12 }).addTo(map); else circle.setLatLng(point).setRadius(meters).setStyle({ color: color.value || '#0ea5e9', fillColor: color.value || '#0ea5e9' });
-        map.setView(point, Math.max(map.getZoom(), 13));
+        if (!hasFittedCircle) {
+            map.fitBounds(circle.getBounds(), { padding: [20, 20], maxZoom: 16 });
+            hasFittedCircle = true;
+        }
     }
     map.on('click', event => {
         lat.value = event.latlng.lat.toFixed(6);
@@ -106,7 +115,7 @@
         redraw();
     });
     [lat, lng, radius, color].forEach(input => input.addEventListener('input', redraw));
-    const mode = document.getElementById('region-match-mode');
+    radius.addEventListener('change', () => { hasFittedCircle = false; redraw(); });
     const updateModeFields = () => { document.getElementById('region-nas-field').classList.toggle('hidden', mode.value !== 'nas'); document.getElementById('region-pop-field').classList.toggle('hidden', mode.value !== 'pop_site'); };
     mode.addEventListener('change', updateModeFields);
     updateModeFields();
