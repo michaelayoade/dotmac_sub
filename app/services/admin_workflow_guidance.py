@@ -1082,6 +1082,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "When radii overlap, use Nearest for geographic proximity, NAS or POP/site for the matching infrastructure tie-breaker, or Manual priority when an explicit precedence is required.",
         "Disable a region instead of deleting it when it should stop receiving new assignments but remain available for review history.",
         notes=(
+            "Infrastructure choices are loaded only when the selected overlap rule needs them, so region editing remains responsive even when the network inventory is large.",
             "NAS and POP/site rules are tie-breakers for customers already inside a configured radius; they do not replace missing customer geolocation.",
             "Region write actions require gis:area:write. Users with map-view access can review the configuration without changing it.",
         ),

@@ -221,21 +221,29 @@ def region_options(db: Session) -> list[RegionOption]:
     ]
 
 
-def infrastructure_options(db: Session) -> dict[str, list[dict[str, str]]]:
-    """Return bounded NAS/POP choices used by the Settings Hub form."""
+def infrastructure_options(
+    db: Session,
+    *,
+    nas_device_id: UUID | None = None,
+    pop_site_id: UUID | None = None,
+) -> dict[str, list[dict[str, str]]]:
+    """Return only selected infrastructure labels for lazy typeahead fields."""
 
     nas = (
         db.query(NasDevice.id, NasDevice.name)
+        .filter(NasDevice.id == nas_device_id)
         .order_by(NasDevice.name.asc())
-        .limit(500)
         .all()
+        if nas_device_id is not None
+        else []
     )
     pop_sites = (
         db.query(PopSite.id, PopSite.name)
-        .filter(PopSite.is_active.is_(True))
+        .filter(PopSite.is_active.is_(True), PopSite.id == pop_site_id)
         .order_by(PopSite.name.asc())
-        .limit(500)
         .all()
+        if pop_site_id is not None
+        else []
     )
     return {
         "nas": [{"id": str(row.id), "name": row.name} for row in nas],
