@@ -175,11 +175,14 @@ def test_reviewed_sequence_allocates_displaced_payment_before_history() -> None:
     target_allocation = source.index(
         "target_result = PaymentAllocations.stage_confirm("
     )
+    historical_settlement = source.index(
+        "Payments.stage_reviewed_splynx_prepaid_settlement_reconstruction("
+    )
     historical_reclassification = source.index(
         "PaymentAllocations.stage_confirm_reviewed_historical_reclassification_for_owner("
     )
 
-    assert target_allocation < historical_reclassification
+    assert target_allocation < historical_settlement < historical_reclassification
 
 
 def _draft(db, account, subscription, *, total: Decimal) -> Invoice:
