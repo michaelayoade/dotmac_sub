@@ -229,19 +229,22 @@ def infrastructure_options(
 ) -> dict[str, list[dict[str, str]]]:
     """Return only selected infrastructure labels for lazy typeahead fields."""
 
-    nas_query = db.query(NasDevice.id, NasDevice.name)
-    if nas_device_id is not None:
-        nas_query = nas_query.filter(NasDevice.id == nas_device_id)
-    else:
-        nas_query = nas_query.filter(NasDevice.id.is_(None))
-    nas = nas_query.order_by(NasDevice.name.asc()).all()
-
-    pop_query = db.query(PopSite.id, PopSite.name).filter(PopSite.is_active.is_(True))
-    if pop_site_id is not None:
-        pop_query = pop_query.filter(PopSite.id == pop_site_id)
-    else:
-        pop_query = pop_query.filter(PopSite.id.is_(None))
-    pop_sites = pop_query.order_by(PopSite.name.asc()).all()
+    nas = (
+        db.query(NasDevice.id, NasDevice.name)
+        .filter(NasDevice.id == nas_device_id)
+        .order_by(NasDevice.name.asc())
+        .all()
+        if nas_device_id is not None
+        else []
+    )
+    pop_sites = (
+        db.query(PopSite.id, PopSite.name)
+        .filter(PopSite.is_active.is_(True), PopSite.id == pop_site_id)
+        .order_by(PopSite.name.asc())
+        .all()
+        if pop_site_id is not None
+        else []
+    )
     return {
         "nas": [{"id": str(row.id), "name": row.name} for row in nas],
         "pop_site": [{"id": str(row.id), "name": row.name} for row in pop_sites],
