@@ -86,7 +86,7 @@ groups:
         labels:
           severity: warning
           area: prepaid-enforcement
-          owner: financial-collections
+          owner: financial-billing
         annotations:
           summary: "Prepaid accounts blocked on contradictory financial evidence"
           description: >
@@ -103,14 +103,15 @@ groups:
         labels:
           severity: warning
           area: prepaid-enforcement
-          owner: financial-collections
+          owner: financial-billing
         annotations:
           summary: "Prepaid accounts blocked on unresolved renewal terms"
           description: >
             Due prepaid service exists whose contracted renewal charge cannot
-            be resolved. Complete the billing contract/obligation backfill for
-            these accounts; enforcement stays fail-closed until then.
-          runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
+            be resolved. Each subscription has an owned finance work item
+            (prepaid-renewal-terms:evidence:*) whose decision names the next
+            step; enforcement stays fail-closed until it is resolved.
+          runbook: "docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md"
 
       # --- Owned finance work items must be worked within their SLA. The
       # deadline is fixed when an item opens, so this fires once any open
@@ -121,7 +122,7 @@ groups:
         labels:
           severity: warning
           area: prepaid-enforcement
-          owner: financial-collections
+          owner: financial-billing
         annotations:
           summary: "Prepaid finance work items are past their review SLA"
           description: >
@@ -129,7 +130,7 @@ groups:
             items in admin alerts have passed their sla_due_at. Each needs a
             finance decision; enforcement for these accounts stays
             fail-closed until the evidence is corrected.
-          runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
+          runbook: "docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md"
 
       - alert: PrepaidNoContactRouteAccounts
         expr: observability_state{domain="prepaid_enforcement",signal="no_contact_route"} > 0

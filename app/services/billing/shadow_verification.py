@@ -1681,7 +1681,7 @@ def _record_phase3_forward_run(
                     "batch; never invent a per-account fallback."
                 ),
                 details={
-                    "owner": "finance-billing",
+                    "owner": "financial-billing",
                     "account_id": str(account_id),
                     "debt": "opening_position",
                     "sla_due_at": (
@@ -1713,7 +1713,7 @@ def _record_phase3_forward_run(
                     "the coverage owner may create or correct entitlements."
                 ),
                 details={
-                    "owner": "finance-billing",
+                    "owner": "financial-billing",
                     "account_id": debt_account,
                     "debt": "entitlement_evidence",
                     "subscription_ids": subscription_ids,

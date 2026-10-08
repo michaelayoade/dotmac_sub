@@ -501,4 +501,10 @@ def test_batch_cost_does_not_scale_with_account_count(db_session):
     # It comes back down when settings caching is settled — Redis fronts this
     # in production but is deliberately dead in the unit suite (conftest points
     # REDIS_URL at a refusing port), so these numbers are the uncached cost.
-    assert c_large.count < 20
+    #
+    # Raised from 20 to 21, again with a named cause: the threshold now asks
+    # the canonical chargeability owner (one batched, account-count-independent
+    # statement) whether a service is confirmed free by an explicit zero
+    # catalog price, so a free service is non-billable rather than
+    # renewal-blocked. The slope assertion above is unchanged.
+    assert c_large.count < 21

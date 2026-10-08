@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -53,6 +53,18 @@ RENEWAL_TERMS_FINDING_PREFIX = "prepaid-renewal-terms:evidence:"
 _FINDING_PREFIX = RENEWAL_TERMS_FINDING_PREFIX
 #: Finance review window recorded on each unresolved-evidence work item.
 _EVIDENCE_SLA_HOURS = 72
+#: The team that owns finance-review work items and their alerts. It is the
+#: same label the ``deploy/observability`` alert rules route on; an
+#: architecture test pins the two together.
+RENEWAL_TERMS_WORK_ITEM_OWNER = "financial-billing"
+#: Operator runbook linked from every renewal-terms work item and alert.
+RENEWAL_TERMS_RUNBOOK = "docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md"
+#: Narrow RBAC permission both the requesting and the approving staff member
+#: must hold for a finance-reviewed renewal-term record. Real access control
+#: lives at the invocation boundary (the operator CLI resolves a named staff
+#: principal's granted roles via ``has_permission`` and passes the result as
+#: ``permission_granted``); this owner refuses when that evidence is missing.
+RENEWAL_TERM_RECORD_PERMISSION = "billing:renewal_terms:record"
 
 
 class PrepaidRenewalTermsBackfillError(DomainError):
@@ -255,7 +267,7 @@ def _unit_price_missing(subscription: Subscription) -> bool:
 
 
 def _blocked_subscriptions(
-    db: Session, *, enforcement_currency: str
+    db: Session, *, enforcement_currency: str, as_of: datetime | None = None
 ) -> list[tuple[Subscription, ChargeInputs]]:
     # The threshold owner evaluates every COLLECTIBLE status, not just
     # active: a suspended prepaid subscription with unresolved renewal terms
@@ -264,16 +276,35 @@ def _blocked_subscriptions(
     # downstream charge-term inputs (active recurring price row for
     # currency/cadence metadata, proven monthly cadence) are absent — both
     # yield charge=None in the renewal resolver.
+    #
+    # The cohort mirrors the threshold owner exactly: a subscription whose
+    # customer billing is suppressed by an effective (or drift-protected)
+    # billing treatment, or that the chargeability owner confirms is free
+    # (one active recurring catalog price of ZERO, no contradictory positive
+    # subscription price), is non-billable there and never needs renewal
+    # terms — so it is not a finance work item here either, and an existing
+    # item resolves on the next capture. A missing price row is review work
+    # and stays in the cohort.
     from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+    from app.services.customer_chargeability import confirmed_free_subscription_ids
+    from app.services.subscription_billing_treatments import (
+        resolve_subscription_billing_treatments,
+    )
 
-    rows = db.scalars(
-        select(Subscription).where(
-            Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
-            Subscription.billing_mode == BillingMode.prepaid,
-        )
-    ).all()
+    rows = list(
+        db.scalars(
+            select(Subscription).where(
+                Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+                Subscription.billing_mode == BillingMode.prepaid,
+            )
+        ).all()
+    )
+    treatments = resolve_subscription_billing_treatments(db, rows, as_of=as_of)
+    confirmed_free_ids = confirmed_free_subscription_ids(db, rows)
     blocked: list[tuple[Subscription, ChargeInputs]] = []
     for sub in sorted(rows, key=lambda item: str(item.id)):
+        if treatments[sub.id].suppress_customer_billing or sub.id in confirmed_free_ids:
+            continue
         inputs = _charge_inputs(db, sub)
         if _unit_price_missing(sub) or inputs.reasons(
             enforcement_currency=enforcement_currency
@@ -441,11 +472,42 @@ def preview_prepaid_renewal_terms_backfill(
     currency = resolve_prepaid_enforcement_currency(db)
     items = tuple(
         _classify(db, sub, inputs, enforcement_currency=currency)
-        for sub, inputs in _blocked_subscriptions(db, enforcement_currency=currency)
+        for sub, inputs in _blocked_subscriptions(
+            db, enforcement_currency=currency, as_of=as_of
+        )
     )
     return RenewalTermsBackfillPreview(
         as_of=as_of, items=items, fingerprint=_fingerprint(items)
     )
+
+
+class RenewalTermsNextAction(StrEnum):
+    """The sanctioned finance next step for one work-item decision."""
+
+    reviewed_record = "reviewed_renewal_term_record"
+    charge_inputs = "resolve_charge_inputs"
+
+
+#: admin_alerts.summary is VARCHAR(255) in production PostgreSQL.
+WORK_ITEM_SUMMARIES: dict[RenewalTermsNextAction, str] = {
+    RenewalTermsNextAction.reviewed_record: (
+        "Prepaid subscription has no contracted amount and its paid evidence "
+        "is missing or conflicting. Request and approve a reviewed "
+        "renewal-term record with evidence; never infer it from the catalog. "
+        "See runbook."
+    ),
+    RenewalTermsNextAction.charge_inputs: (
+        "Prepaid subscription lacks charge inputs (recurring price metadata "
+        "or monthly cadence). Decide billable vs complimentary first; a "
+        "price alone cannot clear this item. See runbook."
+    ),
+}
+
+
+def _next_action(decision: RenewalTermsDecision) -> RenewalTermsNextAction:
+    if decision is RenewalTermsDecision.missing_charge_inputs:
+        return RenewalTermsNextAction.charge_inputs
+    return RenewalTermsNextAction.reviewed_record
 
 
 def _sync_evidence_work_items(
@@ -454,45 +516,47 @@ def _sync_evidence_work_items(
     *,
     now: datetime,
 ) -> None:
-    from app.models.network_monitoring import AlertSeverity
-    from app.services.observability import Finding, record_finding, resolve_findings
+    from app.services.observability import resolve_findings
 
     for item in unresolved:
-        record_finding(
-            db,
-            Finding(
-                fingerprint=f"{_FINDING_PREFIX}{item.subscription_id}",
-                domain="prepaid_enforcement",
-                source="prepaid_renewal_terms_backfill",
-                severity=AlertSeverity.warning,
-                title="Prepaid renewal terms need finance review",
-                summary=(
-                    "Active prepaid subscription with no frozen contracted "
-                    "amount; paid-invoice evidence is missing or conflicting. "
-                    "Record the price via a reviewed staff correction — never "
-                    "inferred from the catalog."
-                ),
-                details={
-                    "owner": "finance-billing",
-                    "account_id": str(item.account_id),
-                    "subscription_id": str(item.subscription_id),
-                    "decision": item.decision.value,
-                    "insufficiency_reasons": list(item.insufficiency_reasons),
-                    "distinct_paid_amounts": [
-                        str(a) for a in item.distinct_paid_amounts
-                    ],
-                    "sla_due_at": (
-                        now + timedelta(hours=_EVIDENCE_SLA_HOURS)
-                    ).isoformat(),
-                },
-            ),
-        )
+        _record_evidence_work_item(db, item, now=now)
     resolve_findings(
         db,
         managed_prefix=_FINDING_PREFIX,
         active_fingerprints={
             f"{_FINDING_PREFIX}{item.subscription_id}" for item in unresolved
         },
+    )
+
+
+def _record_evidence_work_item(
+    db: Session, item: RenewalTermsEvidenceItem, *, now: datetime
+) -> None:
+    from app.models.network_monitoring import AlertSeverity
+    from app.services.observability import Finding, record_finding
+
+    next_action = _next_action(item.decision)
+    record_finding(
+        db,
+        Finding(
+            fingerprint=f"{_FINDING_PREFIX}{item.subscription_id}",
+            domain="prepaid_enforcement",
+            source="prepaid_renewal_terms_backfill",
+            severity=AlertSeverity.warning,
+            title="Prepaid renewal terms need finance review",
+            summary=WORK_ITEM_SUMMARIES[next_action],
+            details={
+                "owner": RENEWAL_TERMS_WORK_ITEM_OWNER,
+                "runbook": RENEWAL_TERMS_RUNBOOK,
+                "next_action": next_action.value,
+                "account_id": str(item.account_id),
+                "subscription_id": str(item.subscription_id),
+                "decision": item.decision.value,
+                "insufficiency_reasons": list(item.insufficiency_reasons),
+                "distinct_paid_amounts": [str(a) for a in item.distinct_paid_amounts],
+                "sla_due_at": (now + timedelta(hours=_EVIDENCE_SLA_HOURS)).isoformat(),
+            },
+        ),
     )
 
 
@@ -845,10 +909,12 @@ def _sync_correction_work_item(
             summary=(
                 "A previously restored contracted amount was reverted to the "
                 "fail-closed state after finance review. Record the correct "
-                "price via a reviewed correction."
+                "price via a reviewed renewal-term record. See runbook."
             ),
             details={
-                "owner": "finance-billing",
+                "owner": RENEWAL_TERMS_WORK_ITEM_OWNER,
+                "runbook": RENEWAL_TERMS_RUNBOOK,
+                "next_action": RenewalTermsNextAction.reviewed_record.value,
                 "account_id": str(subscription.subscriber_id),
                 "subscription_id": str(subscription.id),
                 "decision": "correction_fail_closed",
@@ -992,3 +1058,641 @@ def _confirms_current_amount(
 ) -> bool:
     proven = [e for e in verdict.evidence if e.compatible and e.full_cycle]
     return bool(proven) and all(e.unit_price == current for e in proven)
+
+
+# ---------------------------------------------------------------------------
+# Finance-reviewed renewal-term record (four-eyes, two-step).
+#
+# The backfill above restores an amount only from exact paid evidence and the
+# correction command only supersedes amounts this owner already restored. A
+# subscription that was never restored — no paid evidence, contradictory paid
+# amounts, or no canonical full-cycle proof — had no sanctioned writer: the
+# generic admin subscription form was the only path, with no evidence,
+# reason, or approval contract. This is that writer.
+#
+# ``request`` records a proposal (subscription, positive amount, expected
+# current value, reason, evidence reference + SHA-256, requesting staff
+# member) as durable record-only evidence and changes nothing. ``approve`` by
+# a DIFFERENT staff member re-validates every precondition under the
+# subscription lock, writes ``Subscription.unit_price``, emits
+# ``prepaid_renewal_terms.recorded``, and resolves the finance work item in
+# the same transaction. Catalog prices are never read for the amount and
+# never written.
+# ---------------------------------------------------------------------------
+
+_RECORD_CONCERN = "finance-reviewed prepaid renewal-term record"
+_REQUEST_RECORD_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=_RECORD_CONCERN,
+    name="request_reviewed_renewal_term_record",
+)
+_APPROVE_RECORD_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=_RECORD_CONCERN,
+    name="approve_reviewed_renewal_term_record",
+)
+_RECORD_SCHEMA_VERSION = 1
+#: Stable namespace for deterministic request/approval event identities.
+_RECORD_NAMESPACE = UUID("0f6b7a2e-3c1d-4f5e-9a8b-6c7d8e9f0a1b")
+#: Decisions whose amount cannot be restored from evidence and therefore
+#: needs a finance-reviewed record. ``missing_charge_inputs`` is deliberately
+#: absent: a price alone cannot unblock it, and on an offer that has no
+#: recurring price at all it would turn unpriced service into billed service.
+#: ``repairable`` is absent because the backfill restores it from evidence.
+RECORDABLE_DECISIONS: frozenset[RenewalTermsDecision] = frozenset(
+    {
+        RenewalTermsDecision.no_evidence,
+        RenewalTermsDecision.ambiguous_amounts,
+        RenewalTermsDecision.insufficient_cycle_evidence,
+    }
+)
+_MAX_REASON_LENGTH = 500
+_MAX_EVIDENCE_REFERENCE_LENGTH = 200
+_HEX = frozenset("0123456789abcdef")
+
+
+class RenewalTermRecordStatus(StrEnum):
+    requested = "requested"
+    recorded = "recorded"
+
+
+@dataclass(frozen=True, slots=True)
+class RequestRenewalTermRecordCommand:
+    """Finance proposal for one never-restored subscription's contracted amount.
+
+    ``requested_by`` is the real staff principal (``SystemUser.id``) whose
+    granted role authorized ``permission_granted``; ``context.actor`` stays a
+    free-text audit label. ``expected_current_amount`` is the optimistic
+    check: ``None`` when the stored price is NULL, else the stored value.
+    """
+
+    subscription_id: UUID
+    reviewed_amount: Decimal
+    expected_current_amount: Decimal | None
+    reason: str
+    evidence_reference: str
+    evidence_sha256: str
+    requested_by: UUID
+    permission_granted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ApproveRenewalTermRecordCommand:
+    """Second-person approval of one recorded proposal.
+
+    The approver restates the amount being approved, so an approval can never
+    be given without seeing what it applies.
+    """
+
+    request_id: UUID
+    approved_amount: Decimal
+    approved_by: UUID
+    permission_granted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RenewalTermRecordRequest:
+    """Durable read model of one proposal and its decision, if any."""
+
+    request_id: UUID
+    subscription_id: UUID
+    account_id: UUID
+    decision: RenewalTermsDecision
+    reviewed_amount: Decimal
+    expected_current_amount: Decimal | None
+    reason: str
+    evidence_reference: str
+    evidence_sha256: str
+    requested_by: UUID
+    requested_at: datetime
+    status: RenewalTermRecordStatus
+    approved_by: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RenewalTermRecordResult:
+    request_id: UUID
+    subscription_id: UUID
+    status: RenewalTermRecordStatus
+    previous_amount: Decimal | None
+    new_amount: Decimal | None
+    work_item_resolved: bool
+    remaining_reasons: tuple[str, ...]
+    replayed: bool
+
+
+def _request_event_id(idempotency_key: str) -> UUID:
+    return uuid5(_RECORD_NAMESPACE, f"{OWNER}:record-request:{idempotency_key}")
+
+
+def _approval_event_id(request_id: UUID) -> UUID:
+    return uuid5(_RECORD_NAMESPACE, f"{OWNER}:record-approval:{request_id}")
+
+
+def _money(value: Decimal | None) -> Decimal | None:
+    if value is None:
+        return None
+    if not value.is_finite():
+        raise _error("invalid_reviewed_amount", "Amounts must be finite decimals.")
+    return value.quantize(Decimal("0.01"))
+
+
+def _stored_money(raw: object) -> Decimal | None:
+    return None if raw is None else Decimal(str(raw))
+
+
+def _require_staff(
+    db: Session,
+    *,
+    context: CommandContext,
+    system_user_id: UUID,
+    permission_granted: bool,
+) -> None:
+    from app.models.system_user import SystemUser
+
+    if context.scope != RENEWAL_TERM_RECORD_PERMISSION or not permission_granted:
+        raise _error(
+            "permission_denied",
+            f"The {RENEWAL_TERM_RECORD_PERMISSION} permission is required.",
+        )
+    user = db.get(SystemUser, system_user_id)
+    if user is None or not user.is_active:
+        raise _error(
+            "invalid_actor",
+            "The staff member must be an existing, active system user.",
+        )
+
+
+def _validate_request(command: RequestRenewalTermRecordCommand) -> Decimal:
+    amount = _money(command.reviewed_amount)
+    if amount is None or amount <= Decimal("0.00"):
+        # Zero is a claim, not an absent price: genuinely complimentary
+        # service goes through the billing-treatment owner instead.
+        raise _error(
+            "invalid_reviewed_amount",
+            "A reviewed renewal-term record requires a positive amount; "
+            "complimentary service uses a billing treatment.",
+        )
+    reason = command.reason.strip()
+    if not reason or len(reason) > _MAX_REASON_LENGTH:
+        raise _error(
+            "invalid_review_reason",
+            f"A reason of 1-{_MAX_REASON_LENGTH} characters is required.",
+        )
+    reference = command.evidence_reference.strip()
+    digest = command.evidence_sha256.strip().lower()
+    if (
+        not reference
+        or len(reference) > _MAX_EVIDENCE_REFERENCE_LENGTH
+        or len(digest) != 64
+        or not set(digest) <= _HEX
+    ):
+        raise _error(
+            "invalid_evidence",
+            "An evidence reference and the evidence's 64-hex SHA-256 are required.",
+        )
+    return amount
+
+
+def _locked_subscription(db: Session, subscription_id: UUID) -> Subscription:
+    subscription = db.execute(
+        select(Subscription).where(Subscription.id == subscription_id).with_for_update()
+    ).scalar_one_or_none()
+    if subscription is None:
+        raise _error("subscription_not_found", "Subscription was not found.")
+    return subscription
+
+
+def _current_amount(subscription: Subscription) -> Decimal | None:
+    return (
+        Decimal(str(subscription.unit_price))
+        if subscription.unit_price is not None
+        else None
+    )
+
+
+def _recordable_item(
+    db: Session, subscription: Subscription, *, now: datetime
+) -> RenewalTermsEvidenceItem:
+    """Re-derive cohort membership and the live decision; fail closed."""
+    from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+    from app.services.customer_chargeability import confirmed_free_subscription_ids
+    from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
+    from app.services.subscription_billing_treatments import (
+        subscription_has_open_billing_treatment,
+    )
+
+    if subscription_has_open_billing_treatment(db, subscription.id, as_of=now):
+        raise _error(
+            "billing_treatment_open",
+            "The subscription has an open complimentary or sponsored billing "
+            "treatment; its price cannot change while the treatment is open.",
+        )
+    if (
+        subscription.billing_mode != BillingMode.prepaid
+        or subscription.status not in COLLECTIBLE_SERVICE_STATUSES
+        or not _unit_price_missing(subscription)
+    ):
+        raise _error(
+            "not_in_record_cohort",
+            "Only collectible prepaid subscriptions without a contracted "
+            "amount can receive a reviewed renewal-term record.",
+        )
+    if subscription.id in confirmed_free_subscription_ids(db, [subscription]):
+        raise _error(
+            "not_in_record_cohort",
+            "The catalog declares this service free (explicit zero recurring "
+            "price); a positive record would contradict it. Change the plan "
+            "through the catalog/plan-change owner if it should be billed.",
+        )
+    currency = resolve_prepaid_enforcement_currency(db)
+    item = _classify(
+        db,
+        subscription,
+        _charge_inputs(db, subscription),
+        enforcement_currency=currency,
+    )
+    if item.decision is RenewalTermsDecision.missing_charge_inputs:
+        raise _error(
+            "charge_inputs_missing",
+            "The subscription lacks charge inputs ("
+            + ", ".join(item.insufficiency_reasons)
+            + "); decide billable vs complimentary and fix the price metadata "
+            "first. A price alone cannot clear this.",
+        )
+    if item.decision not in RECORDABLE_DECISIONS:
+        raise _error(
+            "evidence_repairable",
+            "Paid evidence proves the contracted amount; the scheduled "
+            "backfill restores it. A reviewed record must not override it.",
+        )
+    return item
+
+
+def _event_payload(db: Session, *, event_id: UUID, event_type: str) -> dict | None:
+    from app.models.event_store import EventStore
+
+    event = db.execute(
+        select(EventStore).where(
+            EventStore.event_id == event_id,
+            EventStore.event_type == event_type,
+        )
+    ).scalar_one_or_none()
+    return dict(event.payload or {}) if event is not None else None
+
+
+def _load_request(db: Session, request_id: UUID) -> RenewalTermRecordRequest | None:
+    from app.services.events import EventType
+
+    payload = _event_payload(
+        db,
+        event_id=request_id,
+        event_type=EventType.prepaid_renewal_terms_record_requested.value,
+    )
+    if payload is None:
+        return None
+    return _request_from_payload(payload, approval=_load_approval(db, request_id))
+
+
+def _load_approval(db: Session, request_id: UUID) -> dict | None:
+    from app.services.events import EventType
+
+    return _event_payload(
+        db,
+        event_id=_approval_event_id(request_id),
+        event_type=EventType.prepaid_renewal_terms_recorded.value,
+    )
+
+
+def _request_from_payload(
+    payload: dict, *, approval: dict | None
+) -> RenewalTermRecordRequest:
+    reviewed = Decimal(str(payload["reviewed_amount"]))
+    return RenewalTermRecordRequest(
+        request_id=UUID(str(payload["request_id"])),
+        subscription_id=UUID(str(payload["subscription_id"])),
+        account_id=UUID(str(payload["account_id"])),
+        decision=RenewalTermsDecision(str(payload["decision"])),
+        reviewed_amount=reviewed,
+        expected_current_amount=_stored_money(payload.get("expected_current_amount")),
+        reason=str(payload["reason"]),
+        evidence_reference=str(payload["evidence_reference"]),
+        evidence_sha256=str(payload["evidence_sha256"]),
+        requested_by=UUID(str(payload["requested_by_system_user_id"])),
+        requested_at=datetime.fromisoformat(str(payload["requested_at"])),
+        status=(
+            RenewalTermRecordStatus.recorded
+            if approval is not None
+            else RenewalTermRecordStatus.requested
+        ),
+        approved_by=(
+            UUID(str(approval["approved_by_system_user_id"]))
+            if approval is not None
+            else None
+        ),
+    )
+
+
+def list_renewal_term_record_requests(
+    db: Session,
+    *,
+    subscription_id: UUID | None = None,
+    include_recorded: bool = False,
+) -> tuple[RenewalTermRecordRequest, ...]:
+    """Read-only: proposals (pending only by default), oldest first."""
+    from app.models.event_store import EventStore
+    from app.services.events import EventType
+
+    query = select(EventStore).where(
+        EventStore.event_type == EventType.prepaid_renewal_terms_record_requested.value
+    )
+    if subscription_id is not None:
+        query = query.where(EventStore.subscription_id == subscription_id)
+    rows: list[RenewalTermRecordRequest] = []
+    for event in db.execute(query.order_by(EventStore.created_at)).scalars():
+        payload = dict(event.payload or {})
+        request = _request_from_payload(
+            payload,
+            approval=_load_approval(db, UUID(str(payload["request_id"]))),
+        )
+        if include_recorded or request.status is RenewalTermRecordStatus.requested:
+            rows.append(request)
+    return tuple(rows)
+
+
+def request_reviewed_renewal_term_record(
+    db: Session,
+    command: RequestRenewalTermRecordCommand,
+    *,
+    context: CommandContext,
+) -> RenewalTermRecordResult:
+    """Record a finance proposal; changes no price (step 1 of 2)."""
+    return execute_owner_command(
+        db,
+        definition=_REQUEST_RECORD_COMMAND,
+        context=context,
+        operation=lambda: _request_record(db, command=command, context=context),
+    )
+
+
+def _request_record(
+    db: Session,
+    *,
+    command: RequestRenewalTermRecordCommand,
+    context: CommandContext,
+) -> RenewalTermRecordResult:
+    from app.services.events import EventType, emit_event
+
+    if not context.idempotency_key:
+        raise _error(
+            "missing_idempotency_key",
+            "A renewal-term record request requires a business idempotency key.",
+        )
+    _require_staff(
+        db,
+        context=context,
+        system_user_id=command.requested_by,
+        permission_granted=command.permission_granted,
+    )
+    amount = _validate_request(command)
+    expected = _money(command.expected_current_amount)
+    digest = command.evidence_sha256.strip().lower()
+    request_id = _request_event_id(context.idempotency_key)
+
+    existing = _load_request(db, request_id)
+    if existing is not None:
+        if (
+            existing.subscription_id != command.subscription_id
+            or existing.reviewed_amount != amount
+            or existing.expected_current_amount != expected
+            or existing.evidence_sha256 != digest
+            or existing.requested_by != command.requested_by
+        ):
+            raise _error(
+                "idempotency_conflict",
+                "This idempotency key already recorded a different proposal.",
+            )
+        return RenewalTermRecordResult(
+            request_id=request_id,
+            subscription_id=existing.subscription_id,
+            status=existing.status,
+            previous_amount=existing.expected_current_amount,
+            new_amount=(
+                existing.reviewed_amount
+                if existing.status is RenewalTermRecordStatus.recorded
+                else None
+            ),
+            work_item_resolved=False,
+            remaining_reasons=(),
+            replayed=True,
+        )
+
+    subscription = _locked_subscription(db, command.subscription_id)
+    now = datetime.now(UTC)
+    item = _recordable_item(db, subscription, now=now)
+    current = _current_amount(subscription)
+    if current != expected:
+        raise _error(
+            "stale_current_amount",
+            "The subscription's current amount differs from the expected value; "
+            "re-read it before requesting a record.",
+        )
+    emit_event(
+        db,
+        EventType.prepaid_renewal_terms_record_requested,
+        {
+            "schema_version": _RECORD_SCHEMA_VERSION,
+            "request_id": str(request_id),
+            "subscription_id": str(subscription.id),
+            "account_id": str(subscription.subscriber_id),
+            "decision": item.decision.value,
+            "insufficiency_reasons": list(item.insufficiency_reasons),
+            "distinct_paid_amounts": [str(a) for a in item.distinct_paid_amounts],
+            "reviewed_amount": str(amount),
+            "expected_current_amount": (
+                str(expected) if expected is not None else None
+            ),
+            "reason": command.reason.strip(),
+            "evidence_reference": command.evidence_reference.strip(),
+            "evidence_sha256": digest,
+            "requested_by_system_user_id": str(command.requested_by),
+            "requested_at": now.isoformat(),
+            "actor": context.actor,
+            "command_id": str(context.command_id),
+            "idempotency_key": context.idempotency_key,
+        },
+        event_id=request_id,
+        actor=context.actor,
+        subscriber_id=subscription.subscriber_id,
+        account_id=subscription.subscriber_id,
+        subscription_id=subscription.id,
+        record_only=True,
+    )
+    logger.info(
+        "prepaid_renewal_term_record_requested: request=%s subscription=%s decision=%s",
+        request_id,
+        subscription.id,
+        item.decision.value,
+    )
+    return RenewalTermRecordResult(
+        request_id=request_id,
+        subscription_id=subscription.id,
+        status=RenewalTermRecordStatus.requested,
+        previous_amount=current,
+        new_amount=None,
+        work_item_resolved=False,
+        remaining_reasons=item.insufficiency_reasons,
+        replayed=False,
+    )
+
+
+def approve_reviewed_renewal_term_record(
+    db: Session,
+    command: ApproveRenewalTermRecordCommand,
+    *,
+    context: CommandContext,
+) -> RenewalTermRecordResult:
+    """A second staff member approves and applies a proposal (step 2 of 2)."""
+    return execute_owner_command(
+        db,
+        definition=_APPROVE_RECORD_COMMAND,
+        context=context,
+        operation=lambda: _approve_record(db, command=command, context=context),
+    )
+
+
+def _approve_record(
+    db: Session,
+    *,
+    command: ApproveRenewalTermRecordCommand,
+    context: CommandContext,
+) -> RenewalTermRecordResult:
+    from app.services.events import EventType, emit_event
+    from app.services.observability import resolve_findings
+    from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
+
+    if not context.idempotency_key:
+        raise _error(
+            "missing_idempotency_key",
+            "A renewal-term record approval requires a business idempotency key.",
+        )
+    _require_staff(
+        db,
+        context=context,
+        system_user_id=command.approved_by,
+        permission_granted=command.permission_granted,
+    )
+    request = _load_request(db, command.request_id)
+    if request is None:
+        raise _error(
+            "request_not_found", "The renewal-term record request was not found."
+        )
+    if command.approved_by == request.requested_by:
+        raise _error(
+            "self_approval_forbidden",
+            "The approver must be a different staff member from the requester.",
+        )
+    if _money(command.approved_amount) != request.reviewed_amount:
+        raise _error(
+            "approval_amount_mismatch",
+            "The approved amount does not match the requested amount.",
+        )
+    if request.status is RenewalTermRecordStatus.recorded:
+        if request.approved_by == command.approved_by:
+            return RenewalTermRecordResult(
+                request_id=request.request_id,
+                subscription_id=request.subscription_id,
+                status=RenewalTermRecordStatus.recorded,
+                previous_amount=request.expected_current_amount,
+                new_amount=request.reviewed_amount,
+                work_item_resolved=False,
+                remaining_reasons=(),
+                replayed=True,
+            )
+        raise _error(
+            "request_already_decided",
+            "This renewal-term record request was already approved.",
+        )
+
+    subscription = _locked_subscription(db, request.subscription_id)
+    now = datetime.now(UTC)
+    item = _recordable_item(db, subscription, now=now)
+    previous = _current_amount(subscription)
+    if previous != request.expected_current_amount:
+        raise _error(
+            "stale_current_amount",
+            "The subscription's amount changed since the request; submit a new "
+            "request against the current value.",
+        )
+    subscription.unit_price = request.reviewed_amount
+    db.flush()
+
+    # Re-derive the work item from the post-write state in this transaction.
+    # Charge inputs were intact for every recordable decision, so the item
+    # closes; if they were not, it stays open with its new reasons rather
+    # than being silently resolved by a price alone.
+    currency = resolve_prepaid_enforcement_currency(db)
+    inputs = _charge_inputs(db, subscription)
+    remaining = inputs.reasons(enforcement_currency=currency)
+    if remaining:
+        _record_evidence_work_item(
+            db,
+            _classify(db, subscription, inputs, enforcement_currency=currency),
+            now=now,
+        )
+        work_item_resolved = False
+    else:
+        resolve_findings(
+            db,
+            managed_prefix=f"{_FINDING_PREFIX}{subscription.id}",
+            active_fingerprints=set(),
+        )
+        work_item_resolved = True
+
+    emit_event(
+        db,
+        EventType.prepaid_renewal_terms_recorded,
+        {
+            "schema_version": _RECORD_SCHEMA_VERSION,
+            "request_id": str(request.request_id),
+            "subscription_id": str(subscription.id),
+            "account_id": str(subscription.subscriber_id),
+            "decision_at_request": request.decision.value,
+            "decision_at_approval": item.decision.value,
+            "previous_amount": str(previous) if previous is not None else None,
+            "new_amount": str(request.reviewed_amount),
+            "reason": request.reason,
+            "evidence_reference": request.evidence_reference,
+            "evidence_sha256": request.evidence_sha256,
+            "requested_by_system_user_id": str(request.requested_by),
+            "approved_by_system_user_id": str(command.approved_by),
+            "approved_at": now.isoformat(),
+            "actor": context.actor,
+            "command_id": str(context.command_id),
+            "idempotency_key": context.idempotency_key,
+            "work_item_resolved": work_item_resolved,
+            "remaining_reasons": list(remaining),
+        },
+        event_id=_approval_event_id(request.request_id),
+        actor=context.actor,
+        subscriber_id=subscription.subscriber_id,
+        account_id=subscription.subscriber_id,
+        subscription_id=subscription.id,
+    )
+    logger.info(
+        "prepaid_renewal_term_recorded: request=%s subscription=%s "
+        "work_item_resolved=%s",
+        request.request_id,
+        subscription.id,
+        work_item_resolved,
+    )
+    return RenewalTermRecordResult(
+        request_id=request.request_id,
+        subscription_id=subscription.id,
+        status=RenewalTermRecordStatus.recorded,
+        previous_amount=previous,
+        new_amount=request.reviewed_amount,
+        work_item_resolved=work_item_resolved,
+        remaining_reasons=remaining,
+        replayed=False,
+    )

@@ -525,7 +525,7 @@ def _sync_quarantine_work_items(
                     "ambiguous debt."
                 ),
                 details={
-                    "owner": "finance-billing",
+                    "owner": "financial-billing",
                     "account_id": str(account_id),
                     "reason_codes": sorted(reasons_by_account[account_id]),
                     "sla_due_at": (

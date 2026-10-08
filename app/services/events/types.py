@@ -182,6 +182,8 @@ class EventType(enum.Enum):
     prepaid_renewal_terms_backfilled = "prepaid_renewal_terms.backfilled"
     prepaid_renewal_terms_corrected = "prepaid_renewal_terms.corrected"
     prepaid_renewal_terms_audited = "prepaid_renewal_terms.audited"
+    prepaid_renewal_terms_record_requested = "prepaid_renewal_terms.record_requested"
+    prepaid_renewal_terms_recorded = "prepaid_renewal_terms.recorded"
     prepaid_proforma_adopted = "prepaid_proforma.adopted"
     prepaid_paid_invoice_repaired = "prepaid_paid_invoice.repaired"
     prepaid_paid_invoice_coverage_corrected = "prepaid_paid_invoice.coverage_corrected"
