@@ -13,13 +13,13 @@ const status = id => ({request_id: id, accepted: true, materialization_status: '
     delivered_count: 0, submitted_count: 0, pending_count: 0, failed_count: 0, canceled_count: 0,
     error: null, status_url: `/admin/customers/bulk/send-message/${id}`});
 const response = (code, body) => ({ok: code < 400, status: code, json: async () => body});
-function runtime(fetch, storage = new Map()) {
+function runtime(fetch, storage = new Map(), panel = null) {
     const callbacks = {};
     const context = {
         window: {}, fetch, crypto: webcrypto, TextEncoder, AbortController,
         setTimeout: () => 1, clearTimeout: () => {},
         sessionStorage: {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key)},
-        document: {getElementById: () => null, querySelector: () => null,
+        document: {getElementById: () => panel, querySelector: () => null,
             addEventListener: (name, handler) => {callbacks[name] = handler;}},
     };
     vm.runInNewContext(source, context);
@@ -109,4 +109,20 @@ test('a malformed successful response checks the receipt instead of claiming fai
         return response(200, status(id));
     });
     assert.equal((await client.send(payload, {})).accepted, true);
+});
+
+test('the status panel renders matched, suppressed and skipped counts from the receipt', async () => {
+    const message = {textContent: ''};
+    const reference = {textContent: ''};
+    const panel = {hidden: true, querySelector: selector => selector === '[data-send-message]' ? message : reference};
+    const client = runtime(async (_url, options) => {
+        const id = JSON.parse(options.body).request_id;
+        return response(202, {...status(id), matched_count: 10,
+            planned_queued_count: 5, planned_suppressed_count: 2, skipped_count: 3});
+    }, new Map(), panel);
+    const result = await client.send(payload, {});
+    assert.equal(panel.hidden, false);
+    assert.match(message.textContent, /Matched 10 customer\(s\)/);
+    assert.match(message.textContent, /5 delivery requests; 2 suppressed; 3 skipped/);
+    assert.equal(reference.textContent, result.request_id);
 });

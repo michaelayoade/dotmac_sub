@@ -264,11 +264,10 @@ def test_customer_bulk_actions_sync_selection_from_checked_rows_before_submit():
     )
     assert "Matched ${status.matched_count} customer(s)." in runtime
     assert "DotmacCustomerBulkSend.send" in page_template
-    assert "skipped due to missing contact details" in page_template
-    assert "excluded because they have open tickets" in page_template
-    assert "suppressed by preferences, dedupe, or other template conditions" in (
-        page_template
-    )
+    assert "${status.skipped_count} skipped." in runtime
+    assert "${status.planned_suppressed_count} suppressed" in runtime
+    assert "messagePreviewOpenTicketCount()" in page_template
+    assert "messagePreviewOtherSuppressionCount()" in page_template
 
 
 def test_bulk_update_customers_requires_explicit_filtered_scope_preview_and_confirmation(
