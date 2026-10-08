@@ -280,8 +280,10 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use Timeline to review recent events, then open linked records for the detail behind a change.",
         "Open the specific record before performing a state-changing action.",
         "After confirming a customer message, use the send status panel to follow recipient preparation and delivery. If confirmation is lost, keep the send reference and choose Check status before submitting another send.",
+        "If a prepaid funding quarantine banner appears, prepaid service cannot be created or activated until Finance captures the account's opening balance through the runbook the banner names. Only when the customer must be connected first, an admin may grant an activation override with a clear reason; revoke it once the opening is captured.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "An activation override only admits prepaid activation. The account stays funding-quarantined, excluded from balance-based suspension and restoration, and still counts in the quarantine alert until its opening is captured.",
             "Authorized staff can open Test Connection below the Invoice icon in All Subscriptions to grant temporary full service access for troubleshooting; review the configured system-wide duration and expiry before activation.",
             "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
             "The action requires permission to cancel payment intents and review payment proofs.",
@@ -1236,6 +1238,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Check customer message send status",
             7,
             permission="communications:customer:send",
+        ),
+        _action(
+            "prepaid-activation-override",
+            "Handle a prepaid funding quarantine",
+            8,
+            permission="billing:prepaid_funding:activation_override",
         ),
     ),
     "subscription-test-connection": (
