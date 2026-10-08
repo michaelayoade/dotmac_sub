@@ -191,7 +191,7 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
             {
                 "name": "Churn",
                 "url": "/admin/reports/churn",
-                "description": "Retention, churn reasons, and cancellations",
+                "description": "Retention, churn reasons, cancellations, and suspensions",
                 "permission": "customer:read",
             },
             {
@@ -1041,9 +1041,9 @@ def reports_churn(
         "churn_rate": report_data.churn_rate,
         "retention_rate": report_data.retention_rate,
         "cancelled_count": report_data.cancelled_count,
-        "at_risk_count": report_data.at_risk_count,
+        "suspended_count": report_data.suspended_count,
         "churn_reasons": report_data.churn_reasons,
-        "recent_cancellations": report_data.recent_cancellations,
+        "recent_events": report_data.recent_events,
         "churn_chart": report_data.churn_chart,
         "period_filter": period,
         "status_filter": report_data.status_filter,

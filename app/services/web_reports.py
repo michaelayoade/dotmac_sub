@@ -133,9 +133,9 @@ class ChurnReportData:
     churn_rate: float
     retention_rate: float
     cancelled_count: int
-    at_risk_count: int
+    suspended_count: int
     churn_reasons: Mapping[str, int]
-    recent_cancellations: tuple[subscriber_growth.RecentChurnEvent, ...]
+    recent_events: tuple[subscriber_growth.RecentChurnEvent, ...]
     churn_chart: ChartProjection
     period: str
     status_filter: str
@@ -903,7 +903,7 @@ def get_churn_report_data(
 ) -> ChurnReportData:
     """Compose the churn report from the subscriber growth/churn read owner.
 
-    Counts, the monthly churn series, and the recent-cancellation list are
+    Counts, the monthly churn series, and the recent churn-event list are
     owned by app.services.subscriber_growth; this function assembles and
     presents.
     """
@@ -925,18 +925,18 @@ def get_churn_report_data(
         # keep the unfiltered path identical to the historical report.
         summary = subscriber_growth.churn_summary(db=db)
     total_subscribers = summary.total
-    at_risk_count = summary.at_risk_count
+    suspended_count = summary.suspended_count
     # KPI-parity: churn_summary() uses the strict persisted status rule that
     # drives the selected event/date window, so the Cancellations tile cannot
     # silently ignore the active report filters.
     cancelled_count = summary.cancelled_count
     active_count = summary.active_count
     event_count = (
-        at_risk_count
+        suspended_count
         if status_filter == AccountStatus.suspended.value
         else cancelled_count
         if status_filter == AccountStatus.canceled.value
-        else summary.churn_count or cancelled_count + at_risk_count
+        else summary.churn_count or cancelled_count + suspended_count
     )
     churn_rate = (event_count / total_subscribers * 100) if total_subscribers > 0 else 0
     # Retention is the strict active share, not the complement of cancellations
@@ -976,9 +976,9 @@ def get_churn_report_data(
             ),
             tone=StatusTone.negative,
         ),
-        "at_risk": Kpi(
-            label="At Risk",
-            value=StateValue.present(at_risk_count),
+        "suspended": Kpi(
+            label="Suspensions",
+            value=StateValue.present(suspended_count),
             cohort_url=_churn_filter_url(
                 status=AccountStatus.suspended.value,
                 period=period_filter,
@@ -994,17 +994,22 @@ def get_churn_report_data(
             tone=StatusTone.positive,
         ),
     }
-    if status_filter == AccountStatus.suspended.value:
-        churn_reasons = {}
-    elif date_from or date_to:
+    if date_from or date_to:
         churn_start, churn_end = subscriber_growth.churn_window(
             date_from=date_from, date_to=date_to
         )
         churn_reasons = dict(
             crm_reporting_service.subscription_churn_reason_counts(
                 db=db,
+                status=status_filter,
                 date_from=churn_start,
                 date_to=churn_end,
+            )
+        )
+    elif status_filter:
+        churn_reasons = dict(
+            crm_reporting_service.subscription_churn_reason_counts(
+                db=db, status=status_filter
             )
         )
     else:
@@ -1054,10 +1059,10 @@ def get_churn_report_data(
         churn_rate=churn_rate,
         retention_rate=retention_rate,
         cancelled_count=cancelled_count,
-        at_risk_count=at_risk_count,
+        suspended_count=suspended_count,
         churn_reasons=churn_reasons,
-        recent_cancellations=tuple(
-            subscriber_growth.recent_cancellations(
+        recent_events=tuple(
+            subscriber_growth.recent_churn_events(
                 db=db,
                 limit=10,
                 status=status_filter,
@@ -1095,7 +1100,7 @@ def build_churn_export_csv(
         date_from=date_from,
         date_to=date_to,
     )
-    events = subscriber_growth.recent_cancellations(
+    events = subscriber_growth.recent_churn_events(
         db=db,
         limit=None,
         status=status_filter,
@@ -1118,7 +1123,7 @@ def build_churn_export_csv(
                 _derive_subscriber_status(sub) == AccountStatus.canceled
                 for sub in legacy_rows
             )
-            at_risk_count = sum(
+            suspended_count = sum(
                 _derive_subscriber_status(sub) == AccountStatus.suspended
                 for sub in legacy_rows
             )
@@ -1129,14 +1134,14 @@ def build_churn_export_csv(
             summary = subscriber_growth.ChurnSummary(
                 total=len(legacy_rows),
                 cancelled_count=cancelled_count,
-                at_risk_count=at_risk_count,
+                suspended_count=suspended_count,
                 active_count=active_count,
                 churn_count=(
                     cancelled_count
                     if status_filter == AccountStatus.canceled.value
-                    else at_risk_count
+                    else suspended_count
                     if status_filter == AccountStatus.suspended.value
-                    else cancelled_count + at_risk_count
+                    else cancelled_count + suspended_count
                 ),
             )
             events = [
@@ -1154,7 +1159,7 @@ def build_churn_export_csv(
             ]
     total_subscribers = summary.total
     event_count = (
-        summary.at_risk_count
+        summary.suspended_count
         if status_filter == AccountStatus.suspended.value
         else summary.cancelled_count
         if status_filter == AccountStatus.canceled.value
@@ -1169,7 +1174,7 @@ def build_churn_export_csv(
     writer.writerow(["metric", "value"])
     writer.writerow(["total_subscribers", total_subscribers])
     writer.writerow(["cancelled_count", summary.cancelled_count])
-    writer.writerow(["at_risk_count", summary.at_risk_count])
+    writer.writerow(["suspended_count", summary.suspended_count])
     writer.writerow(["churn_rate_percent", f"{churn_rate:.2f}"])
     writer.writerow(["retention_rate_percent", f"{retention_rate:.2f}"])
     writer.writerow(["report_window_days", days or ""])

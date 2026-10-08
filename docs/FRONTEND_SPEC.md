@@ -1787,9 +1787,9 @@ Tabs: Network, Revenue, Subscribers, Churn, Technician
     "churn_rate": float,
     "retention_rate": float,
     "cancelled_count": int,
-    "at_risk_count": int,
-    "churn_reasons": {"price": int, "service_quality": int, "moved": int, "competitor": int},
-    "recent_cancellations": list[Subscriber],
+    "suspended_count": int,
+    "churn_reasons": {"payment_hold": int, "price": int, "service_quality": int, "reason_not_captured": int},
+    "recent_events": tuple[RecentChurnEvent, ...],  # cancellations and suspensions
 }
 ```
 
