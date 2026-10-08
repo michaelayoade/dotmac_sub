@@ -150,3 +150,17 @@ identities; additive merge revision 655 joins them with main's native 650 head.
 The combined corrections remain unpublished pending approval. Full CI for the
 combined commit, PostgreSQL predecessor rehearsals, provider and staging
 acceptance remain release gates.
+
+
+### Current-main refresh on 8 October
+
+After publication of `418f9031e`, all six GitHub workflows passed, including CI
+and E2E. Main then advanced to `634e222bc` with prepaid sweep cycle totals.
+Preserve that migration and the complete purchase history through additive,
+schema-neutral merge revision `657_purchase_prepaid_sweep_merge`. Rename only
+the conflicting purchase filename from 651 to 656; its original revision ID,
+parents and SQL remain unchanged. Keep the effective native-head assertion and
+prefix-collision guard strict. The purchase/outage implementation and approved
+manual Finance posting policy are preserved; validate positive enabled purchase
+settlement and approved grants as well as replay, held-cash, pause, extension,
+browser and sweep regressions before publication.

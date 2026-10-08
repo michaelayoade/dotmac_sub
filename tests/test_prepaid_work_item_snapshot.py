@@ -77,20 +77,31 @@ def test_work_item_signals_fit_the_registered_snapshot_bound(monkeypatch):
         lambda key, payload, ttl: stored.update(payload=payload) or True,
     )
 
+    from app.services.collections.prepaid_balance_sweep import (
+        PrepaidSweepCycleTotals,
+        PrepaidSweepOutcome,
+    )
+
     scheduled._publish_prepaid_enforcement_snapshot(
         scheduled._REPAIR_FAILED,
-        {"renewal_terms_unresolved": 7},
+        {"renewal_terms_unresolved": 3},
         {
             "coverage_quarantine_work_items_open": 9.0,
             "renewal_terms_work_items_open": 44.0,
             "work_items_overdue": 3.0,
         },
+        PrepaidSweepCycleTotals(
+            completed_at=_NOW,
+            counts={PrepaidSweepOutcome.renewal_terms_unresolved: 7},
+        ),
+        now=_NOW,
     )
 
     payload = stored["payload"]
     assert isinstance(payload, dict)
     observations = {item["signal"]: item["value"] for item in payload["observations"]}
-    # The existing due-for-enforcement signal keeps its meaning.
+    # The existing due-for-enforcement signal keeps its meaning, now over a
+    # complete sweep cycle rather than one bounded run's slice.
     assert observations["renewal_terms_unresolved"] == 7.0
     assert observations["renewal_terms_work_items_open"] == 44.0
     assert observations["coverage_quarantine_work_items_open"] == 9.0

@@ -106,6 +106,10 @@ def test_purchase_migration_preserves_original_revision_identities_and_merges_ma
         "647_purchase_outage_approval",
         "650_customer_connection_type",
     }
+    assert set(graph["657_purchase_prepaid_sweep_merge"]) == {
+        "655_prepaid_purchase_current_main_merge",
+        "651_prepaid_sweep_cycle_totals",
+    }
     head = "646_prepaid_purchase_safety"
     assert set(graph[head]) == {
         "642_network_map_import_feature_classification",

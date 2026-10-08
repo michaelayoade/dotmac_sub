@@ -67,7 +67,8 @@ _STATE_SNAPSHOT_SPECS = {
     "network_operations": {"max_observations": 32, "ttl_seconds": 86_400},
     # Prepaid enforcement + transitional coverage-repair counts published by
     # every prepaid_balance_sweep run; snapshot age doubles as its heartbeat.
-    # 23 repair/sweep signals + 3 finance work-item backlog signals = 26.
+    # 19 repair/run signals + 5 last-complete-cycle account-state signals +
+    # cycle_totals_age_seconds + 3 finance work-item backlog signals = 28.
     "prepaid_enforcement": {"max_observations": 32, "ttl_seconds": 7 * 86_400},
     "router_sot": {"max_observations": 16, "ttl_seconds": 7 * 86_400},
 }

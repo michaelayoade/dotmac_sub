@@ -199,8 +199,8 @@ Both `billing.prepaid_period_purchase_enabled` and
 `billing.outage_compensation_enabled` default to false. Schema deployment and
 historical overlap/reconciliation checks precede enabling either writer.
 
-Migration filenames 651 through 654 have distinct numeric prefixes beyond
-current main's 650. Their existing revision identities and parent links remain
+Purchase migration filenames 652, 653, 654 and 656 have distinct prefixes;
+main's 651 sweep-metric migration is retained. Their existing revision identities and parent links remain
 unchanged: `636_service_period_purchase_contract`,
 `637_prepaid_period_purchase_intent_contract`, `646_prepaid_purchase_safety`, and
 `647_purchase_outage_approval`. Filename ordering does not replace Alembic's
@@ -208,6 +208,9 @@ revision graph or cause already-applied revisions to execute again.
 `655_prepaid_purchase_current_main_merge` joins the approved-purchase head and
 `650_customer_connection_type` without changing their schemas or parent links;
 fresh installs and upgrades apply both histories before recording the merge.
+`657_purchase_prepaid_sweep_merge` likewise joins that purchase history with
+`651_prepaid_sweep_cycle_totals`. Its upgrade and downgrade change only head
+markers; they neither post grants nor alter feature flags, receipts or periods.
 Revision
 `646_prepaid_purchase_safety` merges the purchase history with main's 642 head,
 adds receipt reservations, capture timestamps, review resolution links, and the

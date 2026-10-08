@@ -372,6 +372,18 @@ result and it does not make the whole sweep wait for PostgreSQL's lock timeout.
 The sweep publishes the bounded `lock_deferred` signal, and persistent deferral
 is a database-pressure alert requiring correlation with the blocking owner.
 
+One sweep coverage cycle (a keyset pass over the whole candidate cohort) can
+span several budget-limited runs, so a run's own outcome counters describe
+only its slice. The sweep therefore tallies each account's outcome per cycle
+in `prepaid_sweep_cycle_state` (keyed by account, last write wins, written in
+the same transaction as the cursor) and the account-state signals
+`renewal_terms_unresolved`, `coverage_unresolved`, `notice_suppressed`,
+`no_contact_route`, and `delivery_unavailable` publish the last COMPLETED
+cycle's totals. They change only when a cycle completes
+(`cycle_totals_age_seconds`), never on a partial run; cycle progress stays on
+`cycle_remaining`/`cycle_age_seconds`, the run's work on
+`accounts_processed`, and `accounts_scanned` is the cohort size.
+
 ### Postpaid
 
 Postpaid dunning:
