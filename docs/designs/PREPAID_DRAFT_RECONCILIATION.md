@@ -676,6 +676,34 @@ preview fingerprints both values. If a later funded period has already advanced
 the billing anchor, the command preserves that anchor rather than moving it
 backwards.
 
+### Reviewed funding displacement correction
+
+A narrower sequence correction handles the reviewed case where three expired
+periods have complete source funding but the stored projections are split
+across a missing imported settlement, an approved opening, and a later payment
+that was applied to the wrong prepaid document. Its typed manifest names the
+three existing documents, the imported Splynx transaction, the existing
+historical allocation, the exact opening position, the displaced allocation,
+the non-prepaid target invoice, and the already-void duplicate.
+
+Preview requires the first document to be paid with the sole historical
+allocation, the second to be the sole incorrectly funded paid document, and the
+third to be a periodless draft. It also proves the exact contract charge, three
+contiguous expired periods, the incorrect active entitlement, the successful
+unreturned displaced payment and settlement, the full target receivable, the
+unconsumed opening, and absence of competing entitlement or payment evidence.
+
+Apply runs once under the same registered owner. It reconstructs only
+non-position settlement structure from the exact Splynx row, preserves the
+existing Payment, releases the displaced allocation, revokes its incorrect
+entitlement, reassigns that existing invoice to the reviewed historical period,
+and settles it from the historical Payment. It then adopts and settles the
+third document from the approved opening and applies the released payment in
+full to the named non-prepaid invoice. The renewal owner projects the anchor to
+the end of the three surviving entitlements. The command rejects any nonzero
+customer-position delta, changed reusable credit, changed Payment row count,
+or incomplete paid/coverage result, rolling back the complete repair.
+
 ## Rollout
 
 1. Deploy the funding-change draft-first guard and funded-renewal invoice path.

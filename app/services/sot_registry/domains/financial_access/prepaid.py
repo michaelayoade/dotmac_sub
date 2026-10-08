@@ -2212,6 +2212,7 @@ SERVICES: tuple[SOTService, ...] = (
             "reviewed missing prepaid paid-invoice repair",
             "reviewed existing prepaid draft settlement",
             "reviewed prepaid invoice sequence reconstruction",
+            "reviewed prepaid invoice sequence funding correction",
             "reviewed pre-opening invoice settlement correction",
             "stranded prepaid draft classification",
             "stranded prepaid draft invoice reconciliation",
@@ -2321,6 +2322,13 @@ SERVICES: tuple[SOTService, ...] = (
             "provider-fee payments use their exact settlement-backed customer "
             "credit instead of captured gross. The owner preserves any later "
             "billing anchor and requires a zero position delta."
+            " A narrower Finance-approved sequence correction reconstructs "
+            "missing Splynx settlement structure as non-position evidence, "
+            "releases one wrongly applied later Payment, retires its incorrect "
+            "entitlement, reassigns the existing document to its exact historical "
+            "period, consumes the approved opening for the third period, and "
+            "moves the released Payment in full to an explicitly named non-prepaid "
+            "invoice. It creates no Payment and requires zero position delta."
             " When the reviewed command explicitly selects continuous-period "
             "funding, the same owner retires the wrong paid invoice, settles "
             "the historical draft from its selected Payment, and invokes the "
@@ -2412,6 +2420,22 @@ SERVICES: tuple[SOTService, ...] = (
                         "reviewed opening funding",
                         "canonical paid invoice allocation evidence",
                         "canonical reviewed service calendar",
+                        "invoice and payment participant protocols",
+                    ),
+                    canonical_writer="financial.prepaid_draft_reconciliation",
+                ),
+                ConcernContract(
+                    name="reviewed prepaid invoice sequence funding correction",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "reviewed invoice-sequence funding correction command",
+                        "canonical prepaid invoice documents",
+                        "canonical prepaid subscription contract",
+                        "imported Splynx payment transaction",
+                        "canonical payment-backed account credit",
+                        "approved customer subledger opening",
+                        "canonical paid invoice allocation evidence",
+                        "canonical funded service entitlement",
                         "invoice and payment participant protocols",
                     ),
                     canonical_writer="financial.prepaid_draft_reconciliation",
@@ -2530,6 +2554,40 @@ SERVICES: tuple[SOTService, ...] = (
                         "authoritative-funding, Finance approval, ticket, digest, "
                         "explicit calendar basis and expected documentary anchor, "
                         "preview, actor, reason, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="reviewed invoice-sequence funding correction command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:prepaid_reconciliation:repair permission checked "
+                        "against the exact chronological invoice set, selected "
+                        "lines and periods, imported transaction and payment "
+                        "identities, payment allocations, opening position, "
+                        "post-repair credit, Finance approval, ticket, evidence "
+                        "digest, preview fingerprint, actor, reason, command, "
+                        "correlation, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical prepaid invoice documents",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked active invoice sequence, selected lines, exact "
+                        "service periods, balances, statuses, allocations, and "
+                        "settlement state"
+                    ),
+                ),
+                AuthorityInput(
+                    name="imported Splynx payment transaction",
+                    owner="external:splynx_import",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "retained imported billing transaction identity, source "
+                        "payment, customer, amount, transaction date, and active "
+                        "deletion state, read through its local mirror"
                     ),
                 ),
                 AuthorityInput(
