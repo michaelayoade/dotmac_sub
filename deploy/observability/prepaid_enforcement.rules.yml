@@ -93,8 +93,10 @@ groups:
             Ambiguous, conflicting, or malformed financial evidence is
             blocking adverse enforcement. Each item is persisted in the
             reconciliation owner's run evidence and needs a finance review;
-            it must never be auto-suspended or silently parked.
-          runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
+            it must never be auto-suspended or silently parked. Run the
+            read-only scripts/billing/diagnose_prepaid_coverage_quarantine.py
+            to list the exact records and their reviewed owners.
+          runbook: "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
 
       # --- Remaining blocked classes must trend to zero (ADR 0007 SLO).
       - alert: PrepaidRenewalTermsUnresolved
