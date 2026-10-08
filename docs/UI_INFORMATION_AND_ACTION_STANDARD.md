@@ -278,6 +278,15 @@ explains the block, and links to that exact invoice. The invoice page keeps
 settlement-backed payment credit, reviewed opening funding, and exact shortfall
 separate; generic displayed account balance is not settlement evidence.
 
+The admin customer and subscription detail pages show a **Prepaid funding
+quarantine** banner when `financial.prepaid_activation_funding_guard` reports
+the account quarantined. It states the owner's reason and remediation runbook,
+and whether the account's prepaid service is already excluded from enforcement.
+Only principals holding `billing:prepaid_funding:activation_override` see the
+override form (reason and explicit acknowledgement that the account stays
+quarantined) or, once recorded, the override's actor, time, and reason with a
+revoke form. The banner renders nothing for accounts the owner does not report.
+
 Familiar icon-only controls are appropriate for compact tools when they have an
 accessible label and tooltip. Business commands use clear text or icon-and-text
 labels.

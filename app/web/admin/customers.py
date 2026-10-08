@@ -36,6 +36,7 @@ from app.services import (
     payment_intent_management,
     payment_proofs,
     subscriber_party_binding_repair,
+    web_prepaid_activation_funding,
 )
 from app.services import customer_network_path as customer_network_path_service
 from app.services import network_monitoring as network_monitoring_service
@@ -75,6 +76,9 @@ from app.services.customer_timeline import CustomerTimelineItem
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.prepaid_activation_funding_guard import (
+    OVERRIDE_PERMISSION as PREPAID_ACTIVATION_OVERRIDE_PERMISSION,
+)
 from app.services.queue_adapter import enqueue_task
 from app.services.subscription_change_execution import (
     RemoteProvisionActionCommand,
@@ -1171,6 +1175,17 @@ def person_detail(
             "can_read_service_extensions": show_service_extensions,
             "can_create_service_extension": can_create_service_extension,
             "party_binding_repair": party_binding_repair,
+            "prepaid_funding_quarantine": (
+                web_prepaid_activation_funding.prepaid_funding_quarantine_banner(
+                    db,
+                    customer.id,
+                    can_override=bool(auth)
+                    and has_permission(
+                        auth, db, PREPAID_ACTIVATION_OVERRIDE_PERMISSION
+                    ),
+                )
+            ),
+            "prepaid_funding_return_to": detail_config["detailUrl"],
             **custom_field_context,
             "sidebar_stats": sidebar_stats,
         },

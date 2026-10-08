@@ -51,6 +51,12 @@ class EventType(enum.Enum):
     subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
     subscriber_billing_mode_changed = "subscriber.billing_mode_changed"
     carried_source_identity_adjudicated = "billing.carried_source_identity.adjudicated"
+    prepaid_activation_funding_override_granted = (
+        "billing.prepaid_activation_funding_override.granted"
+    )
+    prepaid_activation_funding_override_revoked = (
+        "billing.prepaid_activation_funding_override.revoked"
+    )
     subscriber_suspended = "subscriber.suspended"
     subscriber_reactivated = "subscriber.reactivated"
     subscriber_throttled = "subscriber.throttled"

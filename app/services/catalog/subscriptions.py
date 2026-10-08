@@ -39,6 +39,7 @@ from app.schemas.catalog import (
     SubscriptionUpdate,
 )
 from app.services import settings_spec
+from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -958,6 +959,21 @@ class Subscriptions(ListResponseMixin):
             ),
         )
         requested_status = data.get("status")
+        if data["billing_mode"] == BillingMode.prepaid and (
+            requested_status is None or requested_status in COLLECTIBLE_SERVICE_STATUSES
+        ):
+            # A pending prepaid service already joins the prepaid funding
+            # cohort, so admission is decided before anything is staged.
+            from app.services.prepaid_activation_funding_guard import (
+                PrepaidActivationEntryPoint,
+                require_prepaid_activation_funding_admitted,
+            )
+
+            require_prepaid_activation_funding_admitted(
+                db,
+                account_id=payload.subscriber_id,
+                entry_point=PrepaidActivationEntryPoint.subscription_create,
+            )
         if requested_status == SubscriptionStatus.active and not data.get("start_at"):
             data["start_at"] = datetime.now(UTC)
         start_at = data.get("start_at")
@@ -1327,6 +1343,27 @@ class Subscriptions(ListResponseMixin):
                 offer_id=offer_id,
                 requested_mode=data.get("billing_mode"),
             )
+            if (
+                data["billing_mode"] == BillingMode.prepaid
+                and subscription.status in COLLECTIBLE_SERVICE_STATUSES
+                and (
+                    subscription.billing_mode != BillingMode.prepaid
+                    or subscriber_id != str(subscription.subscriber_id)
+                )
+            ):
+                from app.services.prepaid_activation_funding_guard import (
+                    PrepaidActivationEntryPoint,
+                    require_prepaid_activation_funding_admitted,
+                )
+
+                require_prepaid_activation_funding_admitted(
+                    db,
+                    account_id=subscriber_id,
+                    entry_point=(
+                        PrepaidActivationEntryPoint.subscription_billing_mode_change
+                    ),
+                    subscription_id=subscription.id,
+                )
 
         # Plan change validation and proration
         offer_changing = (

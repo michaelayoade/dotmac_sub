@@ -4250,4 +4250,211 @@ SERVICES: tuple[SOTService, ...] = (
             ),
         ),
     ),
+    SOTService(
+        name="financial.prepaid_activation_funding_guard",
+        module="app.services.prepaid_activation_funding_guard",
+        owns=(
+            "prepaid activation funding admission",
+            "prepaid activation funding override decision",
+        ),
+        depends_on=(
+            "auth.staff_provisioning",
+            "billing.opening_balance_history",
+            "customer.accounts",
+            "events.dispatcher",
+            "financial.customer_subledger_opening_positions",
+            "financial.prepaid_funding_reconstruction",
+            "observability.audit_log",
+        ),
+        notes=(
+            "Answers, before prepaid service starts (subscription create, "
+            "pending-to-active activation, subscription or account billing-mode "
+            "change to prepaid, bulk provisioning), whether the account would be "
+            "in the prepaid funding quarantine. It consumes "
+            "prepaid_funding_incomplete_source_account_ids and the carried-source "
+            "identity classifier unchanged and never re-derives them. Admission "
+            "fails closed with the reason and remediation runbook. The only "
+            "bypass is one durable, permission-gated, attributable override per "
+            "account; it never changes the quarantine computation, so the account "
+            "stays excluded from prepaid money actions and stays counted in the "
+            "quarantine signal until its opening is captured. The guard is inert "
+            "before customer-subledger authority activation, when every "
+            "un-opened account is quarantined by design."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="prepaid activation funding admission",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "canonical prepaid funding quarantine",
+                        "canonical carried-source identity classification",
+                        "customer-subledger authority activation",
+                        "recorded activation funding override",
+                    ),
+                ),
+                ConcernContract(
+                    name="prepaid activation funding override decision",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical prepaid funding quarantine",
+                        "canonical carried-source identity classification",
+                        "customer-subledger authority activation",
+                        "active authorized staff actor",
+                        "canonical customer account",
+                        "recorded activation funding override",
+                    ),
+                    canonical_writer="financial.prepaid_activation_funding_guard",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical prepaid funding quarantine",
+                    owner="financial.prepaid_funding_reconstruction",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "prepaid_funding_incomplete_source_account_ids over active "
+                        "reviewed baselines and subledger openings"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical carried-source identity classification",
+                    owner="billing.opening_balance_history",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "classify_opening_balance_source_identities at the fixed "
+                        "legacy financial handoff"
+                    ),
+                ),
+                AuthorityInput(
+                    name="customer-subledger authority activation",
+                    owner="financial.customer_subledger_opening_positions",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="CustomerSubledgerAuthorityCutover singleton row",
+                ),
+                AuthorityInput(
+                    name="active authorized staff actor",
+                    owner="auth.staff_provisioning",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "active SystemUser principal holding "
+                        "billing:prepaid_funding:activation_override"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical customer account",
+                    owner="customer.accounts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Subscriber row, creation instant, and billing mode",
+                ),
+                AuthorityInput(
+                    name="recorded activation funding override",
+                    owner="financial.prepaid_activation_funding_guard",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "prepaid_activation_funding_overrides row with actor, "
+                        "reason, quarantine reason, runbook, and revocation"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "Grant and revoke enter execute_owner_command once on a "
+                    "transaction-free session; the override row, audit event, and "
+                    "staged event commit together. Admission is a flush-only "
+                    "participant check inside the caller's create, activation, or "
+                    "billing-mode transaction and stages its override audit there."
+                ),
+                locking=(
+                    "Grant and revoke lock the account row and the active "
+                    "override; a partial unique index allows one active override "
+                    "per account."
+                ),
+                idempotency=(
+                    "The grant idempotency key is unique; an exact replay returns "
+                    "the stored override and a reused key with different inputs "
+                    "is refused."
+                ),
+                retries=(
+                    "Retry grant with the same idempotency key. A refused "
+                    "activation is retried only after the opening is captured or "
+                    "an override is recorded."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "financial.prepaid_activation_funding_guard"
+                    ),
+                    "financial.prepaid_activation_funding_guard.account_not_found",
+                    "financial.prepaid_activation_funding_guard.actor_unavailable",
+                    "financial.prepaid_activation_funding_guard.funding_quarantined",
+                    ("financial.prepaid_activation_funding_guard.idempotency_conflict"),
+                    "financial.prepaid_activation_funding_guard.invalid_reason",
+                    "financial.prepaid_activation_funding_guard.invalid_scope",
+                    (
+                        "financial.prepaid_activation_funding_guard."
+                        "missing_idempotency_key"
+                    ),
+                    "financial.prepaid_activation_funding_guard.not_quarantined",
+                    (
+                        "financial.prepaid_activation_funding_guard."
+                        "override_already_active"
+                    ),
+                    "financial.prepaid_activation_funding_guard.override_not_found",
+                    "financial.prepaid_activation_funding_guard.permission_denied",
+                ),
+                mapping_owner="admin web and API adapters",
+                fail_closed_on=(
+                    "a quarantined account without an active override",
+                    "a missing permission, inactive actor, or short reason",
+                    "an account that is not quarantined (no override is needed)",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "billing.prepaid_activation_funding_override.granted",
+                    "billing.prepaid_activation_funding_override.revoked",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries account and override UUIDs and, on grant, "
+                    "the closed quarantine reason."
+                ),
+                replay=(
+                    "The override row, audit event, and staged event commit once; "
+                    "exact grant replay emits no second event."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.prepaid_activation_funding_guard",
+                verification=(
+                    "Entry-point refusal, override permission/reason/audit, "
+                    "post-handoff native and baselined admission, banner, and "
+                    "unchanged quarantine computation tests."
+                ),
+                cutover_gate=(
+                    "Every prepaid create, activation, and billing-mode change "
+                    "path calls require_prepaid_activation_funding_admitted."
+                ),
+                fallback_retirement=(
+                    "No fallback exists; the guard retires with the quarantine "
+                    "once every legacy opening is captured."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                "docs/runbooks/PREPAID_FUNDING_AUDIT_RESTORE.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_prepaid_activation_funding_guard.py",
+                "tests/test_prepaid_funding_reconstruction.py",
+            ),
+        ),
+    ),
 )

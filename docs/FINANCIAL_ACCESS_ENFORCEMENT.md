@@ -117,6 +117,67 @@ partial initial cutover: it is unavailable before authority activation, excludes
 facts after the original cutoff, and cannot accept migrated or ambiguous source
 provenance.
 
+### Prepaid activation funding admission
+
+Billing approval admits an account to service; it does not prove the account
+has prepaid funding authority. A legacy account (one that existed when
+customer-subledger authority activated) with no active reviewed baseline and
+no subledger opening is in the prepaid funding quarantine
+(`prepaid_funding_incomplete_source_account_ids`): every balance-based warning,
+suspension, and restoration skips it, and its arrival in the prepaid cohort
+grows `billing_prepaid_funding_quarantined_accounts`.
+
+`financial.prepaid_activation_funding_guard`
+(`app/services/prepaid_activation_funding_guard.py`) therefore decides, before
+prepaid service starts, whether the account would be quarantined. It reuses
+the quarantine resolver and the carried-source identity classifier unchanged
+and runs at every prepaid start:
+
+- `Subscriptions.create` when the resolved billing mode is prepaid and the
+  status is collectible (pending already joins the cohort) — admin web, API,
+  sales-order provisioning, and financial imports all pass through it;
+- `account_lifecycle.activate_subscription` (pending → active) for a prepaid
+  subscription — lifecycle commands, service-order completion, reseller
+  portal, billing automation, and bulk provisioning;
+- `Subscriptions.update` when a collectible subscription becomes prepaid or
+  moves to another account;
+- the account-wide billing-mode transition to prepaid (a blocking
+  `prepaid_funding_quarantined` readiness blocker plus a recheck at confirm);
+- bulk provisioning before it constructs or re-modes a prepaid row.
+
+Admission is fail-closed. The refusal is
+`financial.prepaid_activation_funding_guard.funding_quarantined` (also a
+`ValueError` for lifecycle adapters) and names the reason and runbook:
+
+| Reason | Account | Runbook |
+| --- | --- | --- |
+| `migrated_opening_missing` | retained Splynx identity | `docs/runbooks/REVIEWED_MIGRATED_PREPAID_OPENING_REPAIR.md` |
+| `carried_source_identity_unresolved` | created before the handoff, no Splynx identity, no adjudication | `docs/runbooks/PREPAID_FUNDING_AUDIT_RESTORE.md` (carried-source identity) |
+| `reviewed_native_opening_missing` | adjudicated pre-handoff native, opening not yet materialized | `docs/runbooks/PREPAID_FUNDING_AUDIT_RESTORE.md` |
+| `native_after_handoff_opening_missing` | created after the handoff, before subledger authority | `docs/runbooks/NATIVE_PREPAID_OPENING_REPAIR.md` |
+| `source_identity_unclassifiable` | stale or conflicting source-identity evidence | `docs/runbooks/PREPAID_FUNDING_AUDIT_RESTORE.md` |
+
+The only bypass is a durable `PrepaidActivationFundingOverride`, recorded per
+account by an active staff user holding
+`billing:prepaid_funding:activation_override` (seeded for `admin` only) with a
+reason of at least ten characters. Grant and revoke are audited owner commands
+that stage `billing.prepaid_activation_funding_override.granted|revoked`; each
+activation admitted by an override stages a
+`prepaid_activation_admitted_by_funding_override` audit row. An override never
+changes the quarantine computation: the account stays excluded from money
+actions and stays counted by the quarantine signal until its opening is
+captured, so `SubPrepaidFundingQuarantineGrowing` still fires. The guard does
+not cover resuming an existing disabled service (`enable_subscription`),
+billing re-approval of an account that already holds prepaid service, or the
+reviewed billing-cleanup account-mode alignment; those surface only through the
+quarantine signal.
+
+The guard is inert before customer-subledger authority activation, when every
+account without a baseline is in the incomplete-source set by design and the
+complete-cohort opening capture owns all of them. The admin customer and
+subscription pages show a quarantine banner with the reason, runbook, and the
+override state or form.
+
 ## Exact prepaid renewal charge
 
 Renewal and enforcement call the same bounded resolver. For each collectible
@@ -346,7 +407,10 @@ The planner and executor consume the same decision in this order:
    accounts without billing approval with a typed outcome. Billing approval is
    activation admission, not a runtime bypass: revocation disables the account
    and its non-terminal services through `customer.billing_approval` and
-   `access.subscription_lifecycle`.
+   `access.subscription_lifecycle`. Billing approval is not funding admission:
+   starting prepaid service on a legacy account without a reviewed opening is
+   refused by `financial.prepaid_activation_funding_guard` (see Prepaid
+   activation funding admission).
 3. Exclude signed-quarantine or missing-baseline accounts from money action.
 4. Protect `unresolved_projection` coverage and `renewal_terms_unresolved`
    contract evidence from adverse action. An uncovered service with exact or
@@ -839,6 +903,7 @@ exports, or secret values in these records.
 
 - `app/services/customer_financial_ledger.py`
 - `app/services/prepaid_funding_reconstruction.py`
+- `app/services/prepaid_activation_funding_guard.py`
 - `app/services/prepaid_service_coverage.py`
 - `app/services/prepaid_service_renewals.py`
 - `app/services/prepaid_threshold.py`
@@ -858,6 +923,7 @@ exports, or secret values in these records.
 - `app/services/events/dispatcher.py`
 - `app/services/events/handlers/enforcement.py`
 - `tests/test_prepaid_funding_reconstruction.py`
+- `tests/test_prepaid_activation_funding_guard.py`
 - `tests/test_prepaid_service_coverage.py`
 - `tests/test_prepaid_coverage_reconciliation.py`
 - `tests/test_prepaid_service_renewals.py`
