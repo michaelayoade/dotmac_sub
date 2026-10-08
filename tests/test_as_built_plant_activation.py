@@ -33,8 +33,7 @@ from app.models.vendor_routes import (
     AsBuiltRouteStatus,
     InstallationProject,
 )
-from app.services import fiber_plant_api
-from app.services import web_network_fiber_plant
+from app.services import fiber_plant_api, web_network_fiber_plant
 from app.services.network import as_built_plant_projection as projection
 
 LINESTRING = '{"type": "LineString", "coordinates": [[7.49, 9.06], [7.50, 9.07]]}'
