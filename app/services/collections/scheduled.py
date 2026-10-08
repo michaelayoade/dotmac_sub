@@ -525,7 +525,7 @@ def _sync_quarantine_work_items(
                     f"(run {PREPAID_COVERAGE_QUARANTINE_DIAGNOSTIC})."
                 ),
                 details={
-                    "owner": "finance-billing",
+                    "owner": "financial-billing",
                     "account_id": str(account_id),
                     "reason_codes": sorted(reasons_by_account[account_id]),
                     "runbook": PREPAID_COVERAGE_QUARANTINE_RUNBOOK,

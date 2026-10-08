@@ -69,6 +69,48 @@ def _ensure_utc(value: datetime | None) -> datetime | None:
     return value
 
 
+def _refuse_unreviewed_renewal_term(
+    db: Session, subscription: Subscription, data: dict
+) -> None:
+    """Retire the generic form as a writer of a missing prepaid renewal term.
+
+    A collectible prepaid subscription without a positive contracted amount
+    is blocked as ``renewal_terms_unresolved``. Its amount is recorded only
+    by ``financial.prepaid_renewal_terms_backfill`` (paid evidence, or the
+    four-eyes reviewed renewal-term record) — never by a generic edit with no
+    evidence, reason, or approval. A plan change still snapshots the new
+    offer's price through its own path.
+    """
+    from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+
+    if data.get("unit_price") is None:
+        return
+    if subscription.unit_price is not None and Decimal(
+        str(data["unit_price"])
+    ) == Decimal(str(subscription.unit_price)):
+        return
+    if "offer_id" in data and str(data["offer_id"]) != str(subscription.offer_id):
+        return
+    if (
+        subscription.billing_mode != BillingMode.prepaid
+        or subscription.status not in COLLECTIBLE_SERVICE_STATUSES
+        or (
+            subscription.unit_price is not None
+            and subscription.unit_price > Decimal("0.00")
+        )
+    ):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "This prepaid service has no contracted renewal amount. Record it "
+            "through the finance-reviewed renewal-term record (request + "
+            "approval), not the generic edit form. See "
+            "docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md."
+        ),
+    )
+
+
 def _subscription_billing_mode_for_write(
     db: Session,
     *,
@@ -1272,6 +1314,7 @@ class Subscriptions(ListResponseMixin):
                     f"updates ({fields}); use the subscription lifecycle command."
                 ),
             )
+        _refuse_unreviewed_renewal_term(db, subscription, data)
         requested_offer_id = data.get("offer_id")
         if (
             requested_offer_id is not None

@@ -187,7 +187,7 @@ def _sla_finding(
         title="Prepaid coverage evidence needs finance review",
         summary="Contradictory evidence blocks enforcement.",
         details={
-            "owner": "finance-billing",
+            "owner": "financial-billing",
             "reason_codes": list(reason_codes),
             "sla_due_at": sla_due_at.isoformat(),
         },

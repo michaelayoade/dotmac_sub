@@ -264,14 +264,9 @@ def _subscription_reason(
     return ChargeabilityReason.chargeable_service
 
 
-def resolve_customer_chargeability(
-    db: Session,
-    account_ids: tuple[UUID, ...],
-) -> dict[UUID, CustomerChargeability]:
-    """Resolve typed chargeability for a bounded account cohort."""
-
-    if not account_ids:
-        return {}
+def _subscription_chargeability_rows(
+    db: Session, scope: ColumnElement[bool]
+) -> list[tuple[UUID, SubscriptionChargeability]]:
     catalog_amount, active_price_count = _catalog_price_expressions()
     treatment_active = effective_customer_billing_treatment_clause()
     rows = db.execute(
@@ -284,15 +279,10 @@ def resolve_customer_chargeability(
             active_price_count.label("active_price_count"),
             treatment_active.label("treatment_active"),
         )
-        .where(
-            Subscription.subscriber_id.in_(account_ids),
-            Subscription.status.in_(CHARGEABILITY_SERVICE_STATUSES),
-        )
+        .where(scope)
         .order_by(Subscription.subscriber_id, Subscription.id)
     ).all()
-    by_account: dict[UUID, list[SubscriptionChargeability]] = {
-        account_id: [] for account_id in account_ids
-    }
+    classified: list[tuple[UUID, SubscriptionChargeability]] = []
     for row in rows:
         amount = Decimal(row.catalog_amount) if row.catalog_amount is not None else None
         unit_price = Decimal(row.unit_price) if row.unit_price is not None else None
@@ -302,15 +292,85 @@ def resolve_customer_chargeability(
             subscription_amount=unit_price,
             treatment_active=bool(row.treatment_active),
         )
-        by_account[row.subscriber_id].append(
-            SubscriptionChargeability(
-                subscription_id=row.id,
-                status=row.status,
-                catalog_amount=amount,
-                subscription_amount=unit_price,
-                reason=reason,
+        classified.append(
+            (
+                row.subscriber_id,
+                SubscriptionChargeability(
+                    subscription_id=row.id,
+                    status=row.status,
+                    catalog_amount=amount,
+                    subscription_amount=unit_price,
+                    reason=reason,
+                ),
             )
         )
+    return classified
+
+
+def resolve_subscription_chargeability(
+    db: Session,
+    subscription_ids: tuple[UUID, ...],
+) -> dict[UUID, SubscriptionChargeability]:
+    """Resolve the same typed per-service classification for exact services.
+
+    Prepaid consumers (threshold and renewal-terms cohort) ask this per
+    service: a service that ``is_non_billable`` (explicit zero catalog price
+    or effective billing treatment, with no contradictory positive
+    subscription price) has no renewal charge to fund or resolve. A missing
+    recurring price is review work, never free service.
+    """
+
+    if not subscription_ids:
+        return {}
+    return {
+        item.subscription_id: item
+        for _account_id, item in _subscription_chargeability_rows(
+            db, Subscription.id.in_(subscription_ids)
+        )
+    }
+
+
+def confirmed_free_subscription_ids(
+    db: Session, subscriptions: list[Subscription]
+) -> frozenset[UUID]:
+    """Services whose catalog explicitly declares them free.
+
+    Exactly ``ChargeabilityReason.explicit_zero_price``: one active recurring
+    catalog price of ZERO and no contradictory positive subscription price.
+    Billing treatments are deliberately not folded in here — prepaid
+    consumers resolve them at their own decision time through
+    ``financial.subscription_billing_treatments``.
+    """
+
+    classified = resolve_subscription_chargeability(
+        db, tuple(item.id for item in subscriptions)
+    )
+    return frozenset(
+        subscription_id
+        for subscription_id, item in classified.items()
+        if item.reason is ChargeabilityReason.explicit_zero_price
+    )
+
+
+def resolve_customer_chargeability(
+    db: Session,
+    account_ids: tuple[UUID, ...],
+) -> dict[UUID, CustomerChargeability]:
+    """Resolve typed chargeability for a bounded account cohort."""
+
+    if not account_ids:
+        return {}
+    by_account: dict[UUID, list[SubscriptionChargeability]] = {
+        account_id: [] for account_id in account_ids
+    }
+    for account_id, item in _subscription_chargeability_rows(
+        db,
+        and_(
+            Subscription.subscriber_id.in_(account_ids),
+            Subscription.status.in_(CHARGEABILITY_SERVICE_STATUSES),
+        ),
+    ):
+        by_account[account_id].append(item)
 
     outcomes: dict[UUID, CustomerChargeability] = {}
     for account_id in account_ids:
@@ -344,9 +404,11 @@ __all__ = [
     "ChargeabilityReason",
     "CustomerChargeability",
     "CustomerChargeabilityStatus",
+    "confirmed_free_subscription_ids",
     "SubscriptionChargeability",
     "chargeability_review_required_customer_clause",
     "confirmed_non_billable_customer_clause",
     "non_billable_section_customer_clause",
     "resolve_customer_chargeability",
+    "resolve_subscription_chargeability",
 ]

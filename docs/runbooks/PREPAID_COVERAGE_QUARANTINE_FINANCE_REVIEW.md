@@ -1,6 +1,6 @@
 # Prepaid coverage quarantine finance review
 
-Work item owner: `finance-billing`.
+Work item and alert owner label: `financial-billing`.
 Evidence owner: `financial.prepaid_service_coverage_reconciliation`.
 Read-only diagnostic: `scripts/billing/diagnose_prepaid_coverage_quarantine.py`.
 

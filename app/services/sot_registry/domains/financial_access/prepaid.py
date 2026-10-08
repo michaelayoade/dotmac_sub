@@ -1192,12 +1192,16 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.prepaid_service_coverage_reconciliation",
             "financial.prepaid_service_renewals",
             "financial.subscription_billing_treatments",
+            "financial.customer_chargeability",
         ),
         notes=(
             "Returns typed minimum and unfunded-renewal provenance. Renewal "
             "and enforcement consume one exact taxed contract charge. Uncovered "
             "services with exact or malformed financial coverage evidence and "
             "services with missing renewal terms produce typed protected outcomes; "
+            "services under an effective billing treatment or confirmed free by "
+            "an explicit zero catalog price (financial.customer_chargeability) "
+            "are non-billable; "
             "missing accounts, invalid minimums, and cross-currency evidence fail "
             "closed."
         ),
@@ -1221,6 +1225,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical current service coverage",
                         "prepaid financial coverage evidence guard",
                         "effective subscription billing treatment",
+                        "confirmed free catalog service",
                         "exact taxed contracted renewal charge",
                         "canonical prepaid currency",
                         "prepaid threshold protocol",
@@ -1228,6 +1233,17 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="confirmed free catalog service",
+                    owner="financial.customer_chargeability",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "explicit_zero_price chargeability: exactly one active "
+                        "recurring catalog price of zero and no positive "
+                        "subscription price is non-billable, like an effective "
+                        "treatment; a missing price row stays standard"
+                    ),
+                ),
                 AuthorityInput(
                     name="canonical account minimum balance",
                     owner="customer.accounts",
@@ -3928,10 +3944,16 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.prepaid_renewal_terms_backfill",
         module="app.services.prepaid_renewal_terms_backfill",
-        owns=("prepaid renewal-terms evidence backfill",),
+        owns=(
+            "prepaid renewal-terms evidence backfill",
+            "finance-reviewed prepaid renewal-term record",
+        ),
         depends_on=(
             "financial.invoices",
             "financial.prepaid_service_renewals",
+            "financial.subscription_billing_treatments",
+            "financial.customer_chargeability",
+            "auth.permission_gate",
         ),
         notes=(
             "ADR 0007 stage-3 migration only. Prepaid enforcement fails "
@@ -3942,7 +3964,15 @@ SERVICES: tuple[SOTService, ...] = (
             "subscription's own PAID base-subscription invoice lines — "
             "never from the mutable catalog. Absent or contradictory "
             "paid evidence becomes an owned, SLA-bound finance work "
-            "item and the account stays fail-closed. Retire at the "
+            "item and the account stays fail-closed. A never-restored "
+            "subscription (no_evidence, ambiguous_amounts, "
+            "insufficient_cycle_evidence) receives its amount only through "
+            "the four-eyes reviewed renewal-term record: a request by one "
+            "staff member holding billing:renewal_terms:record, approved by "
+            "a different one, with reason, evidence reference + SHA-256, an "
+            "expected-current-value check, and idempotency. Subscriptions "
+            "whose customer billing is suppressed by a billing treatment are "
+            "outside the cohort, mirroring the prepaid threshold. Retire at the "
             "ADR 0007 Phase 1 cutover when billing.contracts becomes "
             "the renewal-terms authority."
         ),
@@ -3954,6 +3984,20 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "paid base-subscription invoice lines",
                         "blocked prepaid subscription state",
+                        "open billing-treatment state",
+                        "confirmed free catalog service",
+                    ),
+                    canonical_writer=("financial.prepaid_renewal_terms_backfill"),
+                ),
+                ConcernContract(
+                    name="finance-reviewed prepaid renewal-term record",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "blocked prepaid subscription state",
+                        "paid base-subscription invoice lines",
+                        "authenticated four-eyes renewal-term record command",
+                        "open billing-treatment state",
+                        "confirmed free catalog service",
                     ),
                     canonical_writer=("financial.prepaid_renewal_terms_backfill"),
                 ),
@@ -3980,6 +4024,38 @@ SERVICES: tuple[SOTService, ...] = (
                         "renewal_terms_unresolved)"
                     ),
                 ),
+                AuthorityInput(
+                    name="authenticated four-eyes renewal-term record command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:renewal_terms:record grant for the requesting "
+                        "and a different approving active staff principal, "
+                        "plus reason, evidence reference and SHA-256, expected "
+                        "current amount, and idempotency key"
+                    ),
+                ),
+                AuthorityInput(
+                    name="open billing-treatment state",
+                    owner="financial.subscription_billing_treatments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "effective or scheduled SubscriptionBillingArrangement "
+                        "for the subscription (cohort exclusion and record "
+                        "refusal)"
+                    ),
+                ),
+                AuthorityInput(
+                    name="confirmed free catalog service",
+                    owner="financial.customer_chargeability",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "explicit_zero_price chargeability: exactly one active "
+                        "recurring catalog price of zero and no positive "
+                        "subscription price (cohort exclusion and record "
+                        "refusal); a missing price row stays in the cohort"
+                    ),
+                ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.OWNER_MANAGED,
@@ -3988,18 +4064,28 @@ SERVICES: tuple[SOTService, ...] = (
                     "once on a transaction-free session; the "
                     "fingerprint-bound evidence re-check, unit_price "
                     "writes, and finance work-item sync commit "
-                    "together."
+                    "together. The reviewed-record approval enters it once; "
+                    "its unit_price write, work-item resolution, and "
+                    "prepaid_renewal_terms.recorded event commit together. "
+                    "The request step writes only record-only evidence."
                 ),
                 locking=(
                     "Each repaired Subscription row is locked FOR "
                     "UPDATE and re-checked (already-priced rows are "
-                    "skipped) before its contracted amount is written."
+                    "skipped) before its contracted amount is written. "
+                    "Reviewed-record request and approval lock the "
+                    "Subscription FOR UPDATE and re-derive cohort, decision, "
+                    "treatment, and expected-current-amount under the lock."
                 ),
                 idempotency=(
                     "The capture is fingerprint-bound to the reviewed "
                     "preview; replay with unchanged evidence rewrites "
                     "nothing because repaired rows fail the "
-                    "still-unpriced re-check."
+                    "still-unpriced re-check. A reviewed-record request's "
+                    "identity is uuid5 of its idempotency key (same key + "
+                    "same proposal replays; a different proposal conflicts); "
+                    "its approval identity is uuid5 of the request, so a "
+                    "request is applied at most once."
                 ),
                 retries=(
                     "Retry the whole command with the same idempotency "
@@ -4034,6 +4120,28 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     ("financial.prepaid_renewal_terms_backfill.audit_mismatch"),
                     ("financial.prepaid_renewal_terms_backfill.invalid_audit_action"),
+                    ("financial.prepaid_renewal_terms_backfill.permission_denied"),
+                    ("financial.prepaid_renewal_terms_backfill.invalid_actor"),
+                    ("financial.prepaid_renewal_terms_backfill.invalid_review_reason"),
+                    ("financial.prepaid_renewal_terms_backfill.invalid_evidence"),
+                    ("financial.prepaid_renewal_terms_backfill.not_in_record_cohort"),
+                    ("financial.prepaid_renewal_terms_backfill.billing_treatment_open"),
+                    ("financial.prepaid_renewal_terms_backfill.charge_inputs_missing"),
+                    ("financial.prepaid_renewal_terms_backfill.evidence_repairable"),
+                    ("financial.prepaid_renewal_terms_backfill.idempotency_conflict"),
+                    ("financial.prepaid_renewal_terms_backfill.request_not_found"),
+                    (
+                        "financial.prepaid_renewal_terms_backfill."
+                        "self_approval_forbidden"
+                    ),
+                    (
+                        "financial.prepaid_renewal_terms_backfill."
+                        "approval_amount_mismatch"
+                    ),
+                    (
+                        "financial.prepaid_renewal_terms_backfill."
+                        "request_already_decided"
+                    ),
                 ),
                 mapping_owner="billing migration adapters",
                 fail_closed_on=(
@@ -4042,13 +4150,22 @@ SERVICES: tuple[SOTService, ...] = (
                     "a lone line without explicit full-cycle proof",
                     "currency, cadence, quantity, or proration incompatibility",
                     "stale preview fingerprint",
+                    "zero or negative reviewed amount",
+                    "self-approval or a missing staff permission",
+                    "an open billing treatment",
+                    "missing charge inputs (a price alone cannot clear them)",
+                    "a changed current amount since the request",
                 ),
             ),
             migration=MigrationContract(
                 state=AuthorityMigrationState.SHADOWING,
                 old_owner=(
                     "manual staff corrections of Subscription.unit_price "
-                    "with no evidence contract"
+                    "with no evidence contract — retired for the "
+                    "renewal-terms cohort: the generic subscription update "
+                    "refuses an explicit unit_price on a collectible prepaid "
+                    "subscription without a contracted amount and routes to "
+                    "the reviewed renewal-term record"
                 ),
                 new_owner="financial.prepaid_renewal_terms_backfill",
                 verification=(
@@ -4072,19 +4189,26 @@ SERVICES: tuple[SOTService, ...] = (
             design_refs=(
                 "docs/adr/0007-end-to-end-billing-target-architecture.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
+                "docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md",
             ),
             events=EventContract(
                 event_types=(
                     "prepaid_renewal_terms.backfilled",
                     "prepaid_renewal_terms.corrected",
                     "prepaid_renewal_terms.audited",
+                    "prepaid_renewal_terms.record_requested",
+                    "prepaid_renewal_terms.recorded",
                 ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
                     "Version 1 carries the account, subscription, "
                     "restored contracted amount, paid-line count, and "
-                    "the reviewed preview fingerprint."
+                    "the reviewed preview fingerprint. Reviewed-record "
+                    "events (version 1) carry the request id, amounts, "
+                    "reason, evidence reference and SHA-256, and the "
+                    "requesting and approving staff identities; "
+                    "record_requested is record-only evidence."
                 ),
                 replay=(
                     "Replay with unchanged evidence rewrites nothing: "
@@ -4092,7 +4216,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "so no second event is emitted for them."
                 ),
             ),
-            test_refs=("tests/test_prepaid_renewal_terms_backfill.py",),
+            test_refs=(
+                "tests/test_prepaid_renewal_terms_backfill.py",
+                "tests/test_prepaid_renewal_term_record.py",
+            ),
         ),
     ),
     SOTService(

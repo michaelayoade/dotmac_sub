@@ -213,6 +213,7 @@ def resolve_prepaid_threshold_decisions(
         )
 
     # 3. Resolve explicit customer-billing treatment before payment coverage.
+    from app.services.customer_chargeability import confirmed_free_subscription_ids
     from app.services.subscription_billing_treatments import (
         resolve_subscription_billing_treatments,
     )
@@ -220,10 +221,18 @@ def resolve_prepaid_threshold_decisions(
     treatment_decisions = resolve_subscription_billing_treatments(
         db, subscriptions, as_of=effective_now
     )
+    # A service the canonical chargeability owner confirms is free (exactly
+    # one active recurring catalog price of ZERO and no contradictory
+    # positive subscription price) has no renewal charge to fund. A missing
+    # price row is review work and stays standard (fail-closed).
+    confirmed_free_ids = confirmed_free_subscription_ids(db, subscriptions)
     non_billable_by_account: dict[str, list[UUID]] = defaultdict(list)
     standard_subscriptions: list[Subscription] = []
     for subscription in subscriptions:
-        if treatment_decisions[subscription.id].suppress_customer_billing:
+        if (
+            treatment_decisions[subscription.id].suppress_customer_billing
+            or subscription.id in confirmed_free_ids
+        ):
             non_billable_by_account[str(subscription.subscriber_id)].append(
                 subscription.id
             )
