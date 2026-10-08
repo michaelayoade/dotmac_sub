@@ -1032,7 +1032,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Choose Last 1 month, Last 3 months, or Custom range before reviewing the report.",
         "Use Event type to compare cancellations, suspensions, or both; custom ranges require a start and end date.",
         "Review the KPI totals and period-matched trend together before drawing a conclusion.",
-        "Review recent event timestamps and cancellation reasons within the selected scope.",
+        "Review recent event timestamps and cancellation or suspension reasons within the selected scope.",
         "Export only the currently selected event type and date range when the filtered evidence is needed outside the report.",
         route_templates=("/admin/reports/churn",),
         notes=(
