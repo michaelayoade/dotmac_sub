@@ -461,6 +461,7 @@ def _source_payments(
         .filter(Payment.status == PaymentStatus.succeeded)
         # Historical carried-in rows are migration evidence, not reusable cash.
         .filter(Payment.splynx_payment_id.is_(None))
+        .filter(Payment.reserved_for_purchase_id.is_(None))
         .order_by(
             Payment.paid_at.asc().nulls_last(),
             Payment.created_at.asc(),

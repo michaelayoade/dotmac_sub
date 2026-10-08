@@ -669,6 +669,24 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=("Do not manually edit billing dates to undo an extension.",),
     ),
     _guide(
+        "service-period-review",
+        "Billing",
+        "Review prepaid payments and outage proposals",
+        "Finance reviewers and approvers",
+        "Resolve held prepaid purchase money and approve evidenced outage time.",
+        ("/admin/billing/service-period-review",),
+        "Open Service period review from Service Extensions. Confirm the account, subscription, provider reference, age, and reason for review.",
+        "Compare collected, refunded, and held amounts with provider evidence. Held purchase money is reserved for that purchase and is separate from available account credit.",
+        "Use the permitted purchase recovery action with a clear reason only after reviewing the current evidence. Verified unpaid failures may release checkout; unknown outcomes and late captures require review.",
+        "For an outage proposal, review the finalized downtime, funded coverage, previous time credits, proposed seconds, and resulting service date. An authorized approver must be different from the maker and enter a clear approval reason.",
+        "Confirm only the current reviewed proposal, then verify the resulting purchase or outage state and customer billing history. If the evidence changed, reload and review again.",
+        notes=(
+            "An outage event creates a proposal; it does not grant service time before Finance approval.",
+            "Recovery does not charge the customer again or manufacture a refund. Use the existing provider-confirmed refund workflow when needed.",
+            "Unclear historical extension credits require reviewed attestation before another overlapping award.",
+        ),
+    ),
+    _guide(
         "payments",
         "Payments",
         "Record and allocate payments",
@@ -1014,7 +1032,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Choose Last 1 month, Last 3 months, or Custom range before reviewing the report.",
         "Use Event type to compare cancellations, suspensions, or both; custom ranges require a start and end date.",
         "Review the KPI totals and period-matched trend together before drawing a conclusion.",
-        "Review recent event timestamps and cancellation reasons within the selected scope.",
+        "Review recent event timestamps and cancellation or suspension reasons within the selected scope.",
         "Export only the currently selected event type and date range when the filtered evidence is needed outside the report.",
         route_templates=("/admin/reports/churn",),
         notes=(
@@ -1064,6 +1082,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "When radii overlap, use Nearest for geographic proximity, NAS or POP/site for the matching infrastructure tie-breaker, or Manual priority when an explicit precedence is required.",
         "Disable a region instead of deleting it when it should stop receiving new assignments but remain available for review history.",
         notes=(
+            "Infrastructure choices are loaded only when the selected overlap rule needs them, so region editing remains responsive even when the network inventory is large.",
             "NAS and POP/site rules are tie-breakers for customers already inside a configured radius; they do not replace missing customer geolocation.",
             "Region write actions require gis:area:write. Users with map-view access can review the configuration without changing it.",
         ),
@@ -1550,6 +1569,22 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="billing:extension:reverse",
         ),
         _action("verify-extension", "Verify extension history", 3),
+    ),
+    "service-period-review": (
+        _action("review-held-receipt", "Review held purchase money", 0, 1),
+        _action(
+            "recover-purchase",
+            "Recover a reviewed purchase",
+            2,
+            permission="billing:prepaid_reconciliation:repair",
+        ),
+        _action(
+            "approve-outage",
+            "Approve an outage proposal",
+            3,
+            permission="billing:outage_compensation:approve",
+        ),
+        _action("verify-period-review", "Verify the reviewed result", 4),
     ),
     "payments": (
         _action(
@@ -2074,6 +2109,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "invoice",
             "credit",
             "service-extension",
+            "service-period-review",
             "payments",
             "payment-proofs",
             "payment-reconciliation",
@@ -2184,6 +2220,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),
+    "service-period-review": ("billing:extension:read",),
     "payments": ("billing:payment:read",),
     "payment-proofs": ("billing:proof:read",),
     "payment-reconciliation": ("billing:ledger:read",),

@@ -444,6 +444,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("access.subscription_lifecycle") == (
         "events.dispatcher",
         "financial.prepaid_enforcement_state",
+        "financial.compensated_service_time",
     )
     assert sot_relationships.dependencies_for("financial.access_resolution") == (
         "financial.billing_profile",
@@ -551,6 +552,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.account_credit_deposits",
         "financial.payment_gateway_finance",
         "financial.payments",
+        "financial.prepaid_period_purchases",
         "financial.payment_provider_events",
         "financial.topup_intents",
         "observability.audit_log",

@@ -36,7 +36,7 @@ class MonthlyChurnSeries:
 class ChurnSummary:
     total: int
     cancelled_count: int
-    at_risk_count: int
+    suspended_count: int
     active_count: int = 0
     churn_count: int = 0
 
@@ -584,17 +584,17 @@ def churn_summary(
             func.count(func.distinct(unique_events.c.subscriber_id)),
         ).select_from(unique_events)
     ).one()
-    cancelled, at_risk, churn_count = (int(value or 0) for value in event_counts)
+    cancelled, suspended, churn_count = (int(value or 0) for value in event_counts)
     return ChurnSummary(
         total=int(total),
         cancelled_count=int(cancelled),
-        at_risk_count=int(at_risk),
+        suspended_count=int(suspended),
         active_count=int(active_count or 0),
         churn_count=int(churn_count or 0),
     )
 
 
-def recent_cancellations(
+def recent_churn_events(
     db: Session,
     *,
     limit: int | None = 10,

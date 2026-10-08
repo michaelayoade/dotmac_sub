@@ -71,6 +71,15 @@ def test_projection_handler_consumes_the_lifecycle_outputs():
     assert "_owner_session(" in src
     assert "consume_outage_activation" in src
     assert "consume_outage_termination" in src
+    assert "consume_outage_compensation_event" in src
+    assert "outage_compensation_enabled" in src
+
+
+def test_compensation_is_event_driven_not_a_financial_cohort_sweep():
+    scheduler = _source("app/services/scheduler_config.py")
+    tasks = _source("app/tasks/billing.py")
+    assert "outage_compensation" not in scheduler
+    assert "outage_compensation" not in tasks
 
 
 def test_handler_is_registered_and_scoped():

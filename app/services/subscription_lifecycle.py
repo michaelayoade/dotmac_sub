@@ -722,6 +722,26 @@ def preview_subscription_command(
         offer=proposed_offer,
     )
     effective_at = _effective_at(current, command, now=effective_now)
+    if command.kind in {
+        SubscriptionCommandKind.change_plan,
+        SubscriptionCommandKind.cancel,
+        SubscriptionCommandKind.expire,
+    }:
+        from app.services.purchased_service_coverage import (
+            PurchasedCoverageQuery,
+            resolve_purchased_coverage,
+        )
+
+        purchased = resolve_purchased_coverage(
+            db, PurchasedCoverageQuery(subscription.id)
+        )
+        if purchased.has_unsettled_purchase:
+            reasons.append("resolve_pending_period_purchase_first")
+        if (
+            purchased.protected_until is not None
+            and effective_at < purchased.protected_until
+        ):
+            reasons.append("purchased_periods_require_funded_tail_or_reviewed_refund")
     billing_impact, financial_reason = _billing_impact(
         db,
         subscription,
@@ -1026,7 +1046,17 @@ def _eligibility_reasons(
         try:
             from app.services.catalog.subscriptions import _validate_plan_change
 
-            _validate_plan_change(db, subscription, str(target_offer.id))
+            _validate_plan_change(
+                db,
+                subscription,
+                str(target_offer.id),
+                effective_at=(
+                    _aware_utc(command.effective_at) or subscription.next_billing_at
+                    if command.effective_timing
+                    is SubscriptionEffectiveTiming.next_cycle
+                    else _aware_utc(command.effective_at) or now
+                ),
+            )
         except HTTPException as exc:
             detail = exc.detail
             code = (

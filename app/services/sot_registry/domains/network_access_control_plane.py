@@ -62,6 +62,7 @@ DOMAIN = DomainSOT(
             depends_on=(
                 "events.dispatcher",
                 "financial.prepaid_enforcement_state",
+                "financial.compensated_service_time",
             ),
             notes=(
                 "Locks, subscriber status, subscriber account-active state, "

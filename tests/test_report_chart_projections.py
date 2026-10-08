@@ -159,7 +159,7 @@ def test_churn_chart_has_an_explicit_empty_state(
         subscriber_growth,
         "churn_summary",
         lambda *, db: subscriber_growth.ChurnSummary(
-            total=0, cancelled_count=0, at_risk_count=0
+            total=0, cancelled_count=0, suspended_count=0
         ),
     )
     monkeypatch.setattr(
@@ -169,7 +169,7 @@ def test_churn_chart_has_an_explicit_empty_state(
             labels=("Jan", "Feb"), rates=(0.0, 0.0), counts=(0, 0)
         ),
     )
-    monkeypatch.setattr(subscriber_growth, "recent_cancellations", lambda *_a, **_k: [])
+    monkeypatch.setattr(subscriber_growth, "recent_churn_events", lambda *_a, **_k: [])
     monkeypatch.setattr(
         web_reports.crm_reporting_service,
         "subscription_churn_reason_counts",
@@ -186,7 +186,7 @@ def test_churn_report_uses_reduced_trend_chart_height() -> None:
     source = Path("templates/admin/reports/churn.html").read_text()
 
     assert '"churn-trend-chart"' in source
-    assert "min_height=168" in source
+    assert "min_height=220" in source
     assert "min_height=280" not in source
 
 
@@ -202,11 +202,11 @@ def test_churn_reasons_keep_labels_below_chart_without_duplicate_legend() -> Non
     assert "{ plugins: { legend: { display: false } } }" not in source
 
 
-def test_recent_cancellations_card_keeps_its_natural_height() -> None:
+def test_recent_events_card_keeps_its_natural_height() -> None:
     source = Path("templates/admin/reports/churn.html").read_text()
 
     assert "grid grid-cols-1 items-start gap-6 lg:grid-cols-2" in source
-    assert "recent_cancellations | length > 10" not in source
+    assert "recent_events | length > 10" not in source
     assert "max-height: 520px" not in source
 
 

@@ -85,6 +85,7 @@ _WRITE_TIER_VERBS = frozenset(
         "activation_override",  # Admits prepaid activation for a quarantined account.
         "admin",
         "apply",
+        "approve",  # Posts a reviewed financial remedy.
         "archive",
         "assign",
         "attention",
@@ -108,6 +109,7 @@ _WRITE_TIER_VERBS = frozenset(
         "publish",
         "push_config",
         "redrive",
+        "repair",  # Executes reviewed financial recovery.
         "retire",
         "reverse",
         "resume",

@@ -501,9 +501,19 @@ class DraftInvoiceParticipantError(ValueError):
         self.reason = reason
 
 
+@dataclass(frozen=True, slots=True)
+class InvoiceLineTaxSnapshot:
+    """Reviewed tax facts retained by a quote-owning command."""
+
+    id: UUID
+    code: str | None
+    rate: Decimal
+    is_active: bool
+
+
 def _apply_invoice_line_tax_snapshot(
     line: InvoiceLine,
-    tax_rate: TaxRate | None,
+    tax_rate: TaxRate | InvoiceLineTaxSnapshot | None,
 ) -> None:
     """Copy mutable tax configuration onto the invoice line being authored."""
 
@@ -3954,6 +3964,7 @@ class InvoiceLines(ListResponseMixin):
         payload: SystemInvoiceLineCreate,
         *,
         reason: str,
+        tax_snapshot: InvoiceLineTaxSnapshot | None = None,
     ) -> InvoiceLine:
         """Stage one automation-produced invoice line in its caller transaction."""
         invoice = lock_for_update(db, Invoice, payload.invoice_id)
@@ -3964,9 +3975,16 @@ class InvoiceLines(ListResponseMixin):
                 status_code=409,
                 detail="System lines may be added only to draft or issued invoices",
             )
-        tax_rate = _resolve_tax_rate(
-            db, str(payload.tax_rate_id) if payload.tax_rate_id else None
+        tax_rate: TaxRate | InvoiceLineTaxSnapshot | None = (
+            tax_snapshot
+            or _resolve_tax_rate(
+                db, str(payload.tax_rate_id) if payload.tax_rate_id else None
+            )
         )
+        if tax_snapshot is not None and tax_snapshot.id != payload.tax_rate_id:
+            raise HTTPException(
+                status_code=409, detail="Frozen tax facts name another rate"
+            )
         amount = round_money(
             payload.amount
             if payload.amount is not None
@@ -4049,11 +4067,14 @@ class InvoiceLines(ListResponseMixin):
         payload: SystemInvoiceLineCreate,
         *,
         reason: str,
+        tax_snapshot: InvoiceLineTaxSnapshot | None = None,
     ) -> InvoiceLine:
         """Stage a system line as a flush-only participant for a command owner."""
 
         try:
-            return InvoiceLines.stage_system_line(db, payload, reason=reason)
+            return InvoiceLines.stage_system_line(
+                db, payload, reason=reason, tax_snapshot=tax_snapshot
+            )
         except HTTPException as exc:
             raise InvoiceOwnerError(
                 code="financial.invoice.line_stage_rejected",

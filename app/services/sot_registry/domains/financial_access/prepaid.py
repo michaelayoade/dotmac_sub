@@ -21,6 +21,457 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="financial.purchased_service_coverage",
+        module="app.services.purchased_service_coverage",
+        owns=("purchased service coverage protection",),
+        notes="Read-only fact boundary lets lifecycle policy consume purchase coverage without depending on settlement orchestration.",
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="purchased service coverage protection",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("purchase-linked coverage facts",),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="purchase-linked coverage facts",
+                    owner="financial.prepaid_period_purchases",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="purchase and ordered period identities, active entitlement intervals, and dependent outage decision funding links",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Reads facts in the caller session; performs no writes.",
+                locking="The mutation caller holds its canonical account/subscription locks before rechecking.",
+                idempotency="Identical persisted facts produce identical coverage protection.",
+                retries="Read current facts again before a lifecycle transition; unresolved receipt states fail closed.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(),
+                mapping_owner="lifecycle policy callers",
+                fail_closed_on=("unresolved captured purchase or protected coverage",),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.purchased_service_coverage",
+                verification="Purchase protection and lifecycle boundary tests.",
+                cutover_gate="Lifecycle and catalog callers use the typed coverage query.",
+                fallback_retirement="No mutable billing anchor substitutes for exact purchase entitlement facts.",
+            ),
+            steward="billing and service lifecycle operations",
+            design_refs=(
+                "docs/designs/PREPAID_PERIOD_PURCHASE_AND_OUTAGE_COMPENSATION.md",
+            ),
+            test_refs=(
+                "tests/architecture/test_period_purchase_safety_boundary.py",
+                "tests/test_prepaid_period_purchase_safety.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.purchase_payment_recovery_state",
+        module="app.services.purchase_payment_recovery_state",
+        owns=("confirmed purchase payment recovery state",),
+        notes="Flush-only record participant consumes confirmed payment facts; it never calls the purchase settlement coordinator.",
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="confirmed purchase payment recovery state",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "confirmed reserved payment recovery facts",
+                        "verified terminal intent facts",
+                    ),
+                    canonical_writer="financial.purchase_payment_recovery_state",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="verified terminal intent facts",
+                    owner="financial.topup_intents",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Provider-confirmed failed/abandoned intent, receipt absence and no completed service; unknown, expired and not-found outcomes do not release holds.",
+                ),
+                AuthorityInput(
+                    name="confirmed reserved payment recovery facts",
+                    owner="financial.payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="reserved receipt identity, confirmed refund/reversal status, original purchase payment link, and completed period evidence",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary="Participates in the payment owner transaction and only flushes.",
+                locking="The payment owner holds the canonical account and payment locks.",
+                idempotency="Reapplying the same confirmed payment state makes the same purchase recovery state.",
+                retries="The payment owner retries its complete transaction; unconfirmed cash movement never releases a purchase hold.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.purchase_payment_recovery_state.recovery_evidence_invalid",
+                ),
+                mapping_owner="payment refund/reversal owner adapters",
+                fail_closed_on=("missing or unconfirmed refund/reversal evidence",),
+            ),
+            events=EventContract(
+                event_types=("payment.refunded", "payment.reversed"),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="The payment owner retains its existing funding-change events.",
+                replay="Replay confirmed payment state.",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.purchase_payment_recovery_state",
+                verification="Confirmed refund and additional-capture recovery state tests.",
+                cutover_gate="Payment refund/reversal transactions compose this typed record participant.",
+                fallback_retirement="No repair changes purchase state from an actor label or an assumed refund.",
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/designs/PREPAID_PERIOD_PURCHASE_AND_OUTAGE_COMPENSATION.md",
+            ),
+            test_refs=(
+                "tests/architecture/test_period_purchase_safety_boundary.py",
+                "tests/test_prepaid_period_purchase_safety.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.compensated_service_time",
+        module="app.services.compensated_service_time",
+        owns=("compensated service clock claims", "compensated service clock history"),
+        notes="Named grant owners supply typed validated clock evidence. These input-provenance links are not coordinator calls: this participant never imports or calls those producer owners.",
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="compensated service clock claims",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "validated pause clock evidence",
+                        "validated extension clock evidence",
+                        "validated outage or attestation clock evidence",
+                    ),
+                    canonical_writer="financial.compensated_service_time",
+                ),
+                ConcernContract(
+                    name="compensated service clock history",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "persisted credit claims and historical source facts",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="validated pause clock evidence",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="StageTimeCreditCommand carrying the pause episode identity, exact original pause interval and grant provenance, validated by the account-locked pause owner.",
+                ),
+                AuthorityInput(
+                    name="validated extension clock evidence",
+                    owner="financial.service_extensions",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="StageTimeCreditCommand carrying the applied extension entry identity, uncovered original ranges and grant provenance, validated by the account-locked extension owner.",
+                ),
+                AuthorityInput(
+                    name="validated outage or attestation clock evidence",
+                    owner="financial.outage_compensation",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="StageTimeCreditCommand carrying approved outage ranges or reviewed legacy extension ranges and staff provenance, validated by the account-locked approval or attestation owner.",
+                ),
+                AuthorityInput(
+                    name="persisted credit claims and historical source facts",
+                    owner="financial.compensated_service_time",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Append-only clock claims, exact pause episode/grant pairs, existing outage snapshots and unresolved legacy extension mappings; reads facts without calling producer coordinators.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary="Flush-only participant in the grant or reviewed-attestation owner's transaction.",
+                locking="The caller holds the canonical account lock before resolving and claiming ranges.",
+                idempotency="Unique source kind, identity and ordinal replay the exact original ranges.",
+                retries="Retry the enclosing owner transaction; ambiguous history requires reviewed attestation.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.compensated_service_time.evidence_invalid",
+                    "financial.compensated_service_time.idempotency_conflict",
+                ),
+                mapping_owner="grant writer adapters",
+                fail_closed_on=("changed or ambiguous compensated clock evidence",),
+            ),
+            events=EventContract(
+                event_types=(
+                    "subscription.pause_resumed",
+                    "billing.service_extended",
+                    "outage_compensation.approved",
+                    "time_credit.attested",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="The enclosing grant or attestation owner stages its existing version-1 event atomically with the clock claims. The participant emits no separate grant event.",
+                replay="The enclosing owner replays its canonical command; identical source identities and ranges create no additional claim or event.",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.compensated_service_time",
+                verification="Cross-mechanism compensation and PostgreSQL rollback/concurrency proofs.",
+                cutover_gate="All applicable grant writers stage claims with their grants; overlapping uncertain legacy sources require review.",
+                fallback_retirement="No automatic inference of original compensated clocks from future grant dates or rounded legacy days.",
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/designs/PREPAID_PERIOD_PURCHASE_AND_OUTAGE_COMPENSATION.md",
+            ),
+            test_refs=("tests/test_period_purchase_completion.py",),
+        ),
+    ),
+    SOTService(
+        name="financial.outage_compensation",
+        module="app.services.outage_compensation",
+        owns=(
+            "finalized outage service-period compensation",
+            "reviewed outage compensation recovery",
+            "outage compensation funding retraction",
+            "reviewed outage grant approval",
+            "reviewed legacy time credit attestation",
+        ),
+        depends_on=(
+            "access.subscription_lifecycle",
+            "control.settings_spec",
+            "events.owner_outputs",
+            "financial.prepaid_service_renewals",
+            "financial.compensated_service_time",
+            "network.customer_outage_accrual",
+            "service_intent.subscription_lifecycle",
+            "auth.permission_gate",
+            "observability.audit_log",
+        ),
+        notes=(
+            "Consumes each finalized customer-outage interval exactly once, "
+            "measures eligible downtime in exact seconds, caps compensation to "
+            "funded entitlement overlap, and appends the result after the "
+            "current funded tail only after staff approval; event consumption records proposals without posting service."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="finalized outage service-period compensation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "finalized customer outage intervals",
+                        "funded prepaid coverage intervals",
+                        "outage compensation policy",
+                        "compensation evaluation time",
+                        "receipted outage lifecycle output",
+                    ),
+                    canonical_writer="financial.outage_compensation",
+                ),
+                ConcernContract(
+                    name="reviewed outage compensation recovery",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "finalized customer outage intervals",
+                        "funded prepaid coverage intervals",
+                        "prior compensation and funding reversal evidence",
+                        "staff repair permission",
+                    ),
+                    canonical_writer="financial.outage_compensation",
+                ),
+                ConcernContract(
+                    name="outage compensation funding retraction",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "funded prepaid coverage intervals",
+                        "prior compensation and funding reversal evidence",
+                    ),
+                    canonical_writer="financial.outage_compensation",
+                ),
+                ConcernContract(
+                    name="reviewed outage grant approval",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "finalized customer outage intervals",
+                        "funded prepaid coverage intervals",
+                        "prior compensation and funding reversal evidence",
+                        "staff approval permission",
+                    ),
+                    canonical_writer="financial.outage_compensation",
+                ),
+                ConcernContract(
+                    name="reviewed legacy time credit attestation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "prior compensation and funding reversal evidence",
+                        "staff repair permission",
+                    ),
+                    canonical_writer="financial.outage_compensation",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="staff approval permission",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Active system-user principal, dedicated billing:outage_compensation:approve permission, separate human maker/approver, reason and reviewed fingerprint.",
+                ),
+                AuthorityInput(
+                    name="prior compensation and funding reversal evidence",
+                    owner="financial.outage_compensation",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="durable decision credited ranges, funding dependencies, unresolved reviews, and reversed source entitlements",
+                ),
+                AuthorityInput(
+                    name="staff repair permission",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="active staff principal and billing:prepaid_reconciliation:repair RBAC grant",
+                ),
+                AuthorityInput(
+                    name="receipted outage lifecycle output",
+                    owner="events.owner_outputs",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "unique consumer and outage-event receipt committed with "
+                        "the compensation consequence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="finalized customer outage intervals",
+                    owner="network.customer_outage_accrual",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "finalized confirmed_unavailable CustomerOutageInterval "
+                        "rows and explicit planned-maintenance exclusions"
+                    ),
+                ),
+                AuthorityInput(
+                    name="funded prepaid coverage intervals",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active ServiceEntitlement intervals for the exact "
+                        "subscription and account"
+                    ),
+                ),
+                AuthorityInput(
+                    name="outage compensation policy",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing.outage_compensation_enabled and the admin-editable "
+                        "billing.outage_compensation_min_hours threshold"
+                    ),
+                ),
+                AuthorityInput(
+                    name="compensation evaluation time",
+                    owner="external:system_clock",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="UTC command effective_at",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "The owner locks the subscriber account and writes one "
+                    "proposal and interval links; only a named Finance approval may write its zero-value exact "
+                    "entitlement, and the billing-anchor projection atomically."
+                ),
+                locking=(
+                    "The canonical account lock serializes coverage-tail changes; "
+                    "a unique interval-consumption key prevents two decisions from "
+                    "consuming the same evidence twice. Connected history includes previously "
+                    "consumed intervals but awards only funded ranges not previously "
+                    "credited. Schedule rebasing requires the previous reviewed lifecycle head."
+                ),
+                idempotency=(
+                    "A required idempotency key replays the same preview fingerprint; "
+                    "a changed fingerprint fails closed."
+                ),
+                retries=(
+                    "Transient failures may retry with the same idempotency key. "
+                    "Stale or contradictory evidence requires a fresh preview."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.outage_compensation.configuration_invalid",
+                    "financial.outage_compensation.approval_permission_required",
+                    "financial.outage_compensation.self_approval_forbidden",
+                    "financial.outage_compensation.legacy_credit_invalid",
+                    "financial.outage_compensation.feature_disabled",
+                    "financial.outage_compensation.idempotency_conflict",
+                    "financial.outage_compensation.idempotency_required",
+                    "financial.outage_compensation.no_finalized_outage",
+                    "financial.outage_compensation.review_required",
+                    "financial.outage_compensation.review_invalid",
+                    "financial.outage_compensation.repair_permission_required",
+                    "financial.outage_compensation.stale_preview",
+                    "financial.outage_compensation.subscription_not_found",
+                    *owner_command_boundary_error_codes(
+                        "financial.outage_compensation"
+                    ),
+                ),
+                mapping_owner=(
+                    "outage lifecycle projection and administrative adapters"
+                ),
+                fail_closed_on=(
+                    "missing or invalid policy",
+                    "mutable billing anchor beyond funded coverage evidence",
+                    "stale outage, funding, or tail evidence",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "outage.discarded",
+                    "outage.resolved",
+                    "outage_compensation.proposed",
+                    "outage_compensation.approved",
+                    "time_credit.attested",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Consumes the version-1 outage lifecycle incident identity and "
+                    "resolution timestamp additively."
+                ),
+                replay=(
+                    "A per-subscription owner-output receipt and unique interval "
+                    "consumption make redelivery an exact no-op."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.outage_compensation",
+                verification=(
+                    "Exact-second union, funded-overlap, threshold, exclusion, "
+                    "idempotency, and concurrent-tail regression tests."
+                ),
+                cutover_gate=(
+                    "The feature flag remains disabled until migrations, event "
+                    "consumption, cancellation rebasing, and customer projections "
+                    "are deployed together."
+                ),
+            ),
+            steward="billing and network operations",
+            design_refs=(
+                "docs/designs/PREPAID_PERIOD_PURCHASE_AND_OUTAGE_COMPENSATION.md",
+                "docs/designs/OUTAGE_SLA_SPINE.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_outage_compensation.py",
+                "tests/test_outage_compensation_safety.py",
+                "tests/architecture/test_period_purchase_safety_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.prepaid_currency",
         module="app.services.prepaid_currency",
         owns=("prepaid enforcement currency policy",),
@@ -473,6 +924,7 @@ SERVICES: tuple[SOTService, ...] = (
         depends_on=(
             "access.subscription_lifecycle",
             "auth.permission_gate",
+            "financial.compensated_service_time",
             "control.settings_spec",
             "customer.accounts",
             "events.dispatcher",
@@ -702,6 +1154,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.service_extensions.reversal_evidence_incomplete",
                     "financial.service_extensions.reversal_reason_too_long",
                     "financial.service_extensions.self_approval_forbidden",
+                    "financial.service_extensions.time_credit_conflict",
                     "financial.service_extensions.stale_reversal_preview",
                     "financial.service_extensions.transition_conflict",
                     "financial.service_extensions.write_conflict",
@@ -4219,6 +4672,289 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_prepaid_renewal_terms_backfill.py",
                 "tests/test_prepaid_renewal_term_record.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.prepaid_period_purchases",
+        module="app.services.prepaid_period_purchases",
+        owns=(
+            "prepaid service-period purchase quote persistence",
+            "verified prepaid service-period purchase settlement",
+            "reviewed prepaid purchase receipt recovery",
+        ),
+        depends_on=(
+            "access.subscription_lifecycle",
+            "control.settings_spec",
+            "customer.financial_position",
+            "financial.account_credit_applications",
+            "financial.invoices",
+            "financial.payments",
+            "financial.prepaid_service_renewals",
+            "financial.topup_intents",
+            "network.outage_lifecycle",
+            "financial.outage_compensation",
+            "financial.billing_tax_resolution",
+            "service_intent.subscription_lifecycle",
+            "auth.permission_gate",
+            "observability.audit_log",
+        ),
+        notes=(
+            "Creates a time-limited quote for one to twelve monthly prepaid "
+            "base-subscription periods, rounds tax independently for each period, "
+            "and settles only the verified payment selected for that purchase. "
+            "Settlement atomically produces one paid invoice and one entitlement "
+            "per quoted period; it never applies funds to unrelated account debt."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="prepaid service-period purchase quote persistence",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "prepaid period-purchase policy",
+                        "eligible prepaid subscription",
+                        "customer debt position",
+                        "active outage state",
+                        "canonical monthly charge and service-period projection",
+                    ),
+                    canonical_writer=("financial.prepaid_period_purchases"),
+                ),
+                ConcernContract(
+                    name="verified prepaid service-period purchase settlement",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "persisted period-purchase quote",
+                        "verified selected-payment evidence",
+                        "invoice, allocation, entitlement, and anchor protocols",
+                    ),
+                    canonical_writer=("financial.prepaid_period_purchases"),
+                ),
+                ConcernContract(
+                    name="reviewed prepaid purchase receipt recovery",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "persisted period-purchase quote",
+                        "verified selected-payment evidence",
+                        "staff repair permission",
+                    ),
+                    canonical_writer="financial.prepaid_period_purchases",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="purchase-linked coverage and review decisions",
+                    owner="financial.prepaid_period_purchases",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="active purchase-linked entitlements, dependent outage grants, and unresolved checkout state",
+                ),
+                AuthorityInput(
+                    name="staff repair permission",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="active staff principal and billing:prepaid_reconciliation:repair RBAC grant",
+                ),
+                AuthorityInput(
+                    name="prepaid period-purchase policy",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed feature enablement and maximum-month settings from "
+                        "app.services.service_period_policy"
+                    ),
+                ),
+                AuthorityInput(
+                    name="eligible prepaid subscription",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "account-owned monthly prepaid Subscription lifecycle and "
+                        "base-subscription-only eligibility"
+                    ),
+                ),
+                AuthorityInput(
+                    name="customer debt position",
+                    owner="customer.financial_position",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="canonical positive open-invoice balance for the account",
+                ),
+                AuthorityInput(
+                    name="active outage state",
+                    owner="network.outage_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "open confirmed-unavailable CustomerOutageInterval for the "
+                        "exact subscription"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical monthly charge and service-period projection",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "contracted monthly base price, per-period tax policy, and "
+                        "funded-tail settlement-period resolver"
+                    ),
+                ),
+                AuthorityInput(
+                    name="persisted period-purchase quote",
+                    owner="financial.prepaid_period_purchases",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "immutable purchase and ordered period rows bound to the "
+                        "quote fingerprint and expiry"
+                    ),
+                ),
+                AuthorityInput(
+                    name="verified selected-payment evidence",
+                    owner="financial.payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "succeeded account payment whose exact amount and currency "
+                        "match the purchase and which has no prior allocations"
+                    ),
+                ),
+                AuthorityInput(
+                    name="invoice, allocation, entitlement, and anchor protocols",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed invoice issuance, selected-payment application, paid "
+                        "entitlement creation, and prepaid-anchor projection APIs"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "Quote persistence and verified settlement each enter "
+                    "execute_owner_command once on a transaction-free session. "
+                    "Confirmed cash and its purchase reservation are staged first. "
+                    "Only the invoice, allocation, entitlement, anchor, and intent "
+                    "consequence uses execute_owner_savepoint. A domain rejection "
+                    "rolls back that consequence and persists a held receipt, "
+                    "review_required purchase, and audit evidence outside the savepoint."
+                ),
+                locking=(
+                    "The account is locked before quote idempotency resolution and "
+                    "then the subscription before settlement. A partial unique live-checkout "
+                    "constraint prevents different keys selling the same dates. Exact invoice-line keys, purchase "
+                    "status, and payment-allocation checks prevent duplicate funding."
+                ),
+                idempotency=(
+                    "Quote creation binds the account-scoped idempotency key to the "
+                    "subscription, period count, and fingerprint. Settlement replay "
+                    "returns only when the stored payment and every period result "
+                    "remain complete."
+                ),
+                retries=(
+                    "Retry the whole owner command with the same command and "
+                    "idempotency evidence; stale quotes and mismatched provider "
+                    "evidence require receipt review or a confirmed refund. A reviewed "
+                    "retry binds its fingerprint and key to the completed receipt; "
+                    "it never recharges the customer."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "financial.prepaid_period_purchases"
+                    ),
+                    "financial.prepaid_period_purchases.active_outage",
+                    "financial.prepaid_period_purchases.additional_capture_review",
+                    "financial.prepaid_period_purchases.checkout_in_progress",
+                    "financial.prepaid_period_purchases.coverage_overlap",
+                    "financial.prepaid_period_purchases.currency_unsupported",
+                    "financial.prepaid_period_purchases.explicit_end",
+                    "financial.prepaid_period_purchases.payment_time_invalid",
+                    "financial.prepaid_period_purchases.pending_lifecycle",
+                    "financial.prepaid_period_purchases.recovery_evidence_invalid",
+                    "financial.prepaid_period_purchases.repair_permission_required",
+                    "financial.prepaid_period_purchases.tax_snapshot_missing",
+                    "financial.prepaid_period_purchases.usage_allowance_unsupported",
+                    "financial.prepaid_period_purchases.billing_mode_ineligible",
+                    "financial.prepaid_period_purchases.command_invalid",
+                    "financial.prepaid_period_purchases.configuration_invalid",
+                    "financial.prepaid_period_purchases.entitlement_missing",
+                    "financial.prepaid_period_purchases.evidence_missing",
+                    "financial.prepaid_period_purchases.feature_disabled",
+                    "financial.prepaid_period_purchases.idempotency_conflict",
+                    "financial.prepaid_period_purchases.intent_invalid",
+                    "financial.prepaid_period_purchases.monthly_price_unavailable",
+                    "financial.prepaid_period_purchases.open_debt",
+                    "financial.prepaid_period_purchases.payment_mismatch",
+                    "financial.prepaid_period_purchases.period_count_invalid",
+                    "financial.prepaid_period_purchases.price_changed",
+                    "financial.prepaid_period_purchases.provider_evidence_mismatch",
+                    "financial.prepaid_period_purchases.purchase_expired",
+                    "financial.prepaid_period_purchases.purchase_closed_unpaid",
+                    "financial.prepaid_period_purchases.purchase_incomplete",
+                    "financial.prepaid_period_purchases.purchase_ineligible",
+                    "financial.prepaid_period_purchases.purchase_noncontiguous",
+                    "financial.prepaid_period_purchases.purchase_not_found",
+                    "financial.prepaid_period_purchases.recurring_add_on_unsupported",
+                    "financial.prepaid_period_purchases.settlement_rejected",
+                    "financial.prepaid_period_purchases.stale_quote",
+                    "financial.prepaid_period_purchases.subscription_ineligible",
+                    "financial.prepaid_period_purchases.subscription_not_found",
+                ),
+                mapping_owner="customer portal and gateway webhook adapters",
+                fail_closed_on=(
+                    "existing debt or an active service outage",
+                    "unsupported billing mode, cadence, or recurring add-on",
+                    "stale price, tax, period, or quote evidence",
+                    "payment, provider, invoice, allocation, or entitlement mismatch",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "topup_intent.gateway_created",
+                    "payment.received",
+                    "invoice.created",
+                    "invoice.paid",
+                    "topup_intent.completed",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "The gateway, payment, invoice, and top-up intent participant "
+                    "owners retain their existing version-1 event contracts. "
+                    "Purchase and period identities remain carried by typed intent "
+                    "fields and invoice metadata rather than a second transport."
+                ),
+                replay=(
+                    "The purchase idempotency key, selected payment, ordered period "
+                    "rows, exact invoice-line keys, and entitlement links reconstruct "
+                    "the completed result without allocating or invoicing twice."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.prepaid_period_purchases",
+                verification=(
+                    "Focused quote, tax-rounding, eligibility, exact-payment, "
+                    "multi-invoice settlement, replay, portal, and webhook tests."
+                ),
+                cutover_gate=(
+                    "The portal uses the typed purchase intent and verified owner "
+                    "command; generic account-credit allocation never consumes the "
+                    "purchase payment."
+                ),
+                fallback_retirement=(
+                    "Feature remains default-off until the schema, settlement owner, "
+                    "portal adapter, and operational policy are deployed together."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/designs/PREPAID_PERIOD_PURCHASE_AND_OUTAGE_COMPENSATION.md",
+            ),
+            test_refs=(
+                "tests/test_prepaid_period_purchases.py",
+                "tests/test_prepaid_period_purchase_safety.py",
+                "tests/architecture/test_period_purchase_safety_boundary.py",
+                "tests/integration/test_period_purchase_concurrency_pg.py",
+                "tests/test_gateway_topup_intents.py",
             ),
         ),
     ),

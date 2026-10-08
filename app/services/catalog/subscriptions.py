@@ -482,6 +482,8 @@ def _validate_plan_change(
     db: Session,
     subscription: Subscription,
     new_offer_id: str,
+    *,
+    effective_at: datetime | None = None,
 ) -> None:
     """Validate that a plan change is allowed.
 
@@ -491,9 +493,23 @@ def _validate_plan_change(
     - Regional availability (if offer has region_zone_id)
     - Billing mode compatibility (prepaid ↔ prepaid, postpaid ↔ postpaid)
     """
+    from app.services.purchased_service_coverage import (
+        PurchasedCoverageQuery,
+        resolve_purchased_coverage,
+    )
     from app.services.subscription_billing_treatments import (
         subscription_has_open_billing_treatment,
     )
+
+    purchased = resolve_purchased_coverage(db, PurchasedCoverageQuery(subscription.id))
+    change_at = _ensure_utc(effective_at) or datetime.now(UTC)
+    if purchased.has_unsettled_purchase or (
+        purchased.protected_until is not None and change_at < purchased.protected_until
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Resolve the period purchase or schedule the plan change after paid coverage.",
+        )
 
     if subscription_has_open_billing_treatment(db, subscription.id):
         raise HTTPException(

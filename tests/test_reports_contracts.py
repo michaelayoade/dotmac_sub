@@ -187,7 +187,7 @@ def test_churn_report_returns_kpi_contracts(db_session):
     data = web_reports.get_churn_report_data(db_session)
     kpis = data.churn_kpis
 
-    assert set(kpis) == {"churn_rate", "cancelled", "at_risk", "retention_rate"}
+    assert set(kpis) == {"churn_rate", "cancelled", "suspended", "retention_rate"}
     for kpi in kpis.values():
         assert isinstance(kpi, Kpi)
         assert isinstance(kpi.value, StateValue)
@@ -197,16 +197,16 @@ def test_churn_report_returns_kpi_contracts(db_session):
     assert kpis["churn_rate"].cohort_url == "/admin/reports/churn#churn-summary"
     assert kpis["retention_rate"].cohort_url == "/admin/reports/churn#churn-summary"
     assert _cohort_status(kpis["cancelled"].cohort_url) == AccountStatus.canceled.value
-    assert _cohort_status(kpis["at_risk"].cohort_url) == AccountStatus.suspended.value
+    assert _cohort_status(kpis["suspended"].cohort_url) == AccountStatus.suspended.value
     # KPI-parity: the count tiles equal the size of the cohort they link to.
     assert kpis["cancelled"].value.value == _count_at_cohort(
         db_session, kpis["cancelled"].cohort_url
     )
     assert kpis["cancelled"].value.value == 1
-    assert kpis["at_risk"].value.value == _count_at_cohort(
-        db_session, kpis["at_risk"].cohort_url
+    assert kpis["suspended"].value.value == _count_at_cohort(
+        db_session, kpis["suspended"].cohort_url
     )
-    assert kpis["at_risk"].value.value == 1
+    assert kpis["suspended"].value.value == 1
     # Retention is active / total (1 / 3), not 100 - cancelled / total (2 / 3).
     assert kpis["retention_rate"].value.value == "33.3%"
     # Rate tiles render an owner-formatted string, not a raw number the template
@@ -261,8 +261,8 @@ def test_churn_report_filters_event_type_and_calendar_window(db_session):
     )
 
     assert filtered.cancelled_count == 1
-    assert filtered.at_risk_count == 1
-    assert {item.id for item in filtered.recent_cancellations} == {
+    assert filtered.suspended_count == 1
+    assert {item.id for item in filtered.recent_events} == {
         cancelled_in_range.id,
         suspended_in_range.id,
     }
@@ -277,11 +277,9 @@ def test_churn_report_filters_event_type_and_calendar_window(db_session):
     )
 
     assert suspended_only.cancelled_count == 0
-    assert suspended_only.at_risk_count == 1
+    assert suspended_only.suspended_count == 1
     assert suspended_only.churn_chart.series[1].label == "Suspensions"
-    assert [item.id for item in suspended_only.recent_cancellations] == [
-        suspended_in_range.id
-    ]
+    assert [item.id for item in suspended_only.recent_events] == [suspended_in_range.id]
 
 
 def test_churn_report_kpi_drilldowns_preserve_selected_period(db_session):
@@ -338,9 +336,59 @@ def test_churn_report_uses_lifecycle_event_after_subscriber_resumes(
         date_to="2026-07-31",
     )
 
-    assert report.at_risk_count == 1
-    assert report.recent_cancellations[0].status == "suspended"
-    assert report.recent_cancellations[0].occurred_at.date().isoformat() == "2026-07-15"
+    assert report.suspended_count == 1
+    assert report.churn_reasons == {"Payment hold": 1}
+    assert report.recent_events[0].status == "suspended"
+    assert report.recent_events[0].occurred_at.date().isoformat() == "2026-07-15"
+
+
+def test_churn_report_legacy_suspension_reason_is_explicitly_unavailable(
+    db_session, catalog_offer
+):
+    subscriber = _make_subscriber(
+        db_session,
+        AccountStatus.suspended,
+        updated_at=datetime(2026, 7, 15, 12, tzinfo=UTC),
+        created_at=datetime(2026, 1, 1, 12, tzinfo=UTC),
+    )
+    db_session.add(
+        Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.suspended,
+        )
+    )
+    db_session.commit()
+
+    report = web_reports.get_churn_report_data(
+        db_session,
+        status=AccountStatus.suspended.value,
+        date_from="2026-07-01",
+        date_to="2026-07-31",
+    )
+
+    assert report.churn_reasons == {"Reason not captured": 1}
+
+
+def test_churn_report_excludes_legacy_suspension_reasons_for_hidden_subscribers(
+    db_session, catalog_offer
+):
+    subscriber = _make_subscriber(db_session, AccountStatus.suspended)
+    subscriber.user_type = UserType.system_user
+    db_session.add(
+        Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.suspended,
+        )
+    )
+    db_session.commit()
+
+    report = web_reports.get_churn_report_data(
+        db_session, status=AccountStatus.suspended.value
+    )
+
+    assert report.churn_reasons == {}
 
 
 # --------------------------------------------------------------------------
@@ -388,6 +436,7 @@ def test_churn_template_renders_kpi_contract_fields():
     )
     assert "churn_kpis.churn_rate.value.value" in template
     assert "href=churn_kpis.cancelled.cohort_url" in template
+    assert "href=churn_kpis.suspended.cohort_url" in template
     assert "tone=churn_kpis.retention_rate.tone" in template
     assert 'name="status"' in template
     assert 'name="date_from"' in template

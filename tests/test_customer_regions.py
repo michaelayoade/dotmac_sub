@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -118,3 +119,35 @@ def test_unassigned_customer_filter_uses_the_canonical_assignment_relation():
     clause = customer_region_filter_clause(UNASSIGNED_REGION_FILTER)
 
     assert clause is not None
+
+
+def test_region_editor_posts_to_the_region_save_route():
+    template = Path("templates/admin/customer_regions/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert '<form method="post" action="/admin/customer-regions"' in template
+
+
+def test_region_editor_map_is_safe_without_write_controls_and_fits_radius():
+    template = Path("templates/admin/customer_regions/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "if (!mapContainer || !lat || !lng || !radius || !color || !mode" in template
+    assert "typeof L === 'undefined'" in template
+    assert "map.fitBounds(circle.getBounds()" in template
+    assert 'data-typeahead-url="/api/v1/search/nas-devices"' in template
+    assert 'data-typeahead-url="/api/v1/search/pop-sites"' in template
+
+
+def test_region_infrastructure_choices_are_loaded_by_typeahead():
+    source = Path("app/services/customer_regions.py").read_text(encoding="utf-8")
+    helper_source = source[
+        source.index("def infrastructure_options") : source.index(
+            "def _validate_region_input"
+        )
+    ]
+
+    assert "def infrastructure_options(" in source
+    assert ".limit(500)" not in helper_source
