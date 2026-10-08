@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.models.ai_intake import AiIntakeConfig
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -45,6 +47,7 @@ from app.services import (
     team_inbox_customer_completion,
 )
 from app.services.domain_errors import DomainError
+from app.services.events import dispatcher as event_dispatcher
 from app.services.events.handlers import lead_intake as lead_intake_event_handler
 from app.services.events.types import Event, EventType
 from app.services.operator_tenant import OPERATOR_TENANT_ID
@@ -66,8 +69,14 @@ def _context(key: str) -> CommandContext:
     "status", [AiIntakeStatus.awaiting_follow_up, AiIntakeStatus.fallback]
 )
 def test_sales_capture_precedes_clarification_and_survives_later_complaint(
-    db_session, status: AiIntakeStatus
+    db_session, monkeypatch: pytest.MonkeyPatch, status: AiIntakeStatus
 ):
+    def hold_dispatch(_db: Session, _callback: Callable[[Session], None]) -> None:
+        # Model a worker that has not consumed the committed outbox event yet.
+        # Keep real event persistence so the pending gate and repair scan are tested.
+        return None
+
+    monkeypatch.setattr(event_dispatcher, "run_after_commit", hold_dispatch)
     conversation, message = _instagram_conversation(db_session)
     metadata: dict[str, object] = {
         **(message.metadata_ or {}),
