@@ -159,7 +159,10 @@ proposal and approved decision are linked; approval identity and reason persist.
 `financial.compensated_service_time` owns append-only original clock-range claims.
 Pause resume, new bulk service extensions and approved outages stage claims in
 their account-locked grant transaction. Its history resolver reads facts without
-calling producer coordinators. Exact historical pause grants and outage snapshots
+calling producer coordinators. The manifest names the lifecycle, extension,
+and outage owners that validate each typed command; their enclosing transaction
+stages the corresponding resume, extension, approval or attestation event with
+the claims. Exact historical pause grants and outage snapshots
 are deducted. Rounded legacy extensions without exact per-service clock mappings
 require staff attestation, even after a later renewal. Existing service is not
 clawed back. History remains present after refunds and reversals; withdrawing a
@@ -196,10 +199,16 @@ Both `billing.prepaid_period_purchase_enabled` and
 `billing.outage_compensation_enabled` default to false. Schema deployment and
 historical overlap/reconciliation checks precede enabling either writer.
 
-Migration filenames 644 and 645 remove numeric collisions with current main;
-their original `636_service_period_purchase_contract` and
-`637_prepaid_period_purchase_intent_contract` revision identities are preserved
-for databases that may already have applied the PR. Revision
+Migration filenames 651 through 654 have distinct numeric prefixes beyond
+current main's 650. Their existing revision identities and parent links remain
+unchanged: `636_service_period_purchase_contract`,
+`637_prepaid_period_purchase_intent_contract`, `646_prepaid_purchase_safety`, and
+`647_purchase_outage_approval`. Filename ordering does not replace Alembic's
+revision graph or cause already-applied revisions to execute again.
+`655_prepaid_purchase_current_main_merge` joins the approved-purchase head and
+`650_customer_connection_type` without changing their schemas or parent links;
+fresh installs and upgrades apply both histories before recording the merge.
+Revision
 `646_prepaid_purchase_safety` merges the purchase history with main's 642 head,
 adds receipt reservations, capture timestamps, review resolution links, and the
 single-live-purchase constraint. Duplicate existing live purchases abort the

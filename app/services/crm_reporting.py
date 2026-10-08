@@ -19,7 +19,7 @@ from enum import StrEnum
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select, union_all
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -32,6 +32,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.network import (
     FdhCabinet,
     FiberStrand,
@@ -55,9 +56,11 @@ from app.services import (
     crm_api,
     ip_pool_utilization_snapshot,
     projects,
+    subscriber_growth,
     team_inbox_metrics,
     ticket_sla_reports,
 )
+from app.services import subscriber as subscriber_service
 from app.services.invoice_collectibility import open_invoice_filters
 
 
@@ -1039,18 +1042,75 @@ def subscriber_segment_facts(
     )
 
 
-def subscription_churn_reason_counts(db: Session) -> tuple[tuple[str, int], ...]:
-    """Read authoritative service-cancellation reasons for the churn report."""
+def subscription_churn_reason_counts(
+    db: Session,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> tuple[tuple[str, int], ...]:
+    """Read cancellation reasons from the same lifecycle window as churn."""
+    trusted_cancel = (
+        select(
+            SubscriptionLifecycleEvent.subscription_id.label("subscription_id"),
+            func.coalesce(
+                SubscriptionLifecycleEvent.reason,
+                Subscription.cancel_reason,
+            ).label("reason"),
+            SubscriptionLifecycleEvent.effective_at.label("occurred_at"),
+        )
+        .select_from(SubscriptionLifecycleEvent)
+        .join(
+            Subscription,
+            Subscription.id == SubscriptionLifecycleEvent.subscription_id,
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(
+            subscriber_service.visible_subscriber_clause(),
+            SubscriptionLifecycleEvent.event_type == LifecycleEventType.cancel,
+            subscriber_growth.trusted_lifecycle_transition_clause(),
+        )
+    )
+    trusted_cancel_exists = (
+        select(1)
+        .select_from(SubscriptionLifecycleEvent)
+        .where(
+            SubscriptionLifecycleEvent.subscription_id == Subscription.id,
+            SubscriptionLifecycleEvent.event_type == LifecycleEventType.cancel,
+            subscriber_growth.trusted_lifecycle_transition_clause(),
+        )
+        .exists()
+    )
+    legacy_cancel = (
+        select(
+            Subscription.id.label("subscription_id"),
+            Subscription.cancel_reason.label("reason"),
+            func.coalesce(
+                Subscription.canceled_at,
+                Subscription.updated_at,
+                Subscription.created_at,
+            ).label("occurred_at"),
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(
+            (
+                (Subscription.status == SubscriptionStatus.canceled)
+                | (Subscription.canceled_at.is_not(None))
+            ),
+            ~trusted_cancel_exists,
+        )
+    )
+    source = union_all(trusted_cancel, legacy_cancel).subquery("churn_reasons")
+    statement = select(source.c.reason, func.count(source.c.subscription_id))
+    if date_from is not None:
+        statement = statement.where(source.c.occurred_at >= date_from)
+    if date_to is not None:
+        statement = statement.where(source.c.occurred_at < date_to)
     return tuple(
         (reason or "Reason not captured", int(count or 0))
         for reason, count in db.execute(
-            select(Subscription.cancel_reason, func.count(Subscription.id))
-            .where(
-                (Subscription.status == SubscriptionStatus.canceled)
-                | (Subscription.canceled_at.is_not(None))
+            statement.group_by(source.c.reason).order_by(
+                func.count(source.c.subscription_id).desc()
             )
-            .group_by(Subscription.cancel_reason)
-            .order_by(func.count(Subscription.id).desc())
         ).all()
     )
 

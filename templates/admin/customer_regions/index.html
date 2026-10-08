@@ -1,0 +1,117 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Customer Regions - Settings{% endblock %}
+
+{% block content %}
+{% set values = form_values|default({}) %}
+<div class="space-y-6">
+    <div class="flex flex-col justify-between gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-end dark:border-slate-700">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/system/settings-hub" class="hover:text-slate-700 dark:hover:text-slate-300">Settings Hub</a>
+                <span aria-hidden="true">/</span>
+                <span class="text-slate-900 dark:text-white">Customer Regions</span>
+            </nav>
+            <h1 class="font-display text-2xl font-bold text-slate-900 dark:text-white">Customer regions</h1>
+            <p class="mt-1 max-w-3xl text-sm text-slate-500 dark:text-slate-400">Configure a center point and radius. Customers with a service address inside an active radius are grouped into the winning region.</p>
+        </div>
+        <a href="/admin/system/settings-hub" class="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Back to Settings</a>
+    </div>
+
+    {% if error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">{{ error }}</div>
+    {% endif %}
+
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="mb-4 flex items-center justify-between">
+                <div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Configured regions</h2>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Priority is used by Manual mode when radii overlap.</p>
+                </div>
+                <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ regions | length }}</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-left text-sm">
+                    <thead class="border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                        <tr><th class="px-3 py-3">Region</th><th class="px-3 py-3">Center</th><th class="px-3 py-3">Radius</th><th class="px-3 py-3">Overlap rule</th><th class="px-3 py-3">State</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for region in regions %}
+                        <tr class="align-top">
+                            <td class="px-3 py-3"><span class="mr-2 inline-block h-3 w-3 rounded-full" style="background-color: {{ region.color }}"></span><span class="font-semibold text-slate-900 dark:text-white">{{ region.name }}</span><div class="mt-1 text-xs text-slate-500">Priority {{ region.priority }}</div></td>
+                            <td class="px-3 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">{{ '%.6f'|format(region.latitude) }}, {{ '%.6f'|format(region.longitude) }}</td>
+                            <td class="px-3 py-3 tabular-nums text-slate-600 dark:text-slate-300">{{ '%.0f'|format(region.radius_meters) }} m</td>
+                            <td class="px-3 py-3 text-xs text-slate-600 dark:text-slate-300">{{ region.match_mode | replace('_', ' ') | title }}</td>
+                            <td class="px-3 py-3"><div class="flex flex-wrap items-center gap-2"><span class="text-xs {{ 'text-emerald-600' if region.is_active else 'text-slate-400' }}">{{ 'Active' if region.is_active else 'Disabled' }}</span>{% if can(request, 'gis:area:write') %}<a class="text-xs font-semibold text-amber-600 hover:text-amber-700" href="/admin/customer-regions/{{ region.id }}/edit">Edit</a>{% if region.is_active %}<form method="post" action="/admin/customer-regions/{{ region.id }}/disable"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="text-xs font-semibold text-slate-500 hover:text-rose-600" type="submit">Disable</button></form>{% endif %}{% endif %}</div></td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="5" class="px-3 py-8 text-center text-sm text-slate-500">No regions configured yet.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            {% if not can(request, 'gis:area:write') %}
+            <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                You have read-only access to region configuration. Ask a GIS administrator for the region write permission to add, edit, or disable regions.
+            </div>
+            {% else %}
+            <h2 class="text-base font-semibold text-slate-900 dark:text-white">{{ 'Edit region' if editing_region else 'Add region' }}</h2>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use decimal coordinates. Drag the marker to adjust the center.</p>
+            <form method="post" class="mt-4 space-y-4">
+                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                <input type="hidden" name="region_id" value="{{ values.get('region_id', editing_region.id if editing_region else '') }}">
+                <div><label for="region-name" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Name</label><input id="region-name" name="name" value="{{ values.get('name', editing_region.name if editing_region else '') }}" required placeholder="Gudu" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></div>
+                <div class="grid grid-cols-2 gap-3"><div><label for="region-latitude" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Latitude</label><input id="region-latitude" name="latitude" value="{{ values.get('latitude', editing_region.latitude if editing_region else '') }}" type="number" step="any" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></div><div><label for="region-longitude" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Longitude</label><input id="region-longitude" name="longitude" value="{{ values.get('longitude', editing_region.longitude if editing_region else '') }}" type="number" step="any" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></div></div>
+                <div id="region-editor-map" class="h-48 rounded-lg border border-slate-200 dark:border-slate-700"></div>
+                <div><label for="region-radius" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Radius (meters)</label><input id="region-radius" name="radius_meters" type="number" min="1" max="100000" step="1" value="{{ values.get('radius_meters', editing_region.radius_meters if editing_region else 300) }}" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></div>
+                <div><label for="region-color" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Region color</label><input id="region-color" name="color" type="color" value="{{ values.get('color', editing_region.color if editing_region else '#0ea5e9') }}" class="h-10 w-full rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-600 dark:bg-slate-900"></div>
+                <div><label for="region-match-mode" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Overlap rule</label><select id="region-match-mode" name="match_mode" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"><option value="nearest" {% if values.get('match_mode', editing_region.match_mode if editing_region else 'nearest') == 'nearest' %}selected{% endif %}>Nearest center</option><option value="nas" {% if values.get('match_mode', editing_region.match_mode if editing_region else 'nearest') == 'nas' %}selected{% endif %}>Matching NAS</option><option value="pop_site" {% if values.get('match_mode', editing_region.match_mode if editing_region else 'nearest') == 'pop_site' %}selected{% endif %}>Matching POP/site</option><option value="manual" {% if values.get('match_mode', editing_region.match_mode if editing_region else 'nearest') == 'manual' %}selected{% endif %}>Manual priority</option></select></div>
+                <div class="grid grid-cols-2 gap-3"><div><label for="region-priority" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Priority</label><input id="region-priority" name="priority" type="number" value="{{ values.get('priority', editing_region.priority if editing_region else 0) }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></div><div class="flex items-end pb-2"><label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300"><input name="is_active" type="checkbox" value="true" {% if values.get('is_active', not editing_region or editing_region.is_active) %}checked{% endif %} class="rounded border-slate-300 text-amber-600"> Active</label></div></div>
+                <div id="region-nas-field" class="hidden"><label for="region-nas" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">NAS</label><select id="region-nas" name="nas_device_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"><option value="">Select NAS</option>{% for option in infrastructure_options.nas %}<option value="{{ option.id }}" {% if values.get('nas_device_id', editing_region.nas_device_id|string if editing_region and editing_region.nas_device_id else '') == option.id %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select></div>
+                <div id="region-pop-field" class="hidden"><label for="region-pop" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">POP/site</label><select id="region-pop" name="pop_site_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"><option value="">Select POP/site</option>{% for option in infrastructure_options.pop_site %}<option value="{{ option.id }}" {% if values.get('pop_site_id', editing_region.pop_site_id|string if editing_region and editing_region.pop_site_id else '') == option.id %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select></div>
+                <div><label for="region-notes" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Notes</label><textarea id="region-notes" name="notes" rows="2" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">{{ values.get('notes', editing_region.notes if editing_region else '') }}</textarea></div>
+                <div class="flex gap-2"><button type="submit" class="flex-1 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700">{{ 'Update region' if editing_region else 'Save region' }}</button>{% if editing_region %}<a href="/admin/customer-regions" class="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-300">Cancel</a>{% endif %}</div>
+            </form>
+            {% endif %}
+        </section>
+    </div>
+</div>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script>
+(() => {
+    const lat = document.getElementById('region-latitude');
+    const lng = document.getElementById('region-longitude');
+    const radius = document.getElementById('region-radius');
+    const color = document.getElementById('region-color');
+    const map = L.map('region-editor-map').setView([9.0765, 7.3986], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+    let marker;
+    let circle;
+    function redraw() {
+        const latitude = Number(lat.value), longitude = Number(lng.value), meters = Number(radius.value || 300);
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+        const point = [latitude, longitude];
+        if (!marker) marker = L.marker(point, { draggable: true }).addTo(map).on('dragend', () => { const value = marker.getLatLng(); lat.value = value.lat.toFixed(6); lng.value = value.lng.toFixed(6); redraw(); }); else marker.setLatLng(point);
+        if (!circle) circle = L.circle(point, { radius: meters, color: color.value || '#0ea5e9', fillColor: color.value || '#0ea5e9', fillOpacity: 0.12 }).addTo(map); else circle.setLatLng(point).setRadius(meters).setStyle({ color: color.value || '#0ea5e9', fillColor: color.value || '#0ea5e9' });
+        map.setView(point, Math.max(map.getZoom(), 13));
+    }
+    map.on('click', event => {
+        lat.value = event.latlng.lat.toFixed(6);
+        lng.value = event.latlng.lng.toFixed(6);
+        redraw();
+    });
+    [lat, lng, radius, color].forEach(input => input.addEventListener('input', redraw));
+    const mode = document.getElementById('region-match-mode');
+    const updateModeFields = () => { document.getElementById('region-nas-field').classList.toggle('hidden', mode.value !== 'nas'); document.getElementById('region-pop-field').classList.toggle('hidden', mode.value !== 'pop_site'); };
+    mode.addEventListener('change', updateModeFields);
+    updateModeFields();
+    redraw();
+    setTimeout(() => map.invalidateSize(), 0);
+})();
+</script>
+{% endblock %}

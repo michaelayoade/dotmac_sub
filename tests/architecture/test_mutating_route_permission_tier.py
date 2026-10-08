@@ -84,6 +84,7 @@ _WRITE_TIER_VERBS = frozenset(
         "activate",
         "admin",
         "apply",
+        "approve",  # Posts a reviewed financial remedy.
         "archive",
         "assign",
         "attention",
@@ -107,6 +108,7 @@ _WRITE_TIER_VERBS = frozenset(
         "publish",
         "push_config",
         "redrive",
+        "repair",  # Executes reviewed financial recovery.
         "retire",
         "reverse",
         "resume",

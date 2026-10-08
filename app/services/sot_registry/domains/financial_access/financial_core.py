@@ -15,6 +15,7 @@ from app.services.sot_manifest import (
     SOTService,
     TransactionContract,
     TransactionMode,
+    owner_command_boundary_error_codes,
 )
 
 SERVICES: tuple[SOTService, ...] = (
@@ -375,6 +376,169 @@ SERVICES: tuple[SOTService, ...] = (
             " A reviewed account opening bounds payment source selection even"
             " when a generic caller omits an explicit funding boundary;"
             " pre-opening payment room is historical evidence, not new credit."
+        ),
+    ),
+    SOTService(
+        name="financial.account_credit_invoice_reconciliation",
+        module="app.services.account_credit_invoice_reconciliation",
+        owns=("reviewed stranded account-credit invoice reconciliation",),
+        depends_on=(
+            "financial.account_credit_applications",
+            "financial.invoices",
+            "financial.ledger",
+            "financial.payments",
+            "events.dispatcher",
+            "observability.audit_log",
+        ),
+        notes=(
+            "This correction-only coordinator never records a payment. It binds "
+            "one completed account-credit deposit intent to its existing succeeded "
+            "settlement and the account's oldest eligible non-service invoice, then "
+            "delegates creation of the missing allocation and paired ledger entries "
+            "to financial.account_credit_applications."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="reviewed stranded account-credit invoice reconciliation",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "reviewed reconciliation command",
+                        "canonical invoice debt",
+                        "canonical deposit intent",
+                        "canonical settled payment credit",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="reviewed reconciliation command",
+                    owner="financial.account_credit_invoice_reconciliation",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed account, invoice, payment, deposit-intent, amount, "
+                        "currency, permission, actor, reason, preview fingerprint, "
+                        "command identity, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical invoice debt",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked active financial invoice, active lines, exact balance, "
+                        "status, and canonical oldest-payable-debt order"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical deposit intent",
+                    owner="financial.account_credit_deposits",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "completed account-credit deposit intent whose credit-only "
+                        "policy requires application to eligible invoices"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical settled payment credit",
+                    owner="financial.payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "existing succeeded Payment, PaymentSettlement, unallocated "
+                        "credit ledger evidence, refund/reversal state, and exact "
+                        "payment-allocation room"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary=(
+                    "The public reconciliation command enters execute_owner_command "
+                    "exactly once on a transaction-free session; reservation, "
+                    "allocation, paired ledger entries, invoice settlement, audit, "
+                    "and event commit together."
+                ),
+                locking=(
+                    "Locks the customer account, then the reviewed invoice, payment, "
+                    "and deposit intent before re-previewing and delegating to the "
+                    "account-credit allocation participant."
+                ),
+                idempotency=(
+                    "A bounded command key reserves the one resulting allocation; "
+                    "the preview fingerprints every named record and exact amount."
+                ),
+                retries=(
+                    "Exact replay returns the recorded allocation. Stale, partial, "
+                    "refunded, reversed, service-linked, non-oldest, or ambiguous "
+                    "evidence fails closed."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "financial.account_credit_invoice_reconciliation"
+                    ),
+                    "financial.account_credit_invoice_reconciliation.amount_invalid",
+                    "financial.account_credit_invoice_reconciliation.application_rejected",
+                    "financial.account_credit_invoice_reconciliation.currency_invalid",
+                    "financial.account_credit_invoice_reconciliation.idempotency_conflict",
+                    "financial.account_credit_invoice_reconciliation.idempotency_key_required",
+                    "financial.account_credit_invoice_reconciliation.incomplete_reconciliation",
+                    "financial.account_credit_invoice_reconciliation.invoice_missing",
+                    "financial.account_credit_invoice_reconciliation.not_actionable",
+                    "financial.account_credit_invoice_reconciliation.permission_denied",
+                    "financial.account_credit_invoice_reconciliation.preview_invalid",
+                    "financial.account_credit_invoice_reconciliation.reason_invalid",
+                    "financial.account_credit_invoice_reconciliation.replay_conflict",
+                    "financial.account_credit_invoice_reconciliation.scope_invalid",
+                    "financial.account_credit_invoice_reconciliation.stale_preview",
+                ),
+                mapping_owner="reviewed account-credit reconciliation CLI adapter",
+                fail_closed_on=(
+                    "missing or ambiguous invoice, deposit, settlement, or payment evidence",
+                    "stale preview, permission failure, or idempotency conflict",
+                    "any amount, currency, policy, account, ordering, refund, or reversal mismatch",
+                ),
+            ),
+            events=EventContract(
+                event_types=("account_credit.invoice_reconciled",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries only bounded invoice, payment, settlement, "
+                    "intent, allocation, money, currency, and preview identifiers."
+                ),
+                replay=(
+                    "The command reservation and deterministic participant allocation "
+                    "prevent duplicate allocations, ledger rows, audits, or events."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner="none; stranded credit required manual database intervention",
+                new_owner="financial.account_credit_invoice_reconciliation",
+                verification=(
+                    "Focused eligibility, exact settlement, replay, drift, registry, "
+                    "and architecture-boundary tests."
+                ),
+                cutover_gate=(
+                    "Only fingerprinted CLI confirmation may reconcile one explicitly "
+                    "named evidence chain."
+                ),
+                fallback_retirement=(
+                    "No raw SQL, payment re-recording, balance override, generic "
+                    "adjustment, or direct adapter allocation path exists."
+                ),
+            ),
+            steward="finance operations",
+            design_refs=(
+                "docs/designs/ACCOUNT_CREDIT_INVOICE_RECONCILIATION.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_account_credit_invoice_reconciliation.py",
+                "tests/architecture/test_account_credit_invoice_reconciliation_boundary.py",
+            ),
         ),
     ),
 )

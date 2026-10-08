@@ -47,6 +47,7 @@ from app.services import field_maps as field_maps_service
 from app.services import vendor_routes_api
 from app.web.admin import field_maps as web_field_maps
 from app.web.admin import network as web_network
+from app.web.admin import network_fiber_plant as web_network_fiber_plant
 from app.web.admin import vendor_routes as web_vendor_routes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -789,6 +790,32 @@ def test_closure_proposals_appear_on_route_map_and_project_list(db_session):
         item["properties"]["id"] == str(change_request.id)
         for item in vendor_geojson["features"]
     )
+
+
+def test_legacy_fiber_map_position_endpoint_is_retired():
+    route = _get_route(
+        web_network_fiber_plant.router,
+        "/network/fiber-map/update-position",
+        "POST",
+    )
+
+    response = route.endpoint()
+
+    assert response.status_code == 410
+    assert b"movement_review_required" in response.body
+
+
+def test_fiber_map_drag_submits_review_proposal_and_keeps_canonical_marker():
+    source = (PROJECT_ROOT / "templates/admin/network/fiber/map.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "fetch('/admin/network/map-v2/proposals'" in source
+    assert "operation: 'move'" in source
+    assert "'X-CSRF-Token': decodeURIComponent(csrfToken)" in source
+    assert "Reviewers will see this reason." in source
+    assert "The map position will change after approval." in source
+    assert "e.target.setLatLng(marker._lastSavedLatLng)" in source
 
 
 def test_get_route_project_missing_returns_none(db_session):

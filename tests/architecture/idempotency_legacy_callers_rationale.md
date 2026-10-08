@@ -43,3 +43,19 @@ idempotency off the local `IdempotencyKey` model — at the eventual kernel
 idempotency cutover described by ADR-0011's amendment (pinned
 exact-tagged kernel/module artifacts, composed plane, fresh/predecessor
 upgrade and RLS proof, then a shadow/parity phase before any writer moves).
+
+## `app/services/account_credit_invoice_reconciliation.py` — added 2026-10-08
+
+**Why this caller is warranted.** The reviewed reconciliation command must
+atomically reserve a bounded idempotency key with the existing account-credit
+allocation. Without the reservation, concurrent retries could both pass the
+preview and create duplicate financial evidence. The owner uses the existing
+`IdempotencyKey` ledger in the same owner transaction and returns the exact
+allocation on replay; it does not record a payment or introduce a second
+idempotency mechanism.
+
+**Retirement.** This is explicit transitional coexistence debt. Remove this
+entry when the command is migrated to the approved composed-module idempotency
+runtime, in the same reviewed slice that removes the direct local model
+reference and proves equivalent replay, concurrency, and tenant-isolation
+behavior.

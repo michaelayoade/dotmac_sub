@@ -186,3 +186,46 @@ After an authorized apply, confirm:
 
 Stop and escalate to Finance if any value differs. Never compensate with direct
 invoice status, allocation, ledger, entitlement, anchor, or access updates.
+
+## Funding displacement correction
+
+Use `scripts.billing.correct_reviewed_prepaid_sequence_funding` only when one
+reviewed case has all of these exact facts: three expired contiguous prepaid
+documents; one imported three-period Payment with one existing allocation and
+no settlement structure; one unconsumed approved opening for the third period;
+one later Payment applied to the misdated middle document; and one full-value
+non-prepaid receivable that must receive that released Payment. The preview also
+requires the duplicate historical invoice to be already void.
+
+The operator-local manifest names exact UUIDs and timestamps. `documents[0]`
+must be the correctly identified paid document, `documents[1]` the paid
+misdated document with both `expected_current_period_*` fields, and
+`documents[2]` the periodless draft. Include the canonical active Finance
+approver, ticket, expected source amounts, opening credit, and final reusable
+credit.
+
+Preview first:
+
+```bash
+poetry run python -m scripts.billing.correct_reviewed_prepaid_sequence_funding \
+  --manifest /secure/operator/path/reviewed-sequence-correction.json
+```
+
+Apply only the returned `exact_sequence` fingerprint:
+
+```bash
+poetry run python -m scripts.billing.correct_reviewed_prepaid_sequence_funding \
+  --manifest /secure/operator/path/reviewed-sequence-correction.json \
+  --apply \
+  --fingerprint <reviewed-preview-fingerprint> \
+  --idempotency-key <stable-ticket-and-correction-key> \
+  --actor <operator-identity> \
+  --actor-system-user-id <operator-system-user-uuid> \
+  --reason "Finance-approved prepaid sequence funding correction"
+```
+
+After apply, verify the three paid documents and their exact consecutive
+entitlements, the retired displaced allocation, the new historical allocation,
+the full allocation to the non-prepaid target invoice, the final billing
+anchor, zero reusable credit, zero customer-position delta, and
+`payment_rows_created: 0`. A repeat must return `replayed: true`.

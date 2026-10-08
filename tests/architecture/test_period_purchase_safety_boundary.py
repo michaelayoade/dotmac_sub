@@ -3,7 +3,7 @@
 import ast
 from pathlib import Path
 
-from app.services.sot_registry.registry import all_services
+from app.services.sot_registry.registry import all_services, registry_validation_errors
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -53,7 +53,12 @@ def test_gateway_reconciliation_purchase_branch_ends_before_generic_allocation()
 
 
 def test_repair_and_coverage_boundaries_are_registered_to_their_owners():
+    assert registry_validation_errors() == ()
     expected = {
+        "financial.compensated_service_time": {
+            "compensated service clock claims",
+            "compensated service clock history",
+        },
         "financial.prepaid_period_purchases": {
             "reviewed prepaid purchase receipt recovery",
         },
@@ -97,6 +102,10 @@ def test_purchase_migration_preserves_original_revision_identities_and_merges_ma
                 if isinstance(parents, (list, tuple))
                 else ((parents,) if parents else ())
             )
+    assert set(graph["655_prepaid_purchase_current_main_merge"]) == {
+        "647_purchase_outage_approval",
+        "650_customer_connection_type",
+    }
     head = "646_prepaid_purchase_safety"
     assert set(graph[head]) == {
         "642_network_map_import_feature_classification",

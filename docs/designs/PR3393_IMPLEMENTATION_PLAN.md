@@ -142,4 +142,11 @@ Disabling a feature must stop new admission/proposal collection while preserving
 - Finance can locate and resolve held money and pending proposals through authorized, fingerprinted commands.
 - Current-main integration, migration rehearsals, PostgreSQL races, shared billing regressions and provider/browser acceptance are green for the exact candidate.
 
-The feature slices now have local implementations on the existing PR branch. Local financial, browser and ownership checks passed. PostgreSQL rehearsals and full Linux/provider/staging acceptance remain release gates; Windows cannot provide those proofs. The branch has not been pushed, pending Michael's approval.
+The feature implementation was published as `1b22c07f9` after approval.
+On 8 October, current main at `b5466fb76` was integrated locally with the tested
+CI corrections. Guide-count and native-head conflicts retain both sides' work.
+Filename prefixes 651 through 654 preserve the published purchase revision
+identities; additive merge revision 655 joins them with main's native 650 head.
+The combined corrections remain unpublished pending approval. Full CI for the
+combined commit, PostgreSQL predecessor rehearsals, provider and staging
+acceptance remain release gates.

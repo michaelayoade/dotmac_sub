@@ -2524,6 +2524,7 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
                 "region": (data.get("region") or "").strip() or None,
                 "postal_code": (data.get("postal_code") or "").strip() or None,
                 "country_code": (data.get("country_code") or "").strip() or None,
+                "connection_type": (data.get("connection_type") or "").strip() or None,
                 "is_active": data.get("is_active", True),
                 "status": data.get("status", "active"),
                 "notes": (data.get("notes") or "").strip() or None,
@@ -2565,6 +2566,7 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
                 "region": (data.get("region") or "").strip() or None,
                 "postal_code": (data.get("postal_code") or "").strip() or None,
                 "country_code": (data.get("country_code") or "").strip() or None,
+                "connection_type": (data.get("connection_type") or "").strip() or None,
                 "is_active": True,
                 "status": "active",
                 "notes": (data.get("notes") or "").strip() or None,
@@ -2628,6 +2630,9 @@ def create_customer_from_form(
                 "postal_code": _normalize_optional(form_data.get("postal_code")),
                 "country_code": _normalize_optional(form_data.get("country_code")),
                 "pop_site_id": _normalize_optional(form_data.get("pop_site_id")),
+                "connection_type": _normalize_optional(
+                    form_data.get("connection_type")
+                ),
                 "status": form_data.get("status") or "active",
                 "is_active": form_data.get("is_active") == "true",
                 "marketing_opt_in": form_data.get("marketing_opt_in") == "true",
@@ -2661,6 +2666,7 @@ def create_customer_from_form(
             "tax_id": _normalize_optional(form_data.get("tax_id")),
             "domain": _normalize_optional(form_data.get("domain")),
             "website": _normalize_optional(form_data.get("website")),
+            "connection_type": _normalize_optional(form_data.get("connection_type")),
             "email": identity["email"],
             "phone": identity["phone"],
             "is_active": True,
@@ -2813,6 +2819,7 @@ def update_person_customer(
     reseller_id: str | None = None,
     vat_exempt: str | None = None,
     actor_id: str | None = None,
+    connection_type: str | None = None,
 ):
     before: Subscriber = subscriber_service.subscribers.get(
         db=db, subscriber_id=customer_id
@@ -2868,6 +2875,7 @@ def update_person_customer(
         "region": _normalize_optional(region),
         "postal_code": _normalize_optional(postal_code),
         "country_code": _normalize_optional(country_code),
+        "connection_type": _normalize_optional(connection_type),
         "marketing_opt_in": marketing_opt_in == "true",
         "notes": _normalize_optional(notes),
         "reseller_id": resolved_reseller_id,
@@ -2965,6 +2973,7 @@ def update_business_customer(
     reseller_id: str | None = None,
     vat_exempt: str | None = None,
     actor_id: str | None = None,
+    connection_type: str | None = None,
 ):
     before: Subscriber = subscriber_service.subscribers.get(
         db=db, subscriber_id=customer_id
@@ -3006,6 +3015,7 @@ def update_business_customer(
             "tax_id": _normalize_optional(tax_id),
             "domain": _normalize_optional(domain),
             "website": _normalize_optional(website),
+            "connection_type": _normalize_optional(connection_type),
             "notes": _normalize_optional(org_notes),
             "category": SubscriberCategory.business.value,
             "reseller_id": resolved_reseller_id,

@@ -279,6 +279,10 @@ from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoffStatus,
 )
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
+from app.models.customer_region import (  # noqa: F401
+    CustomerRegion,
+    CustomerRegionMatchMode,
+)
 from app.models.customer_subledger import (  # noqa: F401
     CustomerPositionEffect,
     CustomerPostingGroup,

@@ -52,6 +52,12 @@ TEMPLATE = (PROJECT_ROOT / "templates/vendor/project_detail.html").read_text(
 AUTHORING_JS = (PROJECT_ROOT / "static/js/vendor-route-authoring.js").read_text(
     encoding="utf-8"
 )
+ADMIN_AUTHORING_TEMPLATE = (
+    PROJECT_ROOT / "templates/admin/vendors/route_authoring.html"
+).read_text(encoding="utf-8")
+ADMIN_ROUTE_VIEW_TEMPLATE = (
+    PROJECT_ROOT / "templates/admin/vendors/route_view.html"
+).read_text(encoding="utf-8")
 ASBUILT_JS = (PROJECT_ROOT / "static/js/vendor-asbuilt-map.js").read_text(
     encoding="utf-8"
 )
@@ -264,6 +270,13 @@ def test_authoring_ui_draws_saves_and_submits_owned_revisions() -> None:
     assert "canonical plant feature" in AUTHORING_JS
     assert "if (searchElement)" in AUTHORING_JS
     assert "networkPlantIcon" in AUTHORING_JS
+    assert "route-authoring-plant-marker--" in AUTHORING_JS
+    assert "pop_site" in AUTHORING_JS
+    assert "/static/css/vendor-route-authoring.css" in ADMIN_AUTHORING_TEMPLATE
+    assert "/static/css/vendor-route-authoring.css" in ADMIN_ROUTE_VIEW_TEMPLATE
+    assert "route_control_class" in ADMIN_AUTHORING_TEMPLATE
+    assert "asset_control_class" in ADMIN_AUTHORING_TEMPLATE
+    assert ">network:fiber:write<" not in ADMIN_AUTHORING_TEMPLATE
     assert "applyPlantViewPreset" in AUTHORING_JS
     assert 'data-route-plant-filter="fdh_cabinet"' in TEMPLATE
     assert 'data-route-plant-filter="fiber_segment"' in TEMPLATE

@@ -92,6 +92,7 @@ class EventType(enum.Enum):
     invoice_discount_removed = "invoice.discount_removed"
     invoice_discount_inherited = "invoice.discount_inherited"
     invoice_tax_correction_completed = "invoice.tax_correction_completed"
+    account_credit_invoice_reconciled = "account_credit.invoice_reconciled"
 
     # Billing - Payment events (5)
     payment_received = "payment.received"
@@ -371,6 +372,7 @@ class EventType(enum.Enum):
 
     # Fiber splice plans (cut sheets)
     fiber_cost_item_changed = "fiber.cost_item_changed"
+    customer_region_changed = "customer_region.changed"
     fiber_splice_plan_issued = "fiber.splice_plan_issued"
     fiber_splice_plan_cancelled = "fiber.splice_plan_cancelled"
     fiber_splice_plan_item_executed = "fiber.splice_plan_item_executed"

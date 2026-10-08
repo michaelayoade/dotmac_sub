@@ -254,6 +254,9 @@
                             ] %}
                             {{ filter_select("status", status_options, value=status or "", label="Status", color="amber", attrs=live_filter_attrs) }}
                         </div>
+                        <div>
+                            {{ filter_select("region_id", [{"value": "", "label": "All regions"}] + region_options, value=region_id or "", label="Region", color="amber", attrs=live_filter_attrs) }}
+                        </div>
                         <div
                             class="md:col-span-2 xl:col-span-2"
                             x-data='infrastructurePicker({
@@ -317,15 +320,6 @@
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                        <div>
-                            {% set per_page_options = [
-                                {"value": "10", "label": "10 rows"},
-                                {"value": "25", "label": "25 rows"},
-                                {"value": "50", "label": "50 rows"},
-                                {"value": "100", "label": "100 rows"}
-                            ] %}
-                            {{ filter_select("per_page", per_page_options, value=list_query.per_page|string, label="Show", color="primary", attrs=live_filter_attrs) }}
                         </div>
                     </div>
                     <div class="mt-4 flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-end dark:border-slate-600/80">

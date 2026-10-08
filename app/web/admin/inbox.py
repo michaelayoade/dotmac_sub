@@ -3452,7 +3452,10 @@ def _settings_context(
         if actor_person_id
         else None
     )
-    ai_policy_context = ai_conversation_intake.admin_policy_context(db)
+    ai_policy_context = ai_conversation_intake.admin_policy_context(
+        db,
+        include_testing_data=False,
+    )
     customer_completion_policy = team_inbox_customer_completion_policy.active_policy(db)
     context.update(
         {
@@ -3604,6 +3607,25 @@ def team_inbox_settings_entrypoint(
     return templates.TemplateResponse(
         "admin/inbox/email_routes.html",
         _settings_context(request, db, status=status, message=message),
+    )
+
+
+@settings_router.get(
+    "/settings/partials/ai-testing",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_ai_testing_partial(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Render expensive AI testing data after the settings section is opened."""
+
+    context = _settings_context(request, db)
+    context.update(ai_conversation_intake.admin_policy_testing_context(db))
+    return templates.TemplateResponse(
+        "admin/inbox/partials/ai_testing.html",
+        context,
     )
 
 

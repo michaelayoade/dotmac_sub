@@ -143,12 +143,17 @@ SERVICES: tuple[SOTService, ...] = (
         name="financial.compensated_service_time",
         module="app.services.compensated_service_time",
         owns=("compensated service clock claims", "compensated service clock history"),
+        notes="Named grant owners supply typed validated clock evidence. These input-provenance links are not coordinator calls: this participant never imports or calls those producer owners.",
         contract=ServiceContract(
             concerns=(
                 ConcernContract(
                     name="compensated service clock claims",
                     role=OwnerRole.COMMAND_WRITER,
-                    input_names=("exact original clock evidence",),
+                    input_names=(
+                        "validated pause clock evidence",
+                        "validated extension clock evidence",
+                        "validated outage or attestation clock evidence",
+                    ),
                     canonical_writer="financial.compensated_service_time",
                 ),
                 ConcernContract(
@@ -161,10 +166,22 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             authoritative_inputs=(
                 AuthorityInput(
-                    name="exact original clock evidence",
-                    owner="external:typed_grant_owner",
+                    name="validated pause clock evidence",
+                    owner="access.subscription_lifecycle",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="Typed validated source identity, original ranges and provenance supplied by the account-locked grant writer.",
+                    source="StageTimeCreditCommand carrying the pause episode identity, exact original pause interval and grant provenance, validated by the account-locked pause owner.",
+                ),
+                AuthorityInput(
+                    name="validated extension clock evidence",
+                    owner="financial.service_extensions",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="StageTimeCreditCommand carrying the applied extension entry identity, uncovered original ranges and grant provenance, validated by the account-locked extension owner.",
+                ),
+                AuthorityInput(
+                    name="validated outage or attestation clock evidence",
+                    owner="financial.outage_compensation",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="StageTimeCreditCommand carrying approved outage ranges or reviewed legacy extension ranges and staff provenance, validated by the account-locked approval or attestation owner.",
                 ),
                 AuthorityInput(
                     name="persisted credit claims and historical source facts",
@@ -187,6 +204,18 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 mapping_owner="grant writer adapters",
                 fail_closed_on=("changed or ambiguous compensated clock evidence",),
+            ),
+            events=EventContract(
+                event_types=(
+                    "subscription.pause_resumed",
+                    "billing.service_extended",
+                    "outage_compensation.approved",
+                    "time_credit.attested",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="The enclosing grant or attestation owner stages its existing version-1 event atomically with the clock claims. The participant emits no separate grant event.",
+                replay="The enclosing owner replays its canonical command; identical source identities and ranges create no additional claim or event.",
             ),
             migration=MigrationContract(
                 state=AuthorityMigrationState.NATIVE,
@@ -2636,6 +2665,7 @@ SERVICES: tuple[SOTService, ...] = (
             "reviewed missing prepaid paid-invoice repair",
             "reviewed existing prepaid draft settlement",
             "reviewed prepaid invoice sequence reconstruction",
+            "reviewed prepaid invoice sequence funding correction",
             "reviewed pre-opening invoice settlement correction",
             "stranded prepaid draft classification",
             "stranded prepaid draft invoice reconciliation",
@@ -2745,6 +2775,13 @@ SERVICES: tuple[SOTService, ...] = (
             "provider-fee payments use their exact settlement-backed customer "
             "credit instead of captured gross. The owner preserves any later "
             "billing anchor and requires a zero position delta."
+            " A narrower Finance-approved sequence correction reconstructs "
+            "missing Splynx settlement structure as non-position evidence, "
+            "releases one wrongly applied later Payment, retires its incorrect "
+            "entitlement, reassigns the existing document to its exact historical "
+            "period, consumes the approved opening for the third period, and "
+            "moves the released Payment in full to an explicitly named non-prepaid "
+            "invoice. It creates no Payment and requires zero position delta."
             " When the reviewed command explicitly selects continuous-period "
             "funding, the same owner retires the wrong paid invoice, settles "
             "the historical draft from its selected Payment, and invokes the "
@@ -2836,6 +2873,22 @@ SERVICES: tuple[SOTService, ...] = (
                         "reviewed opening funding",
                         "canonical paid invoice allocation evidence",
                         "canonical reviewed service calendar",
+                        "invoice and payment participant protocols",
+                    ),
+                    canonical_writer="financial.prepaid_draft_reconciliation",
+                ),
+                ConcernContract(
+                    name="reviewed prepaid invoice sequence funding correction",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "reviewed invoice-sequence funding correction command",
+                        "canonical prepaid invoice documents",
+                        "canonical prepaid subscription contract",
+                        "imported Splynx payment transaction",
+                        "canonical payment-backed account credit",
+                        "approved customer subledger opening",
+                        "canonical paid invoice allocation evidence",
+                        "canonical funded service entitlement",
                         "invoice and payment participant protocols",
                     ),
                     canonical_writer="financial.prepaid_draft_reconciliation",
@@ -2954,6 +3007,40 @@ SERVICES: tuple[SOTService, ...] = (
                         "authoritative-funding, Finance approval, ticket, digest, "
                         "explicit calendar basis and expected documentary anchor, "
                         "preview, actor, reason, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="reviewed invoice-sequence funding correction command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:prepaid_reconciliation:repair permission checked "
+                        "against the exact chronological invoice set, selected "
+                        "lines and periods, imported transaction and payment "
+                        "identities, payment allocations, opening position, "
+                        "post-repair credit, Finance approval, ticket, evidence "
+                        "digest, preview fingerprint, actor, reason, command, "
+                        "correlation, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical prepaid invoice documents",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "locked active invoice sequence, selected lines, exact "
+                        "service periods, balances, statuses, allocations, and "
+                        "settlement state"
+                    ),
+                ),
+                AuthorityInput(
+                    name="imported Splynx payment transaction",
+                    owner="external:splynx_import",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "retained imported billing transaction identity, source "
+                        "payment, customer, amount, transaction date, and active "
+                        "deletion state, read through its local mirror"
                     ),
                 ),
                 AuthorityInput(

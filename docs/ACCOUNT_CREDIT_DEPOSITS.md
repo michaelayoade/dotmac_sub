@@ -219,3 +219,13 @@ the live owner-generated allocation preview, and permit checkout even when
 payable invoices exist. Those pages must not compute invoice allocation locally
 or offer customer-controlled allocation behavior. An unresolved balance still
 renders as unavailable rather than zero.
+
+## Stranded invoice reconciliation
+
+If a completed deposit retains its exact unallocated settlement credit while an
+already-issued eligible invoice remains payable, use the fingerprinted operator
+workflow in
+`docs/designs/ACCOUNT_CREDIT_INVOICE_RECONCILIATION.md`. The reconciliation
+reuses the existing payment and creates only the missing allocation and paired
+ledger evidence; payment re-recording, balance overrides, and generic
+adjustments are forbidden.
