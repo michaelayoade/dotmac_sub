@@ -186,6 +186,7 @@ def customer_region_save(
 )
 def customer_region_disable(
     region_id: UUID,
+    request: Request,
     db: Session = Depends(get_db),
     auth: dict[str, object] = Depends(require_permission(customer_regions.WRITE_SCOPE)),
 ):
@@ -209,6 +210,20 @@ def customer_region_disable(
                 region_id=region_id,
             ),
         )
-    except DomainError:
-        pass
+    except (DomainError, ValueError, TypeError) as exc:
+        db.rollback()
+        error = exc.message if isinstance(exc, DomainError) else str(exc)
+        return templates.TemplateResponse(
+            "admin/customer_regions/index.html",
+            _context(
+                request,
+                db,
+                regions=customer_regions.list_regions(db),
+                infrastructure_options=customer_regions.infrastructure_options(db),
+                match_modes=customer_regions.REGION_MATCH_MODES,
+                error=error,
+                editing_region=None,
+            ),
+            status_code=422,
+        )
     return RedirectResponse(url="/admin/customer-regions", status_code=303)

@@ -61,7 +61,7 @@
             {% else %}
             <h2 class="text-base font-semibold text-slate-900 dark:text-white">{{ 'Edit region' if editing_region else 'Add region' }}</h2>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use decimal coordinates. Drag the marker to adjust the center.</p>
-            <form method="post" class="mt-4 space-y-4">
+            <form method="post" action="/admin/customer-regions" class="mt-4 space-y-4">
                 <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
                 <input type="hidden" name="region_id" value="{{ values.get('region_id', editing_region.id if editing_region else '') }}">
                 <div><label for="region-name" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Name</label><input id="region-name" name="name" value="{{ values.get('name', editing_region.name if editing_region else '') }}" required placeholder="Gudu" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></div>

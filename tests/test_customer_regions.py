@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -118,3 +119,11 @@ def test_unassigned_customer_filter_uses_the_canonical_assignment_relation():
     clause = customer_region_filter_clause(UNASSIGNED_REGION_FILTER)
 
     assert clause is not None
+
+
+def test_region_editor_posts_to_the_region_save_route():
+    template = Path("templates/admin/customer_regions/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert '<form method="post" action="/admin/customer-regions"' in template
