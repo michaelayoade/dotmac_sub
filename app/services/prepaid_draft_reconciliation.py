@@ -9215,6 +9215,27 @@ def correct_reviewed_prepaid_sequence_funding(
                 "Invoice or credit owner rejected displaced funding release.",
                 participant_error=getattr(exc, "code", type(exc).__name__),
             )
+        # Allocate the released current payment before reconstructing the
+        # historical prepaid sequence. Those historical postings reduce the
+        # account-wide unallocated credit projection, while this payment is
+        # independently evidenced and reserved for its exact target invoice.
+        target_request = PaymentAllocationPreviewRequest(
+            payment_id=command.query.displaced_payment_id,
+            invoice_id=command.query.credit_target_invoice_id,
+            amount=command.query.expected_displaced_payment_amount,
+        )
+        target_preview = PaymentAllocations.preview(db, target_request)
+        target_result = PaymentAllocations.stage_confirm(
+            db,
+            PaymentAllocationConfirm(
+                **target_request.model_dump(),
+                preview_fingerprint=target_preview.fingerprint,
+                idempotency_key=(
+                    f"reviewed-sequence-correction-target-"
+                    f"{command.query.credit_target_invoice_id}"
+                ),
+            ),
+        )
         historical_request = PaymentAllocationPreviewRequest(
             payment_id=command.query.historical_payment_id,
             invoice_id=reassigned.id,
@@ -9314,24 +9335,6 @@ def correct_reviewed_prepaid_sequence_funding(
             context=command.context,
         )
         finalize_reviewed_document_settlement_for_owner(db, third_invoice)
-
-        target_request = PaymentAllocationPreviewRequest(
-            payment_id=command.query.displaced_payment_id,
-            invoice_id=command.query.credit_target_invoice_id,
-            amount=command.query.expected_displaced_payment_amount,
-        )
-        target_preview = PaymentAllocations.preview(db, target_request)
-        target_result = PaymentAllocations.stage_confirm(
-            db,
-            PaymentAllocationConfirm(
-                **target_request.model_dump(),
-                preview_fingerprint=target_preview.fingerprint,
-                idempotency_key=(
-                    f"reviewed-sequence-correction-target-"
-                    f"{command.query.credit_target_invoice_id}"
-                ),
-            ),
-        )
 
         from app.services.prepaid_service_renewals import (
             BillingAnchorAuthority,
