@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import bisect
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -535,6 +536,112 @@ class _SweepPrefetch:
 _CYCLE_RUNNER = "prepaid_balance_sweep"
 
 
+class PrepaidSweepOutcome(StrEnum):
+    """Per-account outcome classes tallied across one coverage cycle.
+
+    ``ok`` is deliberately absent: it is the default state and is never
+    tallied, which keeps the persisted per-cycle map bounded by the number of
+    accounts that actually need attention.
+    """
+
+    warned = "warned"
+    suspended = "suspended"
+    restored = "restored"
+    deferred = "deferred"
+    shielded = "shielded"
+    billing_profile_invalid = "billing_profile_invalid"
+    coverage_unresolved = "coverage_unresolved"
+    renewal_terms_unresolved = "renewal_terms_unresolved"
+    notice_suppressed = "notice_suppressed"
+    no_contact_route = "no_contact_route"
+    delivery_unavailable = "delivery_unavailable"
+    state_drift = "state_drift"
+
+
+_TALLIED_OUTCOMES = frozenset(item.value for item in PrepaidSweepOutcome)
+
+
+@dataclass(frozen=True, slots=True)
+class PrepaidSweepCycleTotals:
+    """Account counts per outcome class for the last COMPLETED sweep cycle.
+
+    A cycle may span several budget-limited runs; these totals cover every
+    account in the cohort exactly once, so they mean "number of accounts in
+    that state at their evaluation during the cycle". A partial run never
+    changes them: they are replaced only when a cycle completes.
+    """
+
+    completed_at: datetime
+    counts: Mapping[PrepaidSweepOutcome, int]
+
+    def count(self, outcome: PrepaidSweepOutcome) -> int:
+        return int(self.counts.get(outcome, 0))
+
+
+def load_prepaid_sweep_cycle_totals(db: Session) -> PrepaidSweepCycleTotals | None:
+    """Return the last completed cycle's totals, or None before the first one."""
+    state = db.execute(
+        select(PrepaidSweepCycleState).where(
+            PrepaidSweepCycleState.runner == _CYCLE_RUNNER
+        )
+    ).scalar_one_or_none()
+    if (
+        state is None
+        or state.last_cycle_completed_at is None
+        or state.last_cycle_totals is None
+    ):
+        return None
+    counts: dict[PrepaidSweepOutcome, int] = {}
+    for outcome in PrepaidSweepOutcome:
+        raw = state.last_cycle_totals.get(outcome.value, 0)
+        counts[outcome] = int(raw) if isinstance(raw, int) else 0
+    return PrepaidSweepCycleTotals(
+        completed_at=_aware(state.last_cycle_completed_at),
+        counts=counts,
+    )
+
+
+def _merge_cycle_outcomes(
+    base: dict[str, str], run_outcomes: Mapping[str, str]
+) -> dict[str, str]:
+    """Fold this run's per-account outcomes into the cycle tally.
+
+    Keyed by account so the tally is idempotent: an account re-processed in
+    the same cycle (crash before the checkpoint, retry after a rollback,
+    overlapping runs) replaces its earlier outcome instead of counting twice.
+    """
+    merged = dict(base)
+    for account_key, outcome in run_outcomes.items():
+        if outcome in _TALLIED_OUTCOMES:
+            merged[account_key] = outcome
+        else:
+            merged.pop(account_key, None)
+    return merged
+
+
+def _complete_cycle(
+    state: PrepaidSweepCycleState,
+    outcomes: dict[str, str] | None,
+    *,
+    cohort_keys: set[str],
+    completed_at: datetime,
+) -> None:
+    """Publish a finished cycle's tally as the stable last-cycle totals.
+
+    ``outcomes is None`` marks a cycle that started before tallying existed
+    (or whose tally was lost); it is never published as complete.
+    """
+    if outcomes is None:
+        return
+    totals = {outcome.value: 0 for outcome in PrepaidSweepOutcome}
+    for account_key, outcome in outcomes.items():
+        # Accounts that left the cohort mid-cycle are no longer in any state.
+        if account_key in cohort_keys and outcome in totals:
+            totals[outcome] += 1
+    state.last_cycle_totals = totals
+    state.last_cycle_completed_at = completed_at
+
+
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
@@ -646,11 +753,19 @@ def run_prepaid_balance_sweep(
     key, so a full cycle visits every account exactly once and no tail can
     be starved. ``cycle_remaining``/``cycle_age_seconds`` expose cycle
     progress for alerting.
+
+    The returned outcome counters (``warned``, ``renewal_terms_unresolved``,
+    ...) describe THIS run's slice only (``accounts_processed`` accounts);
+    ``accounts_scanned`` is the candidate cohort size. Per-account outcomes
+    are also tallied across the runs of a cycle and checkpointed atomically
+    with the cursor; when the cycle completes the tally becomes the stable
+    totals read by :func:`load_prepaid_sweep_cycle_totals`.
     """
     run_at = now or datetime.now(UTC)
     cfg = resolve_prepaid_enforcement_policy(db)
     stats: dict[str, int | str] = {
         "accounts_scanned": 0,
+        "accounts_processed": 0,
         "warned": 0,
         "suspended": 0,
         "restored": 0,
@@ -686,6 +801,9 @@ def run_prepaid_balance_sweep(
     no_contact_account_ids: set[str] = set()
     ordered = sorted(enforceable_ids, key=str)
     cursor = _load_cycle_state(db).cursor_key
+    # True when the stored cursor's remaining tail left the cohort: the
+    # previous cycle is finished and its tally must be completed, not lost.
+    previous_cycle_finished = False
     if cursor is None:
         start_index = 0
     else:
@@ -694,6 +812,7 @@ def run_prepaid_balance_sweep(
             # The previous cycle's tail is done; wrap to a fresh cycle.
             start_index = 0
             cursor = None
+            previous_cycle_finished = True
     account_order = ordered[start_index:]
     prefetch: _SweepPrefetch | None = None
     try:
@@ -711,6 +830,9 @@ def run_prepaid_balance_sweep(
         prefetch = None
         logger.exception("prepaid_balance_sweep_prefetch_failed")
     stopped_at: int | None = None
+    # account key -> outcome for every account this run evaluated (including
+    # ``ok``, so a re-evaluated account clears an earlier tallied outcome).
+    run_outcomes: dict[str, str] = {}
     for position, account_id in enumerate(account_order):
         if deadline is not None and datetime.now(UTC) >= deadline:
             stopped_at = position
@@ -756,6 +878,8 @@ def run_prepaid_balance_sweep(
                 no_contact_account_ids.add(str(account.id))
             db.commit()
             stats[outcome] = int(stats.get(outcome, 0)) + 1
+            stats["accounts_processed"] = int(stats["accounts_processed"]) + 1
+            run_outcomes[str(account.id)] = outcome
         except SoftTimeLimitExceeded:
             # The worker's soft limit fired before our own deadline (or none
             # was set): stop DB work immediately, count the remainder as
@@ -780,13 +904,38 @@ def run_prepaid_balance_sweep(
     try:
         # Checkpoint the coverage cycle: resume after the last processed key
         # next run, or reset when this run reached the end of the cohort.
+        # The outcome tally is written in the same transaction as the cursor,
+        # so a crash before this commit leaves both untouched and the next run
+        # re-evaluates (and re-tallies) exactly the same accounts.
         state = _load_cycle_state(db)
+        cohort_keys = {str(value) for value in ordered}
+        if previous_cycle_finished:
+            _complete_cycle(
+                state,
+                state.cycle_outcomes,
+                cohort_keys=cohort_keys,
+                completed_at=run_at,
+            )
+            state.cycles_completed = int(state.cycles_completed) + 1
+        outcomes: dict[str, str] | None
         if cursor is None:
             state.cycle_started_at = run_at
+            outcomes = _merge_cycle_outcomes({}, run_outcomes)
+        elif state.cycle_outcomes is None:
+            # This cycle began before tallying existed: never publish it.
+            outcomes = None
+        else:
+            outcomes = _merge_cycle_outcomes(state.cycle_outcomes, run_outcomes)
         if stopped_at is None:
             if account_order:
                 state.cursor_key = None
                 state.cycles_completed = int(state.cycles_completed) + 1
+            # Reaching the end of the cohort (even an empty one) completes the
+            # cycle: its tally becomes the stable published totals.
+            _complete_cycle(
+                state, outcomes, cohort_keys=cohort_keys, completed_at=run_at
+            )
+            outcomes = {}
             cycle_remaining = 0
         elif stopped_at > 0:
             state.cursor_key = str(account_order[stopped_at - 1])
@@ -801,6 +950,7 @@ def run_prepaid_balance_sweep(
         stats["cycle_remaining"] = cycle_remaining
         stats["cycle_age_seconds"] = int(cycle_age)
         stats["cycles_completed"] = int(state.cycles_completed)
+        state.cycle_outcomes = outcomes
         db.commit()
     except Exception:
         _safe_rollback(db)
