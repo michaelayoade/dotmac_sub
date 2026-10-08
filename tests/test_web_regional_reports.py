@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
+
+import pytest
 
 from app.services.web_reports import (
     RegionalReportData,
@@ -10,6 +13,8 @@ from app.services.web_reports import (
     _regional_report_window,
     build_regional_report_csv,
 )
+
+REGIONAL_REPORT_TEMPLATE = Path("templates/admin/reports/regional_performance.html")
 
 
 def test_regional_report_window_treats_end_date_as_inclusive():
@@ -22,6 +27,11 @@ def test_regional_report_window_treats_end_date_as_inclusive():
     assert end == datetime(2026, 8, 29, tzinfo=UTC)
     assert effective_from == "2026-06-28"
     assert effective_to == "2026-08-28"
+
+
+def test_regional_report_window_rejects_unbounded_date_ranges():
+    with pytest.raises(ValueError, match="limited to 366 days"):
+        _regional_report_window(date_from="2020-01-01", date_to="2022-01-01")
 
 
 def test_regional_report_csv_preserves_status_and_connection_dimensions():
@@ -71,3 +81,26 @@ def test_regional_report_csv_preserves_status_and_connection_dimensions():
     assert "other_customers" in csv_text.splitlines()[0]
     assert "wireless_customers" in csv_text.splitlines()[0]
     assert "Gudu,NGN,1000,800,200,5,3,2,1,0,0,1,1,2,2,1" in csv_text
+
+
+def test_regional_report_links_supported_customer_drilldowns_only():
+    template = REGIONAL_REPORT_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "{{ customer_filter }}&status=suspended" in template
+    assert "{{ customer_filter }}&status=disabled" in template
+    assert "{{ customer_filter }}&status=canceled" in template
+    assert "{{ customer_filter }}&status=blocked" in template
+    assert 'title="View customers in {{ row.name }}"' in template
+    assert "&connection_type=" not in template
+    assert "active_service=" not in template
+
+
+def test_regional_report_uses_one_assignment_query_for_all_metric_groups():
+    source = Path("app/services/web_reports.py").read_text(encoding="utf-8")
+
+    assert (
+        "report_stmt = union_all(status_stmt, active_stmt, invoice_stmt, payment_stmt)"
+        in source
+    )
+    assert source.count("db.execute(report_stmt)") == 1
+    assert "MAX_REGIONAL_REPORT_DAYS = 366" in source

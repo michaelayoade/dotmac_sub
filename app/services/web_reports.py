@@ -13,7 +13,19 @@ from typing import TYPE_CHECKING, TypedDict, cast
 from urllib.parse import urlencode
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import (
+    Numeric,
+    String,
+    and_,
+    func,
+    literal,
+    or_,
+    select,
+    union_all,
+)
+from sqlalchemy import (
+    cast as sa_cast,
+)
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
@@ -45,6 +57,8 @@ if TYPE_CHECKING:
     from app.services.provisioning_managers import TechnicianReportRow
 
 logger = logging.getLogger(__name__)
+
+MAX_REGIONAL_REPORT_DAYS = 366
 
 
 @dataclass(frozen=True, slots=True)
@@ -589,6 +603,10 @@ def _regional_report_window(
     end = parsed_end + timedelta(days=1) if parsed_end else default_end
     if end <= start:
         raise ValueError("The report end date must be on or after the start date")
+    if (end - start).days > MAX_REGIONAL_REPORT_DAYS:
+        raise ValueError(
+            f"Regional reports are limited to {MAX_REGIONAL_REPORT_DAYS} days"
+        )
     return (
         start,
         end,
@@ -606,9 +624,9 @@ def get_regional_report_data(
 ) -> RegionalReportData:
     """Aggregate regional customer and billing facts without loading customers.
 
-    Customer assignment is resolved once in the canonical SQL CTE. The four
-    grouped queries below then operate on that bounded relation: account
-    statuses, active services, invoices, and successful collections.
+    Customer assignment is resolved once in the canonical SQL CTE. The metric
+    aggregates are combined into one statement so the materialized spatial
+    relation is evaluated once per report request, not once per metric group.
     """
 
     start, end, effective_from, effective_to = _regional_report_window(
@@ -651,12 +669,28 @@ def get_regional_report_data(
         key: {} for key in region_keys
     }
 
+    invoice_statuses = (
+        InvoiceStatus.issued,
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.paid,
+        InvoiceStatus.overdue,
+    )
+    region_filter = (
+        (assignments.c.region_id == region_id) if region_id is not None else None
+    )
+    null_string = sa_cast(literal(None), String)
+    zero_numeric = sa_cast(literal(0), Numeric)
     status_stmt = (
         select(
             assignments.c.region_id,
-            Subscriber.status,
-            Subscriber.connection_type,
-            func.count(func.distinct(Subscriber.id)),
+            literal("status", type_=String).label("metric"),
+            sa_cast(Subscriber.status, String).label("dimension_a"),
+            sa_cast(Subscriber.connection_type, String).label("dimension_b"),
+            sa_cast(func.count(func.distinct(Subscriber.id)), Numeric).label(
+                "value_one"
+            ),
+            zero_numeric.label("value_two"),
+            null_string.label("currency"),
         )
         .select_from(Subscriber)
         .join(
@@ -674,33 +708,17 @@ def get_regional_report_data(
             Subscriber.connection_type,
         )
     )
-    if region_id is not None:
-        status_stmt = status_stmt.where(assignments.c.region_id == region_id)
-    for assigned_region, status_value, connection_type_value, count in db.execute(
-        status_stmt
-    ).all():
-        if assigned_region not in status_counts:
-            continue
-        status_key = getattr(status_value, "value", None) or "other"
-        if status_key not in status_counts[assigned_region]:
-            status_key = "other"
-        status_counts[assigned_region][status_key] += int(count or 0)
-        connection_key = (
-            getattr(connection_type_value, "value", None)
-            or str(connection_type_value or "")
-            or "unspecified"
-        )
-        if connection_key not in {
-            CustomerConnectionType.wireless.value,
-            CustomerConnectionType.wired.value,
-        }:
-            connection_key = "unspecified"
-        connection_counts[assigned_region][connection_key] += int(count or 0)
-
     active_stmt = (
         select(
             assignments.c.region_id,
-            func.count(func.distinct(Subscription.subscriber_id)),
+            literal("active_services", type_=String).label("metric"),
+            null_string.label("dimension_a"),
+            null_string.label("dimension_b"),
+            sa_cast(
+                func.count(func.distinct(Subscription.subscriber_id)), Numeric
+            ).label("value_one"),
+            zero_numeric.label("value_two"),
+            null_string.label("currency"),
         )
         .select_from(Subscription)
         .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
@@ -715,24 +733,19 @@ def get_regional_report_data(
         .where(visible_clause, Subscription.status == SubscriptionStatus.active)
         .group_by(assignments.c.region_id)
     )
-    if region_id is not None:
-        active_stmt = active_stmt.where(assignments.c.region_id == region_id)
-    for assigned_region, count in db.execute(active_stmt).all():
-        if assigned_region in active_services:
-            active_services[assigned_region] = int(count or 0)
-
-    invoice_statuses = (
-        InvoiceStatus.issued,
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.paid,
-        InvoiceStatus.overdue,
-    )
     invoice_stmt = (
         select(
             assignments.c.region_id,
-            Invoice.currency,
-            func.coalesce(func.sum(Invoice.total), Decimal("0")),
-            func.coalesce(func.sum(Invoice.balance_due), Decimal("0")),
+            literal("invoice", type_=String).label("metric"),
+            null_string.label("dimension_a"),
+            null_string.label("dimension_b"),
+            sa_cast(
+                func.coalesce(func.sum(Invoice.total), Decimal("0")), Numeric
+            ).label("value_one"),
+            sa_cast(
+                func.coalesce(func.sum(Invoice.balance_due), Decimal("0")), Numeric
+            ).label("value_two"),
+            sa_cast(Invoice.currency, String).label("currency"),
         )
         .select_from(Invoice)
         .join(Subscriber, Subscriber.id == Invoice.account_id)
@@ -755,27 +768,23 @@ def get_regional_report_data(
         )
         .group_by(assignments.c.region_id, Invoice.currency)
     )
-    if region_id is not None:
-        invoice_stmt = invoice_stmt.where(assignments.c.region_id == region_id)
-    for assigned_region, currency, billed, outstanding in db.execute(
-        invoice_stmt
-    ).all():
-        if assigned_region not in money:
-            continue
-        values = money[assigned_region].setdefault(
-            str(currency or "NGN"), [Decimal("0"), Decimal("0"), Decimal("0")]
-        )
-        values[0] += billed or Decimal("0")
-        values[2] += outstanding or Decimal("0")
-
     payment_stmt = (
         select(
             assignments.c.region_id,
-            Payment.currency,
-            func.coalesce(
-                func.sum(Payment.amount - func.coalesce(Payment.refunded_amount, 0)),
-                Decimal("0"),
-            ),
+            literal("payment", type_=String).label("metric"),
+            null_string.label("dimension_a"),
+            null_string.label("dimension_b"),
+            sa_cast(
+                func.coalesce(
+                    func.sum(
+                        Payment.amount - func.coalesce(Payment.refunded_amount, 0)
+                    ),
+                    Decimal("0"),
+                ),
+                Numeric,
+            ).label("value_one"),
+            zero_numeric.label("value_two"),
+            sa_cast(Payment.currency, String).label("currency"),
         )
         .select_from(Payment)
         .join(Subscriber, Subscriber.id == Payment.account_id, isouter=True)
@@ -797,15 +806,44 @@ def get_regional_report_data(
         )
         .group_by(assignments.c.region_id, Payment.currency)
     )
-    if region_id is not None:
-        payment_stmt = payment_stmt.where(assignments.c.region_id == region_id)
-    for assigned_region, currency, collected in db.execute(payment_stmt).all():
-        if assigned_region not in money:
+    if region_filter is not None:
+        status_stmt = status_stmt.where(region_filter)
+        active_stmt = active_stmt.where(region_filter)
+        invoice_stmt = invoice_stmt.where(region_filter)
+        payment_stmt = payment_stmt.where(region_filter)
+    report_stmt = union_all(status_stmt, active_stmt, invoice_stmt, payment_stmt)
+
+    for metric_row in db.execute(report_stmt).all():
+        assigned_region = metric_row.region_id
+        if assigned_region not in status_counts:
             continue
-        values = money[assigned_region].setdefault(
-            str(currency or "NGN"), [Decimal("0"), Decimal("0"), Decimal("0")]
-        )
-        values[1] += collected or Decimal("0")
+        if metric_row.metric == "status":
+            status_key = metric_row.dimension_a or "other"
+            if status_key not in status_counts[assigned_region]:
+                status_key = "other"
+            status_counts[assigned_region][status_key] += int(metric_row.value_one or 0)
+            connection_key = metric_row.dimension_b or "unspecified"
+            if connection_key not in {
+                CustomerConnectionType.wireless.value,
+                CustomerConnectionType.wired.value,
+            }:
+                connection_key = "unspecified"
+            connection_counts[assigned_region][connection_key] += int(
+                metric_row.value_one or 0
+            )
+        elif metric_row.metric == "active_services":
+            if assigned_region in active_services:
+                active_services[assigned_region] = int(metric_row.value_one or 0)
+        elif metric_row.metric in {"invoice", "payment"}:
+            values = money[assigned_region].setdefault(
+                str(metric_row.currency or "NGN"),
+                [Decimal("0"), Decimal("0"), Decimal("0")],
+            )
+            if metric_row.metric == "invoice":
+                values[0] += metric_row.value_one or Decimal("0")
+                values[2] += metric_row.value_two or Decimal("0")
+            else:
+                values[1] += metric_row.value_one or Decimal("0")
 
     rows: list[RegionalReportRow] = []
     for region in regions:
