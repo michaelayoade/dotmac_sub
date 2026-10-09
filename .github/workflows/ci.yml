@@ -612,7 +612,7 @@ jobs:
         shard: [1, 2, 3, 4]
     services:
       postgres:
-        image: postgis/postgis:16-3.4
+        image: mirror.gcr.io/postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -783,6 +783,10 @@ jobs:
       - name: Set up Docker Buildx
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
         uses: docker/setup-buildx-action@v3
+        with:
+          # Pin the same upstream BuildKit image through the public registry cache.
+          driver-opts: |
+            image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - name: Build Docker image once
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
@@ -804,8 +808,8 @@ jobs:
             -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
             -e POSTGRES_DB=dotmac_sub_ci \
             --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres" --health-interval 5s \
-            --health-retries 10 postgis/postgis:16-3.4
-          docker run -d --name ci-redis --network ci-net redis:7
+            --health-retries 10 mirror.gcr.io/postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5
+          docker run -d --name ci-redis --network ci-net public.ecr.aws/docker/library/redis:7
           for i in $(seq 1 30); do
             [ "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ci-db)" = "healthy" ] && break
             sleep 2
