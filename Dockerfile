@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# Docker Official Image mirror: avoid Docker Hub anonymous-pull throttling in CI.
+FROM public.ecr.aws/docker/library/python:3.12-slim
 
 WORKDIR /app
 

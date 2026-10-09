@@ -55,7 +55,8 @@ def test_real_radius_authentication_and_worker_independent_expiry(engine):
         (
             "-v",
             f"{ROOT}:/repo:ro",
-            "ubuntu:24.04",
+            # Same Docker Official Image, fetched outside Docker Hub's pull quota.
+            "public.ecr.aws/docker/library/ubuntu:24.04",
             "bash",
             "-c",
             """
