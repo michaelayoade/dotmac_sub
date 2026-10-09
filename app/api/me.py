@@ -556,6 +556,7 @@ def my_topup_initiate(
         result = customer_payments.create_topup_intent(db, customer, payload.amount)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    customer_email = customer_payments._resolve_customer_email(db, customer)
     return TopupInitiateResponse(
         intent_id=result["intent_id"],
         provider_type=result["provider_type"],
@@ -563,7 +564,7 @@ def my_topup_initiate(
         payment_reference=result["reference"],
         amount=result["requested_amount"],
         currency=result.get("currency", "NGN"),
-        customer_email=customer["username"] or None,
+        customer_email=customer_email or None,
     )
 
 
@@ -918,8 +919,9 @@ def my_wallet_topup_initiate(
     subscriber_id = _subscriber_id(principal)
     result = vas_wallet_service.initiate_topup(db, subscriber_id, payload.amount)
     customer = _customer(db, principal)
+    customer_email = customer_payments._resolve_customer_email(db, customer)
     return VasTopupInitiateResponse(
-        **result, customer_email=customer.get("username") or None
+        **result, customer_email=customer_email or None
     )
 
 
@@ -1058,3 +1060,4 @@ def my_vas_purchase_detail(
 ):
     subscriber_id = _subscriber_id(principal)
     return _txn_read(vas_purchases_service.get_transaction(db, subscriber_id, txn_id))
+
