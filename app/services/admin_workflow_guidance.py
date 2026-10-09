@@ -412,6 +412,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Update a customer's WiFi or PPPoE settings on their ONT, or recover a device stuck out of sync after a failed push.",
         ("/admin/network/onts",),
         "Confirm the exact ONT by serial number, account, and OLT/port before changing anything.",
+        "In Assign Subscriber, select the subscriber before choosing a service subscription. Clearing the subscriber also clears and disables the subscription choices; select a subscriber again to reload its services.",
         "Use Set WiFi Password or Set WiFi SSID for a routine change; the value is saved immediately but only pushed to the device at its next check-in unless you force it.",
         "Use Force-Push WiFi Password when the customer reports the change did not take effect (for example, after a factory reset wiped the device's saved settings) and it needs to apply right away.",
         "Use Force Resync only after a previous attempt failed and you have checked it is safe to retry — this re-attempts the whole reconcile against the device, not just the one field you changed.",

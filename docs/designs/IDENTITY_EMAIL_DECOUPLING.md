@@ -148,7 +148,7 @@ recent" with a logged caveat.
 | Site | Today | Required handling |
 |---|---|---|
 | `app/api/crm_webhooks.py` `_find_existing_customer` | CRM upsert matches by `crm_person_id` then falls back to email `.first()` | **DEFERRED — blocked:** the whole `receive_crm_customer` / `_find_existing_customer` feature is uncommitted parallel-session WIP (not in `main`/HEAD), so this fix cannot ship in this PR without absorbing that work. Required follow-up on the customer-webhook branch: make the email fallback adopt only a *single* legacy record with no CRM link (else shared emails merge distinct customers — would regress the prior 4,499-dup CRM merge). Patch + tests are drafted and ready to graft on. |
-| `app/services/auth_flow.py:1415` | lookup by email (password reset / account) | Restrict to accounts that have a login credential; if still ambiguous, refuse rather than guess. |
+| `app/services/credential_recovery.py:_principal_for_email` | credential-backed email recovery | Require one distinct eligible subscriber; if still ambiguous, refuse rather than guess. Multiple credentials for that one subscriber retain the existing newest-credential ordering. Authorized exact-principal recovery remains available. |
 | `app/services/auth_flow.py:1695` | email-change uniqueness check | Remove/relax — email change no longer needs to be globally unique. |
 | `app/services/customer_identity_resolution.py:578` | resolve identity by email | Must tolerate multiple matches; prefer id/`subscriber_number`/credential. |
 | `app/services/web_customer_actions.py:1038` | existing-customer lookup in wizard | Becomes advisory ("possible existing match"), not a hard block. |
@@ -209,7 +209,7 @@ credentials, disabled/canceled customer state, or inactive customer state fail c
 - Existing PPPoE, customer-number, stored email-username, MFA, session, and rate-limit behavior remains.
 - Admin `SystemUser` still logs in by email.
 - CRM webhook with a shared email upserts the correct subscriber by `crm_subscriber_id` (no merge).
-- Password reset for a shared email behaves deterministically (per §4 decision).
+- Email-only password recovery for multiple distinct eligible subscribers refuses to select an account or mint a bearer. The public response remains enumeration-safe. Multiple credentials for one subscriber and authorized exact-principal recovery remain supported.
 - Migration up/down on SQLite (test) and a Postgres check.
 
 ---
