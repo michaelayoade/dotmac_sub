@@ -20,10 +20,15 @@ class LeadIntakeIntent(StrEnum):
     other = "other"
 
 
+class LeadCandidateReviewReason(StrEnum):
+    customer_type_required = "customer_type_required"
+    customer_type_low_confidence = "customer_type_low_confidence"
+
+
 class AiLeadIntakeClassification(BaseModel):
     # Provider JSON contains string enum values. Pydantic still enforces the
     # closed vocabulary and numeric bounds while admitting that wire format.
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
     intent: LeadIntakeIntent
     intent_confidence: float = Field(ge=0, le=1)
     party_type: LeadIntakePartyType

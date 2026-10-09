@@ -67,3 +67,11 @@ flutter pub get
 dart run build_runner build --delete-conflicting-outputs
 flutter test
 ```
+
+On-device smoke test on an iOS simulator or Android emulator (see
+`scripts/mobile_sim.sh` for options; `DEMO_USERNAME`/`DEMO_PASSWORD` add a
+sign-in):
+
+```sh
+../scripts/mobile_sim.sh field_mobile ios        # or: android, and `run` for hot reload
+```

@@ -59,8 +59,6 @@ from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
 from fastapi import HTTPException
-from geoalchemy2.functions import ST_MakePoint, ST_SetSRID
-from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import (
@@ -71,7 +69,6 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
-from app.models.network import FiberAccessPoint
 from app.models.project import Project
 from app.models.sales import (
     Quote,
@@ -87,7 +84,7 @@ from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
-from app.services.sales import quote_acceptance
+from app.services.sales import fiber_feasibility, quote_acceptance
 from app.services.sales.service import leads, quotes
 from app.services.sales.service_request_types import (
     ServiceRequestKind,
@@ -171,67 +168,6 @@ def _priced_offer(db: Session, offer_id: str | None):
         return None
     price = next((p for p in prices if p.price_type == PriceType.one_time), prices[0])
     return offer, _money(price.amount)
-
-
-def _nearest_fiber_access_point(db: Session, latitude: float, longitude: float):
-    """Nearest active fiber access point and its distance in metres (PostGIS).
-
-    Same query the CRM ran, re-pointed at sub's native ``fiber_access_points``
-    (§2.2 step 1) — projected to EPSG:3857 for a metre distance. Returns
-    ``(FiberAccessPoint | None, float | None)``. Isolated so the pricing
-    logic can be unit-tested without a spatial database.
-    """
-    point = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
-    # Order by the KNN nearest-neighbour operator on the RAW 4326 geom so the
-    # GiST index ``idx_fiber_access_points_geom`` is usable: wrapping the geom
-    # in ``ST_Transform(..., 3857)`` (as the old query did, for a metre
-    # distance) made the index unusable and forced a full scan + sort. The
-    # ``<->`` bound-box KNN drives the index; the metre ``distance_m`` value is
-    # still computed by the *same* EPSG:3857 transform, but now only for the
-    # single winning row the LIMIT keeps — so the returned value is unchanged.
-    distance = func.ST_Distance(
-        func.ST_Transform(FiberAccessPoint.geom, 3857),
-        func.ST_Transform(point, 3857),
-    ).label("distance_m")
-    row = (
-        db.query(FiberAccessPoint, distance)
-        .filter(FiberAccessPoint.is_active.is_(True))
-        .filter(FiberAccessPoint.geom.isnot(None))
-        .order_by(FiberAccessPoint.geom.op("<->")(point))
-        .first()
-    )
-    if row is None:
-        return None, None
-    fap, dist = row
-    return fap, (float(dist) if dist is not None else None)
-
-
-def compute_feasibility(db: Session, latitude: float, longitude: float) -> dict:
-    """Classify install feasibility from proximity to the nearest fiber plant.
-
-    Coverage vocabulary unchanged (§2.2): ``covered | survey_required |
-    out_of_area``, covered iff distance ≤ the feasibility radius setting.
-    """
-    cfg = _settings(db)
-    fap, distance = _nearest_fiber_access_point(db, latitude, longitude)
-    if fap is None or distance is None:
-        return {
-            "feasible": False,
-            "coverage": "out_of_area",
-            "nearest_fap_id": None,
-            "nearest_fap_name": None,
-            "distance_meters": None,
-        }
-    coverage = (
-        "covered" if distance <= cfg["feasibility_radius_m"] else "survey_required"
-    )
-    return {
-        "feasible": True,
-        "coverage": coverage,
-        "nearest_fap_id": str(fap.id),
-        "nearest_fap_name": fap.name,
-        "distance_meters": round(distance, 1),
-    }
 
 
 def compute_estimate(db: Session, feasibility: dict, currency: str) -> dict:
@@ -632,7 +568,12 @@ class SelfServeQuotes:
             )
 
         feasibility = (
-            compute_feasibility(db, latitude, longitude)
+            fiber_feasibility.assess(
+                db,
+                query=fiber_feasibility.FiberFeasibilityQuery(
+                    Decimal(str(latitude)), Decimal(str(longitude))
+                ),
+            ).as_metadata()
             if service_option.destination_access_type == "fiber"
             else {
                 "feasible": None,

@@ -43,6 +43,7 @@ from app.schemas.lead_intake import (
 )
 from app.services import (
     ai_conversation_intake,
+    ai_intake,
     lead_intake_ai,
     team_inbox_customer_completion,
 )
@@ -124,7 +125,10 @@ def test_sales_capture_precedes_clarification_and_survives_later_complaint(
     assert any(
         finding.conversation_id == conversation.id
         for finding in lead_intake.classified_candidate_drift(
-            db_session, since=datetime.now(UTC) - timedelta(days=1)
+            db_session,
+            query=lead_intake.ClassifiedCandidateDriftQuery(
+                since=datetime.now(UTC) - timedelta(days=1)
+            ),
         )
     )
     # Later routing/classification cannot retract the earlier message's event.
@@ -245,6 +249,50 @@ def _staff_and_team(db_session) -> tuple[SystemUser, ServiceTeam]:
     db_session.add_all([staff, team])
     db_session.commit()
     return staff, team
+
+
+def test_confident_sales_with_unknown_customer_type_is_durable_staff_review(
+    db_session, monkeypatch: pytest.MonkeyPatch
+):
+    conversation, message = _instagram_conversation(db_session)
+    outcome = AiIntakeOutcome(
+        status=AiIntakeStatus.awaiting_follow_up,
+        reason=AiIntakeReason.low_confidence,
+        classification=AiIntakeClassification(
+            intent=AiIntakeIntent.coverage_request,
+            category=AiIntakeCategory.coverage_request,
+            confidence=0.96,
+            party_type=AiIntakePartyType.unknown,
+            party_type_confidence=0.0,
+            requires_follow_up=True,
+        ),
+    )
+    metadata = {**(message.metadata_ or {}), **ai_intake.route_metadata(outcome)}
+    ai_conversation_intake._stage_lead_candidate_classified(
+        db_session,
+        inbound=message,
+        conversation=conversation,
+        outcome=outcome,
+        metadata=metadata,
+    )
+    message.metadata_ = metadata
+    db_session.commit()
+    assert metadata["ai_sales_candidate_review_reason"] == "customer_type_required"
+    assert "ai_lead_candidate_event_id" not in metadata
+    assert db_session.scalar(select(func.count(Lead.id))) == 0
+    assert team_inbox_customer_completion._classified_sales_candidate_pending(
+        db_session, conversation
+    )
+    findings = lead_intake.classified_candidate_drift(
+        db_session,
+        query=lead_intake.ClassifiedCandidateDriftQuery(
+            since=datetime.now(UTC) - timedelta(days=1)
+        ),
+    )
+    finding = next(item for item in findings if item.conversation_id == conversation.id)
+    assert finding.review_reason is not None
+    assert finding.review_reason.value == "customer_type_required"
+    assert finding.classification.party_type.value == "unknown"
 
 
 def _conversation(db_session) -> tuple[InboxConversation, InboxMessage]:
@@ -689,7 +737,9 @@ def test_historical_resolved_classification_can_be_repaired_without_form(
 
     findings = lead_intake.classified_candidate_drift(
         db_session,
-        since=datetime.now(UTC) - timedelta(days=60),
+        query=lead_intake.ClassifiedCandidateDriftQuery(
+            since=datetime.now(UTC) - timedelta(days=60)
+        ),
     )
     finding = next(item for item in findings if item.conversation_id == conversation.id)
     finding_conversation_id = finding.conversation_id
@@ -716,7 +766,9 @@ def test_historical_resolved_classification_can_be_repaired_without_form(
         item.conversation_id == conversation.id
         for item in lead_intake.classified_candidate_drift(
             db_session,
-            since=datetime.now(UTC) - timedelta(days=60),
+            query=lead_intake.ClassifiedCandidateDriftQuery(
+                since=datetime.now(UTC) - timedelta(days=60)
+            ),
         )
     )
 

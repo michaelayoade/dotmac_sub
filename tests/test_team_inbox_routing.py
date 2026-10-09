@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from jinja2 import Environment
+
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.team_inbox import (
     InboxConversation,
@@ -8,7 +12,25 @@ from app.models.team_inbox import (
     InboxTeamSource,
     TeamInboxEmailRoute,
 )
+from app.schemas.ai_intake import AiIntakeIntent
 from app.services import team_inbox_routing
+
+
+def test_route_selector_offers_coverage_without_editable_draft() -> None:
+    source = Path("templates/admin/inbox/email_routes.html").read_text(encoding="utf-8")
+    start = source.index('<select name="intent_key" required')
+    selector = source[start : source.index("</select>", start) + len("</select>")]
+    rendered = (
+        Environment(autoescape=True)
+        .from_string(selector)
+        .render(
+            ai_intake_supported_intent_keys=tuple(
+                sorted(item.value for item in AiIntakeIntent)
+            ),
+            ai_intake_intent_definitions=(),
+        )
+    )
+    assert '<option value="coverage_request">Coverage Request</option>' in rendered
 
 
 def _team(db_session, name: str, team_type: str) -> ServiceTeam:

@@ -19,7 +19,11 @@ from app.models.team_inbox import (
     InboxMessageDirection,
     InboxTeamSource,
 )
-from app.schemas.fiber_inquiry import FiberInquiryRequest
+from app.schemas.fiber_inquiry import (
+    FiberCoverageEvaluatedEvent,
+    FiberCoverageStatus,
+    FiberInquiryRequest,
+)
 from app.services import (
     conversation_lead_relationships,
     inbox_sla,
@@ -36,9 +40,9 @@ from app.services import (
 from app.services.customer_identity_normalization import normalize_email_identifier
 from app.services.events import EventType as DomainEventType
 from app.services.events import emit_event
-from app.services.owner_commands import CommandContext
+from app.services.owner_commands import CommandContext, execute_owner_savepoint
 from app.services.realtime_platform import EventType as RealtimeEventType
-from app.services.sales.selfserve import compute_feasibility
+from app.services.sales import fiber_feasibility
 
 logger = logging.getLogger(__name__)
 
@@ -243,12 +247,29 @@ def receive_fiber_inquiry(
             }
         else:
             try:
-                feasibility = compute_feasibility(
-                    db,
-                    float(payload.location.latitude),
-                    float(payload.location.longitude),
+                pin = fiber_feasibility.FiberFeasibilityQuery(
+                    payload.location.latitude, payload.location.longitude
                 )
-                coverage_status = str(feasibility["coverage"])
+
+                def assess_and_stage() -> fiber_feasibility.FiberFeasibilityResult:
+                    result = fiber_feasibility.assess(db, query=pin)
+                    if lead_result is not None:
+                        evaluated = FiberCoverageEvaluatedEvent(
+                            lead_id=lead_result.lead.id,
+                            origin_capture_id=lead_result.origin.id,
+                            coverage_status=FiberCoverageStatus(result.coverage.value),
+                        )
+                        emit_event(
+                            db,
+                            DomainEventType.fiber_coverage_evaluated,
+                            evaluated.model_dump(mode="json"),
+                            actor=context.actor,
+                            subscriber_id=lead_result.lead.subscriber_id,
+                        )
+                    return result
+
+                feasibility = execute_owner_savepoint(db, assess_and_stage)
+                coverage_status = feasibility.coverage.value
                 summaries = {
                     "covered": (
                         "Fiber service appears to be available at this location. "
@@ -267,22 +288,13 @@ def receive_fiber_inquiry(
                     "status": coverage_status,
                     "summary": summaries[coverage_status],
                 }
-                if lead_result is not None:
-                    emit_event(
-                        db,
-                        DomainEventType.fiber_coverage_evaluated,
-                        {
-                            "lead_id": str(lead_result.lead.id),
-                            "origin_capture_id": str(lead_result.origin.id),
-                            "coverage_status": coverage_status,
-                        },
-                        actor=context.actor,
-                        subscriber_id=lead_result.lead.subscriber_id,
-                    )
-            except Exception:
-                logger.exception(
-                    "fiber_coverage_calculation_failed delivery_id=%s",
-                    delivery_id,
+            except Exception as exc:
+                logger.error(
+                    "fiber_coverage_calculation_failed",
+                    extra={
+                        "delivery_id": delivery_id,
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 coverage = {
                     "status": "technical_error",
