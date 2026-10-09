@@ -122,9 +122,9 @@ def test_comment_submit_lock_allows_one_in_flight_request_and_resets_on_error(
     )
 
     submit = comment_form.locator("button[type='submit']")
-    # Dispatch the click in-page so Playwright does not wait for the deliberately
-    # held navigation before we can inspect the form's in-flight state.
-    submit.evaluate("button => button.click()")
+    # Schedule submission on the next browser task so this evaluation returns
+    # before the deliberately held navigation begins.
+    comment_form.evaluate("form => setTimeout(() => form.requestSubmit(), 0)")
     expect(submit).to_be_disabled()
     expect(submit).to_have_attribute("aria-busy", "true")
     comment_form.evaluate("form => form.requestSubmit()")
