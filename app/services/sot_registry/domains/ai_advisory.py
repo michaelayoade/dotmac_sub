@@ -621,7 +621,9 @@ DOMAIN = DomainSOT(
                     ),
                     replay=(
                         "Configuration remains authoritative in AiIntakeConfig; the "
-                        "message-derived candidate event id and Sales command are idempotent."
+                        "message-derived candidate event id and Sales command are idempotent. "
+                        "Confident sales evidence is staged before clarification or routing; "
+                        "later intent changes do not retract a staged candidate."
                     ),
                 ),
                 migration=MigrationContract(

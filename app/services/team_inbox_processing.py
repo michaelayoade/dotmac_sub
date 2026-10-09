@@ -373,9 +373,11 @@ def process_provider_observation(
                                 "latitude": data.get("latitude"),
                                 "longitude": data.get("longitude"),
                             },
-                            "selected_plan": {"name": data.get("selected_plan_name")},
                         }
                     )
+                    selected_plan_name = data.get("selected_plan_name")
+                    if selected_plan_name:
+                        request_data["selected_plan"] = {"name": selected_plan_name}
                 inbound_result = team_inbox_receive.receive_fiber_inquiry(
                     db,
                     payload=FiberInquiryRequest.model_validate(

@@ -8,6 +8,7 @@
 {% block title %}Customers - Admin{% endblock %}
 
 {% block content %}
+{% include "admin/customers/_bulk_send_status.html" %}
 <div x-data='customersPage({{ customer_bulk_action_contract | tojson }})' x-init="init()" class="space-y-6">
     {% set customer_stats = stats if stats is mapping else {} %}
     {% set total_customers = customer_stats.get('total_customers', 0) %}
@@ -254,6 +255,9 @@
                             ] %}
                             {{ filter_select("status", status_options, value=status or "", label="Status", color="amber", attrs=live_filter_attrs) }}
                         </div>
+                        <div>
+                            {{ filter_select("region_id", [{"value": "", "label": "All regions"}] + region_options, value=region_id or "", label="Region", color="amber", attrs=live_filter_attrs) }}
+                        </div>
                         <div
                             class="md:col-span-2 xl:col-span-2"
                             x-data='infrastructurePicker({
@@ -317,15 +321,6 @@
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                        <div>
-                            {% set per_page_options = [
-                                {"value": "10", "label": "10 rows"},
-                                {"value": "25", "label": "25 rows"},
-                                {"value": "50", "label": "50 rows"},
-                                {"value": "100", "label": "100 rows"}
-                            ] %}
-                            {{ filter_select("per_page", per_page_options, value=list_query.per_page|string, label="Show", color="primary", attrs=live_filter_attrs) }}
                         </div>
                     </div>
                     <div class="mt-4 flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-end dark:border-slate-600/80">
@@ -1833,6 +1828,7 @@ function customersPage(bulkContract) {
         },
 
         async queueBulkMessage() {
+            window.DotmacCustomerBulkSend.startPreview();
             if (!this.sendMessageForm.templateId) return;
             const template = this.selectedTemplate();
             if (!template) {
@@ -1890,7 +1886,7 @@ function customersPage(bulkContract) {
         },
 
         async queueConfirmedBulkMessage() {
-            if (!this.messagePreviewReady || !this.sendMessageForm.templateId) return;
+            if (this.bulkLoading || !this.messagePreviewReady || !this.sendMessageForm.templateId) return;
             const template = this.selectedTemplate();
             if (!template) {
                 this.invalidateMessagePreview();
@@ -1918,57 +1914,30 @@ function customersPage(bulkContract) {
                     template_id: template.id,
                     template_variables: this.sendMessageForm.templateVariables || {}
                 });
-                const response = await fetch('/admin/customers/bulk/send-message', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
-                    },
-                    body: JSON.stringify({
-                        ...basePayload,
-                        selection: {
-                            ...basePayload.selection,
-                            expected_count: preview.matched_count || 0,
-                            expected_scope_token: preview.scope_token
-                        },
-                        expected_impact_token: preview.impact_token,
-                        confirmed: true
-                    })
+                const result = await window.DotmacCustomerBulkSend.send({
+                    ...basePayload,
+                    selection: {...basePayload.selection,
+                        expected_count: preview.matched_count || 0,
+                        expected_scope_token: preview.scope_token},
+                    expected_impact_token: preview.impact_token,
+                    confirmed: true
+                }, {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    ...(csrfToken ? {'X-CSRF-Token': csrfToken} : {})
                 });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    this.sendMessageModal = false;
-                    if (this.sendMessageSelectionSnapshot) {
-                        this.selectionMode = this.sendMessageSelectionSnapshot.mode;
-                        this.selectedIds = this.sendMessageSelectionSnapshot.ids;
-                        this.sendMessageSelectionSnapshot = null;
-                        this.applySelectionToDom();
-                    } else {
-                        this.clearSelection();
-                    }
-                    const dispatch = result.delivery_dispatch || {};
-                    const deliveryMessage = dispatch.queued
-                        ? ' Delivery has been started.'
-                        : (result.queued_count ? ' Delivery is queued, but the dispatcher could not be started automatically.' : '');
-                    const matched = result.matched_count || 0;
-                    const created = result.created_count || 0;
-                    const queued = result.queued_count || 0;
-                    const skipped = result.skipped_count ?? result.skipped?.length ?? 0;
-                    const suppressed = result.suppressed || [];
-                    const openTicketExcluded = suppressed.filter((item) => item.reason_code === 'open_ticket');
-                    const otherSuppressed = Math.max((result.suppressed_count || 0) - openTicketExcluded.length, 0);
-                    const openTicketNames = openTicketExcluded.slice(0, 10).map((item) => item.name).join(', ');
-                    const openTicketMore = openTicketExcluded.length > 10 ? `, and ${openTicketExcluded.length - 10} more` : '';
-                    alert(`Matched ${matched} customer(s). Created ${created} notification(s); queued ${queued}.${deliveryMessage}${skipped ? ` ${skipped} skipped due to missing contact details.` : ''}${openTicketExcluded.length ? ` ${openTicketExcluded.length} excluded because they have open tickets: ${openTicketNames}${openTicketMore}.` : ''}${otherSuppressed ? ` ${otherSuppressed} suppressed by preferences, dedupe, or other template conditions.` : ''}`);
+                if (result.materialization_status === 'failed') throw new Error(result.error || 'Recipient preparation failed. Check send status.');
+                this.sendMessageModal = false;
+                if (this.sendMessageSelectionSnapshot) {
+                    this.selectionMode = this.sendMessageSelectionSnapshot.mode;
+                    this.selectedIds = this.sendMessageSelectionSnapshot.ids;
+                    this.sendMessageSelectionSnapshot = null;
+                    this.applySelectionToDom();
                 } else {
-                    const error = await response.json().catch(() => ({}));
-                    alert(error.detail || 'Failed to queue the message. Please try again.');
+                    this.clearSelection();
                 }
             } catch (error) {
-                console.error('Confirmed bulk send failed:', error);
-                alert('An error occurred. Please try again.');
+                this.messagePreviewError = error.message;
             } finally {
                 this.bulkLoading = false;
             }

@@ -284,7 +284,7 @@ def test_report_projects_supported_phone_forms_to_ncc_msisdn(
 def test_malformed_phone_remains_visible_as_an_ncc_validation_failure(db_session):
     subscriber = _subscriber(
         db_session,
-        phone="not-a-number",
+        phone="x",
         region="Lagos",
         lga="Eti-Osa",
     )

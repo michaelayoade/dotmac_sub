@@ -108,13 +108,16 @@ function _container(ctx) {
         const div = document.createElement('div');
         div.className = 'echarts-holder';
         const parent = el.parentElement;
+        const parentMinHeight = parent
+            ? parseFloat(window.getComputedStyle(parent).minHeight) || 0
+            : 0;
         const h = Math.max(
             el.clientHeight || 0,
             (parent && parent.clientHeight) || 0,
-            260,
+            parentMinHeight,
         );
         div.style.width = '100%';
-        div.style.height = (h > 40 ? h : 260) + 'px';
+        div.style.height = (h > 40 ? h : 220) + 'px';
         el.style.display = 'none';
         if (parent) parent.insertBefore(div, el);
         el._echartsDiv = div;
@@ -153,6 +156,7 @@ function _makeChart(container, buildOption) {
     const wrapper = {
         _echarts: instance,
         _destroyed: false,
+        _resizeObserver: null,
         canvas: container,
         ctx: container,
         _build: buildOption,
@@ -166,6 +170,7 @@ function _makeChart(container, buildOption) {
         destroy() {
             if (this._destroyed) return;
             this._destroyed = true;
+            if (this._resizeObserver) this._resizeObserver.disconnect();
             try { instance.dispose(); } catch (_e) { /* already disposed */ }
             if (container._sourceCanvas) {
                 container._sourceCanvas.style.display = '';
@@ -184,20 +189,26 @@ function _makeChart(container, buildOption) {
         return null;
     }
     container._dotmacChart = wrapper;
+    if (typeof ResizeObserver !== 'undefined') {
+        wrapper._resizeObserver = new ResizeObserver(() => wrapper.resize());
+        wrapper._resizeObserver.observe(container);
+    }
     _bindResize();
     return wrapper;
 }
 
-function _lineSeries(data, theme, area) {
+function _lineSeries(data, theme, area, axisIds = ['y']) {
     return (data.datasets || []).map((ds, i) => {
-        const color = ds.color || CATEGORICAL[i % CATEGORICAL.length];
+        const color = ds.borderColor || ds.color || CATEGORICAL[i % CATEGORICAL.length];
         const fill = area || ds.fill !== false;
+        const axisIndex = Math.max(0, axisIds.indexOf(ds.yAxisID || 'y'));
         return {
             name: ds.label || `Dataset ${i + 1}`,
             type: 'line', smooth: true, showSymbol: false,
             lineStyle: { width: 2, color },
             itemStyle: { color },
-            areaStyle: fill ? { color: (ds.fillColor || color), opacity: 0.13 } : undefined,
+            areaStyle: fill ? { color: (ds.fillColor || ds.backgroundColor || color), opacity: 0.13 } : undefined,
+            yAxisIndex: axisIndex,
             data: ds.data || [],
         };
     });
@@ -205,14 +216,31 @@ function _lineSeries(data, theme, area) {
 
 function createLineChart(ctx, data, options = {}) {
     const container = _container(ctx);
+    const scaleEntries = Object.entries(options.scales || {})
+        .filter(([id, scale]) => id.startsWith('y') && scale && scale.display !== false);
+    const axisIds = scaleEntries.length ? scaleEntries.map(([id]) => id) : ['y'];
     return _makeChart(container, (theme) => ({
         color: CATEGORICAL,
-        grid: { left: 8, right: 16, top: 32, bottom: 8, containLabel: true },
+        grid: { left: 16, right: 56, top: 32, bottom: 8, containLabel: true },
         tooltip: { trigger: 'axis', ..._tooltip(theme) },
         legend: (options.legend && options.legend.display === false) ? { show: false } : _legend(theme, 'top'),
         xAxis: _catAxis(theme, data.labels),
-        yAxis: _valAxis(theme),
-        series: _lineSeries(data, theme, false),
+        yAxis: (scaleEntries.length ? scaleEntries : [['y', {}]]).map(([id, scale], index) => {
+            const axis = _valAxis(theme);
+            const title = scale.title && scale.title.text;
+            return {
+                ...axis,
+                position: scale.position || (index === 0 ? 'left' : 'right'),
+                name: title || '',
+                nameLocation: 'middle',
+                nameGap: 42,
+                nameTextStyle: { color: theme.textMuted, fontFamily: FONT, fontSize: 11 },
+                splitLine: scale.grid && scale.grid.drawOnChartArea === false
+                    ? { show: false }
+                    : axis.splitLine,
+            };
+        }),
+        series: _lineSeries(data, theme, false, axisIds),
     }));
 }
 

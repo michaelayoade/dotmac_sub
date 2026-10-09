@@ -1040,6 +1040,7 @@ DOMAIN = DomainSOT(
                 "control.settings_spec",
                 "financial.access_resolution",
                 "financial.prepaid_plan_change",
+                "financial.purchased_service_coverage",
                 "access.radius_state",
             ),
             notes=(

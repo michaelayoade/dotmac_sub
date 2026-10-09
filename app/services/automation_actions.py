@@ -543,6 +543,123 @@ def _set_work_order_status(
     )
 
 
+def _notify_test_connection_finance(
+    db: Session,
+    command: ExecuteAutomationActionCommand,
+) -> AutomationActionOutcome:
+    from app.services.test_connection_finance import (
+        NotifyTestConnectionFinanceCommand,
+        notify_test_connection_finance,
+    )
+
+    if command.target.entity_type != "access.test_connection":
+        raise AutomationActionExecutorError(
+            "The Finance action requires a native Test Connection grant target."
+        )
+    notify_test_connection_finance(
+        db,
+        command=NotifyTestConnectionFinanceCommand(
+            context=command.context,
+            tenant_id=command.tenant_id,
+            event_id=command.event_id,
+            grant_id=command.target.entity_id,
+            rule_version_id=command.rule_version_id,
+            step_index=command.step_index,
+            service_team_id=_uuid_input(command.inputs, key="service_team_id"),
+        ),
+    )
+    return AutomationActionOutcome(
+        disposition=AutomationActionDisposition.succeeded,
+        outcome_code="test_connection_finance_review_queued",
+    )
+
+
+def _send_automation_notification(
+    db: Session, command: ExecuteAutomationActionCommand
+) -> AutomationActionOutcome:
+    """Queue an email or staff in-app notification from a typed rule step."""
+
+    from app.models.notification import NotificationChannel
+    from app.schemas.notification import NotificationCreate
+    from app.services.notification import Notifications
+    from app.services.staff_notifications import queue_staff_push
+
+    values = {item.key: item.value for item in command.inputs}
+    channel = str(values.get("channel") or "").strip().casefold()
+    recipient = str(values.get("recipient") or "").strip()
+    subject = str(values.get("subject") or "").strip()
+    body = str(values.get("body") or "")
+    body_format = str(values.get("body_format") or "plain_text").strip().casefold()
+    target_url = str(values.get("target_url") or "/admin").strip() or "/admin"
+    if channel not in {"email", "in_app"}:
+        raise AutomationActionExecutorError(
+            "Automation notification channel must be email or in_app."
+        )
+    if not recipient or not subject or not body:
+        raise AutomationActionExecutorError(
+            "Automation notifications require a recipient, subject, and body."
+        )
+    if body_format not in {"plain_text", "html"}:
+        raise AutomationActionExecutorError(
+            "Automation notification body format is invalid."
+        )
+
+    if channel == "in_app":
+        try:
+            UUID(recipient)
+        except (TypeError, ValueError) as exc:
+            raise AutomationActionExecutorError(
+                "In-app automation notifications require a system-user UUID recipient."
+            ) from exc
+        queue_staff_push(
+            db,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            delivered=False,
+            target_url=target_url,
+        )
+        # queue_staff_push deliberately has a ``None`` return type because it
+        # is also used for best-effort mentions. The created admin notification
+        # is still durable when the recipient is a valid active staff user.
+        return AutomationActionOutcome(
+            disposition=AutomationActionDisposition.succeeded,
+            outcome_code="automation_in_app_notification_queued",
+        )
+
+    metadata = {
+        "source": "automation_rule",
+        "source_event_id": str(command.event_id),
+        "source_entity_type": command.target.entity_type,
+        "source_entity_id": str(command.target.entity_id),
+    }
+    if body_format == "html":
+        metadata["body_html"] = body
+        metadata["body_text"] = body
+    notification = Notifications.create_internal_notification(
+        db,
+        NotificationCreate(
+            channel=NotificationChannel.email,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            event_type="automation.rule.notification",
+            category="automation",
+            audience_type=command.target.entity_type,
+            audience_id=command.target.entity_id,
+            metadata_=metadata,
+        ),
+    )
+    if notification is None:
+        raise AutomationActionExecutorError(
+            "The automation notification could not be queued."
+        )
+    return AutomationActionOutcome(
+        disposition=AutomationActionDisposition.succeeded,
+        outcome_code="automation_email_notification_queued",
+    )
+
+
 # Module-adapter PRs add exact key -> typed adapter entries here. The immutable
 # mapping prevents runtime registration from turning a configuration change
 # into executable code admission.
@@ -564,6 +681,8 @@ _ACTION_EXECUTORS: Mapping[str, AutomationActionExecutor] = MappingProxyType(
         "customer.account.set_status": _apply_customer_status_action,
         "operations.work_order.set_status": _set_work_order_status,
         "operations.vendor.set_status": _set_vendor_project_status,
+        "communications.send_notification": _send_automation_notification,
+        "billing.test_connection.notify_finance": _notify_test_connection_finance,
     }
 )
 

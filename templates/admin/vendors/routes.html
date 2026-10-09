@@ -12,6 +12,7 @@
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Vendor Routes</h1>
             <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">Installation projects with proposed or as-built fiber route geometry</p>
         </div>
+        <a href="/admin/vendors/routes/new" class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700">Create admin proposal</a>
     </div>
 
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
@@ -46,6 +47,7 @@
                         <td class="px-6 py-3"><span class="rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ project.status | replace('_', ' ') }}</span></td>
                         <td class="px-6 py-3">
                             {% if project.has_proposed %}<span class="mr-1 rounded-lg bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">Proposed</span>{% endif %}
+                            {% if project.has_admin_proposed %}<span class="mr-1 rounded-lg bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">Admin proposed</span>{% endif %}
                             {% if project.has_as_built %}<span class="rounded-lg bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">As-built</span>{% endif %}
                         </td>
                         <td class="px-6 py-3 text-right">

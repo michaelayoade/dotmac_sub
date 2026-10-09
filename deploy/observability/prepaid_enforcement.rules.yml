@@ -6,6 +6,14 @@
 # snapshot age is the runner heartbeat. System-wide billing never stops: an
 # account with contradictory evidence enters an owned, SLA-bound exception
 # workflow, and these alerts fire when any blocked class stops draining.
+#
+# Account-state signals (renewal_terms_unresolved, coverage_unresolved,
+# notice_suppressed, no_contact_route, delivery_unavailable) are the totals of
+# the last COMPLETE keyset cycle, which may span several budget-limited runs.
+# They change only when a cycle completes (cycle_totals_age_seconds is their
+# age) and are absent until the first complete cycle. Run-scoped signals
+# (accounts_processed, budget_deferred, warned, ...) describe one bounded run;
+# accounts_scanned is the candidate cohort size, not the processed count.
 groups:
   - name: prepaid_enforcement
     rules:
@@ -78,15 +86,17 @@ groups:
         labels:
           severity: warning
           area: prepaid-enforcement
-          owner: financial-collections
+          owner: financial-billing
         annotations:
           summary: "Prepaid accounts blocked on contradictory financial evidence"
           description: >
             Ambiguous, conflicting, or malformed financial evidence is
             blocking adverse enforcement. Each item is persisted in the
             reconciliation owner's run evidence and needs a finance review;
-            it must never be auto-suspended or silently parked.
-          runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
+            it must never be auto-suspended or silently parked. Run the
+            read-only scripts/billing/diagnose_prepaid_coverage_quarantine.py
+            to list the exact records and their reviewed owners.
+          runbook: "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
 
       # --- Remaining blocked classes must trend to zero (ADR 0007 SLO).
       - alert: PrepaidRenewalTermsUnresolved
@@ -95,14 +105,34 @@ groups:
         labels:
           severity: warning
           area: prepaid-enforcement
-          owner: financial-collections
+          owner: financial-billing
         annotations:
           summary: "Prepaid accounts blocked on unresolved renewal terms"
           description: >
             Due prepaid service exists whose contracted renewal charge cannot
-            be resolved. Complete the billing contract/obligation backfill for
-            these accounts; enforcement stays fail-closed until then.
-          runbook: "docs/adr/0007-end-to-end-billing-target-architecture.md"
+            be resolved. Each subscription has an owned finance work item
+            (prepaid-renewal-terms:evidence:*) whose decision names the next
+            step; enforcement stays fail-closed until it is resolved.
+          runbook: "docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md"
+
+      # --- Owned finance work items must be worked within their SLA. The
+      # deadline is fixed when an item opens, so this fires once any open
+      # quarantine or renewal-terms work item outlives its review window.
+      - alert: PrepaidWorkItemsOverdue
+        expr: observability_state{domain="prepaid_enforcement",signal="work_items_overdue"} > 0
+        for: 1h
+        labels:
+          severity: warning
+          area: prepaid-enforcement
+          owner: financial-billing
+        annotations:
+          summary: "Prepaid finance work items are past their review SLA"
+          description: >
+            Open prepaid-coverage quarantine or renewal-terms evidence work
+            items in admin alerts have passed their sla_due_at. Each needs a
+            finance decision; enforcement for these accounts stays
+            fail-closed until the evidence is corrected.
+          runbook: "docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md"
 
       - alert: PrepaidNoContactRouteAccounts
         expr: observability_state{domain="prepaid_enforcement",signal="no_contact_route"} > 0

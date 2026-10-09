@@ -68,7 +68,10 @@ from app.models.subscriber import (
 )
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser, SystemUserType
+from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services.credential_crypto import encrypt_credential
+from app.services.customer_financial_ledger import CustomerFinancialEvent
+from app.services.web_billing_ledger import CustomerLedgerQuery
 from app.services.web_customer_details import (
     CustomerDetailNetworkQuery,
     build_business_detail_snapshot,
@@ -506,6 +509,93 @@ def test_customer_billing_ledger_route_renders_ten_rows_and_page_navigation(
     assert "Page 2 of 2" in second_page
 
 
+def test_customer_billing_ledger_uses_canonical_financial_events(
+    db_session,
+    subscriber,
+    monkeypatch,
+):
+    events = [
+        CustomerFinancialEvent(
+            id="invoice:1",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            amount=Decimal("400.00"),
+            currency="NGN",
+            memo="Invoice",
+            occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        ),
+        CustomerFinancialEvent(
+            id="payment:2",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("2500.00"),
+            currency="NGN",
+            memo="Payment",
+            occurred_at=datetime(2026, 1, 2, tzinfo=UTC),
+        ),
+        CustomerFinancialEvent(
+            id="credit-note:3",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.credit_note,
+            amount=Decimal("500.00"),
+            currency="NGN",
+            memo="Credit note",
+            occurred_at=datetime(2026, 1, 3, tzinfo=UTC),
+        ),
+        CustomerFinancialEvent(
+            id="prepaid-invoice-consumption:4",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            amount=Decimal("1200.00"),
+            currency="NGN",
+            memo="Prepaid usage",
+            occurred_at=datetime(2026, 1, 4, tzinfo=UTC),
+        ),
+        CustomerFinancialEvent(
+            id="invoice-writeoff:5",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("800.00"),
+            currency="NGN",
+            memo="Write-off",
+            occurred_at=datetime(2026, 1, 5, tzinfo=UTC),
+        ),
+    ]
+    monkeypatch.setattr(
+        web_billing_ledger_service,
+        "list_customer_financial_events",
+        lambda _db, _account_id, *, currency=None: events,
+    )
+
+    view = web_billing_ledger_service.build_customer_ledger_view(
+        db_session,
+        query=CustomerLedgerQuery(account_id=subscriber.id),
+    )
+
+    assert view.total_entries == 5
+    assert view.summary.credit_count == 3
+    assert view.summary.debit_count == 2
+    assert [entry.id for entry in view.entries] == [
+        "invoice-writeoff:5",
+        "prepaid-invoice-consumption:4",
+        "credit-note:3",
+        "payment:2",
+        "invoice:1",
+    ]
+    assert [entry.running_balance for entry in view.entries] == [
+        Decimal("2200.00"),
+        Decimal("1400.00"),
+        Decimal("2600.00"),
+        Decimal("2100.00"),
+        Decimal("-400.00"),
+    ]
+
+
 def test_customer_360_service_health_contains_only_active_services(
     db_session, subscriber, subscription
 ):
@@ -585,6 +675,48 @@ def test_customer_360_restore_action_is_permission_gated_and_reviewed() -> None:
     assert "body.set('expected_head', preview.expected_head)" in template
     assert "'Idempotency-Key': idempotencyKey" in template
     assert "`${lifecycleUrl}/execute`" in template
+
+
+def test_customer_360_view_more_is_available_for_paused_subscriptions(
+    db_session, subscriber, subscription, monkeypatch
+) -> None:
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.paused
+    db_session.commit()
+
+    monkeypatch.setattr(
+        customer_routes.web_notifications_service,
+        "customer_notification_picker_context",
+        lambda _db: {},
+    )
+    monkeypatch.setattr(
+        customer_routes.subscriber_party_binding_repair,
+        "resolve_repair_context",
+        lambda _db, *, subscriber_id: None,
+    )
+    import app.web.admin as admin_module
+
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+
+    request = _bare_request(f"/admin/customers/person/{subscriber.id}#subscriptions")
+    request.state.auth = {}
+    response = customer_routes.person_detail(
+        request=request,
+        customer_id=str(subscriber.id),
+        panel=None,
+        usage_period="current",
+        usage_page=1,
+        usage_per_page=25,
+        usage_view="chart",
+        db=db_session,
+    )
+    rendered = response.body.decode("utf-8")
+
+    assert f"/admin/catalog/subscriptions/{subscription.id}" in rendered
+    assert (
+        "x-text=\"showAllSubscriptions ? 'Show active only' : 'View more'\"" in rendered
+    )
 
 
 def test_customer_360_unsuspend_action_is_permission_gated_and_reviewed() -> None:
@@ -1038,6 +1170,7 @@ def test_customer_subscription_action_context_hides_unauthorized_actions(
         "can_activate_subscriptions": True,
         "can_suspend_subscriptions": False,
         "can_reconcile_service_changes": False,
+        "can_test_connection": False,
     }
 
 

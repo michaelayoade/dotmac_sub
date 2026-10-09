@@ -1292,6 +1292,7 @@ def set_lead_status_from_automation(
                 "tenant_id": str(OPERATOR_TENANT_ID),
                 "lead_id": str(lead.id),
                 "status": lead.status,
+                "pipeline_id": str(lead.pipeline_id) if lead.pipeline_id else None,
             },
             actor=command.context.actor,
         )

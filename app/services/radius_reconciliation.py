@@ -100,7 +100,24 @@ def _fully_blocked_usernames(db: Session) -> list[str]:
             )
         )
     ).scalars()
-    return [u for u in rows if u]
+    usernames = [u for u in rows if u]
+    from app.services.test_connection import TestConnectionQuery, current_access
+
+    subscriptions = list(
+        db.scalars(select(Subscription).where(Subscription.login.in_(usernames))).all()
+    )
+    test_ids = {
+        access.subscription_id
+        for access in current_access(
+            db,
+            query=TestConnectionQuery(
+                subscription_ids=tuple(sub.id for sub in subscriptions),
+                evaluated_at=datetime.now(UTC),
+            ),
+        )
+    }
+    testing = {sub.login for sub in subscriptions if sub.id in test_ids}
+    return [username for username in usernames if username not in testing]
 
 
 def mixed_status_subscriber_count(db: Session) -> int:

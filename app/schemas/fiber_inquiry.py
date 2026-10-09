@@ -76,7 +76,10 @@ class FiberLocation(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
 
     address: str = Field(min_length=5, max_length=1000)
-    area: str = Field(min_length=2, max_length=80)
+    # The coverage calculation uses the coordinates, not the display area.
+    # Keep area when the website knows it, but do not force customers to invent
+    # a district label before their address can be reviewed.
+    area: str | None = Field(default=None, max_length=80)
     latitude: Decimal | None = Field(default=None, ge=-90, le=90)
     longitude: Decimal | None = Field(default=None, ge=-180, le=180)
 
@@ -137,14 +140,9 @@ class FiberInquiryRequest(BaseModel):
             return self
         if self.phone is None:
             raise ValueError("phone is required for fiber-coverage-v1")
-        if (
-            self.attribution is None
-            or self.location is None
-            or self.selected_plan is None
-        ):
+        if self.attribution is None or self.location is None:
             raise ValueError(
-                "attribution, location, and selected_plan are required for "
-                "fiber-coverage-v1"
+                "attribution and location are required for fiber-coverage-v1"
             )
         if self.attribution.captured_at > self.submitted_at:
             raise ValueError("attribution.captured_at cannot be after submitted_at")
@@ -161,6 +159,8 @@ class FiberCoverageStatus(StrEnum):
     covered = "covered"
     survey_required = "survey_required"
     out_of_area = "out_of_area"
+    manual_review = "manual_review"
+    technical_error = "technical_error"
 
 
 class FiberCoverageResult(BaseModel):

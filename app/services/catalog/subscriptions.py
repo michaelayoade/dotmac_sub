@@ -39,6 +39,7 @@ from app.schemas.catalog import (
     SubscriptionUpdate,
 )
 from app.services import settings_spec
+from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -67,6 +68,48 @@ def _ensure_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value
+
+
+def _refuse_unreviewed_renewal_term(
+    db: Session, subscription: Subscription, data: dict
+) -> None:
+    """Retire the generic form as a writer of a missing prepaid renewal term.
+
+    A collectible prepaid subscription without a positive contracted amount
+    is blocked as ``renewal_terms_unresolved``. Its amount is recorded only
+    by ``financial.prepaid_renewal_terms_backfill`` (paid evidence, or the
+    four-eyes reviewed renewal-term record) — never by a generic edit with no
+    evidence, reason, or approval. A plan change still snapshots the new
+    offer's price through its own path.
+    """
+    from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+
+    if data.get("unit_price") is None:
+        return
+    if subscription.unit_price is not None and Decimal(
+        str(data["unit_price"])
+    ) == Decimal(str(subscription.unit_price)):
+        return
+    if "offer_id" in data and str(data["offer_id"]) != str(subscription.offer_id):
+        return
+    if (
+        subscription.billing_mode != BillingMode.prepaid
+        or subscription.status not in COLLECTIBLE_SERVICE_STATUSES
+        or (
+            subscription.unit_price is not None
+            and subscription.unit_price > Decimal("0.00")
+        )
+    ):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "This prepaid service has no contracted renewal amount. Record it "
+            "through the finance-reviewed renewal-term record (request + "
+            "approval), not the generic edit form. See "
+            "docs/runbooks/PREPAID_RENEWAL_TERMS_FINANCE_REVIEW.md."
+        ),
+    )
 
 
 def _subscription_billing_mode_for_write(
@@ -439,6 +482,8 @@ def _validate_plan_change(
     db: Session,
     subscription: Subscription,
     new_offer_id: str,
+    *,
+    effective_at: datetime | None = None,
 ) -> None:
     """Validate that a plan change is allowed.
 
@@ -448,9 +493,23 @@ def _validate_plan_change(
     - Regional availability (if offer has region_zone_id)
     - Billing mode compatibility (prepaid ↔ prepaid, postpaid ↔ postpaid)
     """
+    from app.services.purchased_service_coverage import (
+        PurchasedCoverageQuery,
+        resolve_purchased_coverage,
+    )
     from app.services.subscription_billing_treatments import (
         subscription_has_open_billing_treatment,
     )
+
+    purchased = resolve_purchased_coverage(db, PurchasedCoverageQuery(subscription.id))
+    change_at = _ensure_utc(effective_at) or datetime.now(UTC)
+    if purchased.has_unsettled_purchase or (
+        purchased.protected_until is not None and change_at < purchased.protected_until
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Resolve the period purchase or schedule the plan change after paid coverage.",
+        )
 
     if subscription_has_open_billing_treatment(db, subscription.id):
         raise HTTPException(
@@ -958,6 +1017,21 @@ class Subscriptions(ListResponseMixin):
             ),
         )
         requested_status = data.get("status")
+        if data["billing_mode"] == BillingMode.prepaid and (
+            requested_status is None or requested_status in COLLECTIBLE_SERVICE_STATUSES
+        ):
+            # A pending prepaid service already joins the prepaid funding
+            # cohort, so admission is decided before anything is staged.
+            from app.services.prepaid_activation_funding_guard import (
+                PrepaidActivationEntryPoint,
+                require_prepaid_activation_funding_admitted,
+            )
+
+            require_prepaid_activation_funding_admitted(
+                db,
+                account_id=payload.subscriber_id,
+                entry_point=PrepaidActivationEntryPoint.subscription_create,
+            )
         if requested_status == SubscriptionStatus.active and not data.get("start_at"):
             data["start_at"] = datetime.now(UTC)
         start_at = data.get("start_at")
@@ -1272,6 +1346,7 @@ class Subscriptions(ListResponseMixin):
                     f"updates ({fields}); use the subscription lifecycle command."
                 ),
             )
+        _refuse_unreviewed_renewal_term(db, subscription, data)
         requested_offer_id = data.get("offer_id")
         if (
             requested_offer_id is not None
@@ -1327,6 +1402,27 @@ class Subscriptions(ListResponseMixin):
                 offer_id=offer_id,
                 requested_mode=data.get("billing_mode"),
             )
+            if (
+                data["billing_mode"] == BillingMode.prepaid
+                and subscription.status in COLLECTIBLE_SERVICE_STATUSES
+                and (
+                    subscription.billing_mode != BillingMode.prepaid
+                    or subscriber_id != str(subscription.subscriber_id)
+                )
+            ):
+                from app.services.prepaid_activation_funding_guard import (
+                    PrepaidActivationEntryPoint,
+                    require_prepaid_activation_funding_admitted,
+                )
+
+                require_prepaid_activation_funding_admitted(
+                    db,
+                    account_id=subscriber_id,
+                    entry_point=(
+                        PrepaidActivationEntryPoint.subscription_billing_mode_change
+                    ),
+                    subscription_id=subscription.id,
+                )
 
         # Plan change validation and proration
         offer_changing = (

@@ -37,6 +37,7 @@ from app.web.admin.catalog_settings import router as catalog_settings_router
 from app.web.admin.configuration import router as configuration_router
 from app.web.admin.crm_referrals import router as crm_referrals_router
 from app.web.admin.custom_fields import router as custom_fields_router
+from app.web.admin.customer_regions import router as customer_regions_router
 from app.web.admin.customer_retention import router as customer_retention_router
 from app.web.admin.customers import contacts_router
 from app.web.admin.customers import router as customers_router
@@ -102,6 +103,10 @@ from app.web.admin.network_zones import router as network_zones_router
 from app.web.admin.notifications import router as notifications_router
 from app.web.admin.payment_configuration_actions import (
     router as payment_configuration_actions_router,
+)
+from app.web.admin.period_purchase_review import router as period_purchase_review_router
+from app.web.admin.prepaid_activation_funding import (
+    router as prepaid_activation_funding_router,
 )
 from app.web.admin.projects import router as projects_router
 from app.web.admin.provisioning import router as provisioning_router
@@ -203,6 +208,7 @@ router.include_router(dashboard_router)
 router.include_router(automation_center_router)
 router.include_router(custom_fields_router)
 router.include_router(customer_retention_router)
+router.include_router(customer_regions_router)
 router.include_router(help_center_router)
 router.include_router(meta_connection_router)
 router.include_router(surveys_router)
@@ -238,6 +244,10 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
+    prepaid_activation_funding_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
     billing_payment_proofs_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
@@ -259,6 +269,10 @@ router.include_router(
 )
 router.include_router(
     billing_extensions_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
+    period_purchase_review_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(

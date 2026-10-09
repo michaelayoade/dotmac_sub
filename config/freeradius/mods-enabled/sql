@@ -58,22 +58,39 @@ sql {
 
 	# Group membership query
 	group_membership_query = "\
-		SELECT groupname \
-		FROM ${usergroup_table} \
-		WHERE username = '%{SQL-User-Name}' \
+		WITH test AS (SELECT max(CAST(value AS bigint)) AS until_epoch FROM ${authcheck_table} \
+		 WHERE username = '%{SQL-User-Name}' AND attribute = 'Dotmac-Test-Until') \
+		SELECT CASE WHEN left(groupname, 12) = 'Dotmac-Test-' THEN substring(groupname from 13) ELSE groupname END AS groupname \
+		FROM ${usergroup_table} CROSS JOIN test \
+		WHERE username = '%{SQL-User-Name}' AND \
+		 ((coalesce(test.until_epoch, 0) > extract(epoch from CURRENT_TIMESTAMP) AND left(groupname, 12) = 'Dotmac-Test-') OR \
+		  (coalesce(test.until_epoch, 0) <= extract(epoch from CURRENT_TIMESTAMP) AND left(groupname, 12) <> 'Dotmac-Test-')) \
 		ORDER BY priority"
 
 	# Authorization queries
 	authorize_check_query = "\
-		SELECT id, username, attribute, value, op \
-		FROM ${authcheck_table} \
-		WHERE username = '%{SQL-User-Name}' \
+		WITH test AS (SELECT max(CAST(value AS bigint)) AS until_epoch FROM ${authcheck_table} \
+		 WHERE username = '%{SQL-User-Name}' AND attribute = 'Dotmac-Test-Until') \
+		SELECT id, username, CASE WHEN left(attribute, 12) = 'Dotmac-Test-' THEN substring(attribute from 13) ELSE attribute END AS attribute, value, op \
+		FROM ${authcheck_table} CROSS JOIN test \
+		WHERE username = '%{SQL-User-Name}' AND attribute NOT IN ('Dotmac-Test-Until', 'Dotmac-Test-Grant') AND \
+		 ((coalesce(test.until_epoch, 0) > extract(epoch from CURRENT_TIMESTAMP) AND left(attribute, 12) = 'Dotmac-Test-') OR \
+		  (coalesce(test.until_epoch, 0) <= extract(epoch from CURRENT_TIMESTAMP) AND left(attribute, 12) <> 'Dotmac-Test-')) \
+		UNION ALL SELECT 2147483646, '%{SQL-User-Name}', 'Tmp-Integer-0', CAST(test.until_epoch AS text), ':=' FROM test \
+		 WHERE test.until_epoch > extract(epoch from CURRENT_TIMESTAMP) \
 		ORDER BY id"
 
 	authorize_reply_query = "\
-		SELECT id, username, attribute, value, op \
-		FROM ${authreply_table} \
-		WHERE username = '%{SQL-User-Name}' \
+		WITH test AS (SELECT max(CAST(value AS bigint)) AS until_epoch FROM ${authcheck_table} \
+		 WHERE username = '%{SQL-User-Name}' AND attribute = 'Dotmac-Test-Until') \
+		SELECT id, username, CASE WHEN left(attribute, 12) = 'Dotmac-Test-' THEN substring(attribute from 13) ELSE attribute END AS attribute, value, op \
+		FROM ${authreply_table} CROSS JOIN test \
+		WHERE username = '%{SQL-User-Name}' AND \
+		 ((coalesce(test.until_epoch, 0) > extract(epoch from CURRENT_TIMESTAMP) AND left(attribute, 12) = 'Dotmac-Test-') OR \
+		  (coalesce(test.until_epoch, 0) <= extract(epoch from CURRENT_TIMESTAMP) AND left(attribute, 12) <> 'Dotmac-Test-')) \
+		UNION ALL SELECT 2147483647, '%{SQL-User-Name}', 'Session-Timeout', \
+		 CAST(greatest(1, floor(test.until_epoch - extract(epoch from CURRENT_TIMESTAMP))) AS text), ':=' FROM test \
+		 WHERE test.until_epoch > extract(epoch from CURRENT_TIMESTAMP) \
 		ORDER BY id"
 
 	authorize_group_check_query = "\

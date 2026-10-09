@@ -34,6 +34,14 @@ account-scoped; it is never coerced to zero, paid, funded, or safe-to-suspend.
 
 ## Owners and boundaries
 
+Subscription Test Connection is a separate bounded troubleshooting grant,
+owned by `access.test_connection`. A valid grant temporarily overrides financial
+network restrictions without changing debt, baselines, billing approval,
+commercial status, locks or coverage. Normal financial transitions continue;
+their network consequences respect current grant evidence. Absolute RADIUS/NAS
+deadlines and durable expiry return to current ordinary access policy. See
+[Subscription Test Connection](designs/SUBSCRIPTION_TEST_CONNECTION.md).
+
 | Concern | Owner | Contract |
 | --- | --- | --- |
 | Postpaid invoices and lifecycle | `financial.invoices` | Owns invoice construction, issue, due, settlement projection, void, and receivable document state. |
@@ -108,6 +116,67 @@ lock and writes only its approved immutable opening. The bounded path is not a
 partial initial cutover: it is unavailable before authority activation, excludes
 facts after the original cutoff, and cannot accept migrated or ambiguous source
 provenance.
+
+### Prepaid activation funding admission
+
+Billing approval admits an account to service; it does not prove the account
+has prepaid funding authority. A legacy account (one that existed when
+customer-subledger authority activated) with no active reviewed baseline and
+no subledger opening is in the prepaid funding quarantine
+(`prepaid_funding_incomplete_source_account_ids`): every balance-based warning,
+suspension, and restoration skips it, and its arrival in the prepaid cohort
+grows `billing_prepaid_funding_quarantined_accounts`.
+
+`financial.prepaid_activation_funding_guard`
+(`app/services/prepaid_activation_funding_guard.py`) therefore decides, before
+prepaid service starts, whether the account would be quarantined. It reuses
+the quarantine resolver and the carried-source identity classifier unchanged
+and runs at every prepaid start:
+
+- `Subscriptions.create` when the resolved billing mode is prepaid and the
+  status is collectible (pending already joins the cohort) — admin web, API,
+  sales-order provisioning, and financial imports all pass through it;
+- `account_lifecycle.activate_subscription` (pending → active) for a prepaid
+  subscription — lifecycle commands, service-order completion, reseller
+  portal, billing automation, and bulk provisioning;
+- `Subscriptions.update` when a collectible subscription becomes prepaid or
+  moves to another account;
+- the account-wide billing-mode transition to prepaid (a blocking
+  `prepaid_funding_quarantined` readiness blocker plus a recheck at confirm);
+- bulk provisioning before it constructs or re-modes a prepaid row.
+
+Admission is fail-closed. The refusal is
+`financial.prepaid_activation_funding_guard.funding_quarantined` (also a
+`ValueError` for lifecycle adapters) and names the reason and runbook:
+
+| Reason | Account | Runbook |
+| --- | --- | --- |
+| `migrated_opening_missing` | retained Splynx identity | `docs/runbooks/REVIEWED_MIGRATED_PREPAID_OPENING_REPAIR.md` |
+| `carried_source_identity_unresolved` | created before the handoff, no Splynx identity, no adjudication | `docs/runbooks/PREPAID_FUNDING_AUDIT_RESTORE.md` (carried-source identity) |
+| `reviewed_native_opening_missing` | adjudicated pre-handoff native, opening not yet materialized | `docs/runbooks/PREPAID_FUNDING_AUDIT_RESTORE.md` |
+| `native_after_handoff_opening_missing` | created after the handoff, before subledger authority | `docs/runbooks/NATIVE_PREPAID_OPENING_REPAIR.md` |
+| `source_identity_unclassifiable` | stale or conflicting source-identity evidence | `docs/runbooks/PREPAID_FUNDING_AUDIT_RESTORE.md` |
+
+The only bypass is a durable `PrepaidActivationFundingOverride`, recorded per
+account by an active staff user holding
+`billing:prepaid_funding:activation_override` (seeded for `admin` only) with a
+reason of at least ten characters. Grant and revoke are audited owner commands
+that stage `billing.prepaid_activation_funding_override.granted|revoked`; each
+activation admitted by an override stages a
+`prepaid_activation_admitted_by_funding_override` audit row. An override never
+changes the quarantine computation: the account stays excluded from money
+actions and stays counted by the quarantine signal until its opening is
+captured, so `SubPrepaidFundingQuarantineGrowing` still fires. The guard does
+not cover resuming an existing disabled service (`enable_subscription`),
+billing re-approval of an account that already holds prepaid service, or the
+reviewed billing-cleanup account-mode alignment; those surface only through the
+quarantine signal.
+
+The guard is inert before customer-subledger authority activation, when every
+account without a baseline is in the incomplete-source set by design and the
+complete-cohort opening capture owns all of them. The admin customer and
+subscription pages show a quarantine banner with the reason, runbook, and the
+override state or form.
 
 ## Exact prepaid renewal charge
 
@@ -338,7 +407,10 @@ The planner and executor consume the same decision in this order:
    accounts without billing approval with a typed outcome. Billing approval is
    activation admission, not a runtime bypass: revocation disables the account
    and its non-terminal services through `customer.billing_approval` and
-   `access.subscription_lifecycle`.
+   `access.subscription_lifecycle`. Billing approval is not funding admission:
+   starting prepaid service on a legacy account without a reviewed opening is
+   refused by `financial.prepaid_activation_funding_guard` (see Prepaid
+   activation funding admission).
 3. Exclude signed-quarantine or missing-baseline accounts from money action.
 4. Protect `unresolved_projection` coverage and `renewal_terms_unresolved`
    contract evidence from adverse action. An uncovered service with exact or
@@ -363,6 +435,18 @@ authoritative facts on the next run; it is never treated as a safe no-action
 result and it does not make the whole sweep wait for PostgreSQL's lock timeout.
 The sweep publishes the bounded `lock_deferred` signal, and persistent deferral
 is a database-pressure alert requiring correlation with the blocking owner.
+
+One sweep coverage cycle (a keyset pass over the whole candidate cohort) can
+span several budget-limited runs, so a run's own outcome counters describe
+only its slice. The sweep therefore tallies each account's outcome per cycle
+in `prepaid_sweep_cycle_state` (keyed by account, last write wins, written in
+the same transaction as the cursor) and the account-state signals
+`renewal_terms_unresolved`, `coverage_unresolved`, `notice_suppressed`,
+`no_contact_route`, and `delivery_unavailable` publish the last COMPLETED
+cycle's totals. They change only when a cycle completes
+(`cycle_totals_age_seconds`), never on a partial run; cycle progress stays on
+`cycle_remaining`/`cycle_age_seconds`, the run's work on
+`accounts_processed`, and `accounts_scanned` is the cohort size.
 
 ### Postpaid
 
@@ -660,9 +744,15 @@ The initial billing treatment is selected by the immutable Automation rule as
 `extend_by_effective_pause_duration`. Pause records the canonical billing
 anchor but does not move it. Authorized manual resume after Ticket resolution
 computes `[effective_at, resumed_at)` in exact seconds and moves the anchor by
-that duration through the existing compare-and-set billing-anchor writer.
-Changed or missing anchor evidence fails closed. Event replay returns the
-existing cause, and resume replay never moves the anchor twice.
+that duration through the existing compare-and-set billing-anchor writer. For
+prepaid service, resume consumes the typed
+`financial.prepaid_service_coverage` decision: funded entitlements and applied
+`financial.service_extensions` grant intervals may form one continuous
+coverage union through the captured anchor. The zero-value pause-compensation
+entitlement records the exact coverage fingerprint and never duplicates or
+rewrites an extension grant. Changed, discontinuous, or missing anchor evidence
+fails closed. Event replay returns the existing cause, and resume replay never
+moves the anchor twice.
 
 Independent enforcement locks can be added while paused. Releasing the Ticket
 cause closes the episode only when no other pause cause remains; an outstanding
@@ -686,6 +776,13 @@ python scripts/billing/prepaid_coverage_reconcile.py \
   --idempotency-key <stable-key> --actor <operator> \
   --reason "<reviewed evidence reason>"
 ```
+
+Enforcement-blocking quarantine opens one `prepaid-coverage:quarantine:<account>`
+finance work item per account. Finance resolves `malformed_paid_invoice_period`
+and `malformed_renewal_origin` with
+`docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md`, starting from the
+read-only `scripts/billing/diagnose_prepaid_coverage_quarantine.py`, which lists
+the exact records and the reviewed owner (if any) for each.
 
 Preview prepaid-lock cleanup from active lock evidence, not subscriber status,
 invoice status, or paid-through date:
@@ -813,6 +910,7 @@ exports, or secret values in these records.
 
 - `app/services/customer_financial_ledger.py`
 - `app/services/prepaid_funding_reconstruction.py`
+- `app/services/prepaid_activation_funding_guard.py`
 - `app/services/prepaid_service_coverage.py`
 - `app/services/prepaid_service_renewals.py`
 - `app/services/prepaid_threshold.py`
@@ -832,6 +930,7 @@ exports, or secret values in these records.
 - `app/services/events/dispatcher.py`
 - `app/services/events/handlers/enforcement.py`
 - `tests/test_prepaid_funding_reconstruction.py`
+- `tests/test_prepaid_activation_funding_guard.py`
 - `tests/test_prepaid_service_coverage.py`
 - `tests/test_prepaid_coverage_reconciliation.py`
 - `tests/test_prepaid_service_renewals.py`

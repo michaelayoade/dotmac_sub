@@ -4,7 +4,7 @@
 {% block title %}{{ 'Decommissioned Network Devices' if lifecycle == 'archived' else 'Network Devices' }} - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-8">
+<div x-data="{ activeType: '{{ type or 'all' }}' }" class="space-y-8">
     {% if request.query_params.get('message') %}
     <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300">
         {{ request.query_params.get('message') }}
@@ -43,7 +43,7 @@
 
     {# Device Type Tabs #}
     {% if lifecycle != 'archived' %}
-    <div x-data="{ activeType: '{{ type or 'all' }}' }" class="animate-fade-in-up" style="animation-delay: 50ms;">
+    <div class="animate-fade-in-up" style="animation-delay: 50ms;">
         <div class="flex flex-wrap gap-2 rounded-2xl border border-slate-200/60 bg-white p-2 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             {% set device_types = [
                 {'value': 'all', 'label': 'All Devices', 'kpi': device_kpis.total, 'color': 'slate', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>'},
@@ -53,7 +53,8 @@
                 {'value': 'cpe', 'label': 'CPE', 'kpi': device_kpis.cpe, 'color': 'emerald', 'icon': '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>'}
             ] %}
             {% for dt in device_types %}
-            <button x-on:click="activeType = '{{ dt.value }}'"
+            <button type="button"
+                    x-on:click="activeType = '{{ dt.value }}'; $refs.deviceTypeFilter.value = '{{ dt.value }}'"
                     hx-get="{{ dt.kpi.cohort_url }}"
                     hx-target="#devices-content"
                     hx-select="#devices-content"
@@ -81,7 +82,7 @@
     {# Search & Filters #}
     {% call filter_bar() %}
     <form id="devices-filter-form" method="GET" action="/admin/network/devices" class="flex flex-col gap-4 lg:flex-row lg:items-end">
-        <input type="hidden" name="type" value="{{ type or 'all' }}">
+        <input id="device-type-filter" x-ref="deviceTypeFilter" type="hidden" name="type" x-model="activeType" value="{{ type or 'all' }}">
         <input type="hidden" name="lifecycle" value="{{ lifecycle or 'current' }}">
         <div class="flex-1">
             <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search Devices</label>

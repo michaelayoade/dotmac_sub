@@ -559,6 +559,7 @@ def _stage_evidence(
             "name": "customer.account.status_changed",
             "tenant_id": str(OPERATOR_TENANT_ID),
             "subscriber_id": str(account.id),
+            "previous_status": prior_status.value,
             "status": account.status.value,
             "action": command.action.value,
         },

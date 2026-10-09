@@ -120,6 +120,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.alert_evaluation.evaluate_alert_rules": _c(
         "monitoring", SWEEP, IDEMP, STATUS
     ),
+    "app.tasks.automation.run_scheduled_automation_rules": _c(
+        "automation",
+        SWEEP,
+        GUARDED,
+        STATUS,
+        "Each rule/version slot is claimed transactionally before events are emitted; a later sweep retries unclaimed work.",
+    ),
     "app.tasks.arrangements.check_overdue_arrangements": _c(
         "billing", SWEEP, GUARDED, HEALTH
     ),
@@ -461,6 +468,25 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "idempotency key, failed lookups are logged, and the next scheduled "
         "sweep retries unresolved emails.",
     ),
+    "app.tasks.notifications.dispatch_customer_bulk_messages": _c(
+        "notifications",
+        SWEEP,
+        GUARDED,
+        STATUS,
+        "The permanent receipt outbox sweep redispatches accepted and expired-lease "
+        "request UUIDs. Broker failure leaves the receipt due for a later sweep; "
+        "duplicate wakeups cannot bypass receipt row locks or attempt guards.",
+    ),
+    "app.tasks.notifications.materialize_customer_bulk_message": _c(
+        "notifications",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Receipt claims, bounded preparation attempts and durable failure state "
+        "own recovery. Materialization and receipt completion commit together; "
+        "the outbox sweep recovers stale leases without Celery autoretry. "
+        "Status is visible through the actor-scoped customer send status panel.",
+    ),
     "app.tasks.oauth.check_token_health": _c("integrations", SWEEP, IDEMP, HEALTH),
     "app.tasks.oauth.refresh_expiring_tokens": _c(
         "integrations", STATE, GUARDED, STATUS
@@ -745,14 +771,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Scans persisted queue-notification next_due_at rows; each logical "
         "notice has a database dedupe key and failed deliveries retry the same "
         "ledger row.",
-    ),
-    "app.tasks.team_inbox.send_reply_reminders": _c(
-        "support",
-        SWEEP,
-        IDEMP,
-        STATUS,
-        "A durable assignment reminder row owns the next due time and repeat count; "
-        "an agent reply settles it and re-runs before next_due_at are no-ops.",
     ),
     "app.tasks.team_inbox.recover_stale_ai_intake": _c(
         "support",

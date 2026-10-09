@@ -7,6 +7,13 @@ from sqlalchemy import select
 
 from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
 from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.service_extension import (
+    ServiceExtension,
+    ServiceExtensionAnchorBasis,
+    ServiceExtensionEntry,
+    ServiceExtensionScope,
+    ServiceExtensionStatus,
+)
 from app.models.subscriber import SubscriberStatus
 from app.models.subscription_pause import (
     SubscriptionPauseBillingPolicy,
@@ -184,6 +191,100 @@ def test_prepaid_resume_grants_exact_pause_compensation_once(
     assert _as_utc(active_subscription.next_billing_at) == _as_utc(
         compensation[0].ends_at
     )
+
+
+def test_prepaid_resume_preserves_unused_applied_extension_time(
+    db_session, subscriber, active_subscription
+):
+    effective_at = datetime(2026, 10, 5, 15, 32, tzinfo=UTC)
+    resumed_at = effective_at + timedelta(days=1)
+    entitlement_end = datetime(2026, 10, 2, tzinfo=UTC)
+    original_anchor = datetime(2026, 10, 11, tzinfo=UTC)
+    active_subscription.billing_mode = BillingMode.prepaid
+    active_subscription.next_billing_at = original_anchor
+    entitlement = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=active_subscription.id,
+        starts_at=datetime(2026, 9, 2, tzinfo=UTC),
+        ends_at=entitlement_end,
+        amount_funded=active_subscription.unit_price or 0,
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+        metadata_={"source": "test_funded_prepaid_renewal"},
+    )
+    extension = ServiceExtension(
+        reason="Cabinet disconnection compensation",
+        window_start=datetime(2026, 9, 12, tzinfo=UTC),
+        window_end=datetime(2026, 9, 23, tzinfo=UTC),
+        days=9,
+        scope_type=ServiceExtensionScope.subscribers,
+        scope_subscriber_ids=[str(subscriber.id)],
+        status=ServiceExtensionStatus.applied,
+        applied_at=datetime(2026, 9, 23, 16, 5, tzinfo=UTC),
+    )
+    db_session.add_all((entitlement, extension))
+    db_session.flush()
+    db_session.add(
+        ServiceExtensionEntry(
+            extension_id=extension.id,
+            subscription_id=active_subscription.id,
+            subscriber_id=subscriber.id,
+            previous_next_billing_at=entitlement_end,
+            grant_starts_at=entitlement_end,
+            grant_ends_at=original_anchor,
+            anchor_basis=ServiceExtensionAnchorBasis.existing_billing_anchor,
+            new_next_billing_at=original_anchor,
+        )
+    )
+    db_session.commit()
+
+    pause_context = _context(reason="confirmed resolution SLA breach")
+    paused = account_lifecycle.pause_subscription_for_cause(
+        db_session,
+        account_lifecycle.PauseSubscriptionCauseCommand(
+            subscription_id=active_subscription.id,
+            reason=SubscriptionPauseReason.ticket_resolution_sla_breach,
+            source_type=SubscriptionPauseSource.automation_workflow,
+            source_id=f"test-source:{pause_context.command_id}",
+            selection_policy="unique_active_subscription",
+            resume_policy=(
+                SubscriptionPauseResumePolicy.manual_after_ticket_resolution
+            ),
+            billing_policy=(
+                SubscriptionPauseBillingPolicy.extend_by_effective_pause_duration
+            ),
+            requested_at=effective_at,
+            effective_at=effective_at,
+            actor=pause_context.actor,
+            idempotency_key=pause_context.idempotency_key or "",
+            context=pause_context,
+        ),
+    )
+
+    resume_context = _context(reason="linked ticket resolved")
+    outcome = account_lifecycle.release_pause_cause_and_resume_subscription(
+        db_session,
+        account_lifecycle.ResumePausedSubscriptionCauseCommand(
+            cause_id=paused.cause_id,
+            preview_fingerprint="extension-backed-prepaid-preview",
+            resumed_at=resumed_at,
+            actor=resume_context.actor,
+            reason="linked ticket resolved and extension coverage reviewed",
+            context=resume_context,
+        ),
+    )
+
+    compensation = db_session.scalar(
+        select(ServiceEntitlement).where(
+            ServiceEntitlement.source_pause_episode_id == paused.episode_id
+        )
+    )
+    assert outcome.resumed
+    assert compensation is not None
+    assert _as_utc(compensation.starts_at) == original_anchor
+    assert _as_utc(compensation.ends_at) == original_anchor + timedelta(days=1)
+    assert compensation.currency == "NGN"
+    assert len((compensation.metadata_ or {})["coverage_fingerprint"]) == 64
 
 
 def test_pause_replay_reuses_the_original_cause(db_session, active_subscription):

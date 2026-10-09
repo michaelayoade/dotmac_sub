@@ -215,6 +215,65 @@ Sub-native account has no Splynx history component and uses complete canonical
 Sub facts from inception. A mismatch or stale adjudication blocks the whole
 artifact.
 
+## Activation guard: a legacy account about to enter the quarantine
+
+Prepaid activation is refused for an account that existed when
+customer-subledger authority activated and has neither an active reviewed
+baseline nor a subledger opening
+(`financial.prepaid_activation_funding_guard`, see
+`docs/FINANCIAL_ACCESS_ENFORCEMENT.md` "Prepaid activation funding admission").
+Creating a prepaid subscription (pending or active), activating a pending one,
+moving a subscription or account to prepaid, and bulk provisioning all fail
+with `...funding_quarantined` and a message naming the runbook. The admin
+customer and subscription pages show a **Prepaid funding quarantine** banner
+with the same reason and runbook.
+
+### Clear the quarantine (the normal path)
+
+Read the reason on the banner or refusal (example: account 25448, created
+2025-03-03 and given its first prepaid subscription on 2026-10-07):
+
+| Reason | Do this |
+| --- | --- |
+| `migrated_opening_missing` (Splynx-linked) | `docs/runbooks/REVIEWED_MIGRATED_PREPAID_OPENING_REPAIR.md`: no-write preview, operator and Finance approval, capture the reviewed opening at the original cutoff. |
+| `carried_source_identity_unresolved` (pre-handoff, no Splynx identity) | Section 2 above: `review_carried_source_identity` preview and dual review, then a bounded export/materialization with a reviewed scope file and `MATERIALIZE_REVIEWED_PREPAID_SCOPE`. Never invent a Splynx ID. |
+| `reviewed_native_opening_missing` (adjudication recorded) | Rerun the bounded export/materialization for that account from a fresh restore. |
+| `native_after_handoff_opening_missing` | `docs/runbooks/NATIVE_PREPAID_OPENING_REPAIR.md` (or `CUSTOMER_SUBLEDGER_CUTOVER.md` §3a). |
+| `source_identity_unclassifiable` | Stale or conflicting adjudication/identity evidence: re-review the carried-source identity first. |
+
+When the baseline or opening exists the banner disappears, activation is
+admitted without an override, and the account leaves
+`billing_prepaid_funding_quarantined_accounts`. Revoke any override left on
+the account (banner → **Revoke override**, reason required) so the record shows
+it is no longer relied on.
+
+### Override (only when service must start before the review completes)
+
+A user holding `billing:prepaid_funding:activation_override` (seeded for
+`admin` only; grant it to another role deliberately) opens the customer page,
+expands **Record activation override** in the banner, gives a reason of at
+least ten characters (ticket, customer impact, who is doing the review) and
+confirms. This writes one `prepaid_activation_funding_overrides` row with the
+real staff user, an audit event, and an owner event; every later activation it
+admits writes `prepaid_activation_admitted_by_funding_override`. Then retry the
+original create/activation.
+
+The override is not funding. The account stays excluded from prepaid
+warning/suspension/restoration, stays in the quarantine count, and
+`SubPrepaidFundingQuarantineGrowing` still fires for it. Start the clearing
+path above in the same ticket; the override does not expire on its own.
+
+Audit trail:
+
+```sql
+SELECT action, actor_id, occurred_at, metadata
+  FROM audit_events
+ WHERE entity_type = 'subscriber'
+   AND entity_id = 'ACCOUNT_UUID'
+   AND action LIKE 'prepaid_activation%'
+ ORDER BY occurred_at;
+```
+
 ## Monitoring
 
 `billing_prepaid_funding_quarantined_accounts` is the retained compatibility
@@ -224,3 +283,10 @@ not a permitted steady state. While legacy review stock remains, track its
 absolute level as remediation work and alert any 24-hour increase separately as
 the prevention signal. A constant legacy cohort must not create a permanent
 warning that operators learn to ignore.
+
+With the activation guard deployed, an increase has three explanations, in
+order of likelihood: a recorded activation override (check the
+`prepaid_activation_admitted_by_funding_override` audit rows), an existing
+disabled prepaid service resumed or an account re-approved for billing (paths
+the guard does not cover), or a guard regression. Each is cleared by capturing
+the account's opening as above.

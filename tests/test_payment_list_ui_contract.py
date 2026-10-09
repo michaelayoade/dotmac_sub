@@ -25,3 +25,25 @@ def test_payment_export_route_delegates_complete_csv_scope_to_list_owner():
     assert "web_billing_payments_service.render_payments_csv" not in calls
     assert "10000" not in source
     assert "csv.writer" not in calls
+
+
+def test_payment_routes_normalize_empty_html_date_filters():
+    route_path = PROJECT_ROOT / "app/web/admin/billing_payments.py"
+    tree = ast.parse(route_path.read_text(encoding="utf-8"))
+    routes = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name
+        in {"payments_list", "payments_export_csv", "payments_unallocated"}
+    }
+
+    assert set(routes) == {
+        "payments_list",
+        "payments_export_csv",
+        "payments_unallocated",
+    }
+    for route in routes.values():
+        args = {arg.arg: ast.unparse(arg.annotation) for arg in route.args.args}
+        assert args["start_date"] == "OptionalDateQuery"
+        assert args["end_date"] == "OptionalDateQuery"

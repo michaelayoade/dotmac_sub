@@ -24,6 +24,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,7 @@ from app.services import (
     payment_intent_management,
     payment_proofs,
     subscriber_party_binding_repair,
+    web_prepaid_activation_funding,
 )
 from app.services import customer_network_path as customer_network_path_service
 from app.services import network_monitoring as network_monitoring_service
@@ -75,6 +77,9 @@ from app.services.customer_timeline import CustomerTimelineItem
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.prepaid_activation_funding_guard import (
+    OVERRIDE_PERMISSION as PREPAID_ACTIVATION_OVERRIDE_PERMISSION,
+)
 from app.services.queue_adapter import enqueue_task
 from app.services.subscription_change_execution import (
     RemoteProvisionActionCommand,
@@ -92,6 +97,9 @@ register_customer_portal_filters(templates)
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
 
 _NOTIFICATION_QUEUE_TASK = "app.tasks.notifications.deliver_notification_queue"
+_BULK_MESSAGE_MATERIALIZE_TASK = (
+    "app.tasks.notifications.materialize_customer_bulk_message"
+)
 
 
 def _reseller_form_context(
@@ -241,11 +249,123 @@ def _subscription_action_permission_context(
         ),
         "can_activate_subscriptions": can_write_catalog
         or (bool(auth) and has_permission(auth, db, "subscription:activate")),
+        "can_test_connection": bool(auth)
+        and auth.get("principal_type") == "system_user"
+        and has_permission(auth, db, "subscription:test_connection"),
         "can_suspend_subscriptions": can_write_catalog
         or (bool(auth) and has_permission(auth, db, "subscription:suspend")),
         "can_reconcile_service_changes": bool(auth)
         and has_permission(auth, db, "provisioning:service_change_reconcile"),
     }
+
+
+@router.get(
+    "/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:test_connection"))],
+)
+def customer_test_connection_form(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: UUID,
+    subscription_id: UUID,
+    db: Session = Depends(get_db),
+):
+    from app.services.test_connection import (
+        TEST_CONNECTION_FORM,
+        TestConnectionPreviewQuery,
+        preview_test_connection,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    try:
+        preview = preview_test_connection(
+            db,
+            query=TestConnectionPreviewQuery(
+                subscriber_id=customer_id,
+                subscription_id=subscription_id,
+            ),
+        )
+    except DomainError as exc:
+        raise HTTPException(
+            status_code=404 if exc.code.endswith("subscription_not_found") else 400,
+            detail=exc.message,
+        ) from exc
+    return templates.TemplateResponse(
+        "admin/customers/test_connection.html",
+        {
+            "request": request,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "customers",
+            "active_menu": "customers",
+            "preview": preview,
+            "form_state": TEST_CONNECTION_FORM.state(list(preview.prerequisites)),
+            "command_id": str(uuid4()),
+            "customer_url": f"/admin/customers/{customer_type}/{customer_id}",
+        },
+    )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:test_connection"))],
+)
+def customer_test_connection_activate(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: UUID,
+    subscription_id: UUID,
+    command_id: UUID = Form(...),
+):
+    from app.services.test_connection import (
+        PERMISSION,
+        ActivateTestConnectionCommand,
+        activate_test_connection,
+    )
+
+    auth = getattr(request.state, "auth", {})
+    if auth.get("principal_type") != "system_user" or not auth.get("principal_id"):
+        raise HTTPException(
+            status_code=403, detail="Test Connection requires an authorized staff user."
+        )
+    actor_id = UUID(str(auth["principal_id"]))
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=str(actor_id),
+        scope=PERMISSION,
+        reason="Customer subscription connectivity troubleshooting",
+        idempotency_key=f"test-connection:{command_id}",
+    )
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    try:
+        with db_session_adapter.owner_command_session() as db:
+            outcome = activate_test_connection(
+                db,
+                command=ActivateTestConnectionCommand(
+                    context=context,
+                    subscriber_id=customer_id,
+                    subscription_id=subscription_id,
+                    actor_id=actor_id,
+                ),
+            )
+    except DomainError as exc:
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Test Connection not activated",
+            message=exc.message,
+        )
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=True,
+        title="Test Connection requested",
+        message=f"{outcome.duration_seconds // 3600} hour(s) granted. Expires {outcome.expires_at.strftime('%d %b %Y %H:%M UTC')}. Check the subscription for delivery status.",
+    )
 
 
 def _workflow_changed_count(result: Mapping[str, Any]) -> int:
@@ -500,6 +620,7 @@ def customers_list(
     pop_site_id: str | None = None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    region_id: str | None = None,
     sort: Literal["created_at", "name", "status"] = Query("created_at"),
     direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     page: int = Query(1, ge=1),
@@ -526,6 +647,7 @@ def customers_list(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             sort_by=sort,
             sort_dir=direction,
             page=page,
@@ -746,6 +868,7 @@ async def customer_create(
     postal_code: str | None = Form(None),
     country_code: str | None = Form(None),
     pop_site_id: str | None = Form(None),
+    connection_type: str | None = Form(None),
     status: str | None = Form(None),
     is_active: str | None = Form(None),
     marketing_opt_in: str | None = Form(None),
@@ -804,6 +927,7 @@ async def customer_create(
             "postal_code": postal_code,
             "country_code": country_code,
             "pop_site_id": pop_site_id,
+            "connection_type": connection_type,
             "status": status,
             "is_active": is_active,
             "marketing_opt_in": marketing_opt_in,
@@ -1052,6 +1176,17 @@ def person_detail(
             "can_read_service_extensions": show_service_extensions,
             "can_create_service_extension": can_create_service_extension,
             "party_binding_repair": party_binding_repair,
+            "prepaid_funding_quarantine": (
+                web_prepaid_activation_funding.prepaid_funding_quarantine_banner(
+                    db,
+                    customer.id,
+                    can_override=bool(auth)
+                    and has_permission(
+                        auth, db, PREPAID_ACTIVATION_OVERRIDE_PERMISSION
+                    ),
+                )
+            ),
+            "prepaid_funding_return_to": detail_config["detailUrl"],
             **custom_field_context,
             "sidebar_stats": sidebar_stats,
         },
@@ -2202,6 +2337,7 @@ def person_update(
     region: str | None = Form(None),
     postal_code: str | None = Form(None),
     country_code: str | None = Form(None),
+    connection_type: str | None = Form(None),
     marketing_opt_in: str | None = Form(None),
     notes: str | None = Form(None),
     account_start_date: str | None = Form(None),
@@ -2259,6 +2395,7 @@ def person_update(
             region=region,
             postal_code=postal_code,
             country_code=country_code,
+            connection_type=connection_type,
             marketing_opt_in=marketing_opt_in,
             notes=notes,
             account_start_date=account_start_date,
@@ -2346,6 +2483,7 @@ def business_update(
     tax_id: str | None = Form(None),
     domain: str | None = Form(None),
     website: str | None = Form(None),
+    connection_type: str | None = Form(None),
     business_notes: str | None = Form(None),
     business_account_start_date: str | None = Form(None),
     billing_enabled_override: str | None = Form(None),
@@ -2372,6 +2510,7 @@ def business_update(
             tax_id=tax_id,
             domain=domain,
             website=website,
+            connection_type=connection_type,
             org_notes=business_notes,
             org_account_start_date=business_account_start_date,
             billing_enabled_override=billing_enabled_override,
@@ -3293,20 +3432,118 @@ def bulk_send_customer_message(
 ):
     """Queue a bulk notification for selected or filtered customers."""
     try:
-        result = web_customer_actions_service.queue_bulk_message_from_payload(
-            db=db, payload=data
+        if bool(data.get("preview_only")):
+            return web_customer_actions_service.queue_bulk_message_from_payload(
+                db=db,
+                payload=data,
+            )
+
+        from app.services import customer_bulk_messages
+        from app.services.customer_bulk_message_contracts import BulkMessageSpec
+
+        actor_id = UUID(_get_actor_id(request) or "")
+        request_id = UUID(str(data.get("request_id") or ""))
+        spec = BulkMessageSpec.model_validate(
+            {key: value for key, value in data.items() if key != "request_id"}
         )
-        if result.get("preview") is True:
-            return result
-        return _kick_notification_delivery(result)
+        db_session_adapter.release_read_transaction(db)
+        receipt = customer_bulk_messages.accept(
+            db=db,
+            command=customer_bulk_messages.AcceptBulkMessageCommand(
+                context=CommandContext.system(
+                    actor=str(actor_id),
+                    scope=str(request_id),
+                    reason="confirmed customer bulk message",
+                    command_id=request_id,
+                    idempotency_key=str(request_id),
+                ),
+                request_id=request_id,
+                actor_id=actor_id,
+                spec=spec,
+            ),
+        )
+        # The receipt is durable before this best-effort wakeup. The permanent
+        # outbox drain recovers a broker outage without another operator send.
+        try:
+            dispatch = enqueue_task(
+                _BULK_MESSAGE_MATERIALIZE_TASK,
+                args=(str(receipt.request_id),),
+                queue="celery",
+                correlation_id=str(request_id),
+                source="admin_customers_bulk_send",
+                actor_id=str(actor_id),
+            )
+            if not dispatch.queued:
+                logger.warning(
+                    "customer_bulk_message_wakeup_deferred",
+                    extra={"request_id": str(request_id)},
+                )
+        except Exception:
+            logger.exception(
+                "customer_bulk_message_wakeup_deferred",
+                extra={"request_id": str(request_id)},
+            )
+        result = customer_bulk_messages.status(
+            db=db,
+            query=customer_bulk_messages.BulkMessageStatusQuery(
+                request_id=request_id,
+                actor_id=actor_id,
+            ),
+        )
+        return JSONResponse(status_code=202, content=result.model_dump(mode="json"))
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid bulk message request or send reference."
+        ) from exc
+    except DomainError as exc:
+        code = exc.code.rsplit(".", 1)[-1]
+        status_code = (
+            404
+            if code == "not_found"
+            else 409
+            if code in {"idempotency_conflict", "impact_changed"}
+            else 400
+        )
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Bulk customer message queue failed")
         raise HTTPException(
             status_code=500,
-            detail="Bulk message queue failed. Please try again.",
+            detail="Could not confirm the bulk send status. Check its send reference before sending again.",
         ) from e
+
+
+@router.get(
+    "/bulk/send-message/{request_id}",
+    dependencies=[
+        Depends(
+            require_permission(
+                web_customer_bulk_actions_service.CUSTOMER_MESSAGE_SEND_PERMISSION
+            )
+        )
+    ],
+)
+def customer_bulk_message_status(
+    request: Request, request_id: UUID, db: Session = Depends(get_db)
+):
+    from app.services import customer_bulk_messages
+
+    actor_id = _get_actor_id(request)
+    if not actor_id:
+        raise HTTPException(status_code=401, detail="Sign in to check this send.")
+    try:
+        result = customer_bulk_messages.status(
+            db=db,
+            query=customer_bulk_messages.BulkMessageStatusQuery(
+                request_id=request_id,
+                actor_id=UUID(actor_id),
+            ),
+        )
+        return JSONResponse(content=result.model_dump(mode="json"))
+    except DomainError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
 
 
 @router.get(
@@ -3360,6 +3597,7 @@ def export_customers(
     pop_site_id: str | None = None,
     infrastructure_type: str | None = None,
     infrastructure_id: str | None = None,
+    region_id: str | None = None,
     sort: Literal["created_at", "name", "status"] = Query("created_at"),
     direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     db: Session = Depends(get_db),
@@ -3376,6 +3614,7 @@ def export_customers(
             pop_site_id=pop_site_id,
             infrastructure_type=infrastructure_type,
             infrastructure_id=infrastructure_id,
+            region_id=region_id,
             sort_by=sort,
             sort_dir=direction,
         )

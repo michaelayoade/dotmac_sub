@@ -1,7 +1,7 @@
 """Service for managing subscription change requests."""
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import cast
 
 from fastapi import HTTPException
@@ -58,6 +58,24 @@ class SubscriptionChangeRequests(ListResponseMixin):
         subscription = db.get(Subscription, coerce_uuid(subscription_id))
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
+
+        from app.services.purchased_service_coverage import (
+            PurchasedCoverageQuery,
+            resolve_purchased_coverage,
+        )
+
+        purchased = resolve_purchased_coverage(
+            db, PurchasedCoverageQuery(subscription.id)
+        )
+        if purchased.has_unsettled_purchase or (
+            purchased.protected_until is not None
+            and datetime.combine(effective_date, time.min, tzinfo=UTC)
+            < purchased.protected_until
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Resolve the purchase or schedule the plan change after paid coverage.",
+            )
 
         if not subscription.offer_id:
             raise HTTPException(
@@ -184,6 +202,24 @@ class SubscriptionChangeRequests(ListResponseMixin):
         subscription = db.get(Subscription, coerce_uuid(subscription_id))
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
+
+        from app.services.purchased_service_coverage import (
+            PurchasedCoverageQuery,
+            resolve_purchased_coverage,
+        )
+
+        purchased = resolve_purchased_coverage(
+            db, PurchasedCoverageQuery(subscription.id)
+        )
+        if purchased.has_unsettled_purchase or (
+            purchased.protected_until is not None
+            and datetime.combine(effective_date, time.min, tzinfo=UTC)
+            < purchased.protected_until
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Resolve the purchase or schedule the plan change after paid coverage.",
+            )
 
         if not subscription.offer_id:
             raise HTTPException(

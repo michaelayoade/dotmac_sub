@@ -20,9 +20,12 @@ DOB, gender, and NIN. The policy stores field keys rather than browser logic. It
 
 `communications.team_inbox_customer_completion` owns the resolution
 `ActionReadiness` verdict and coordinates profile completion from Inbox into the
-canonical Customer account and Party owners. Final AI classification metadata
+canonical Customer account and Party owners. Captured sales-candidate event metadata
 is also an authoritative-input projection for detecting a missing Sales
 consequence; it never substitutes for the required active Lead link.
+An emitted `ai_lead_candidate_event_id` requires the same Lead-link check during
+clarification and fallback. Legacy final qualifying classifications retain their
+existing check. Later engine routing cannot overwrite the captured sales evidence.
 
 `customer.canonical_profile_patch` is the typed, flush-only Customer participant
 used by that coordinator. It locks and updates the existing Subscriber and

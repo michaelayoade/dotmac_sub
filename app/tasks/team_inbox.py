@@ -9,17 +9,14 @@ from uuid import UUID
 from sqlalchemy.exc import OperationalError
 
 from app.celery_app import celery_app
-from app.models.domain_settings import SettingDomain
 from app.services import (
     ai_conversation_intake,
     team_inbox_assignment,
     team_inbox_maintenance,
     team_inbox_queue_notifications,
-    team_inbox_reply_reminders,
 )
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
-from app.services.settings_spec import resolve_integer
 
 logger = logging.getLogger(__name__)
 
@@ -102,40 +99,6 @@ def repair_whatsapp_locations(
             extra={"event": "team_inbox_whatsapp_location_repair", **payload},
         )
         return payload
-
-
-@celery_app.task(name="app.tasks.team_inbox.send_reply_reminders")
-def send_reply_reminders(*, limit: int = 200) -> dict[str, int]:
-    with db_session_adapter.session() as session:
-        # Resolve decision inputs before entering the owner command. A settings
-        # miss reads the database, which opens a read transaction on this
-        # session, and the owner command requires a transaction-free session at
-        # entry. Release that read transaction before handing the session over.
-        delay_minutes = resolve_integer(
-            session, SettingDomain.comms, "inbox_reply_reminder_delay_minutes"
-        )
-        repeat_minutes = resolve_integer(
-            session, SettingDomain.comms, "inbox_reply_reminder_repeat_minutes"
-        )
-        db_session_adapter.release_read_transaction(session)
-        result = team_inbox_reply_reminders.sweep_reply_reminders(
-            session,
-            team_inbox_reply_reminders.ReplyReminderSweepCommand(
-                context=CommandContext.system(
-                    actor="task:team-inbox-reply-reminders",
-                    scope="team-inbox:reply-reminders",
-                    reason="notify assigned agents about waiting inbound replies",
-                ),
-                delay_minutes=delay_minutes,
-                repeat_minutes=repeat_minutes,
-                limit=limit,
-            ),
-        )
-        return {
-            "scheduled": result.scheduled,
-            "sent": result.sent,
-            "resolved": result.resolved,
-        }
 
 
 @celery_app.task(name="app.tasks.team_inbox.promote_queued_conversations")

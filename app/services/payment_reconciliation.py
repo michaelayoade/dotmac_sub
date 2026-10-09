@@ -146,6 +146,7 @@ class TopupReconciliationDisposition(str, Enum):
     failed = "failed"
     abandoned = "abandoned"
     unchanged = "unchanged"
+    review_required = "review_required"
 
 
 class PaystackOutsideWindowRecoveryDisposition(str, Enum):
@@ -266,6 +267,7 @@ class TopupReconciliationSummary:
     outside_window: int = 0
     saturated: bool = False
     partial: bool = False
+    review_required: int = 0
 
     def as_dict(self) -> dict[str, int | bool]:
         """Serialize the typed result at the Celery transport boundary."""
@@ -287,6 +289,7 @@ class TopupReconciliationSummary:
             "outside_window": self.outside_window,
             "saturated": self.saturated,
             "partial": self.partial,
+            "review_required": self.review_required,
         }
 
 
@@ -667,6 +670,39 @@ def _stage_verified_settlement_for_intent(
     _validate_candidate(intent, command.candidate)
     provider = _active_provider_for_intent(db, intent)
     external_id, amount, provider_fee, currency = _normalized_transaction(command)
+    if intent.purpose == "prepaid_period_purchase":
+        from app.models.service_period_purchase import PrepaidPeriodPurchaseStatus
+        from app.services.prepaid_period_purchases import (
+            SettleVerifiedPrepaidPeriodPurchaseCommand,
+            stage_verified_prepaid_period_purchase,
+        )
+
+        result = stage_verified_prepaid_period_purchase(
+            db,
+            SettleVerifiedPrepaidPeriodPurchaseCommand(
+                intent_id=intent.id,
+                provider_id=provider.id,
+                external_transaction_id=external_id,
+                amount=amount,
+                provider_fee=provider_fee,
+                currency=currency,
+                effective_at=command.observed_at,
+                provider_paid_at=command.transaction.paid_at,
+                completion_source=TopupIntentCompletionSource.gateway_reconciliation,
+            ),
+            context=context,
+        )
+        return ReconciledTopupResult(
+            intent_id=intent.id,
+            payment_id=result.payment_id,
+            disposition=(
+                TopupReconciliationDisposition.review_required
+                if result.status is PrepaidPeriodPurchaseStatus.review_required
+                else TopupReconciliationDisposition.linked
+                if result.replayed
+                else TopupReconciliationDisposition.recovered
+            ),
+        )
     if currency != intent.currency.strip().upper():
         raise _error(
             "currency_mismatch",
@@ -2123,6 +2159,7 @@ def reconcile_pending_topups(
 
     checked = checked_pending = checked_terminal = 0
     recovered = linked = expired = failed = abandoned = unchanged = errors = 0
+    review_required = 0
     previous_attempted_at: datetime | None = None
     for candidate in candidates:
         try:
@@ -2237,6 +2274,8 @@ def reconcile_pending_topups(
             abandoned += 1
         elif result.disposition is TopupReconciliationDisposition.unchanged:
             unchanged += 1
+        elif result.disposition is TopupReconciliationDisposition.review_required:
+            review_required += 1
 
     backlog = topup_reconciliation_backlog(db, observed_at=observed_at)
     batch_size = _resolve_reconciliation_int_setting(
@@ -2265,6 +2304,7 @@ def reconcile_pending_topups(
         outside_window=backlog.outside_window,
         saturated=saturated,
         partial=partial,
+        review_required=review_required,
     )
     logger.info(
         "Top-up reconciliation completed: selected=%d checked=%d checked_pending=%d "

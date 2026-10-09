@@ -68,7 +68,7 @@ approval against the gates below.
 | message identity, direction, message key, subject, body, transport refs, author, occurrence | `dotmac-inbox` | `mod_inbox.messages` |
 | per-operator read cursor | `dotmac-inbox` | `mod_inbox.conversation_read_states` |
 | subscriber link, primary team link, priority, mute, active flag, metadata, continuation link, message addressing and notification link | Sub | `public.inbox_*` |
-| leads, tickets, field jobs, AI intake, participants, contact links, labels, macros, templates, media, comments, saved filters, reply reminders, campaigns, provider observations, delivery receipts | Sub | their existing tables |
+| leads, tickets, field jobs, AI intake, participants, contact links, labels, macros, templates, media, comments, saved filters, legacy reply-reminder records, campaigns, provider observations, delivery receipts | Sub | their existing tables |
 | queues, routing, presence, assignment, rotation | **undecided — out of scope**; `dotmac-inbox-operations` is a separate decision | — |
 | provider transport, delivery, receipts | Integrator | unchanged |
 

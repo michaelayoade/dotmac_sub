@@ -104,6 +104,12 @@ class HighImpactEditor:
 
 HIGH_IMPACT_EDITORS: tuple[HighImpactEditor, ...] = (
     HighImpactEditor(
+        key="admin.subscription_test_connection",
+        surface="admin customer subscription Test Connection",
+        status="contracted",
+        contract_key="admin.subscription_test_connection",
+    ),
+    HighImpactEditor(
         key="admin.billing_mode_transition",
         surface="/admin/billing/accounts/{account_id}/billing-mode",
         status="contracted",

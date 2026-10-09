@@ -408,12 +408,15 @@
         ).join('');
         const canReview = governance.can_review && proposal.status === 'pending'
             && String(proposal.requested_by_actor_id || '') !== String(governance.actor_id || '');
+        const isCurrentActorProposer = proposal.status === 'pending'
+            && String(proposal.requested_by_actor_id || '') === String(governance.actor_id || '');
         return `<article class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900" data-proposal-id="${escapeHtml(proposal.id)}">
             <div class="flex flex-wrap items-center justify-between gap-2"><strong>${escapeHtml(humanize(proposal.operation))} ${escapeHtml(humanize(proposal.asset_type))}</strong><span class="rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-700">${escapeHtml(humanize(proposal.status))}</span></div>
             <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">${escapeHtml(proposal.request_reason || '')}</p>
             <div class="mt-2 overflow-x-auto"><table class="w-full text-xs"><thead><tr><th class="text-left">Field</th><th class="text-left">Before</th><th class="text-left">After</th></tr></thead><tbody>${rows.map((row) => `<tr><td class="py-1 pr-2 font-medium">${escapeHtml(humanize(row.field))}</td><td class="py-1 pr-2">${escapeHtml(proposalValue(row.before))}</td><td class="py-1">${escapeHtml(proposalValue(row.after))}</td></tr>`).join('') || '<tr><td colspan="3" class="py-2 text-slate-500">No changed values available.</td></tr>'}</tbody></table></div>
             ${proposal.review_notes ? `<p class="mt-2 text-xs"><strong>Reviewer comments:</strong> ${escapeHtml(proposal.review_notes)}</p>` : ''}
             <details class="mt-2 text-xs"><summary class="cursor-pointer font-medium">Audit history (${(proposal.audit_history || []).length})</summary><ol class="mt-1 space-y-1">${history || '<li>No audit events are available.</li>'}</ol></details>
+            ${isCurrentActorProposer ? '<p class="mt-3 text-xs text-amber-700 dark:text-amber-300">You submitted this proposal. Another user with network:fiber:review must review it.</p>' : ''}
             ${canReview ? `<div class="mt-3"><label class="block text-xs font-medium">Reviewer comments<textarea data-review-notes rows="2" required class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"></textarea></label><div class="mt-2 flex gap-2"><button type="button" data-review-action="approve" class="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">Approve</button><button type="button" data-review-action="reject" class="rounded bg-red-600 px-3 py-1.5 text-xs font-semibold text-white">Reject</button></div></div>` : ''}
         </article>`;
     }
@@ -426,10 +429,12 @@
         const panel = document.createElement('section');
         panel.id = 'network-map-v2-governance';
         panel.className = 'mt-4 rounded-xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-800 dark:bg-violet-950/30';
-        const permissionMessage = governance.can_propose
-            ? 'Changes remain pending until an independent authorized reviewer approves them.'
-            : 'You can inspect proposal evidence but cannot submit asset changes.';
-        panel.innerHTML = `<div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="font-semibold text-slate-900 dark:text-white">Governed asset changes</h2><p class="text-xs text-slate-600 dark:text-slate-300">${escapeHtml(permissionMessage)}</p></div><label class="flex items-center gap-2 text-xs"><input id="v2-proposal-preview-toggle" type="checkbox" checked> Proposal previews (${Number(governance.total || 0)})</label></div>
+        const permissionMessage = governance.can_review
+            ? 'You can review pending proposals from other users. Proposers cannot approve or reject their own changes.'
+            : governance.can_propose
+                ? 'You can submit changes. An independent user with network:fiber:review must approve or reject each proposal.'
+                : 'You can inspect proposal evidence but cannot submit or review asset changes. Review requires network:fiber:review.';
+        panel.innerHTML = `<div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="font-semibold text-slate-900 dark:text-white">Governed asset changes</h2><p class="text-xs text-slate-600 dark:text-slate-300">${escapeHtml(permissionMessage)}</p><a class="mt-2 inline-block text-xs font-medium text-violet-700 underline dark:text-violet-300" href="/admin/network/fiber-change-requests">Open the Fiber Change Requests review queue</a></div><label class="flex items-center gap-2 text-xs"><input id="v2-proposal-preview-toggle" type="checkbox" checked> Proposal previews (${Number(governance.total || 0)})</label></div>
             <p id="v2-governance-message" class="mt-3 rounded bg-white/70 p-2 text-xs text-slate-600 dark:bg-slate-900/50 dark:text-slate-300">${escapeHtml(governance.unavailable_message || '')}</p>
             ${governance.can_propose ? `<form id="v2-proposal-form" class="mt-3 grid gap-3 rounded-lg border border-violet-200 bg-white p-3 dark:border-violet-800 dark:bg-slate-900 sm:grid-cols-2">
                 <label class="text-xs font-medium">Operation<select name="operation" class="mt-1 w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-800"><option value="create">Create</option><option value="edit">Edit</option><option value="move">Move</option></select></label>
@@ -635,7 +640,7 @@
         panel.className = 'rounded-xl border border-cyan-200 bg-cyan-50 p-4 dark:border-cyan-800 dark:bg-cyan-950/30';
         panel.innerHTML = `
             <div class="flex flex-wrap items-center justify-between gap-3">
-                <div><h2 class="font-semibold text-slate-900 dark:text-white">Network Map V2</h2><p class="text-xs text-slate-600 dark:text-slate-300">Read-only parity preview. Lines are rendered only from stored route geometry.</p></div>
+                <div><h2 class="font-semibold text-slate-900 dark:text-white">Network Map V2</h2><p class="text-xs text-slate-600 dark:text-slate-300">Canonical map data stays unchanged until an independent reviewer approves a governed proposal. Lines are rendered only from stored route geometry.</p></div>
                 <div class="flex flex-wrap gap-2">
                     <select id="v2-layer-preset" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"><option value="all">All layers</option><option value="osp">OSP</option><option value="backbone">Backbone</option><option value="edge">Customer edge</option><option value="sites">Sites</option><option value="clear">Clear</option></select>
                     <button id="v2-measure" type="button" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium dark:border-slate-600 dark:bg-slate-800 dark:text-white">Measure distance</button>

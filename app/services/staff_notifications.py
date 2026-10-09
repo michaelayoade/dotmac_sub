@@ -80,6 +80,7 @@ class StaffDirectEventType(StrEnum):
     """Bounded staff-only events that create a personal notification."""
 
     team_inbox_private_note_mention = "team_inbox.private_note_mention"
+    test_connection_finance_review = "billing.test_connection.finance_review"
 
 
 class StaffNotificationError(DomainError):
@@ -220,6 +221,11 @@ def stage_staff_direct_notification(
             code="communications.staff_notifications.invalid_recipient",
             message="Active staff notification recipient not found.",
         )
+    category = (
+        "billing"
+        if command.event_type is StaffDirectEventType.test_connection_finance_review
+        else "support"
+    )
 
     push_dedupe_key = _direct_notification_dedupe_key(command, NotificationChannel.push)
     push_notification = (
@@ -239,7 +245,7 @@ def stage_staff_direct_notification(
             body=command.body,
             delivered=True,
             event_type=command.event_type.value,
-            category="support",
+            category=category,
             audience_type="system_user",
             audience_id=user.id,
             metadata={
@@ -289,10 +295,13 @@ def stage_staff_direct_notification(
                 recipient=user.email,
                 subject=command.subject,
                 body=(
-                    f"{command.body}\n\nOpen the note: {_absolute_staff_url(open_url)}"
+                    f"{command.body}\n\nOpen the review: {_absolute_staff_url(open_url)}"
+                    if command.event_type
+                    is StaffDirectEventType.test_connection_finance_review
+                    else f"{command.body}\n\nOpen the note: {_absolute_staff_url(open_url)}"
                 ),
                 event_type=command.event_type.value,
-                category="support",
+                category=category,
                 audience_type="system_user",
                 audience_id=user.id,
                 metadata={

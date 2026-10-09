@@ -27,18 +27,85 @@
             {"label": "Churn Analysis"}
         ]
     ) %}
-        <form method="GET" action="/admin/reports/churn/export" class="flex items-center gap-2">
-            <label for="days" class="sr-only">Export period</label>
-            <select id="days" name="days" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="30">Last 30 Days</option>
-                <option value="90">Last 90 Days</option>
-                <option value="365">Last Year</option>
-            </select>
-            <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                Export
-            </button>
-        </form>
+        <div class="w-full min-w-0">
+            <form id="churn-filter-form" method="GET" action="/admin/reports/churn" class="grid min-w-0 grid-cols-1 items-end gap-3 sm:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-6">
+                <div class="min-w-0">
+                    <label for="churn-period" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Date range</label>
+                    <select id="churn-period" name="period" class="block w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="1m" {% if period_filter == "1m" %}selected{% endif %}>Last 1 month</option>
+                        <option value="3m" {% if period_filter == "3m" %}selected{% endif %}>Last 3 months</option>
+                        <option value="custom" {% if period_filter == "custom" %}selected{% endif %}>Custom range</option>
+                    </select>
+                </div>
+                <div class="min-w-0">
+                    <label for="churn-status" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Event type</label>
+                    <select id="churn-status" name="status" class="block w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="" {% if not status_filter %}selected{% endif %}>All churn events</option>
+                        <option value="canceled" {% if status_filter == "canceled" %}selected{% endif %}>Cancellations</option>
+                        <option value="suspended" {% if status_filter == "suspended" %}selected{% endif %}>Suspensions</option>
+                    </select>
+                </div>
+                <div id="churn-custom-range" class="grid min-w-0 grid-cols-2 gap-2 sm:col-span-2 xl:col-span-2 {% if period_filter != "custom" %}hidden{% endif %}">
+                    <div>
+                        <label for="churn-date-from" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">From</label>
+                        <input id="churn-date-from" name="date_from" type="date" value="{{ date_from if period_filter == "custom" else "" }}" aria-label="From date" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="churn-date-to" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">To</label>
+                        <input id="churn-date-to" name="date_to" type="date" value="{{ date_to if period_filter == "custom" else "" }}" aria-label="To date" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+                <div class="flex min-w-0 flex-wrap gap-2 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700">
+                    Filter
+                </button>
+                <a href="/admin/reports/churn" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
+                </div>
+            </form>
+            <form method="GET" action="/admin/reports/churn/export" class="mt-3 flex justify-end">
+                <input type="hidden" name="period" value="{{ period_filter }}">
+                <input type="hidden" name="status" value="{{ status_filter }}">
+                <input type="hidden" name="date_from" value="{{ date_from }}">
+                <input type="hidden" name="date_to" value="{{ date_to }}">
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                    Export
+                </button>
+            </form>
+        </div>
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('churn-filter-form');
+            const period = document.getElementById('churn-period');
+            const customRange = document.getElementById('churn-custom-range');
+            const dateFrom = document.getElementById('churn-date-from');
+            const dateTo = document.getElementById('churn-date-to');
+            const dateInputs = customRange ? customRange.querySelectorAll('input[type="date"]') : [];
+            if (!form || !period || !customRange || !dateFrom || !dateTo) return;
+            const syncCustomRange = function() {
+                const isCustom = period.value === 'custom';
+                customRange.classList.toggle('hidden', !isCustom);
+                dateInputs.forEach(function(input) { input.disabled = !isCustom; });
+                dateFrom.required = isCustom;
+                dateTo.required = isCustom;
+                dateTo.min = dateFrom.value || '';
+                dateFrom.max = dateTo.value || '';
+            };
+            period.addEventListener('change', syncCustomRange);
+            dateFrom.addEventListener('change', syncCustomRange);
+            dateTo.addEventListener('change', syncCustomRange);
+            form.addEventListener('submit', function(event) {
+                if (period.value === 'custom' && dateFrom.value && dateTo.value && dateFrom.value > dateTo.value) {
+                    event.preventDefault();
+                    dateTo.setCustomValidity('The end date must be on or after the start date.');
+                    dateTo.reportValidity();
+                } else {
+                    dateTo.setCustomValidity('');
+                }
+            });
+            syncCustomRange();
+        });
+        </script>
     {% endcall %}
 
     {# ── Summary Stats ── #}
@@ -58,11 +125,11 @@
             tone=churn_kpis.cancelled.tone
         ) }}
         {{ stats_card(
-            churn_kpis.at_risk.label,
-            (churn_kpis.at_risk.value.value if churn_kpis.at_risk.value.is_present else churn_kpis.at_risk.value.placeholder),
+            churn_kpis.suspended.label,
+            (churn_kpis.suspended.value.value if churn_kpis.suspended.value.is_present else churn_kpis.suspended.value.placeholder),
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
-            href=churn_kpis.at_risk.cohort_url,
-            tone=churn_kpis.at_risk.tone
+            href=churn_kpis.suspended.cohort_url,
+            tone=churn_kpis.suspended.tone
         ) }}
         {{ stats_card(
             churn_kpis.retention_rate.label,
@@ -74,7 +141,8 @@
     </div>
 
     {# ── Churn Trend Chart ── #}
-    {% call report_chart_card("Churn Trend", churn_chart, "churn-trend-chart", icon='<svg class="h-4 w-4 text-teal-600 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>', color="teal", min_height=168) %}
+    {% set trend_title = "Cancellation Trend" if status_filter == "canceled" else "Suspension Trend" if status_filter == "suspended" else "Churn Trend" %}
+    {% call report_chart_card(trend_title, churn_chart, "churn-trend-chart", icon='<svg class="h-4 w-4 text-teal-600 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>', color="teal", min_height=220) %}
         <script>
         document.addEventListener('DOMContentLoaded', function() {
             const ctx = document.getElementById('churn-trend-chart');
@@ -92,7 +160,7 @@
                         yAxisID: 'y'
                     },
                     {
-                        label: 'Cancellations',
+                        label: {{ churn_chart.series[1].label | tojson | safe }},
                         data: {{ churn_chart.series[1].values | tojson | safe }},
                         borderColor: '#f59e0b',
                         backgroundColor: 'transparent',
@@ -106,7 +174,7 @@
             const options = {
                 scales: {
                     y: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Churn Rate (%)' } },
-                    y1: { type: 'linear', display: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Cancellations' } }
+                    y1: { type: 'linear', display: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: {{ churn_chart.series[1].label | tojson | safe }} } }
                 }
             };
             const chart = DotmacCharts.createLineChart(ctx, chartData, options);
@@ -115,9 +183,10 @@
         </script>
     {% endcall %}
 
-    {# ── Churn Reasons and Recent Cancellations ── #}
+    {# ── Churn Reasons and Recent Events ── #}
     <div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-        {% call card("Churn Reasons", icon='<svg class="h-4 w-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="rose") %}
+        {% set reason_title = "Cancellation Reasons" if status_filter == "canceled" else "Suspension Reasons" if status_filter == "suspended" else "Churn Reasons" %}
+        {% call card(reason_title, icon='<svg class="h-4 w-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="rose") %}
             {% if churn_reasons %}
             <div class="chart-container mb-3">
                 <canvas id="churn-reasons-chart"></canvas>
@@ -140,8 +209,8 @@
                 const ctx = document.getElementById('churn-reasons-chart');
                 if (!ctx) return;
                 const chartData = {
-                    labels: [{% for reason, count in churn_reasons.items() %}'{{ reason | title }}'{% if not loop.last %}, {% endif %}{% endfor %}],
-                    values: [{% for reason, count in churn_reasons.items() %}{{ count }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                    labels: [{% for reason, count in churn_reasons.items() %}{{ (reason | title) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                    values: [{% for reason, count in churn_reasons.items() %}{{ count | int }}{% if not loop.last %}, {% endif %}{% endfor %}],
                     colors: ['#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16']
                 };
                 if (chartData.labels.length > 0) {
@@ -151,27 +220,32 @@
             });
             </script>
             {% else %}
-            <p class="text-sm text-slate-500 dark:text-slate-400">No churn reason data available.</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">No {{ reason_title | lower }} data available for the selected period.</p>
             {% endif %}
         {% endcall %}
 
-        {% call card("Recent Cancellations", icon='<svg class="h-4 w-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>', color="red") %}
-            {% if recent_cancellations %}
+        {% set recent_events_title = "Cancellations" if status_filter == "canceled" else "Suspensions" if status_filter == "suspended" else "Churn Events" %}
+        {% set recent_events_color = "amber" if status_filter == "suspended" else "red" %}
+        {% set recent_events_icon = '<svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>' if status_filter == "suspended" else '<svg class="h-4 w-4 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' %}
+        {% call card("Recent " ~ recent_events_title, icon=recent_events_icon, color=recent_events_color) %}
+            {% if recent_events %}
             <div class="space-y-3">
-                {% for sub in recent_cancellations %}
+                {% for event in recent_events %}
+                {% set sub = event.subscriber %}
+                {% set event_status = event.status %}
                 <div class="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-700 last:border-0">
                     <div>
                         <p class="text-sm font-medium text-slate-900 dark:text-white">
                             {{ sub.name if sub else 'Subscriber' }}
                         </p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Cancelled {{ sub.updated_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ event_status | replace('_', ' ') | title }} {{ event.occurred_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}</p>
                     </div>
-                    {{ status_badge("Cancelled", variant="error") }}
+                    {{ status_badge(event_status | replace('_', ' ') | title, variant="error" if event_status == "canceled" else "warning") }}
                 </div>
                 {% endfor %}
             </div>
             {% else %}
-            <p class="text-sm text-slate-500 dark:text-slate-400">No recent cancellations.</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">No recent {{ recent_events_title | lower }}.</p>
             {% endif %}
         {% endcall %}
     </div>

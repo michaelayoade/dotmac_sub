@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import (
     AccessCredential,
+    BillingMode,
     CatalogOffer,
     NasDevice,
     OfferStatus,
@@ -34,6 +35,10 @@ from app.services.auth_flow import hash_service_secret
 from app.services.catalog.subscriptions import (
     apply_offer_radius_profile,
     contracted_amount_for_offer,
+)
+from app.services.prepaid_activation_funding_guard import (
+    PrepaidActivationEntryPoint,
+    require_prepaid_activation_funding_admitted,
 )
 
 logger = logging.getLogger(__name__)
@@ -460,6 +465,14 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                         account_id=subscriber.id,
                         offer_id=offer.id,
                     )
+                    if target_billing_mode == BillingMode.prepaid:
+                        require_prepaid_activation_funding_admitted(
+                            db,
+                            account_id=subscriber.id,
+                            entry_point=(
+                                PrepaidActivationEntryPoint.bulk_provisioning_activation
+                            ),
+                        )
                     target = Subscription(
                         subscriber_id=subscriber.id,
                         offer_id=offer.id,
@@ -484,6 +497,18 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                         account_id=subscriber.id,
                         offer_id=offer.id,
                     )
+                    if (
+                        target_billing_mode == BillingMode.prepaid
+                        and target.billing_mode != BillingMode.prepaid
+                    ):
+                        require_prepaid_activation_funding_admitted(
+                            db,
+                            account_id=subscriber.id,
+                            entry_point=(
+                                PrepaidActivationEntryPoint.bulk_provisioning_activation
+                            ),
+                            subscription_id=target.id,
+                        )
                     previous_offer_id = target.offer_id
                     target.offer_id = offer.id
                     target.billing_mode = target_billing_mode

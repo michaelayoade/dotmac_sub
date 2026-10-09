@@ -304,10 +304,14 @@ def test_network_map_layers_are_opt_in_on_initial_load() -> None:
 def test_network_map_filters_bypass_none_only_for_selected_results() -> None:
     source = (TEMPLATES / "admin/network/map.html").read_text(encoding="utf-8")
 
-    assert "let layersSuppressed = true;" in source
+    assert (
+        "let layersSuppressed = Object.keys(layerToggles).every(id => "
+        "!document.getElementById(id).checked);"
+    ) in source
     assert "function layersRequiredByFilters()" in source
     assert "function applyLayerFilterBypass(requiredLayers)" in source
-    assert "if (!enabled) applyMapFilters();" in source
+    assert "applyMapFilters();\n        scheduleFitAllBounds();" in source
+    assert "feature?.properties?.type === 'network_device'" in source
     assert "config.selected.size > 0 && config.selected.has(key)" in source
     assert (
         "directFilters.device.active && directFilters.device.selected.size > 0"
@@ -321,7 +325,11 @@ def test_network_map_filters_bypass_none_only_for_selected_results() -> None:
     assert "if (key.startsWith('connected|'))" in source
     assert "if (key.startsWith('not_connected|'))" in source
     assert "if (map.hasLayer(group)) visible += 1;" in source
-    assert "!item.filteredOut && map.hasLayer(layers[item.layerName])" in source
+    assert (
+        "!item.filteredOut && layers[item.layerName] && map.hasLayer(layers[item.layerName])"
+        in source
+    )
+    assert "All loaded assets" in source
 
 
 def test_shared_confirmation_assets_and_critical_actions_are_wired():

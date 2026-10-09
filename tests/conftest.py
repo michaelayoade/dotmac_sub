@@ -10,6 +10,12 @@ from scripts.testing.host_test_policy import (
     enforce_pytest_host_policy,
 )
 
+# Register shared Test Connection fixtures at collection time.  Keeping this
+# in the root conftest makes the fixture available to every shard, including
+# Finance workflow tests that are collected independently of the fixture
+# module itself.
+pytest_plugins = ("tests.test_subscription_test_connection",)
+
 # Refuse unsafe host/scope combinations before importing the application graph.
 # This protects direct ``pytest`` invocations that bypass the Makefile owner.
 try:

@@ -19,6 +19,14 @@
     'archived': 'inactive',
 }.get(status_value, 'default') %}
 <div class="space-y-6">
+    {% if active_outage %}
+    <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20" role="status">
+        <p class="text-sm font-semibold text-amber-800 dark:text-amber-200">A network outage is affecting this service.</p>
+        <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
+            Service-period purchases are unavailable while restoration is in progress. Eligible downtime is measured from {{ active_outage.started_at | portal_datetime('%b %d, %Y %H:%M', 'the confirmed start') }} and is added after your funded service end once the outage is resolved.
+        </p>
+    </div>
+    {% endif %}
     {% set service_change = request.query_params.get('service_change') %}
     {% if service_change == 'applied' %}
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-900/20">

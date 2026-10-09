@@ -53,20 +53,29 @@ The omitted values intentionally use these defaults:
 - delivery header: `X-Dotmac-Fiber-Delivery`
 - signature prefix: `sha256=`
 
+The coverage producer submits `fiber-coverage-v1`. Its minimum customer data is
+the installation address, full name, and phone, plus system attribution and the
+`new_connection` interest. Email, area, coordinates, and selected plan remain
+optional: coordinates enable the automated initial indication, while a missing
+pin returns `manual_review` for staff follow-up. The producer must never add a
+placeholder email, plan, or area to satisfy validation.
+
 ## What the availability result means
 
 This deployment work does not introduce a new coverage algorithm. It exposes
 the existing `sales.selfserve.compute_feasibility` rule to the Fiber website:
 
-- The website must submit a latitude and longitude. An address without a map
-  pin creates the Lead but returns no automatic coverage result, so staff can
-  arrange a survey.
+- The website should submit the installation latitude and longitude when the
+  customer selects a pin. An address without a map pin still creates the Lead
+  and returns `manual_review`; it must never be presented as `out_of_area`.
 - PostGIS measures the straight-line map distance from that pin to the nearest
   active Fiber Access Point with recorded geometry.
 - `covered` means the distance is within
   `selfserve_quote_feasibility_radius_meters` (2,000 metres by default).
 - No active Fiber Access Point produces `out_of_area`; a point beyond the
   configured radius produces `survey_required`.
+- A missing installation pin produces `manual_review`. A calculation failure
+  produces `technical_error`; neither status is a coverage conclusion.
 
 This is an initial feasibility indication, not an installation guarantee. It
 does not currently prove available splitter/OLT ports, route continuity,

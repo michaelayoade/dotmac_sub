@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,11 @@ from app.services.operational_logging import (
     OperationalOutcome,
     log_operational_event,
 )
+
+if TYPE_CHECKING:
+    from app.services.collections.prepaid_balance_sweep import (
+        PrepaidSweepCycleTotals,
+    )
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
@@ -107,7 +113,15 @@ def run_bundle_reconcile() -> dict[str, int]:
 # bounded so a large backlog cannot stall enforcement or interactive traffic.
 _COVERAGE_REPAIR_CHUNK = 200
 
-_QUARANTINE_FINDING_PREFIX = "prepaid-coverage:quarantine:"
+PREPAID_COVERAGE_QUARANTINE_FINDING_PREFIX = "prepaid-coverage:quarantine:"
+_QUARANTINE_FINDING_PREFIX = PREPAID_COVERAGE_QUARANTINE_FINDING_PREFIX
+#: Finance procedure and read-only diagnostic for blocking-quarantine items.
+PREPAID_COVERAGE_QUARANTINE_RUNBOOK = (
+    "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
+)
+PREPAID_COVERAGE_QUARANTINE_DIAGNOSTIC = (
+    "scripts/billing/diagnose_prepaid_coverage_quarantine.py"
+)
 #: Finance review window recorded on each blocking-quarantine work item.
 _QUARANTINE_SLA_HOURS = 72
 
@@ -343,8 +357,8 @@ def repair_prepaid_coverage_evidence(
     """
     from app.services.owner_commands import CommandContext
     from app.services.prepaid_coverage_reconciliation import (
+        ENFORCEMENT_BLOCKING_QUARANTINE_REASONS,
         CoverageReconciliationDecision,
-        CoverageReconciliationReason,
         PrepaidCoverageReconciliationError,
         ReconcilePrepaidCoverageCommand,
         preview_prepaid_coverage_reconciliation,
@@ -353,15 +367,7 @@ def repair_prepaid_coverage_evidence(
 
     # Quarantine reasons that also block adverse enforcement (the same
     # evidence classes resolve_prepaid_coverage_enforcement_blockers reports).
-    blocking_reasons: frozenset[CoverageReconciliationReason] = frozenset(
-        {
-            CoverageReconciliationReason.malformed_paid_invoice_period,
-            CoverageReconciliationReason.malformed_renewal_origin,
-            CoverageReconciliationReason.conflicting_financial_sources,
-            CoverageReconciliationReason.ambiguous_paid_invoice_lines,
-            CoverageReconciliationReason.ambiguous_renewal_adjustments,
-        }
-    )
+    blocking_reasons = ENFORCEMENT_BLOCKING_QUARANTINE_REASONS
 
     observed_at = now or datetime.now(UTC)
     if observed_at.tzinfo is None:
@@ -511,17 +517,23 @@ def _sync_quarantine_work_items(
                 source="prepaid_coverage_repair",
                 severity=AlertSeverity.warning,
                 title="Prepaid coverage evidence needs finance review",
+                # AdminAlert.summary is bounded at 255 characters.
                 summary=(
-                    "Contradictory or malformed financial evidence blocks "
-                    "adverse enforcement for this account. Review the "
-                    "reconciliation run evidence and correct the source "
-                    "records; the account must never be auto-suspended from "
-                    "ambiguous debt."
+                    "Malformed or contradictory financial evidence blocks "
+                    "adverse enforcement; never auto-suspend. Follow "
+                    f"{PREPAID_COVERAGE_QUARANTINE_RUNBOOK} "
+                    f"(run {PREPAID_COVERAGE_QUARANTINE_DIAGNOSTIC})."
                 ),
                 details={
-                    "owner": "finance-billing",
+                    "owner": "financial-billing",
                     "account_id": str(account_id),
                     "reason_codes": sorted(reasons_by_account[account_id]),
+                    "runbook": PREPAID_COVERAGE_QUARANTINE_RUNBOOK,
+                    "diagnostic_command": (
+                        "poetry run python -m "
+                        "scripts.billing.diagnose_prepaid_coverage_quarantine "
+                        f"--account-id {account_id}"
+                    ),
                     "sla_due_at": (
                         now + timedelta(hours=_QUARANTINE_SLA_HOURS)
                     ).isoformat(),
@@ -538,11 +550,59 @@ def _sync_quarantine_work_items(
     )
 
 
+def _prepaid_work_item_counts(
+    session: Session, *, now: datetime | None = None
+) -> dict[str, float]:
+    """Count open prepaid finance work items and those past their SLA.
+
+    ``renewal_terms_unresolved`` reports only subscriptions currently due for
+    enforcement; these counts report the whole open work-item backlog (and its
+    overdue part) so dashboards and alerts can see both.
+    """
+    from app.services.observability import count_open_findings
+    from app.services.prepaid_renewal_terms_backfill import (
+        RENEWAL_TERMS_FINDING_PREFIX,
+    )
+
+    as_of = now or datetime.now(UTC)
+    prefixes = (_QUARANTINE_FINDING_PREFIX, RENEWAL_TERMS_FINDING_PREFIX)
+    return {
+        "coverage_quarantine_work_items_open": float(
+            count_open_findings(session, managed_prefix=_QUARANTINE_FINDING_PREFIX)
+        ),
+        "renewal_terms_work_items_open": float(
+            count_open_findings(session, managed_prefix=RENEWAL_TERMS_FINDING_PREFIX)
+        ),
+        "work_items_overdue": float(
+            sum(
+                count_open_findings(session, managed_prefix=prefix, overdue_at=as_of)
+                for prefix in prefixes
+            )
+        ),
+    }
+
+
 def _publish_prepaid_enforcement_snapshot(
     repair: PrepaidCoverageRepairOutcome,
     sweep: dict[str, int | str],
+    work_items: dict[str, float] | None = None,
+    cycle_totals: PrepaidSweepCycleTotals | None = None,
+    *,
+    now: datetime | None = None,
 ) -> None:
-    """Export bounded repair + enforcement counts for /metrics and alerting."""
+    """Export bounded repair + enforcement counts for /metrics and alerting.
+
+    Account-state signals (``renewal_terms_unresolved``,
+    ``coverage_unresolved``, ``notice_suppressed``, ``no_contact_route``,
+    ``delivery_unavailable``) come from the last COMPLETED sweep cycle, never
+    from this run's slice: a bounded run covers only part of the cohort, so
+    its counters are partial. They stay constant between cycle completions
+    and are omitted (absent series, not a false zero) until a first complete
+    cycle exists. Run-scoped signals (``accounts_processed``, ``warned``,
+    ``budget_deferred`` ...) and cycle progress (``cycle_remaining``,
+    ``cycle_age_seconds``) still describe this run.
+    """
+    from app.services.collections.prepaid_balance_sweep import PrepaidSweepOutcome
     from app.services.observability import StateObservation, publish_state_snapshot
 
     def _count(key: str) -> float:
@@ -559,15 +619,13 @@ def _publish_prepaid_enforcement_snapshot(
         "coverage_repair_failed": float(
             repair.status is PrepaidCoverageRepairStatus.error
         ),
-        "coverage_unresolved": _count("coverage_unresolved"),
-        "renewal_terms_unresolved": _count("renewal_terms_unresolved"),
+        # Evaluated over the whole candidate cohort on every run: complete.
         "funding_quarantined": _count("funding_quarantined"),
-        "notice_suppressed": _count("notice_suppressed"),
-        "no_contact_route": _count("no_contact_route"),
-        "delivery_unavailable": _count("delivery_unavailable"),
         "budget_deferred": _count("budget_deferred"),
         "lock_deferred": _count("lock_deferred"),
+        # Candidate cohort size (compatibility name), not the processed count.
         "accounts_scanned": _count("accounts_scanned"),
+        "accounts_processed": _count("accounts_processed"),
         "cycle_total": _count("cycle_total"),
         "cycle_remaining": _count("cycle_remaining"),
         "cycle_age_seconds": _count("cycle_age_seconds"),
@@ -576,6 +634,21 @@ def _publish_prepaid_enforcement_snapshot(
         "warned": _count("warned"),
         "restored": _count("restored"),
     }
+    if cycle_totals is not None:
+        for outcome in (
+            PrepaidSweepOutcome.coverage_unresolved,
+            PrepaidSweepOutcome.renewal_terms_unresolved,
+            PrepaidSweepOutcome.notice_suppressed,
+            PrepaidSweepOutcome.no_contact_route,
+            PrepaidSweepOutcome.delivery_unavailable,
+        ):
+            signals[outcome.value] = float(cycle_totals.count(outcome))
+        signals["cycle_totals_age_seconds"] = max(
+            0.0,
+            ((now or datetime.now(UTC)) - cycle_totals.completed_at).total_seconds(),
+        )
+    # Omitted (absent series, not a false zero) when the count query failed.
+    signals.update(work_items or {})
     if repair.status is PrepaidCoverageRepairStatus.error or signals["sweep_errors"]:
         status = "error"
     elif any(
@@ -591,6 +664,7 @@ def _publish_prepaid_enforcement_snapshot(
             "budget_deferred",
             "lock_deferred",
         )
+        if name in signals
     ):
         status = "degraded"
     else:
@@ -625,6 +699,9 @@ def _sweep_budget_seconds(session: Session) -> int:
 
 def run_prepaid_balance_sweep() -> dict[str, int | str]:
     from app.services.collections.prepaid_balance_sweep import (
+        load_prepaid_sweep_cycle_totals,
+    )
+    from app.services.collections.prepaid_balance_sweep import (
         run_prepaid_balance_sweep as run_sweep,
     )
 
@@ -656,7 +733,23 @@ def run_prepaid_balance_sweep() -> dict[str, int | str]:
             renewal_repair = _RENEWAL_TERMS_REPAIR_FAILED
         result = run_sweep(session, deadline=deadline)
         try:
-            _publish_prepaid_enforcement_snapshot(repair, result)
+            work_items: dict[str, float] | None = _prepaid_work_item_counts(session)
+        except Exception:
+            session.rollback()
+            logger.exception("prepaid_work_item_counts_failed")
+            work_items = None
+        try:
+            cycle_totals: PrepaidSweepCycleTotals | None = (
+                load_prepaid_sweep_cycle_totals(session)
+            )
+        except Exception:
+            session.rollback()
+            logger.exception("prepaid_sweep_cycle_totals_failed")
+            cycle_totals = None
+        try:
+            _publish_prepaid_enforcement_snapshot(
+                repair, result, work_items, cycle_totals
+            )
         except Exception:
             logger.exception("prepaid_enforcement_snapshot_failed")
         result.update(repair.as_stats())

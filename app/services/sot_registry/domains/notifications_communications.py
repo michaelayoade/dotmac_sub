@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from app.services.automation_contracts import (
+    AutomationActionCapability,
+    AutomationActionInput,
     AutomationCatalogItem,
     AutomationCatalogState,
     AutomationDomainCapabilities,
+    AutomationValueType,
 )
 from app.services.sot_manifest import (
     AuthorityInput,
@@ -199,6 +202,118 @@ DOMAIN = DomainSOT(
     ),
     services=(
         *PAYMENT_EMAIL_SERVICES,
+        SOTService(
+            name="communications.customer_bulk_messages",
+            module="app.services.customer_bulk_messages",
+            owns=(
+                "durable customer bulk message admission and materialization",
+                "customer bulk message receipt and delivery status",
+            ),
+            depends_on=(
+                "communications.customer_bulk_message_evaluation",
+                "events.dispatcher",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.customer_bulk_messages",
+                concerns=(
+                    (
+                        "durable customer bulk message admission and materialization",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                    (
+                        "customer bulk message receipt and delivery status",
+                        OwnerRole.RESOLVER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="bulk send receipts",
+                        owner="communications.customer_bulk_messages",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="system_jobs rows scoped to job_type customer_bulk_message",
+                    ),
+                    AuthorityInput(
+                        name="confirmed message impact",
+                        owner="communications.customer_bulk_message_evaluation",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="typed drift-bound audience and materialization counts",
+                    ),
+                ),
+                transaction_mode=TransactionMode.OWNER_MANAGED,
+                transaction_contract=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="Each public command enters execute_owner_command once; receipt completion and notification materialization commit atomically.",
+                    locking="Existing unique job_type/job_id constraint arbitrates acceptance; row locks serialize replay; skip-locked claims avoid concurrent materialization.",
+                    idempotency="Actor-scoped UUID and canonical request fingerprint replay a receipt before impact revalidation; changed inputs fail closed.",
+                    retries="Permanent 60-second outbox drain recovers broker failures and 15-minute stale leases; three bounded preparation attempts; notification retries retain their owner.",
+                ),
+                event_types=("customer_bulk_message.changed",),
+                domain_error_codes=(
+                    "communications.customer_bulk_messages.idempotency_conflict",
+                    "communications.customer_bulk_messages.impact_changed",
+                    "communications.customer_bulk_messages.command_required",
+                ),
+                design_refs=(
+                    "docs/designs/LIFECYCLE_COMMUNICATIONS_SOT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_customer_bulk_message_receipts.py",
+                    "tests/architecture/test_customer_bulk_message_receipt_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="communications.customer_bulk_message_evaluation",
+            module="app.services.customer_bulk_message_evaluation",
+            owns=(
+                "customer bulk message preview",
+                "customer bulk message delivery materialization",
+            ),
+            depends_on=(
+                "communications.intents",
+                "communications.customer_policy",
+                "customer.identity_scope",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.customer_bulk_message_evaluation",
+                concerns=(
+                    ("customer bulk message preview", OwnerRole.RESOLVER),
+                    (
+                        "customer bulk message delivery materialization",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="typed message specification",
+                        owner="communications.customer_bulk_messages",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="BulkMessageSpec with preview scope and impact evidence",
+                    ),
+                    AuthorityInput(
+                        name="recipient policy decisions",
+                        owner="communications.customer_policy",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="authoritative cohort policy query",
+                    ),
+                ),
+                transaction_mode=TransactionMode.PARTICIPANT,
+                transaction_contract=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Preview reads persisted templates; materialization is flush-only inside communications.customer_bulk_messages.",
+                    locking="Host receipt lock serializes each request; communication intent uniqueness retains recipient deduplication.",
+                    idempotency="Existing impact-token/subscriber communication-intent identity replays delivery rows.",
+                    retries="Host owner rolls back before recording preparation failure; scope or template drift fails closed.",
+                ),
+                event_types=("communication_intent.planned",),
+                design_refs=("docs/designs/LIFECYCLE_COMMUNICATIONS_SOT.md",),
+                test_refs=(
+                    "tests/test_customer_bulk_actions.py",
+                    "tests/architecture/test_customer_bulk_message_receipt_boundary.py",
+                ),
+            ),
+        ),
         SOTService(
             name="communication.document_delivery",
             module="app.services.document_delivery",
@@ -566,6 +681,8 @@ DOMAIN = DomainSOT(
                 "survey lifecycle and content",
                 "survey invitation records",
                 "survey response records",
+                "survey response review",
+                "survey feedback report",
             ),
             depends_on=(
                 "party.registry",
@@ -614,8 +731,33 @@ DOMAIN = DomainSOT(
                         ),
                         canonical_writer="communications.surveys",
                     ),
+                    ConcernContract(
+                        name="survey response review",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "persisted Survey aggregate",
+                            "persisted Survey responses",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="survey feedback report",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "persisted Survey aggregate",
+                            "persisted Survey responses",
+                        ),
+                    ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="persisted Survey responses",
+                        owner="communications.surveys",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "SurveyResponse saved answers, submission time and "
+                            "optional rating/NPS values"
+                        ),
+                    ),
                     AuthorityInput(
                         name="typed Survey command",
                         owner="communications.surveys",
@@ -772,6 +914,49 @@ DOMAIN = DomainSOT(
                         "Survey and invitation rows plus audit evidence rebuild "
                         "current state; source-event uniqueness makes durable event "
                         "redelivery a no-op."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="survey feedback report",
+                        input_names=(
+                            "persisted Survey aggregate",
+                            "persisted Survey responses",
+                        ),
+                        writer="communications.surveys",
+                        freshness="Rebuilt from all saved submissions on each detail request.",
+                        stale_behavior=(
+                            "Current options define distributions; unsupported scales "
+                            "show option counts without inferred sentiment."
+                        ),
+                        drift_signal=(
+                            "Answers outside current options are counted separately; "
+                            "zero eligible ratings yield no percentage."
+                        ),
+                        rebuild_operation="survey_report with SurveyReportQuery",
+                        repair_owner="communications.surveys",
+                    ),
+                    ProjectionContract(
+                        name="survey response review",
+                        input_names=(
+                            "persisted Survey aggregate",
+                            "persisted Survey responses",
+                        ),
+                        writer="communications.surveys",
+                        freshness=(
+                            "Rebuilt on each detail request from current questions "
+                            "and saved responses."
+                        ),
+                        stale_behavior=(
+                            "Removed question keys retain saved values with explicit "
+                            "unavailable wording; labels use the current definition."
+                        ),
+                        drift_signal=(
+                            "A saved answer key absent from current questions is "
+                            "marked as an earlier question."
+                        ),
+                        rebuild_operation="response_reviews with SurveyResponseReviewQuery",
+                        repair_owner="communications.surveys",
                     ),
                 ),
                 migration=MigrationContract(
@@ -3333,43 +3518,6 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
-            name="communications.team_inbox_reply_reminders",
-            module="app.services.team_inbox_reply_reminders",
-            owns=("agent reply reminder scheduling and repeat delivery",),
-            depends_on=(
-                "communications.team_inbox_threads",
-                "communications.team_inbox_routing",
-                "communications.intents",
-                "control.settings_spec",
-            ),
-            contract=_team_inbox_contract(
-                service_name="communications.team_inbox_reply_reminders",
-                concerns=(
-                    (
-                        "agent reply reminder scheduling and repeat delivery",
-                        OwnerRole.COMMAND_WRITER,
-                    ),
-                ),
-                inputs=(
-                    AuthorityInput(
-                        name="assignment and message chronology",
-                        owner="communications.team_inbox_routing",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Active assignment plus latest inbound and agent outbound timestamps.",
-                    ),
-                    AuthorityInput(
-                        name="configured reminder intervals",
-                        owner="control.settings_spec",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source="Validated delay and repeat minute settings.",
-                    ),
-                ),
-                transaction_mode=TransactionMode.OWNER_MANAGED,
-                event_types=("team_inbox.reply_reminder_queued.v1",),
-                test_refs=("tests/test_team_inbox_reply_reminders.py",),
-            ),
-        ),
-        SOTService(
             name="communications.team_inbox_agent_introduction",
             module="app.services.team_inbox_agent_introduction",
             owns=(
@@ -5169,6 +5317,58 @@ DOMAIN = DomainSOT(
     "and response writes to communications.surveys. Admin inbox mutation "
     "routes delegate to the committed team-inbox command boundary.",
     automation=AutomationDomainCapabilities(
+        target_types=("automation.shared",),
+        actions=(
+            AutomationActionCapability(
+                key="communications.send_notification",
+                label="Send notification",
+                entity_type="automation.shared",
+                target_types=("*",),
+                command_owner="communications.notification_service",
+                command_name="queue_automation_notification",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="channel",
+                        label="Channel",
+                        value_type=AutomationValueType.enum,
+                        enum_values=("email", "in_app"),
+                    ),
+                    AutomationActionInput(
+                        key="recipient",
+                        label="Recipient",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="subject",
+                        label="Subject",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="body",
+                        label="Message body",
+                        value_type=AutomationValueType.string,
+                    ),
+                    AutomationActionInput(
+                        key="body_format",
+                        label="Email body format",
+                        value_type=AutomationValueType.enum,
+                        required=False,
+                        enum_values=("plain_text", "html"),
+                    ),
+                    AutomationActionInput(
+                        key="target_url",
+                        label="In-app target URL",
+                        value_type=AutomationValueType.string,
+                        required=False,
+                    ),
+                ),
+                author_permission="notification:write",
+                runtime_scope="one automation notification",
+                idempotency="tenant/event/rule/version/step/recipient",
+                runtime_enabled=True,
+            ),
+        ),
         catalog_items=(
             AutomationCatalogItem(
                 key="communications.event_notifications",
@@ -5260,13 +5460,6 @@ DOMAIN = DomainSOT(
                 group="Team Inbox",
                 state=AutomationCatalogState.unavailable,
                 explanation="The provider reply window is checked by existing message delivery safeguards.",
-            ),
-            AutomationCatalogItem(
-                key="communications.reply_reminders",
-                label="Reply reminders",
-                group="Team Inbox",
-                state=AutomationCatalogState.unavailable,
-                explanation="Reminder timing and cancellation are owned by the reply-reminder service, not Center rules yet.",
             ),
             AutomationCatalogItem(
                 key="communications.ai_intake_processing",

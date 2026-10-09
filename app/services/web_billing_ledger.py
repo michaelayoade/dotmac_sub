@@ -30,6 +30,10 @@ from app.services import display_format
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.billing import ledger as billing_ledger_service
 from app.services.common import validate_enum
+from app.services.customer_financial_ledger import (
+    CustomerFinancialEvent,
+    list_customer_financial_events,
+)
 from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
@@ -83,7 +87,7 @@ class CustomerLedgerQuery:
 
 @dataclass(frozen=True, slots=True)
 class CustomerLedgerEntryView:
-    id: UUID
+    id: str | UUID
     entry_type: LedgerEntryType
     source: LedgerSource
     amount: Decimal
@@ -118,6 +122,40 @@ class CustomerLedgerView:
     page_end: int
     previous_page_url: str | None
     next_page_url: str | None
+
+
+def _customer_financial_event_display_id(event: CustomerFinancialEvent) -> str | UUID:
+    """Keep legacy ledger links UUID-shaped while preserving canonical event IDs."""
+    prefix, _, raw_id = event.id.partition(":")
+    if prefix == "ledger":
+        try:
+            return UUID(raw_id)
+        except ValueError:
+            pass
+    return event.id
+
+
+def _customer_financial_event_detail_url(event: CustomerFinancialEvent) -> str:
+    """Link an audit row to its source document where one exists."""
+    prefix, _, raw_id = event.id.partition(":")
+    raw = event.raw
+    if prefix == "payment":
+        return f"/admin/billing/payments/{raw_id}"
+    if prefix in {"invoice", "prepaid-invoice-consumption"}:
+        return f"/admin/billing/invoices/{raw_id}"
+    if prefix == "ledger":
+        return f"/admin/billing/ledger/{raw_id}"
+    if prefix == "credit-note":
+        return f"/admin/billing/credits/{raw_id}"
+    if prefix == "external-allocation":
+        invoice = getattr(raw, "invoice", None)
+        if invoice is not None:
+            return f"/admin/billing/invoices/{invoice.id}"
+    if prefix == "invoice-writeoff":
+        invoice = getattr(raw, "invoice", None)
+        if invoice is not None:
+            return f"/admin/billing/invoices/{invoice.id}"
+    return "/admin/billing/ledger"
 
 
 @dataclass(frozen=True, slots=True)
@@ -500,89 +538,88 @@ def build_customer_ledger_view(
     *,
     query: CustomerLedgerQuery,
 ) -> CustomerLedgerView:
-    """Return the general ledger projection, fixed to one customer account.
+    """Return the canonical customer financial events as an audit ledger.
 
-    The embedded customer workspace deliberately delegates all money and row
-    interpretation to ``build_ledger_entries_data``. It only adapts that shared
-    projection into a stable typed view contract for the customer UI.
+    This view intentionally uses the same event owner as customer balances.
+    The general billing ledger remains a broader operational projection, while
+    this customer-scoped tab is the audit trail for the customer's position.
     """
 
-    requested_limit = query.page * CUSTOMER_LEDGER_PAGE_SIZE
-    customer_ref = str(query.account_id)
-    state = build_ledger_entries_data(
-        db,
-        customer_ref=customer_ref,
-        entry_type=None,
-        limit=requested_limit,
-    )
-    totals = state["ledger_totals"]
-    if not isinstance(totals, dict):
-        raise TypeError("Ledger projection returned invalid totals")
+    events = list_customer_financial_events(db, query.account_id, currency=None)
+    credit_amounts: dict[str, Decimal] = {}
+    debit_amounts: dict[str, Decimal] = {}
+    for event in events:
+        target = (
+            credit_amounts
+            if event.entry_type == LedgerEntryType.credit
+            else debit_amounts
+        )
+        _add_grouped_amount(
+            target,
+            currency=event.currency,
+            amount=event.amount,
+        )
 
-    raw_entries = state["entries"]
-    if not isinstance(raw_entries, list):
-        raise TypeError("Ledger projection returned invalid entries")
-    total_entries = int(totals["credit_count"]) + int(totals["debit_count"])
+    credit_count = sum(event.entry_type == LedgerEntryType.credit for event in events)
+    debit_count = sum(event.entry_type == LedgerEntryType.debit for event in events)
+    net_amounts = dict(credit_amounts)
+    for currency, amount in debit_amounts.items():
+        net_amounts[currency] = net_amounts.get(currency, Decimal("0")) - amount
+    total_entries = len(events)
     total_pages = max(
         1,
         (total_entries + CUSTOMER_LEDGER_PAGE_SIZE - 1) // CUSTOMER_LEDGER_PAGE_SIZE,
     )
     page = min(query.page, total_pages)
     offset = (page - 1) * CUSTOMER_LEDGER_PAGE_SIZE
-    page_entries = raw_entries[offset : offset + CUSTOMER_LEDGER_PAGE_SIZE]
+    ordered_events = sorted(
+        events,
+        key=lambda event: (event.occurred_at, event.id),
+        reverse=True,
+    )
+    page_events = ordered_events[offset : offset + CUSTOMER_LEDGER_PAGE_SIZE]
 
-    # The projection is newest-first. Start from the filtered closing net per
-    # currency and walk backward through the loaded rows so every page gets a
-    # balance that includes older activity, without loading the full ledger.
-    raw_net_amounts = totals.get("net_amounts", {})
-    if not isinstance(raw_net_amounts, dict):
-        raise TypeError("Ledger projection returned invalid net amounts")
+    # Rows are newest-first. Walk backward from the canonical closing position
+    # so every displayed row shows the balance immediately after that event.
     balance_by_currency = {
         str(currency): Decimal(str(amount or 0))
-        for currency, amount in raw_net_amounts.items()
+        for currency, amount in net_amounts.items()
     }
-    running_balances: dict[UUID, Decimal] = {}
-    for raw_entry in raw_entries:
-        entry_id = UUID(str(raw_entry.id))
-        currency = display_format.currency_code(raw_entry.currency)
+    running_balances: dict[str, Decimal] = {}
+    for event in sorted(
+        events,
+        key=lambda item: (item.occurred_at, item.id),
+        reverse=True,
+    ):
+        currency = display_format.currency_code(event.currency)
         current = balance_by_currency.get(currency, Decimal("0"))
-        running_balances[entry_id] = current
-        amount = Decimal(str(raw_entry.amount or 0))
-        if raw_entry.entry_type == LedgerEntryType.credit:
-            balance_by_currency[currency] = current - amount
-        else:
-            balance_by_currency[currency] = current + amount
+        running_balances[event.id] = current
+        balance_by_currency[currency] = current - event.signed_amount
 
     entries: list[CustomerLedgerEntryView] = []
-    for entry in page_entries:
-        raw_entry_type = getattr(getattr(entry, "entry_type", None), "value", None)
-        raw_source = getattr(getattr(entry, "source", None), "value", None)
+    for event in page_events:
         entries.append(
             CustomerLedgerEntryView(
-                id=UUID(str(entry.id)),
-                entry_type=LedgerEntryType(str(raw_entry_type)),
-                source=LedgerSource(str(raw_source)),
-                amount=Decimal(str(entry.amount or 0)),
-                currency=display_format.currency_code(entry.currency),
-                description=str(entry.memo or ""),
-                occurred_at=getattr(entry, "effective_date", None)
-                or getattr(entry, "created_at", None),
-                detail_url=(
-                    f"/admin/billing/ledger/{entry.id}"
-                    if isinstance(entry, LedgerEntry)
-                    else f"/admin/billing/invoices/{entry.id}"
-                ),
-                running_balance=running_balances[UUID(str(entry.id))],
+                id=_customer_financial_event_display_id(event),
+                entry_type=event.entry_type,
+                source=event.source,
+                amount=event.amount,
+                currency=display_format.currency_code(event.currency),
+                description=event.memo,
+                occurred_at=event.occurred_at,
+                detail_url=_customer_financial_event_detail_url(event),
+                running_balance=running_balances[event.id],
             )
         )
 
     summary = CustomerLedgerSummary(
-        credit_count=int(totals["credit_count"]),
-        debit_count=int(totals["debit_count"]),
-        credit_display=str(totals["credit_display"]),
-        debit_display=str(totals["debit_display"]),
-        net_display=str(totals["net_display"]),
+        credit_count=credit_count,
+        debit_count=debit_count,
+        credit_display=display_format.format_currency_groups(credit_amounts),
+        debit_display=display_format.format_currency_groups(debit_amounts),
+        net_display=display_format.format_currency_groups(net_amounts),
     )
+    customer_ref = str(query.account_id)
     query_string = urlencode({"customer_ref": customer_ref})
     page_url = f"/admin/customers/person/{query.account_id}/billing/ledger"
     page_start = offset + 1 if entries else 0

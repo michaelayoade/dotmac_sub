@@ -9,6 +9,7 @@ from app.web.admin import admin_hub as admin_system_hub
 from app.web.admin import catalog as admin_catalog
 from app.web.admin import catalog_settings as admin_catalog_settings
 from app.web.admin import configuration as admin_configuration
+from app.web.admin import customers as admin_customers
 from app.web.admin import dashboard as admin_dashboard
 from app.web.admin import design_system as admin_design_system
 from app.web.admin import dispatch_work_orders as admin_dispatch_work_orders
@@ -86,6 +87,16 @@ def test_catalog_routes_require_catalog_permissions():
             path,
             method,
             "catalog:write",
+        )
+
+
+def test_customer_test_connection_requires_its_dedicated_permission():
+    for method in ("GET", "POST"):
+        assert _route_has_permission(
+            admin_customers.router,
+            "/customers/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
+            method,
+            "subscription:test_connection",
         )
 
 

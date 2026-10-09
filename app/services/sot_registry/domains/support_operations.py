@@ -1283,6 +1283,7 @@ DOMAIN = DomainSOT(
                 "support.ticket_lifecycle",
                 "access.subscription_lifecycle",
                 "automation.execution",
+                "financial.prepaid_service_coverage",
             ),
             contract=ServiceContract(
                 concerns=(
@@ -1301,6 +1302,7 @@ DOMAIN = DomainSOT(
                         input_names=(
                             "canonical ticket lifecycle state",
                             "active ticket service pause evidence",
+                            "authoritative prepaid pause coverage evidence",
                         ),
                     ),
                 ),
@@ -1349,6 +1351,17 @@ DOMAIN = DomainSOT(
                             "stable runtime command identity"
                         ),
                     ),
+                    AuthorityInput(
+                        name="authoritative prepaid pause coverage evidence",
+                        owner="financial.prepaid_service_coverage",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "continuous funded-entitlement and applied service-"
+                            "extension grant intervals through the captured billing "
+                            "anchor, with exact evidence fingerprint and currency "
+                            "provenance"
+                        ),
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.COORDINATOR_MANAGED,
@@ -1360,7 +1373,9 @@ DOMAIN = DomainSOT(
                     ),
                     locking=(
                         "The Ticket, exact prior pause cause, and active service "
-                        "candidates are selected with row locks."
+                        "candidates are selected with row locks. Prepaid coverage "
+                        "is re-resolved from exact entitlement and applied-extension "
+                        "evidence after the subscription lock is held."
                     ),
                     idempotency=(
                         "The event, rule version, and step derive one stable pause-cause "
@@ -1421,6 +1436,7 @@ DOMAIN = DomainSOT(
                         "missing Ticket or customer account link",
                         "zero or multiple active linked services",
                         "conflicting replay evidence",
+                        "missing, discontinuous, or anchor-inconsistent prepaid coverage",
                     ),
                 ),
                 events=EventContract(
@@ -1464,9 +1480,11 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_ticket_sla_service_automation.py",
+                    "tests/test_subscription_pause_lifecycle.py",
                     "tests/test_sla_assignment.py",
                     "tests/test_automation_ticket_assignment_drafts.py",
                     "tests/architecture/test_automation_runtime_boundary.py",
+                    "tests/architecture/test_subscription_pause_boundary.py",
                 ),
             ),
         ),
@@ -2255,20 +2273,7 @@ DOMAIN = DomainSOT(
                 tenant_id_field="tenant_id",
                 entity_id_field="ticket_id",
                 fields=(
-                    AutomationConditionField(
-                        key="priority",
-                        label="Priority",
-                        value_type=AutomationValueType.enum,
-                        operators=(AutomationOperator.equals,),
-                        enum_values=(
-                            "lower",
-                            "low",
-                            "medium",
-                            "normal",
-                            "high",
-                            "urgent",
-                        ),
-                    ),
+                    *_SUPPORT_WORKFLOW_FIELDS,
                     AutomationConditionField(
                         key="ticket_type",
                         label="Ticket type",
@@ -2278,6 +2283,40 @@ DOMAIN = DomainSOT(
                 ),
                 author_permission="support:ticket:read",
                 runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="support.ticket.scheduled",
+                label="Support ticket scheduled evaluation",
+                event_type="support.ticket.scheduled",
+                event_schema_version=1,
+                entity_type="support.ticket",
+                tenant_id_field="tenant_id",
+                entity_id_field="ticket_id",
+                fields=(
+                    *_SUPPORT_WORKFLOW_FIELDS,
+                    AutomationConditionField(
+                        key="ticket_type",
+                        label="Ticket type",
+                        value_type=AutomationValueType.string,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                        ),
+                    ),
+                    AutomationConditionField(
+                        key="region",
+                        label="Region",
+                        value_type=AutomationValueType.string,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                        ),
+                    ),
+                ),
+                author_permission="support:ticket:read",
+                runtime_enabled=True,
+                scheduled=True,
+                schedule_adapter_key="support.ticket",
             ),
         ),
         actions=(

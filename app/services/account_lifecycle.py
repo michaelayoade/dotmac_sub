@@ -44,6 +44,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
 from app.models.catalog import (
     BillingMode,
     Subscription,
@@ -97,6 +98,7 @@ class BillingAnchorProjectionSource(StrEnum):
     prepaid_settlement_reanchor = "prepaid_settlement_reanchor"
     subscription_billing_grant = "subscription_billing_grant"
     service_extension = "service_extension"
+    outage_compensation = "outage_compensation"
     reviewed_reconciliation = "reviewed_reconciliation"
 
 
@@ -343,6 +345,8 @@ class ResumePausedSubscriptionCauseCommand:
     actor: str
     reason: str
     context: CommandContext
+    reconciled_renewal_period_start: datetime | None = None
+    reconciled_renewal_period_end: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1229,6 +1233,20 @@ def activate_subscription(
         db,
         subscriber_id=str(subscription.subscriber_id),
     )
+    if subscription.billing_mode == BillingMode.prepaid:
+        # Fail closed before starting prepaid service on an account the
+        # prepaid funding quarantine would exclude from money enforcement.
+        from app.services.prepaid_activation_funding_guard import (
+            PrepaidActivationEntryPoint,
+            require_prepaid_activation_funding_admitted,
+        )
+
+        require_prepaid_activation_funding_admitted(
+            db,
+            account_id=subscription.subscriber_id,
+            entry_point=PrepaidActivationEntryPoint.subscription_activation,
+            subscription_id=subscription.id,
+        )
 
     # Sales-created service contracts are gated by the canonical provisioning
     # result.  Billing settlement may fund the pending Subscription, but it may
@@ -1896,7 +1914,12 @@ def release_pause_cause_and_resume_subscription(
         )
     previous_anchor = _aware_utc(subscription.next_billing_at)
     recorded_anchor = _aware_utc(episode.previous_next_billing_at)
-    if previous_anchor != recorded_anchor:
+    anchor_reconciled = (
+        previous_anchor != recorded_anchor
+        and command.reconciled_renewal_period_start is not None
+        and command.reconciled_renewal_period_end is not None
+    )
+    if previous_anchor != recorded_anchor and not anchor_reconciled:
         raise BillingAnchorProjectionError(
             "Billing anchor changed while the subscription was paused"
         )
@@ -1904,17 +1927,93 @@ def release_pause_cause_and_resume_subscription(
         raise BillingAnchorProjectionError(
             "A paused subscription requires an existing billing anchor"
         )
-    target_anchor = previous_anchor + timedelta(seconds=paused_seconds)
-    if subscription.billing_mode == BillingMode.prepaid:
+    compensation_anchor = previous_anchor
+    if previous_anchor != recorded_anchor:
+        renewal_start = _aware_utc(command.reconciled_renewal_period_start)
+        renewal_end = _aware_utc(command.reconciled_renewal_period_end)
+        if renewal_start != recorded_anchor or renewal_end != previous_anchor:
+            raise BillingAnchorProjectionError(
+                "Reconciled prepaid renewal does not match the paused episode evidence"
+            )
+        exact_renewal = tuple(
+            db.scalars(
+                select(ServiceEntitlement)
+                .where(
+                    ServiceEntitlement.subscription_id == subscription.id,
+                    ServiceEntitlement.account_id == subscription.subscriber_id,
+                    ServiceEntitlement.status == ServiceEntitlementStatus.active,
+                    ServiceEntitlement.starts_at == recorded_anchor,
+                    ServiceEntitlement.ends_at == previous_anchor,
+                    ServiceEntitlement.amount_funded > 0,
+                )
+                .with_for_update()
+            ).all()
+        )
+        if len(exact_renewal) != 1:
+            raise BillingAnchorProjectionError(
+                "Reconciled prepaid renewal coverage is incomplete"
+            )
+    elif (
+        command.reconciled_renewal_period_start is not None
+        or command.reconciled_renewal_period_end is not None
+    ):
+        raise BillingAnchorProjectionError(
+            "Unexpected reconciled prepaid renewal evidence"
+        )
+    from app.services.compensated_service_time import (
+        TimeCreditQuery,
+        resolve_compensated_service_time,
+    )
+    from app.services.outage_interval_algebra import (
+        TimeInterval,
+        intersect_seconds,
+        interval_seconds,
+        subtract_intervals,
+    )
+
+    pause_start = _aware_utc(episode.effective_at)
+    assert pause_start is not None
+    original_clock = (TimeInterval(pause_start, command.resumed_at),)
+    credited_clock = resolve_compensated_service_time(
+        db, TimeCreditQuery(subscription.id)
+    )
+    if any(
+        intersect_seconds(original_clock, (item.interval,))
+        for item in credited_clock.unresolved
+    ):
+        raise BillingAnchorProjectionError(
+            "Resolve overlapping historical time credits before preserving paused service"
+        )
+    net_clock = subtract_intervals(original_clock, credited_clock.credited)
+    net_seconds = interval_seconds(net_clock)
+    target_anchor = compensation_anchor + timedelta(seconds=net_seconds)
+    if subscription.billing_mode == BillingMode.prepaid and net_seconds > 0:
         grant_pause_compensation_entitlement(
             db,
             GrantPauseCompensationEntitlementCommand(
                 pause_episode_id=episode.id,
                 subscription_id=subscription.id,
                 account_id=subscription.subscriber_id,
-                pause_effective_at=effective_at,
-                starts_at=previous_anchor,
+                pause_effective_at=pause_start,
+                starts_at=compensation_anchor,
                 ends_at=target_anchor,
+            ),
+        )
+    if net_seconds > 0:
+        from app.services.compensated_service_time import (
+            StageTimeCreditCommand,
+            TimeCreditSource,
+            stage_compensated_service_time,
+        )
+
+        stage_compensated_service_time(
+            db,
+            StageTimeCreditCommand(
+                subscription_id=subscription.id,
+                source=TimeCreditSource.pause,
+                source_id=episode.id,
+                ranges=net_clock,
+                evidence_ref=f"pause-episode:{episode.id}",
             ),
         )
     stage_subscription_billing_anchor(

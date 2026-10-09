@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -10,6 +11,10 @@ from sqlalchemy import select
 
 from app.models.billing import BillingAccount, Invoice, InvoiceStatus, TopupIntent
 from app.models.idempotency import IdempotencyKey
+from app.models.service_period_purchase import (
+    PrepaidPeriodPurchase,
+    PrepaidPeriodPurchaseStatus,
+)
 from app.models.subscriber import Reseller
 from app.services import gateway_topup_intents as svc
 from app.services.account_credit_deposits import AccountCreditDeposits
@@ -230,6 +235,69 @@ def test_customer_deposit_creation_requires_reviewed_preview(
         )
 
     assert exc_info.value.code.endswith("preview_required")
+
+
+def test_period_purchase_intent_is_typed_and_links_exact_purchase(
+    monkeypatch, db_session, subscriber, subscription
+):
+    _patch_policy(monkeypatch)
+    binding = _checkout_binding(db_session)
+    now = datetime.now(UTC)
+    purchase = PrepaidPeriodPurchase(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        status=PrepaidPeriodPurchaseStatus.quoted,
+        period_count=2,
+        currency="NGN",
+        coverage_starts_at=now,
+        coverage_ends_at=now + timedelta(days=60),
+        subtotal=Decimal("15000.00"),
+        tax_total=Decimal("1125.00"),
+        total=Decimal("16125.00"),
+        preview_fingerprint="a" * 64,
+        policy_version=1,
+        policy_snapshot={},
+        idempotency_key="period-purchase-test",
+        created_by="pytest",
+        expires_at=now + timedelta(minutes=30),
+    )
+    db_session.add(purchase)
+    db_session.commit()
+    purchase_id = purchase.id
+    account_id = subscriber.id
+    binding_id = binding.id
+
+    db_session_adapter.release_read_transaction(db_session)
+    result = svc.create_customer_gateway_topup_intent(
+        db_session,
+        svc.CreateCustomerGatewayTopupIntentCommand(
+            flow=svc.CustomerGatewayTopupFlow.prepaid_period_purchase,
+            account_id=account_id,
+            purchase_id=purchase_id,
+            reference="gateway-period-purchase-ref",
+            provider_type="paystack",
+            provider_id=None,
+            created_by="pytest",
+            expected_preview_fingerprint="a" * 64,
+            capability_binding_id=binding_id,
+        ),
+        context=_context(
+            svc.CREATE_CUSTOMER_SCOPE,
+            idempotency_key="period-purchase-test",
+        ),
+    )
+
+    intent = db_session.get(TopupIntent, result.intent_id)
+    linked = db_session.get(PrepaidPeriodPurchase, purchase_id)
+    assert result.requested_amount == Decimal("16125.00")
+    assert intent is not None
+    assert intent.purpose == "prepaid_period_purchase"
+    assert intent.allocation_policy == "selected_purchase_invoices_only"
+    assert intent.credit_application_policy == "none"
+    assert intent.metadata_["purchase_id"] == str(purchase_id)
+    assert linked is not None
+    assert linked.topup_intent_id == intent.id
+    assert linked.status is PrepaidPeriodPurchaseStatus.payment_pending
 
 
 def test_reseller_creation_locks_canonical_billing_account(monkeypatch, db_session):

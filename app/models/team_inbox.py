@@ -1759,50 +1759,6 @@ class InboxQueueNotification(Base):
     )
 
 
-class InboxReplyReminder(Base):
-    """Durable per-assignment reminder schedule and repeat evidence."""
-
-    __tablename__ = "inbox_reply_reminders"
-    __table_args__ = (
-        UniqueConstraint("assignment_id", name="uq_inbox_reply_reminder_assignment"),
-        Index("ix_inbox_reply_reminders_due", "is_active", "next_due_at"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    assignment_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("inbox_conversation_assignments.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    conversation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("inbox_conversations.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    waiting_since: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    next_due_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    sent_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-        nullable=False,
-    )
-
-
 class InboxRoutingEvent(Base):
     """Append-only authority for assignment, queue and escalation decisions."""
 

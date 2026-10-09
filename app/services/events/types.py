@@ -20,6 +20,8 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
+    customer_bulk_message_changed = "customer_bulk_message.changed"
+
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"
     field_work_order_note_created = "field_work_order_note.created"
@@ -51,12 +53,19 @@ class EventType(enum.Enum):
     subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
     subscriber_billing_mode_changed = "subscriber.billing_mode_changed"
     carried_source_identity_adjudicated = "billing.carried_source_identity.adjudicated"
+    prepaid_activation_funding_override_granted = (
+        "billing.prepaid_activation_funding_override.granted"
+    )
+    prepaid_activation_funding_override_revoked = (
+        "billing.prepaid_activation_funding_override.revoked"
+    )
     subscriber_suspended = "subscriber.suspended"
     subscriber_reactivated = "subscriber.reactivated"
     subscriber_throttled = "subscriber.throttled"
     subscriber_unthrottled = "subscriber.unthrottled"
 
     # Subscription events
+    subscription_test_connection_changed = "subscription.test_connection_changed"
     subscription_created = "subscription.created"
     subscription_activated = "subscription.activated"
     subscription_paused = "subscription.paused"
@@ -91,6 +100,7 @@ class EventType(enum.Enum):
     invoice_discount_removed = "invoice.discount_removed"
     invoice_discount_inherited = "invoice.discount_inherited"
     invoice_tax_correction_completed = "invoice.tax_correction_completed"
+    account_credit_invoice_reconciled = "account_credit.invoice_reconciled"
 
     # Billing - Payment events (5)
     payment_received = "payment.received"
@@ -180,6 +190,8 @@ class EventType(enum.Enum):
     prepaid_renewal_terms_backfilled = "prepaid_renewal_terms.backfilled"
     prepaid_renewal_terms_corrected = "prepaid_renewal_terms.corrected"
     prepaid_renewal_terms_audited = "prepaid_renewal_terms.audited"
+    prepaid_renewal_terms_record_requested = "prepaid_renewal_terms.record_requested"
+    prepaid_renewal_terms_recorded = "prepaid_renewal_terms.recorded"
     prepaid_proforma_adopted = "prepaid_proforma.adopted"
     prepaid_paid_invoice_repaired = "prepaid_paid_invoice.repaired"
     prepaid_paid_invoice_coverage_corrected = "prepaid_paid_invoice.coverage_corrected"
@@ -197,6 +209,10 @@ class EventType(enum.Enum):
 
     # Billing - Outage compensation
     service_extension_created = "billing.service_extension_created"
+    test_connection_created = "billing.test_connection.created"
+    test_connection_finance_review_queued = (
+        "billing.test_connection.finance_review_queued"
+    )
     service_extension_applied = "billing.service_extension_applied"
     service_extension_canceled = "billing.service_extension_canceled"
     service_extension_reversed = "billing.service_extension_reversed"
@@ -366,6 +382,7 @@ class EventType(enum.Enum):
 
     # Fiber splice plans (cut sheets)
     fiber_cost_item_changed = "fiber.cost_item_changed"
+    customer_region_changed = "customer_region.changed"
     fiber_splice_plan_issued = "fiber.splice_plan_issued"
     fiber_splice_plan_cancelled = "fiber.splice_plan_cancelled"
     fiber_splice_plan_item_executed = "fiber.splice_plan_item_executed"
@@ -545,6 +562,9 @@ class EventType(enum.Enum):
     outage_rerooted = "outage.rerooted"
     outage_discarded = "outage.discarded"
     outage_resolved = "outage.resolved"
+    outage_compensation_proposed = "outage_compensation.proposed"
+    outage_compensation_approved = "outage_compensation.approved"
+    time_credit_attested = "time_credit.attested"
 
     # Planned maintenance lifecycle outputs (docs/designs/OUTAGE_SLA_SPINE.md
     # §5). Staged atomically with each window transition by

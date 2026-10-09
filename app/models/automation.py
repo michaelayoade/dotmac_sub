@@ -83,6 +83,7 @@ class AutomationRule(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     trigger_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    trigger_keys: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     status: Mapped[str] = mapped_column(
         String(24), nullable=False, default=AutomationRuleStatus.draft.value
     )
@@ -137,12 +138,16 @@ class AutomationRuleVersion(Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     trigger_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    conditions: Mapped[list[dict[str, object]]] = mapped_column(
+    trigger_schema_versions: Mapped[dict[str, int]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    conditions: Mapped[list[dict[str, object]] | dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=list
     )
     actions: Mapped[list[dict[str, object]]] = mapped_column(
         JSONB, nullable=False, default=list
     )
+    schedule: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     created_by: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -150,6 +155,45 @@ class AutomationRuleVersion(Base):
     )
     published_by: Mapped[str | None] = mapped_column(String(255))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AutomationScheduledRun(Base):
+    """Idempotency ledger for one scheduled rule/version time slot."""
+
+    __tablename__ = "automation_scheduled_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "rule_version_id",
+            "slot_key",
+            name="uq_automation_scheduled_runs_version_slot",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "rule_id"],
+            ["automation_rules.tenant_id", "automation_rules.id"],
+            ondelete="CASCADE",
+            name="fk_automation_scheduled_runs_rule_tenant",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "rule_version_id"],
+            ["automation_rule_versions.tenant_id", "automation_rule_versions.id"],
+            ondelete="CASCADE",
+            name="fk_automation_scheduled_runs_version_tenant",
+        ),
+        Index("ix_automation_scheduled_runs_tenant_created", "tenant_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    rule_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    rule_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    slot_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
 
 
 class AutomationRun(Base):

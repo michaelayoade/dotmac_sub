@@ -178,8 +178,9 @@ def build_automation_center_data(
             ),
             "actions": tuple(
                 action.key
-                for action in manifest.actions
-                if action.entity_type == target_type
+                for action_manifest in manifests
+                for action in action_manifest.actions
+                if automation_capabilities.action_applies_to_entity(action, target_type)
                 and action.authoring_enabled
                 and action.runtime_enabled
             ),
@@ -197,7 +198,9 @@ def build_automation_center_data(
         and any(
             (authorized or trigger.author_permission in permission_keys)
             and any(
-                action.entity_type == trigger.entity_type
+                automation_capabilities.action_applies_to_entity(
+                    action, trigger.entity_type
+                )
                 and action.authoring_enabled
                 and action.runtime_enabled
                 and (authorized or action.author_permission in permission_keys)

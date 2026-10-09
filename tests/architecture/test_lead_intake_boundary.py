@@ -34,3 +34,21 @@ def test_ai_candidate_event_has_one_sales_owned_handler():
     assert "EventType.ai_intake_lead_candidate_classified" in source
     assert "lead_intake_ai.apply_shared_classification(" in source
     assert "execute_owner_command(" not in source
+
+
+def test_sales_capture_is_not_gated_on_final_routing_status():
+    source = Path("app/services/ai_conversation_intake.py").read_text(encoding="utf-8")
+    capture = source.split("def _stage_lead_candidate_classified(", 1)[1].split(
+        "@dataclass", 1
+    )[0]
+    assert "classification.requires_follow_up" not in capture
+    assert "AiIntakeStatus.awaiting_follow_up" in capture
+    assert "AiIntakeStatus.fallback" in capture
+    assert "classification.party_type_confidence < threshold" in capture
+    assert "conversation.subscriber_id is not None" in capture
+    for path in (
+        "app/services/team_inbox_customer_completion.py",
+        "app/services/sales/lead_intake.py",
+        "app/services/lead_intake_ai.py",
+    ):
+        assert "ai_lead_candidate_event_id" in Path(path).read_text(encoding="utf-8")

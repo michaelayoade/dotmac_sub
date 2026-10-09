@@ -45,16 +45,97 @@ _CUSTOMER_STATUS_FIELD = AutomationConditionField(
         "active",
         "blocked",
         "suspended",
+        "paused",
         "disabled",
         "canceled",
         "delinquent",
     ),
 )
 
+_CUSTOMER_PREVIOUS_STATUS_FIELD = AutomationConditionField(
+    key="previous_status",
+    label="Previous account status",
+    value_type=AutomationValueType.enum,
+    operators=(
+        AutomationOperator.equals,
+        AutomationOperator.not_equals,
+        AutomationOperator.in_values,
+        AutomationOperator.not_in_values,
+    ),
+    enum_values=(
+        "new",
+        "active",
+        "blocked",
+        "suspended",
+        "paused",
+        "disabled",
+        "canceled",
+        "delinquent",
+    ),
+)
+
+_CUSTOMER_ACTION_FIELD = AutomationConditionField(
+    key="action",
+    label="Status action",
+    value_type=AutomationValueType.enum,
+    operators=(AutomationOperator.equals, AutomationOperator.not_equals),
+    enum_values=("activate", "unsuspend", "suspend", "block", "disable"),
+)
+
 DOMAIN = DomainSOT(
     domain="customer_context",
     setting_domains=("subscriber",),
     services=(
+        SOTService(
+            name="customer.period_purchase_finance_review",
+            module="app.services.web_billing_period_reviews",
+            owns=("period purchase Finance review projection",),
+            depends_on=(
+                "financial.prepaid_period_purchases",
+                "financial.outage_compensation",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="period purchase Finance review projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("purchase and outage review facts",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="purchase and outage review facts",
+                        owner="financial.prepaid_period_purchases",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed purchase recovery previews, held receipts and outage approval previews from their financial owners.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Read-only bounded Finance projection.",
+                    locking="Commands revalidate under their account locks.",
+                    idempotency="Same owner facts project the same actions.",
+                    retries="Refresh after every command or stale preview.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="Finance route adapters",
+                    fail_closed_on=("incomplete owner evidence",),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.period_purchase_finance_review",
+                    verification="Typed Finance projection and permission tests.",
+                    cutover_gate="Finance views call owner queries only.",
+                    fallback_retirement="Templates and routes do not decide payment or grant eligibility.",
+                ),
+                steward="billing and finance operations",
+                design_refs=(
+                    "docs/designs/PREPAID_PERIOD_PURCHASE_AND_OUTAGE_COMPENSATION.md",
+                ),
+                test_refs=("tests/test_period_purchase_completion.py",),
+            ),
+        ),
         SOTService(
             name="customer.avatar",
             module="app.services.avatar",
@@ -897,8 +978,12 @@ DOMAIN = DomainSOT(
         SOTService(
             name="customer.portal_profile_commands",
             module="app.services.customer_portal_profile_commands",
-            owns=("customer portal profile update",),
+            owns=(
+                "customer minimum age policy",
+                "customer portal profile update",
+            ),
             depends_on=(
+                "control.settings_spec",
                 "customer.accounts",
                 "customer.identity_scope",
                 "events.dispatcher",
@@ -908,16 +993,31 @@ DOMAIN = DomainSOT(
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
+                        name="customer minimum age policy",
+                        role=OwnerRole.POLICY,
+                        input_names=("minimum customer age setting",),
+                    ),
+                    ConcernContract(
                         name="customer portal profile update",
                         role=OwnerRole.COMMAND_WRITER,
                         input_names=(
                             "typed authenticated customer profile command",
                             "locked canonical Subscriber account",
+                            "minimum customer age setting",
                         ),
                         canonical_writer="customer.portal_profile_commands",
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="minimum customer age setting",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "database-authoritative subscriber setting "
+                            "customer_minimum_age_years"
+                        ),
+                    ),
                     AuthorityInput(
                         name="typed authenticated customer profile command",
                         owner="customer.portal_profile_commands",
@@ -959,6 +1059,9 @@ DOMAIN = DomainSOT(
                         "customer.portal_profile_commands.invalid_region",
                         "customer.portal_profile_commands.invalid_lga",
                         "customer.portal_profile_commands.invalid_profile",
+                        "customer.portal_profile_commands.invalid_age_policy",
+                        "customer.portal_profile_commands.invalid_date_of_birth",
+                        "customer.portal_profile_commands.minimum_age_not_met",
                         "customer.portal_profile_commands.subscriber_not_found",
                         "customer.portal_profile_commands.invalid_biodata",
                     ),
@@ -967,6 +1070,8 @@ DOMAIN = DomainSOT(
                         "subscriber outside authenticated scope",
                         "unknown country code",
                         "invalid Nigerian state or FCT/LGA pairing",
+                        "invalid or unavailable minimum customer age policy",
+                        "future or underage date of birth",
                         "invalid profile or required biodata",
                     ),
                 ),
@@ -1004,6 +1109,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_customer_profile_location.py",
+                    "tests/test_customer_portal_profile_age_policy.py",
                     "tests/test_customer_portal_gaps.py",
                 ),
             ),
@@ -1292,6 +1398,9 @@ DOMAIN = DomainSOT(
                 "cannot inflate prepaid funding. Historical payments without "
                 "settlement evidence retain their explicit gross-minus-refund "
                 "fallback until reviewed reconciliation. "
+                "Purchase-reserved unallocated receipts remain cash evidence but "
+                "are excluded from spendable prepaid funding until their exact "
+                "purchase application or confirmed refund resolves them. "
                 "Paid prepaid subscription invoices are non-AR documents but "
                 "become exact customer-position service debits only when fully "
                 "paid and backed by exact active settlement applications. "
@@ -3146,7 +3255,11 @@ DOMAIN = DomainSOT(
                 entity_type="customer.account",
                 tenant_id_field="tenant_id",
                 entity_id_field="subscriber_id",
-                fields=(_CUSTOMER_STATUS_FIELD,),
+                fields=(
+                    _CUSTOMER_STATUS_FIELD,
+                    _CUSTOMER_PREVIOUS_STATUS_FIELD,
+                    _CUSTOMER_ACTION_FIELD,
+                ),
                 author_permission="customer:read",
                 runtime_enabled=True,
             ),
@@ -3197,6 +3310,20 @@ DOMAIN = DomainSOT(
                 fields=(),
                 author_permission="customer:read",
                 runtime_enabled=True,
+            ),
+            AutomationTriggerCapability(
+                key="customer.account.scheduled",
+                label="Customer account scheduled evaluation",
+                event_type="customer.account.scheduled",
+                event_schema_version=1,
+                entity_type="customer.account",
+                tenant_id_field="tenant_id",
+                entity_id_field="subscriber_id",
+                fields=(_CUSTOMER_STATUS_FIELD,),
+                author_permission="customer:read",
+                runtime_enabled=True,
+                scheduled=True,
+                schedule_adapter_key="customer.account",
             ),
         ),
         actions=(

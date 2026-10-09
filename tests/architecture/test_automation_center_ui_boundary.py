@@ -86,6 +86,10 @@ def test_rule_builder_uses_registered_options_and_supports_multiple_steps() -> N
     template = _source("templates/admin/automation/rule_builder.html")
     assert "builder_options|tojson" in template
     assert "Add condition" in template
+    assert "Add group" in template
+    assert "trigger-keys-json" in template
+    assert 'multiple size="6"' in template
+    assert 'group: "and"' in template
     assert "Add action" in template
     assert "conditions-availability" in template
     assert "actions-availability" in template

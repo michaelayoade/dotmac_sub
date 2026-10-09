@@ -39,7 +39,6 @@ from app.models.subscriber import (
     SubscriberChannel,
     SubscriberStatus,
 )
-from app.schemas.notification import NotificationCreate
 from app.schemas.subscriber import (
     AddressCreate,
     AddressUpdate,
@@ -48,11 +47,11 @@ from app.schemas.subscriber import (
 )
 from app.services import (
     account_status_commands,
+    communication_intents,
     customer_portal,
 )
 from app.services import billing_day as billing_day_service
 from app.services import catalog as catalog_service
-from app.services import notification as notification_service
 from app.services import radius as radius_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_lists as web_customer_lists_service
@@ -71,6 +70,10 @@ from app.services.bulk_actions import (
 )
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
+from app.services.customer_bulk_message_contracts import (
+    BulkMessageEvaluation,
+    BulkMessageSpec,
+)
 from app.services.customer_financial_position import get_customer_financial_position
 from app.services.customer_identity_normalization import (
     collapse_whitespace,
@@ -101,7 +104,6 @@ from app.services.radius_access_state import (
 from app.services.whatsapp_notification_templates import (
     build_provider_template_body,
     provider_template_from_template,
-    sync_whatsapp_registry_templates,
 )
 
 
@@ -1539,9 +1541,71 @@ def _bulk_message_impact_token(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _evaluate_bulk_message_domain(
+    db: Session, *, spec: BulkMessageSpec
+) -> BulkMessageEvaluation:
+    """Translate legacy helper failures at its typed collaborator boundary."""
+    from app.services.domain_errors import DomainError
+
+    try:
+        return _evaluate_bulk_message(db=db, spec=spec)
+    except HTTPException as exc:
+        suffix = "impact_changed" if exc.status_code == 409 else "invalid_command"
+        raise DomainError(
+            code=f"communications.customer_bulk_messages.{suffix}",
+            message=str(exc.detail),
+            retryable=False,
+        ) from exc
+
+
 def queue_bulk_message_from_payload(
     db: Session, payload: dict[str, Any]
 ) -> dict[str, object]:
+    """Legacy JSON adapter; every write now enters the same typed command owner."""
+    from pydantic import ValidationError
+
+    from app.services.customer_bulk_message_evaluation import evaluate_bulk_message
+    from app.services.customer_bulk_messages import (
+        ImmediateBulkMessageCommand,
+        materialize_immediate,
+    )
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.domain_errors import DomainError
+    from app.services.owner_commands import CommandContext
+
+    try:
+        spec = BulkMessageSpec.model_validate(payload)
+        if spec.preview_only:
+            result = evaluate_bulk_message(db=db, spec=spec)
+        else:
+            db_session_adapter.release_read_transaction(db)
+            result = materialize_immediate(
+                db=db,
+                command=ImmediateBulkMessageCommand(
+                    context=CommandContext.system(
+                        actor="system:legacy_bulk_message",
+                        scope="customer_bulk_message",
+                        reason="confirmed bulk message",
+                    ),
+                    spec=spec,
+                ),
+            )
+        return result.model_dump(mode="json", exclude_none=True)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid bulk message request"
+        ) from exc
+    except DomainError as exc:
+        raise HTTPException(
+            status_code=409 if exc.code.endswith("impact_changed") else 400,
+            detail=exc.message,
+        ) from exc
+
+
+def _evaluate_bulk_message(
+    db: Session, *, spec: BulkMessageSpec
+) -> BulkMessageEvaluation:
+    payload = spec.model_dump(mode="json", exclude_none=True)
     template_id = str(payload.get("template_id") or "").strip()
     channel_value = str(payload.get("channel") or "").strip().lower()
     if not template_id or not channel_value:
@@ -1556,7 +1620,6 @@ def queue_bulk_message_from_payload(
             status_code=400, detail="Unsupported notification channel"
         ) from exc
 
-    sync_whatsapp_registry_templates(db)
     template = None
     if channel == NotificationChannel.whatsapp:
         template = _notification_template_for_whatsapp(db, template_id)
@@ -1801,26 +1864,28 @@ def queue_bulk_message_from_payload(
             render_sample_count += 1
             if render_sample_count >= _BULK_MESSAGE_RENDER_SAMPLE_LIMIT:
                 break
-        return {
-            "success": True,
-            "preview": True,
-            "scope": resolved.scope,
-            "matched_count": len(customers),
-            "scope_token": resolved_scope_token,
-            "impact_token": impact_token,
-            "missing_ids": list(resolved.missing_ids),
-            "created_count": created_count,
-            "queued_count": queued_count,
-            "suppressed_count": suppressed_count,
-            "suppression_counts": suppression_counts,
-            "skipped_count": skipped_count,
-            "suppressed": suppressed,
-            "skipped": skipped,
-            "recipient_summary": recipient_summary,
-            "recipient_summary_limit": _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT,
-            "render_sample_count": render_sample_count,
-            "notification_ids": [],
-        }
+        return BulkMessageEvaluation.model_validate(
+            {
+                "success": True,
+                "preview": True,
+                "scope": resolved.scope,
+                "matched_count": len(customers),
+                "scope_token": resolved_scope_token,
+                "impact_token": impact_token,
+                "missing_ids": list(resolved.missing_ids),
+                "created_count": created_count,
+                "queued_count": queued_count,
+                "suppressed_count": suppressed_count,
+                "suppression_counts": suppression_counts,
+                "skipped_count": skipped_count,
+                "suppressed": suppressed,
+                "skipped": skipped,
+                "recipient_summary": recipient_summary,
+                "recipient_summary_limit": _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT,
+                "render_sample_count": render_sample_count,
+                "notification_ids": [],
+            }
+        )
 
     expected_impact_token = str(payload.get("expected_impact_token") or "")
     if not expected_impact_token:
@@ -1850,26 +1915,35 @@ def queue_bulk_message_from_payload(
             payload_variables=payload_variables,
             required_variables=required_variables,
         )
-        notification = notification_service.notifications.queue_customer_notification(
+        intent_result = communication_intents.submit(
             db,
-            NotificationCreate(
-                template_id=template.id,
+            communication_intents.CommunicationIntent(
                 subscriber_id=subscriber.id,
-                channel=channel,
                 event_type="service_bulk_message",
                 category=category,
-                recipient=recipient,
+                template_id=template.id,
                 subject=subject if channel == NotificationChannel.email else None,
                 body=body,
-                status=(
+                channels=(channel,),
+                include_reseller=False,
+                recipients={channel: recipient},
+                requested_status=(
                     NotificationStatus.queued
                     if allowed
                     else NotificationStatus.canceled
                 ),
+                requested_last_error=condition_error or reason,
                 send_at=quiet_send_at if allowed else None,
-                last_error=condition_error or reason,
+                dedupe_key=f"admin-customer-bulk:{impact_token}:{subscriber.id}",
+                metadata={
+                    "source": "admin_customers_bulk_send",
+                    "bulk_impact_token": impact_token,
+                },
             ),
         )
+        notification = next(iter(intent_result.deliveries), None)
+        if notification is None:
+            raise RuntimeError("bulk communication intent produced no delivery")
         if notification.id:
             notification_ids.append(str(notification.id))
         if notification.status == NotificationStatus.queued:
@@ -1888,27 +1962,29 @@ def queue_bulk_message_from_payload(
                         reason=reason or "Suppressed by notification policy",
                     )
                 )
-    db.commit()
+    db.flush()
 
-    return {
-        "success": True,
-        "preview": preview_only,
-        "scope": resolved.scope,
-        "matched_count": len(customers),
-        "scope_token": resolved_scope_token,
-        "impact_token": impact_token,
-        "missing_ids": list(resolved.missing_ids),
-        "created_count": created_count,
-        "queued_count": queued_count,
-        "suppressed_count": suppressed_count,
-        "suppression_counts": suppression_counts,
-        "skipped_count": skipped_count,
-        "suppressed": suppressed,
-        "skipped": skipped,
-        "recipient_summary": recipient_summary,
-        "recipient_summary_limit": _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT,
-        "notification_ids": notification_ids,
-    }
+    return BulkMessageEvaluation.model_validate(
+        {
+            "success": True,
+            "preview": preview_only,
+            "scope": resolved.scope,
+            "matched_count": len(customers),
+            "scope_token": resolved_scope_token,
+            "impact_token": impact_token,
+            "missing_ids": list(resolved.missing_ids),
+            "created_count": created_count,
+            "queued_count": queued_count,
+            "suppressed_count": suppressed_count,
+            "suppression_counts": suppression_counts,
+            "skipped_count": skipped_count,
+            "suppressed": suppressed,
+            "skipped": skipped,
+            "recipient_summary": recipient_summary,
+            "recipient_summary_limit": _BULK_MESSAGE_PREVIEW_SAMPLE_LIMIT,
+            "notification_ids": notification_ids,
+        }
+    )
 
 
 def _bulk_message_suppression_item(
@@ -2434,6 +2510,7 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
                 "region": (data.get("region") or "").strip() or None,
                 "postal_code": (data.get("postal_code") or "").strip() or None,
                 "country_code": (data.get("country_code") or "").strip() or None,
+                "connection_type": (data.get("connection_type") or "").strip() or None,
                 "is_active": data.get("is_active", True),
                 "status": data.get("status", "active"),
                 "notes": (data.get("notes") or "").strip() or None,
@@ -2475,6 +2552,7 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
                 "region": (data.get("region") or "").strip() or None,
                 "postal_code": (data.get("postal_code") or "").strip() or None,
                 "country_code": (data.get("country_code") or "").strip() or None,
+                "connection_type": (data.get("connection_type") or "").strip() or None,
                 "is_active": True,
                 "status": "active",
                 "notes": (data.get("notes") or "").strip() or None,
@@ -2538,6 +2616,9 @@ def create_customer_from_form(
                 "postal_code": _normalize_optional(form_data.get("postal_code")),
                 "country_code": _normalize_optional(form_data.get("country_code")),
                 "pop_site_id": _normalize_optional(form_data.get("pop_site_id")),
+                "connection_type": _normalize_optional(
+                    form_data.get("connection_type")
+                ),
                 "status": form_data.get("status") or "active",
                 "is_active": form_data.get("is_active") == "true",
                 "marketing_opt_in": form_data.get("marketing_opt_in") == "true",
@@ -2571,6 +2652,7 @@ def create_customer_from_form(
             "tax_id": _normalize_optional(form_data.get("tax_id")),
             "domain": _normalize_optional(form_data.get("domain")),
             "website": _normalize_optional(form_data.get("website")),
+            "connection_type": _normalize_optional(form_data.get("connection_type")),
             "email": identity["email"],
             "phone": identity["phone"],
             "is_active": True,
@@ -2723,6 +2805,7 @@ def update_person_customer(
     reseller_id: str | None = None,
     vat_exempt: str | None = None,
     actor_id: str | None = None,
+    connection_type: str | None = None,
 ):
     before: Subscriber = subscriber_service.subscribers.get(
         db=db, subscriber_id=customer_id
@@ -2778,6 +2861,7 @@ def update_person_customer(
         "region": _normalize_optional(region),
         "postal_code": _normalize_optional(postal_code),
         "country_code": _normalize_optional(country_code),
+        "connection_type": _normalize_optional(connection_type),
         "marketing_opt_in": marketing_opt_in == "true",
         "notes": _normalize_optional(notes),
         "reseller_id": resolved_reseller_id,
@@ -2875,6 +2959,7 @@ def update_business_customer(
     reseller_id: str | None = None,
     vat_exempt: str | None = None,
     actor_id: str | None = None,
+    connection_type: str | None = None,
 ):
     before: Subscriber = subscriber_service.subscribers.get(
         db=db, subscriber_id=customer_id
@@ -2916,6 +3001,7 @@ def update_business_customer(
             "tax_id": _normalize_optional(tax_id),
             "domain": _normalize_optional(domain),
             "website": _normalize_optional(website),
+            "connection_type": _normalize_optional(connection_type),
             "notes": _normalize_optional(org_notes),
             "category": SubscriberCategory.business.value,
             "reseller_id": resolved_reseller_id,

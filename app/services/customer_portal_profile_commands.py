@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberCategory
 from app.schemas.subscriber import (
     SubscriberNotificationPreferencesUpdate,
     SubscriberUpdate,
 )
-from app.services import customer_profile_location, ncc_location
+from app.services import customer_profile_location, ncc_location, settings_spec
 from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.customer_identity_resolution import (
@@ -28,8 +29,10 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
+from app.timezone import APP_TIMEZONE
 
 PORTAL_PROFILE_WRITE_SCOPE = "customer:profile:write"
+CUSTOMER_MINIMUM_AGE_SETTING_KEY = "customer_minimum_age_years"
 
 _UPDATE_COMMAND = OwnerCommandDefinition(
     owner="customer.portal_profile_commands",
@@ -80,11 +83,90 @@ class CustomerProfileUpdateOutcome:
     email_changed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class CustomerMinimumAgePolicy:
+    """Typed customer DOB policy projected from the authoritative setting."""
+
+    minimum_age_years: int
+    as_of_date: date
+    latest_allowed_date_of_birth: date
+
+
 def _fail(code: str, message: str) -> CustomerPortalProfileCommandError:
     return CustomerPortalProfileCommandError(
         code=f"customer.portal_profile_commands.{code}",
         message=message,
     )
+
+
+def _latest_allowed_date_of_birth(as_of_date: date, minimum_age_years: int) -> date:
+    try:
+        return as_of_date.replace(year=as_of_date.year - minimum_age_years)
+    except ValueError:
+        # A 29 February policy date maps to 28 February when the cutoff year
+        # is not a leap year.
+        return as_of_date.replace(
+            year=as_of_date.year - minimum_age_years,
+            day=28,
+        )
+
+
+def resolve_customer_minimum_age_policy(
+    db: Session,
+    *,
+    as_of_date: date | None = None,
+) -> CustomerMinimumAgePolicy:
+    """Resolve the UI and command owner's single minimum-age interpretation."""
+
+    try:
+        raw_value = settings_spec.resolve_value(
+            db,
+            SettingDomain.subscriber,
+            CUSTOMER_MINIMUM_AGE_SETTING_KEY,
+        )
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise TypeError("minimum customer age must resolve to an integer")
+        minimum_age_years = raw_value
+    except (TypeError, ValueError) as exc:
+        raise _fail(
+            "invalid_age_policy",
+            "The minimum customer age policy is invalid.",
+        ) from exc
+    except Exception as exc:
+        raise _fail(
+            "invalid_age_policy",
+            "The minimum customer age policy is unavailable.",
+        ) from exc
+    if not 0 <= minimum_age_years <= 120:
+        raise _fail(
+            "invalid_age_policy",
+            "The minimum customer age policy is invalid.",
+        )
+    effective_date = as_of_date or datetime.now(APP_TIMEZONE).date()
+    return CustomerMinimumAgePolicy(
+        minimum_age_years=minimum_age_years,
+        as_of_date=effective_date,
+        latest_allowed_date_of_birth=_latest_allowed_date_of_birth(
+            effective_date,
+            minimum_age_years,
+        ),
+    )
+
+
+def _validate_date_of_birth(db: Session, birth_date: date | None) -> None:
+    if birth_date is None:
+        return
+    age_policy = resolve_customer_minimum_age_policy(db)
+    if birth_date > age_policy.as_of_date:
+        raise _fail(
+            "invalid_date_of_birth",
+            "Date of birth cannot be in the future.",
+        )
+    if birth_date > age_policy.latest_allowed_date_of_birth:
+        raise _fail(
+            "minimum_age_not_met",
+            f"Customer must be at least {age_policy.minimum_age_years} years old.",
+        )
 
 
 def _canonical_location(
@@ -139,7 +221,9 @@ def _validated_fields(
             else None
         )
     except ValueError as exc:
-        raise _fail("invalid_profile", "Date of birth must be a valid date.") from exc
+        raise _fail(
+            "invalid_date_of_birth", "Date of birth must be a valid date."
+        ) from exc
 
     fields: dict[str, object] = {
         "first_name": command.first_name.strip(),
@@ -199,6 +283,8 @@ def update_customer_profile(
         )
         if subscriber is None:
             raise _fail("subscriber_not_found", "Customer account was not found.")
+
+        _validate_date_of_birth(db, fields.date_of_birth)
 
         nin_locked = bool((subscriber.metadata_ or {}).get("nin_verified"))
         if (

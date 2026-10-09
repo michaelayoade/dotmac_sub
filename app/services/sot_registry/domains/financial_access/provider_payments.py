@@ -574,6 +574,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.account_credit_deposits",
             "financial.payment_gateway_finance",
             "financial.payments",
+            "financial.prepaid_period_purchases",
             "financial.payment_provider_events",
             "financial.topup_intents",
             "observability.audit_log",

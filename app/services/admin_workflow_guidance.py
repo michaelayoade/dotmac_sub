@@ -194,7 +194,10 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
         "Confirm that your role has Automation Center access before opening the hub.",
         "Choose Workflows, Client scripts, Server scripts, or Execution history for the task you need to complete.",
-        "In Workflows, choose the module and owner-produced event shown by the form; workflow is the user-facing name for a central rule.",
+        "In Workflows, choose the module and one or more owner-produced events shown by the form; workflow is the user-facing name for a central rule.",
+        "Use AND, OR, and NOT condition groups to express broad matches and exceptions, such as excluding a particular ticket status.",
+        "For system-backed condition values, type into the lookup field and choose a returned option; the list is loaded on demand from current system records and configuration.",
+        "For recurring work, choose a scheduled event, set an interval or cron cadence and time zone, and keep scheduled triggers together; add a notification action when an operator or customer needs an update.",
         "Add only declared conditions and typed actions, then save the workflow as a draft before activation.",
         "In Client scripts, bind browser JavaScript to one registered module target and form event; use the restricted form API.",
         "Open a script to inspect its active source and SHA-256 hash. Edit creates or replaces an unpublished draft version; it does not overwrite the active version.",
@@ -205,6 +208,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "If you have retry permission, continue a failed run; successful steps are skipped, and the retry result is recorded.",
         notes=(
             "Workflow and rule refer to the same central event-to-action mechanism; the technical /rules routes remain for compatibility.",
+            "To review repeated temporary access, choose Network Access Control Plane → Test Connection created, set the preceding 7-day count greater than 5, and select Notify Finance with the intended team. Expired grants remain in the creation count; queued email still requires delivery confirmation.",
             "The hub is a directory. Module ownership diagnostics are not part of the operator workspace.",
             "Run history is read-only, while continuing a failed run requires the separate retry permission.",
             "A target may be scriptable before it is workflow-executable; each mechanism has its own declared capability list.",
@@ -275,8 +279,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "For portal access, confirm the contact details and impersonate only when a valid support reason requires it.",
         "Use Timeline to review recent events, then open linked records for the detail behind a change.",
         "Open the specific record before performing a state-changing action.",
+        "After confirming a customer message, use the send status panel to follow recipient preparation and delivery. If confirmation is lost, keep the send reference and choose Check status before submitting another send.",
+        "If a prepaid funding quarantine banner appears, prepaid service cannot be created or activated until Finance captures the account's opening balance through the runbook the banner names. Only when the customer must be connected first, an admin may grant an activation override with a clear reason; revoke it once the opening is captured.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "An activation override only admits prepaid activation. The account stays funding-quarantined, excluded from balance-based suspension and restoration, and still counts in the quarantine alert until its opening is captured.",
+            "Authorized staff can open Test Connection below the Invoice icon in All Subscriptions to grant temporary full service access for troubleshooting; review the configured system-wide duration and expiry before activation.",
             "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
             "The action requires permission to cancel payment intents and review payment proofs.",
             "Customer pages use a short-lived notification-choice snapshot; use the bulk notification setup workflow when provider templates need to be refreshed.",
@@ -286,6 +294,27 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "/admin/customers/{customer_type}/{customer_id}/**",
             "/admin/customers/{subscriber_id}/availability",
             "/admin/customers/{subscriber_id}/subscriptions/{subscription_id}/sla-review",
+        ),
+    ),
+    _guide(
+        "subscription-test-connection",
+        "Subscriptions",
+        "Test a customer's connection",
+        "Customer Experience Manager, Finance Manager, authorized engineers",
+        "Temporarily enable full subscription access while troubleshooting connectivity.",
+        (),
+        "In the customer's All Subscriptions list, open Test Connection below the Invoice icon on the affected subscription.",
+        "Review the administrator-configured system-wide duration and expected expiry before activation; initiators cannot override the duration for an individual subscription.",
+        "Check the prerequisites and activate only for the displayed configured duration. The Test Connection permission is required.",
+        "Check the delivery status: pending means network application is still underway; applied confirms delivery; failed requires investigation before treating service as restored.",
+        "Test connectivity during the displayed interval. Outstanding bills, prolonged debt, and a missing billing baseline do not restrict this temporary access.",
+        "At expiry, current normal subscription and billing rules apply automatically. Review Timeline for the initiating user, activation time, duration, and expected expiry.",
+        route_templates=(
+            "/admin/customers/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
+        ),
+        notes=(
+            "Test Connection does not pay invoices, change the billing baseline, or permanently change the subscription's commercial state.",
+            "Security holds and missing or ambiguous network provisioning remain blockers; the configured network must support automatic expiry before activation is enabled.",
         ),
     ),
     _guide(
@@ -350,11 +379,14 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "On Network Map, use Import Map to stage a KML or KMZ file for review, or Export Map to download the permitted layers; staging does not change the canonical map.",
         "Review each staged feature's name, geometry, suggested asset type, and blocker; correct classifications before submission.",
         "Submit eligible new point assets into the existing proposal review. Route geometry and other blocked features stay staged until their separate review is complete.",
+        "On the fiber map, submit supported FDH and closure moves for review; the canonical map position changes only after approval.",
+        "On Fiber Change Requests, review pending Map V2 proposals in their separate queue. Only an independent reviewer with network:fiber:review can approve or reject; approval applies the proposed canonical asset change.",
+        "On the FDH cabinet ledger, use the active-cabinet list and page controls to find a cabinet, then use its editor for non-location details.",
         notes=(
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",
             "Map imports accept optional asset IDs when available and keep unsupported or sensitive features blocked for review.",
         ),
-        route_templates=("/admin/network",),
+        route_templates=("/admin/network/fiber-change-requests", "/admin/network"),
     ),
     _guide(
         "olt-operational-health",
@@ -637,6 +669,24 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=("Do not manually edit billing dates to undo an extension.",),
     ),
     _guide(
+        "service-period-review",
+        "Billing",
+        "Review prepaid payments and outage proposals",
+        "Finance reviewers and approvers",
+        "Resolve held prepaid purchase money and approve evidenced outage time.",
+        ("/admin/billing/service-period-review",),
+        "Open Service period review from Service Extensions. Confirm the account, subscription, provider reference, age, and reason for review.",
+        "Compare collected, refunded, and held amounts with provider evidence. Held purchase money is reserved for that purchase and is separate from available account credit.",
+        "Use the permitted purchase recovery action with a clear reason only after reviewing the current evidence. Verified unpaid failures may release checkout; unknown outcomes and late captures require review.",
+        "For an outage proposal, review the finalized downtime, funded coverage, previous time credits, proposed seconds, and resulting service date. An authorized approver must be different from the maker and enter a clear approval reason.",
+        "Confirm only the current reviewed proposal, then verify the resulting purchase or outage state and customer billing history. If the evidence changed, reload and review again.",
+        notes=(
+            "An outage event creates a proposal; it does not grant service time before Finance approval.",
+            "Recovery does not charge the customer again or manufacture a refund. Use the existing provider-confirmed refund workflow when needed.",
+            "Unclear historical extension credits require reviewed attestation before another overlapping award.",
+        ),
+    ),
+    _guide(
         "payments",
         "Payments",
         "Record and allocate payments",
@@ -650,6 +700,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "If the complete prepaid charge is unavailable, no renewal invoice is created and the billing date is not moved.",
         "Acknowledge duplicate risk only when the reviewed bank evidence proves the payment is distinct.",
         "Use allocation for existing unallocated value; it does not create new money.",
+        "Filter the Payments or Unallocated Payments list by customer, status, method, or dates. Leave either date blank to omit that boundary; leave both blank for all dates. Export CSV uses the same filters across the complete result.",
         notes=(
             "Use Payment Proof review for customer-uploaded transfer receipts; never bypass a duplicate warning by changing the reference.",
             "Do not create a manual invoice or manually change the next billing date to imitate a prepaid renewal.",
@@ -800,9 +851,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
 )
 
 
-# These guides complete the Help Center's Admin-sidebar inventory. They are not
-# matched by ``guidance_for_path``, so adding Help content never adds a new
-# contextual question-mark control to a page.
+# These guides complete the Help Center's Admin-sidebar inventory. They are
+# also available to contextual path lookup when they describe a concrete page.
 HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
     _guide(
         "workqueue",
@@ -825,7 +875,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/surveys",),
         "Search or filter the survey list, then open a survey to review its questions and response status.",
         "Choose New Survey, enter its name and purpose, add the required questions, and save it.",
-        "Open the saved survey to copy its public response link, activate or close collection, and review responses.",
+        "Open the saved survey to copy its public response link or activate or close collection. Read the feedback report for satisfaction, reliability, downtime, and improvement priorities. Each chart shows its answer count and excluded or missing answers; percentages describe submitted answers, not unique customers. Expand an individual submission to read its answers, including answers to removed questions. The report includes all saved submissions; the response list shows the latest 200.",
         "Export responses only when the intended audience and date range are correct.",
     ),
     _guide(
@@ -944,13 +994,19 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
     _guide(
         "vendor-routes",
         "Vendors",
-        "Review vendor routes",
+        "Review and propose map routes and assets",
         "Network and fiber reviewers",
-        "Review proposed vendor routes before accepting them into network work.",
+        "Review vendor submissions and create staff-owned map proposals before accepting network work.",
         ("/admin/vendors/routes",),
-        "Filter the route queue and open the exact proposal.",
-        "Review geometry, endpoints, project scope, evidence, and existing network conflicts.",
-        "Approve or reject the route with a clear reason, then verify the resulting project state.",
+        "Filter the route queue or open Fiber Plant Map, then choose the exact route or asset proposal.",
+        "Review geometry, endpoints, project or work-order links when present, evidence, and existing network conflicts.",
+        "When creating a staff proposal, choose Propose Route or Asset; project and work order links are optional, and no vendor quote is required.",
+        "Approve or reject the pending proposal with a clear reason, then verify the resulting network or project state.",
+        route_templates=("/admin/network/fiber", "/admin/network/fiber-map/new"),
+        notes=(
+            "Staff-owned proposals remain separate from vendor quote submissions and stay pending until an authorized reviewer decides.",
+            "If a work order already belongs to an installation project, linking the work order can populate that project association; otherwise the proposal may remain unscoped.",
+        ),
     ),
     _guide(
         "reports-overview",
@@ -967,6 +1023,41 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/reports",),
     ),
     _guide(
+        "churn-report",
+        "Reports",
+        "Review subscriber churn",
+        "Authorized customer reporting and operations staff",
+        "Compare cancellation and suspension activity over a controlled calendar period.",
+        (),
+        "Choose Last 1 month, Last 3 months, or Custom range before reviewing the report.",
+        "Use Event type to compare cancellations, suspensions, or both; custom ranges require a start and end date.",
+        "Review the KPI totals and period-matched trend together before drawing a conclusion.",
+        "Review recent event timestamps and cancellation or suspension reasons within the selected scope.",
+        "Export only the currently selected event type and date range when the filtered evidence is needed outside the report.",
+        route_templates=("/admin/reports/churn",),
+        notes=(
+            "The chart and recent-event list use the selected calendar window in the application timezone.",
+            "Legacy subscriber rows without trusted lifecycle evidence remain visible through the compatibility fallback and should be backfilled before treating them as a complete historical record.",
+        ),
+    ),
+    _guide(
+        "regional-performance-report",
+        "Reports",
+        "Review regional performance",
+        "Billing, operations, network management",
+        "Compare revenue, service, customer status, and connection type across configured regions.",
+        ("/admin/reports/regional-performance",),
+        "Choose the current-month default or enter an inclusive date range, then optionally narrow the report to one configured region.",
+        "Read revenue and collection figures as period-bound financial facts; customer status, connection type, active service, and region assignment are current-state values.",
+        "Use the region link in the detail table to inspect the matching customer list, including the Unassigned row when location cleanup is needed.",
+        "Confirm the selected period, region, and customer-state totals before exporting the report.",
+        "Export only the filtered scope you are authorized to use.",
+        notes=(
+            "Revenue is grouped using each customer's current winning region, so changing a radius, center, or overlap rule can change historical geographic grouping.",
+            "Wireless and Wired counts come from the customer's explicit Connection Type field; Unspecified means the field still needs manual classification.",
+        ),
+    ),
+    _guide(
         "gis",
         "GIS / Map",
         "Manage service locations and map layers",
@@ -977,6 +1068,24 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open a feature to review its coordinates, ownership, source, and current status.",
         "Review pending customer pin corrections before accepting or rejecting them.",
         "Create or edit locations, areas, and layers only from verified geographic evidence.",
+    ),
+    _guide(
+        "customer-regions",
+        "GIS / Map",
+        "Configure customer regions",
+        "GIS and network administrators",
+        "Define the center, radius, color, and overlap rule used to classify customers geographically.",
+        ("/admin/customer-regions",),
+        "Open Customer Regions from the Settings Hub and review existing active and disabled regions before changing one.",
+        "Create or edit a region with verified decimal coordinates, a radius, a color, and the overlap rule that matches the operating decision; if validation fails, correct the highlighted input and save again because the existing configuration remains unchanged.",
+        "Use the map marker or click the map to adjust the center, then save and verify the radius boundary on the network maps.",
+        "When radii overlap, use Nearest for geographic proximity, NAS or POP/site for the matching infrastructure tie-breaker, or Manual priority when an explicit precedence is required.",
+        "Disable a region instead of deleting it when it should stop receiving new assignments but remain available for review history.",
+        notes=(
+            "Infrastructure choices are loaded only when the selected overlap rule needs them, so region editing remains responsive even when the network inventory is large.",
+            "NAS and POP/site rules are tie-breakers for customers already inside a configured radius; they do not replace missing customer geolocation.",
+            "Region write actions require gis:area:write. Users with map-view access can review the configuration without changing it.",
+        ),
     ),
     _guide(
         "integrations",
@@ -1002,6 +1111,8 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Search and open the exact notification record before editing or retrying anything.",
         "Create or edit templates and policies, choose the purpose that matches the customer message, preview the result, then save and verify it.",
         "For manual customer-page sends, suspended or blocked accounts may receive only account, billing, service, or credentials messages; canceled and disabled accounts receive none.",
+        "For customer bulk messages, Accepted and Preparing describe recipient preparation; queued delivery requests, provider submissions, confirmed deliveries, and failures appear separately in the send status panel.",
+        "A broker outage leaves an accepted request for automatic recovery. A failed preparation requires reviewing the reason and a new preview before another confirmed send.",
         "Review delivery failure evidence before retrying or canceling a queued notification.",
         "Before a controlled payment email adoption, review the receipt and invoice-paid comparison report, including both template IDs, purpose, conditions, and active state.",
         "An authorized operator can copy both reviewed payment email templates once, then rerun the comparison. Resolve conflicts before retrying; customer delivery uses the current templates until the separate cutover.",
@@ -1069,26 +1180,26 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("review-automation-access", "Review Automation Center access", 0),
         _action("choose-automation-workspace", "Choose the automation workspace", 1),
         _action("choose-automation-event", "Choose a module and event", 2),
-        _action("save-automation-workflow", "Save a workflow draft", 3),
-        _action("create-automation-client-script", "Create a client script draft", 4),
+        _action("save-automation-workflow", "Save a workflow draft", 3, 4, 5, 6),
+        _action("create-automation-client-script", "Create a client script draft", 7),
         _action(
             "inspect-automation-script",
             "Inspect the active script and draft version",
-            5,
+            8,
         ),
         _action(
             "control-automation-script-lifecycle",
             "Publish, pause, resume, or retire a script",
-            6,
+            9,
         ),
-        _action("create-automation-server-script", "Create a server script draft", 7),
+        _action("create-automation-server-script", "Create a server script draft", 10),
         _action(
             "review-automation-runtime-boundary",
             "Review isolated runtime and owner-command limits",
-            8,
+            11,
         ),
-        _action("review-automation-runs", "Review run history and failure details", 9),
-        _action("retry-automation-run", "Continue a failed automation run", 10),
+        _action("review-automation-runs", "Review run history and failure details", 12),
+        _action("retry-automation-run", "Continue a failed automation run", 13),
     ),
     "custom-fields-center": (
         _action("review-custom-field-access", "Review custom-field access", 0),
@@ -1141,6 +1252,30 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="subscriber:impersonate",
         ),
         _action("review-history", "Review customer history", 5, 6),
+        _action(
+            "check-customer-send-status",
+            "Check customer message send status",
+            7,
+            permission="communications:customer:send",
+        ),
+        _action(
+            "prepaid-activation-override",
+            "Handle a prepaid funding quarantine",
+            8,
+            permission="billing:prepaid_funding:activation_override",
+        ),
+    ),
+    "subscription-test-connection": (
+        _action("review-test-duration", "Review the Test Connection duration", 0, 1),
+        _action(
+            "activate-test-connection",
+            "Activate and verify Test Connection",
+            2,
+            3,
+            4,
+            permission="subscription:test_connection",
+        ),
+        _action("review-test-expiry", "Review expiry and account history", 5),
     ),
     "new-subscription": (
         _action("select-service", "Select the customer service", 0),
@@ -1212,6 +1347,24 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Submit eligible point proposals",
             6,
             permission="network:fiber:import",
+        ),
+        _action(
+            "review-fiber-map-movement",
+            "Review fiber map movement",
+            7,
+            permission="network:fiber:read",
+        ),
+        _action(
+            "review-fiber-change-proposals",
+            "Review Map V2 asset proposals",
+            8,
+            permission="network:fiber:review",
+        ),
+        _action(
+            "find-fdh-cabinet",
+            "Find an FDH cabinet",
+            9,
+            permission="network:fiber:read",
         ),
     ),
     "olt-operational-health": (
@@ -1417,7 +1570,29 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("verify-extension", "Verify extension history", 3),
     ),
+    "service-period-review": (
+        _action("review-held-receipt", "Review held purchase money", 0, 1),
+        _action(
+            "recover-purchase",
+            "Recover a reviewed purchase",
+            2,
+            permission="billing:prepaid_reconciliation:repair",
+        ),
+        _action(
+            "approve-outage",
+            "Approve an outage proposal",
+            3,
+            permission="billing:outage_compensation:approve",
+        ),
+        _action("verify-period-review", "Verify the reviewed result", 4),
+    ),
     "payments": (
+        _action(
+            "filter-export-payments",
+            "Filter or export payments",
+            7,
+            permission="billing:payment:read",
+        ),
         _action(
             "record-payment",
             "Record a payment",
@@ -1686,12 +1861,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("verify-vendor-review", "Verify the review result", 3),
     ),
     "vendor-routes": (
-        _action("find-vendor-route", "Find a vendor route", 0),
-        _action("review-vendor-route", "Review route evidence", 1),
+        _action("find-vendor-route", "Find a route or asset proposal", 0),
+        _action("review-vendor-route", "Review route or asset evidence", 1),
+        _action(
+            "create-admin-map-proposal",
+            "Create a staff map proposal",
+            2,
+            permission="network:fiber:write",
+        ),
         _action(
             "decide-vendor-route",
             "Approve or reject a route",
-            2,
+            3,
             permission="network:fiber:write",
         ),
     ),
@@ -1701,6 +1882,28 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("investigate-report", "Investigate a report item", 2),
         _action(
             "export-report", "Export a report", 3, permission="reports:billing:export"
+        ),
+    ),
+    "churn-report": (
+        _action("choose-churn-window", "Choose the churn date range", 0),
+        _action("filter-churn-events", "Filter cancellation or suspension events", 1),
+        _action("review-churn-evidence", "Review churn totals and trend", 2, 3),
+        _action(
+            "export-churn-report",
+            "Export the filtered churn report",
+            4,
+            permission="customer:read",
+        ),
+    ),
+    "regional-performance-report": (
+        _action("filter-regional-report", "Filter regional performance", 0, 1),
+        _action("review-regional-metrics", "Review regional metrics", 2),
+        _action("open-regional-customers", "Open regional customers", 3),
+        _action(
+            "export-regional-report",
+            "Export the regional report",
+            4,
+            permission="reports:billing:export",
         ),
     ),
     "gis": (
@@ -1717,6 +1920,28 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Create or edit map data",
             3,
             permission="gis:location:write",
+        ),
+    ),
+    "customer-regions": (
+        _action("review-region-configuration", "Review region configuration", 0),
+        _action(
+            "edit-region-configuration",
+            "Create or edit a region",
+            1,
+            2,
+            permission="gis:area:write",
+        ),
+        _action(
+            "choose-overlap-rule",
+            "Choose an overlap rule",
+            3,
+            permission="gis:area:write",
+        ),
+        _action(
+            "disable-region",
+            "Disable a region",
+            4,
+            permission="gis:area:write",
         ),
     ),
     "integrations": (
@@ -1752,21 +1977,28 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="communications:customer:send",
         ),
         _action(
+            "check-bulk-send-status",
+            "Check bulk message preparation and delivery",
+            4,
+            5,
+            permission="communications:customer:send",
+        ),
+        _action(
             "resolve-notification",
             "Review or retry delivery",
-            4,
+            6,
             permission="notification:write",
         ),
         _action(
             "review-payment-email-adoption",
             "Review payment email adoption evidence",
-            5,
+            7,
             permission="notification:read",
         ),
         _action(
             "adopt-payment-email-templates",
             "Copy reviewed payment email templates",
-            6,
+            8,
             permission="notification:write",
         ),
     ),
@@ -1877,6 +2109,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "invoice",
             "credit",
             "service-extension",
+            "service-period-review",
             "payments",
             "payment-proofs",
             "payment-reconciliation",
@@ -1889,6 +2122,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         (
             "catalog-overview",
             "new-subscription",
+            "subscription-test-connection",
             "subscription-lifecycle",
             "service-access",
         ),
@@ -1935,6 +2169,8 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Reports",
         (
             "reports-overview",
+            "churn-report",
+            "regional-performance-report",
             "ticket-sla-report",
             "ncc-complaints-report",
             "support-csat-report",
@@ -1947,7 +2183,9 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "reports:ncc:read",
         ),
     ),
-    AdminHelpNavigationSection("gis", "GIS / Map", ("gis",), "gis:map:view"),
+    AdminHelpNavigationSection(
+        "gis", "GIS / Map", ("gis", "customer-regions"), "gis:map:view"
+    ),
     AdminHelpNavigationSection(
         "integrations", "Integrations", ("integrations",), "system:settings:read"
     ),
@@ -1982,6 +2220,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),
+    "service-period-review": ("billing:extension:read",),
     "payments": ("billing:payment:read",),
     "payment-proofs": ("billing:proof:read",),
     "payment-reconciliation": ("billing:ledger:read",),
@@ -1989,8 +2228,11 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "vendor-reviews": ("inventory:read", "finance:ap:read"),
     "vendor-routes": ("network:fiber:read",),
     "ticket-sla-report": ("reports:support:read",),
+    "churn-report": ("customer:read",),
+    "regional-performance-report": ("reports:billing:read",),
     "ncc-complaints-report": ("reports:ncc:read",),
     "support-csat-report": ("reports:support:read",),
+    "customer-regions": ("gis:map:view",),
 }
 
 
@@ -1998,7 +2240,7 @@ def guidance_for_path(path: str) -> AdminWorkflowGuidance | None:
     """Return the most-specific guide for an Admin page path."""
     matches = (
         (specificity, guide)
-        for guide in WORKFLOW_GUIDANCE
+        for guide in all_guidance()
         if (specificity := guide.match_specificity(path)) is not None
     )
     return max(matches, key=lambda match: match[0], default=(0, None))[1]

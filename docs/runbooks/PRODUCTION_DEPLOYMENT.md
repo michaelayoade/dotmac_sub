@@ -87,11 +87,14 @@ resume modes.
 11. Verify every enabled integration installation pin resolves to a current or
    bounded historical definition in the new image. Unavailable pins block
    replacement; historical pins are reported for explicit adoption.
-12. Start and health-check the new application image on `127.0.0.1:18002`.
+12. Start the new application image on `127.0.0.1:18002` and wait up to
+   `CANDIDATE_HEALTH_TIMEOUT_SECONDS` (production: 600 s) for `/health` to
+   answer and `/api/v1/health/ready` to report `"status":"ready"`.
 13. Recreate the primary application and workers. Nginx uses the healthy
    candidate while the primary port is unavailable.
-14. Verify the primary image has no source-code bind mount and wait for its
-   health endpoint.
+14. Verify the primary image has no source-code bind mount and wait up to
+   `HEALTH_TIMEOUT_SECONDS` (production: 600 s) for its health endpoint and
+   readiness document.
 15. Require every declared Celery worker to remain restart-free and answer a
    node-specific ping, and require Celery Beat to remain running without
    restarts, across a bounded stabilization window.
@@ -99,6 +102,93 @@ resume modes.
 
 The candidate runs the same image, environment, and database schema as the
 primary. It is bound to localhost and exists only for the handoff window.
+
+## Web worker liveness and health budget
+
+### Incident 2026-10-06: worker restart storm and stuck release
+
+Production runs the app with six Uvicorn workers (6 CPUs, 18 GiB) on a
+16-CPU host whose load average was 13-15. Uvicorn 0.30.1's multiprocess
+supervisor pings every worker with a hard-coded 5-second deadline and kills
+any worker that misses one ping (`Waiting for child process [pid]`, then
+`Child process [pid] died`). A cold worker needs 43-70 s at near-100% CPU to
+load ~3,500 routes before `startup_complete`, and slow requests (the admin
+inbox projection, ~4.8 s) also block workers. CPU-starved workers missed the
+ping, were killed and respawned into the same contention: 77 worker deaths in
+four hours, 27 of them during startup, rising from 1/h to 20/h. There were no
+OOM kills and no Python exceptions. selfcare.dotmac.io timed out for a period.
+
+Production deploy run 37430270678 failed the same way: the warm candidate
+started at 07:57:07, the 180 s gate gave up at 08:00:09, and the candidate
+reported `startup_complete` at 08:00:40. Automatic rollback was correctly
+refused (`payment email floor is installed or unproved; repair forward`), so
+`.env` kept the new image pinned while the old image continued to serve.
+
+### Contract
+
+- `uvicorn[standard]` is pinned at 0.37.0 or later, the first release with
+  `--timeout-worker-healthcheck`. The base `docker-compose.yml` sets
+  `UVICORN_TIMEOUT_WORKER_HEALTHCHECK=${UVICORN_TIMEOUT_WORKER_HEALTHCHECK:-60}`
+  in the app environment; Uvicorn reads its options from `UVICORN_*`
+  variables. Because it is a variable rather than a CLI flag, it also applies
+  under a host-override `command:`, and an older rollback image (Uvicorn
+  0.30.1) ignores it instead of refusing to start.
+- The worker count comes from `WEB_CONCURRENCY` in `.env`
+  (`--workers ${WEB_CONCURRENCY:-1}` in the base command).
+- `scripts/deploy_production.sh` gives the warm candidate and the replaced
+  primary a 600 s web health window, matching staging. Both gates require
+  `/health` and then `/api/v1/health/ready` reporting `"status":"ready"` (routes
+  loaded and database reachable). A non-2xx readiness answer counts as not
+  ready. The gate fails closed at the deadline and prints the last readiness
+  answer. The previous-image restore gate keeps liveness only, because an
+  older image may predate the readiness contract.
+
+### One-time host change (optional cleanup, not required for the fix)
+
+The production host override `/root/dotmac_sub/docker-compose.override.yml`
+replaces the app `command:` with
+`uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log --workers 6`.
+The liveness deadline still applies under that override because it is an
+environment variable, so no host edit is needed before the next deploy.
+To make the release compose file the single source of truth, the platform
+owner may, on `sub-prod`, before the next deploy:
+
+1. Add `WEB_CONCURRENCY=6` to `/root/dotmac_sub/.env`.
+2. Delete only the `command:` key (and its list items) under `services.app`
+   in `/root/dotmac_sub/docker-compose.override.yml`. Leave the CPU/memory
+   limits and every other service unchanged.
+3. Check the resolved command and variable without starting anything:
+   `cd /root/dotmac_sub && docker compose config app | grep -E 'workers|UVICORN_TIMEOUT'`
+   must show `--workers 6`. The `UVICORN_TIMEOUT_WORKER_HEALTHCHECK: "60"`
+   line appears once the host checkout contains this change; the deploy
+   itself always uses the authorized release checkout's compose file.
+
+Do not restart or recreate the app by hand; the next deploy recreates it. Do
+not add `--timeout-worker-healthcheck` to the override command: an image
+older than Uvicorn 0.37 exits on the unknown option.
+
+### Completing the stuck release
+
+The production workflow runs the deploy scripts from the authorized release
+revision, so re-deploying the stuck digest would reuse its 180 s gate and its
+Uvicorn 0.30.1. Complete it forward instead:
+
+1. Record that the stuck candidate (run 37430270678) is abandoned so the
+   release merge freeze lifts, then merge this fix into `main`.
+2. Build one candidate from the validated `origin/main` SHA ("Build release
+   candidate once" workflow), deploy that digest to staging ("Deploy main to
+   staging") and accept it.
+3. Authorize it ("Promote staged digest for production") and dispatch
+   "Deploy authorized digest to production" with
+   `target_server_name=dotmac-sub-prod`, `resume_after_migration=false`,
+   `hotfix_no_migrations=false`, and no rollback/bootstrap inputs. The new
+   digest contains every commit of the stuck release, whose migrations are
+   already applied; `alembic upgrade heads` applies only what is new. The
+   deploy takes a fresh backup and pins the new digest over the stuck one.
+4. Afterwards verify on `sub-prod`:
+   `docker exec dotmac_sub_app sh -c 'uvicorn --version; echo $UVICORN_TIMEOUT_WORKER_HEALTHCHECK'`
+   reports 0.37.0 and `60`, and `docker logs --since 1h dotmac_sub_app 2>&1 | grep -c 'Child process .* died'`
+   stays at or near zero.
 
 ## Deployment retention
 
@@ -364,6 +454,15 @@ kept reviewed and clean. A host tree left on a feature branch or carrying
 hand-applied edits remains configuration drift, but it can no longer replace
 the authorized release's base Compose service graph during a controlled deploy.
 
+Because `config/` comes from this host directory, a release does not by itself
+change the configuration that `freeradius`, `vmagent` or `promtail` read. A
+config change reaches them when the host checkout is updated. The next deploy
+then restarts each running service whose mounted checkout files changed after
+it started. FreeRADIUS config is validated with `freeradius -XC` first, and a
+rejected config refuses the deploy before backup or migration. See
+[SERVICE_CONFIG_MOUNTS.md](SERVICE_CONFIG_MOUNTS.md), including the one-time
+recreate that switches vmagent and promtail to directory mounts.
+
 `scripts/ops/prod_tree_drift_metrics.sh` exports that state as gauges
 (`deploy_tree_on_main`, `deploy_tree_clean`, `deploy_tree_matches_origin_main`,
 `deploy_tree_behind_commits`, `deploy_tree_dirty_files`,
@@ -400,7 +499,8 @@ tree drifted for days undetected.
 - Commercial module prerequisite or dispatcher-role failure occurs before
   database backup and before Alembic. Run the explicit bootstrap repair, then
   rerun the guarded deploy.
-- Candidate startup failure leaves the primary release serving traffic.
+- Candidate startup failure, including a candidate that answers `/health` but
+  never reports ready, leaves the primary release serving traffic.
 - Primary health failure restores the previous image while the candidate
   continues serving, then removes the candidate after the rollback is healthy.
 - Celery worker or Beat startup/readiness failure follows the same rollback

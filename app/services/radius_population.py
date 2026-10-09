@@ -22,6 +22,7 @@ import logging
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import cast
 
 import psycopg
@@ -64,6 +65,12 @@ from app.services.radius_address_lists import (
     suspended_address_list,
 )
 from app.services.radius_projection_planner import plan_login_radius_projections
+from app.services.test_connection_policy import (
+    TEST_RADIUS_GRANT,
+    TEST_RADIUS_PREFIX,
+    TEST_RADIUS_UNTIL,
+    TestConnectionAccess,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -86,6 +93,10 @@ class RadiusProjectionWorkItem:
     status: SubscriptionStatus
     mode: str
     profile_group: str | None
+    test_access: TestConnectionAccess | None = None
+    test_check_attrs: tuple[RadiusAttribute, ...] = ()
+    test_reply_attrs: tuple[RadiusAttribute, ...] = ()
+    test_profile_group: str | None = None
 
 
 def _result_count(result: Mapping[str, object], key: str) -> int:
@@ -277,6 +288,7 @@ def _radreply_attrs(
     delegated_ipv6: str | None = None,
     suspended_list_name: str = SUSPENDED_ADDRESS_LIST,
     simultaneous_use_enabled: bool = False,
+    full_test_access: bool = False,
 ) -> list[RadiusAttribute]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
@@ -347,10 +359,14 @@ def _radreply_attrs(
     # Soft captive walled-garden — only for blocked subscribers who OPTED IN
     # (per-customer captive_redirect_enabled). Non-opted blocked subscribers get
     # a hard reject in radcheck instead, so they never reach this radreply.
-    is_blocked = subscriber_blocked or sub.status in (
-        SubscriptionStatus.blocked,
-        SubscriptionStatus.paused,
-        SubscriptionStatus.suspended,
+    is_blocked = not full_test_access and (
+        subscriber_blocked
+        or sub.status
+        in (
+            SubscriptionStatus.blocked,
+            SubscriptionStatus.paused,
+            SubscriptionStatus.suspended,
+        )
     )
     if is_blocked and captive_redirect_enabled:
         attrs.append(("Mikrotik-Address-List", ":=", suspended_list_name))
@@ -401,8 +417,11 @@ def _projection_rows_for_item(
     group_routing_enabled: bool,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
     """Build the exact external rows used by both writer and comparator."""
-    if item.mode == "reject":
-        check_rows: list[dict[str, object]] = [
+    if item.mode == "none":
+        check_rows: list[dict[str, object]] = []
+        reply_rows: list[dict[str, object]] = []
+    elif item.mode == "reject":
+        check_rows = [
             {
                 "username": item.username,
                 "attribute": "Auth-Type",
@@ -410,7 +429,7 @@ def _projection_rows_for_item(
                 "value": "Reject",
             }
         ]
-        reply_rows: list[dict[str, object]] = []
+        reply_rows = []
     else:
         check_rows = [
             {
@@ -448,7 +467,7 @@ def _projection_rows_for_item(
                 "priority": config["group_priority"],
             }
         )
-    if group_routing_enabled:
+    if group_routing_enabled and item.mode != "none":
         access_key = (
             "captive"
             if item.mode == "captive"
@@ -462,6 +481,63 @@ def _projection_rows_for_item(
                 {
                     "username": item.username,
                     "groupname": access_group,
+                    "priority": access_group_priority,
+                }
+            )
+    if item.test_access is not None:
+        check_rows.extend(
+            [
+                {
+                    "username": item.username,
+                    "attribute": TEST_RADIUS_UNTIL,
+                    "op": ":=",
+                    "value": str(int(item.test_access.expires_at.timestamp())),
+                },
+                {
+                    "username": item.username,
+                    "attribute": TEST_RADIUS_GRANT,
+                    "op": ":=",
+                    "value": str(item.test_access.grant_id),
+                },
+                {
+                    "username": item.username,
+                    "attribute": TEST_RADIUS_PREFIX + str(config["password_attribute"]),
+                    "op": config["password_op"],
+                    "value": item.cleartext_password,
+                },
+            ]
+        )
+        check_rows.extend(
+            {
+                "username": item.username,
+                "attribute": TEST_RADIUS_PREFIX + attribute,
+                "op": op,
+                "value": value,
+            }
+            for attribute, op, value in item.test_check_attrs
+        )
+        reply_rows.extend(
+            {
+                "username": item.username,
+                "attribute": TEST_RADIUS_PREFIX + attribute,
+                "op": op,
+                "value": value,
+            }
+            for attribute, op, value in item.test_reply_attrs
+        )
+        if config["use_group"] and item.test_profile_group:
+            group_rows.append(
+                {
+                    "username": item.username,
+                    "groupname": TEST_RADIUS_PREFIX + item.test_profile_group,
+                    "priority": config["group_priority"],
+                }
+            )
+        if group_routing_enabled and access_groups.get("active"):
+            group_rows.append(
+                {
+                    "username": item.username,
+                    "groupname": TEST_RADIUS_PREFIX + access_groups["active"],
                     "priority": access_group_priority,
                 }
             )
@@ -586,7 +662,14 @@ def _write_radius_projection(
         )
         delete_group_rows = True
         if not config["use_group"]:
-            owned_names = sorted({name for name in access_groups.values() if name})
+            owned_names = sorted(
+                {
+                    variant
+                    for name in access_groups.values()
+                    if name
+                    for variant in (name, TEST_RADIUS_PREFIX + name)
+                }
+            )
             if owned_names:
                 group_delete = group_delete.where(
                     radusergroup.c.groupname.in_(owned_names)
@@ -708,6 +791,7 @@ def populate(
         )
         suspended_list_name = suspended_address_list(db)
         from app.models.subscriber import Subscriber
+        from app.models.test_connection import TestConnectionGrant
 
         scoped = only_usernames is not None
         requested_usernames = set(only_usernames or set())
@@ -724,7 +808,15 @@ def populate(
                 joinedload(Subscription.subscriber).joinedload(Subscriber.reseller),
             )
             .where(
-                Subscription.status.in_(ACTIVE_STATUSES | BLOCKED_STATUSES),
+                or_(
+                    Subscription.status.in_(ACTIVE_STATUSES | BLOCKED_STATUSES),
+                    Subscription.id.in_(
+                        select(TestConnectionGrant.subscription_id).where(
+                            TestConnectionGrant.ended_at.is_(None),
+                            TestConnectionGrant.expires_at > datetime.now(UTC),
+                        )
+                    ),
+                ),
                 Subscription.login.isnot(None),
             )
         )
@@ -740,6 +832,9 @@ def populate(
             "considering %d active/blocked subscriptions with a login", len(rows)
         )
         login_projections = plan_login_radius_projections(db, rows)
+        normal_login_projections = plan_login_radius_projections(
+            db, rows, include_test_access=False
+        )
 
         cohort_subscription_ids = {row.id for row in rows}
         cohort_subscriber_ids = {row.subscriber_id for row in rows}
@@ -747,7 +842,16 @@ def populate(
         # Pre-fetch AccessCredentials keyed by username. Scoped reconciliation
         # does not hydrate unrelated fleet credentials.
         credential_statement = select(AccessCredential).where(
-            AccessCredential.is_active.is_(True)
+            or_(
+                AccessCredential.is_active.is_(True),
+                AccessCredential.username.in_(
+                    {
+                        login
+                        for login, projection in login_projections.items()
+                        if projection.plan.test_access is not None
+                    }
+                ),
+            )
         )
         if scoped:
             credential_statement = credential_statement.where(
@@ -947,6 +1051,8 @@ def populate(
             ):
                 continue
             projection = selected_projection.plan
+            test_access = projection.test_access
+            normal_projection = normal_login_projections[login].plan
             captive = projection.mode == "captive"
             if (
                 getattr(sub.subscriber, "captive_redirect_enabled", False)
@@ -958,7 +1064,7 @@ def populate(
             # does not need a customer password.  Resolve it before credential
             # lookup/decryption so a missing or unreadable secret can never
             # preserve an old permissive row for a blocked login.
-            if projection.mode == "reject":
+            if projection.mode == "reject" and test_access is None:
                 by_login[login] = RadiusProjectionWorkItem(
                     username=login,
                     cleartext_password="",
@@ -1108,20 +1214,44 @@ def populate(
                 sub,
                 sub.offer,
                 effective_profile,
-                sub_blocked,
-                captive_redirect_enabled=captive,
+                normal_projection.blocked,
+                captive_redirect_enabled=normal_projection.captive,
                 additional_routes=additional_routes,
                 framed_ipv4=eff_ipv4,
                 delegated_ipv6=delegated_ipv6,
                 suspended_list_name=suspended_list_name,
                 simultaneous_use_enabled=simultaneous_use_enabled,
             )
-            blocked_flag = projection.blocked
+            test_attrs = (
+                _radreply_attrs(
+                    sub,
+                    sub.offer,
+                    sub.radius_profile,
+                    additional_routes=additional_routes,
+                    framed_ipv4=eff_ipv4,
+                    delegated_ipv6=delegated_ipv6,
+                    simultaneous_use_enabled=simultaneous_use_enabled,
+                    full_test_access=True,
+                )
+                if test_access is not None
+                else []
+            )
+            test_checks = (
+                _radcheck_policy_attrs(
+                    sub.radius_profile,
+                    simultaneous_use_enabled=simultaneous_use_enabled,
+                )
+                if test_access is not None
+                else []
+            )
+            blocked_flag = normal_projection.blocked
             # Enforcement mode for the radcheck write: active subs and opted-in
             # blocked subs keep a usable password (captive subs are walled via
             # the radreply Address-List); non-opted blocked subs are hard
             # rejected (Auth-Type := Reject, offline).
-            mode = projection.mode
+            # A retained disabled credential is usable only inside the grant.
+            # Never create an ordinary password row that survives its deadline.
+            mode = normal_projection.mode if cred.is_active else "reject"
             check_attrs = (
                 _radcheck_policy_attrs(
                     effective_profile,
@@ -1139,6 +1269,12 @@ def populate(
                 status=sub.status,
                 mode=mode,
                 profile_group=effective_profile.name if effective_profile else None,
+                test_access=test_access,
+                test_reply_attrs=tuple(test_attrs),
+                test_check_attrs=tuple(test_checks),
+                test_profile_group=sub.radius_profile.name
+                if sub.radius_profile
+                else None,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
@@ -1436,7 +1572,14 @@ def _reap_radius_orphans(
     group_delete = delete(radusergroup).where(radusergroup.c.username.in_(orphans))
     delete_group_rows = True
     if not config["use_group"]:
-        owned_names = sorted({name for name in access_groups.values() if name})
+        owned_names = sorted(
+            {
+                variant
+                for name in access_groups.values()
+                if name
+                for variant in (name, TEST_RADIUS_PREFIX + name)
+            }
+        )
         if owned_names:
             group_delete = group_delete.where(radusergroup.c.groupname.in_(owned_names))
         else:

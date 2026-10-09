@@ -11,15 +11,18 @@ displayed numbers do not change.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import String, and_, case, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session
 
+from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.subscriber import AccountStatus, Subscriber, SubscriberStatus
 from app.services import subscriber as subscriber_service
+from app.timezone import APP_TIMEZONE
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,24 +36,223 @@ class MonthlyChurnSeries:
 class ChurnSummary:
     total: int
     cancelled_count: int
-    at_risk_count: int
+    suspended_count: int
+    active_count: int = 0
+    churn_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RecentChurnEvent:
+    """A subscriber-facing projection of one canonical churn event."""
+
+    subscriber: Subscriber
+    status: str
+    occurred_at: datetime
+    reason: str | None = None
+
+    @property
+    def id(self):
+        """Keep the historical report-row contract for lightweight callers."""
+
+        return self.subscriber.id
+
+
+CHURN_STATUS_VALUES = (AccountStatus.canceled.value, AccountStatus.suspended.value)
+TRUSTED_LIFECYCLE_EVIDENCE_GRADE = "transition_evidence"
+TRUSTED_LIFECYCLE_EVIDENCE_SOURCE = "lifecycle_command"
+
+
+def trusted_lifecycle_transition_clause():
+    """Return the fail-closed admission rule for reportable transitions."""
+
+    return and_(
+        SubscriptionLifecycleEvent.evidence_grade == TRUSTED_LIFECYCLE_EVIDENCE_GRADE,
+        SubscriptionLifecycleEvent.evidence_source == TRUSTED_LIFECYCLE_EVIDENCE_SOURCE,
+        SubscriptionLifecycleEvent.source_id.is_not(None),
+        SubscriptionLifecycleEvent.evidence_fingerprint.is_not(None),
+        SubscriptionLifecycleEvent.effective_at.is_not(None),
+        SubscriptionLifecycleEvent.recorded_at.is_not(None),
+    )
+
+
+def normalize_churn_status(status: str | None) -> str | None:
+    """Return the supported churn-event filter or ``None`` for all events."""
+
+    value = (status or "").strip().lower()
+    if not value:
+        return None
+    if value not in CHURN_STATUS_VALUES:
+        raise ValueError(f"Unsupported churn status: {status}")
+    return value
+
+
+def _churn_window(
+    *, date_from: str | None = None, date_to: str | None = None
+) -> tuple[datetime | None, datetime | None]:
+    def local_midnight(value: str | None) -> datetime | None:
+        text = (value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = date.fromisoformat(text)
+        except ValueError:
+            return None
+        return datetime.combine(parsed, time.min, APP_TIMEZONE).astimezone(UTC)
+
+    start = local_midnight(date_from)
+    parsed_to = local_midnight(date_to)
+    end = parsed_to + timedelta(days=1) if parsed_to else None
+    return start, end
+
+
+def churn_window(
+    *, date_from: str | None = None, date_to: str | None = None
+) -> tuple[datetime | None, datetime | None]:
+    """Resolve report calendar dates in the application display timezone."""
+
+    return _churn_window(date_from=date_from, date_to=date_to)
+
+
+def _month_start(value: datetime) -> datetime:
+    local = value.astimezone(APP_TIMEZONE)
+    return datetime(local.year, local.month, 1, tzinfo=APP_TIMEZONE).astimezone(UTC)
+
+
+def _next_month(value: datetime) -> datetime:
+    local = value.astimezone(APP_TIMEZONE)
+    if local.month == 12:
+        next_year, next_month = local.year + 1, 1
+    else:
+        next_year, next_month = local.year, local.month + 1
+    return datetime(next_year, next_month, 1, tzinfo=APP_TIMEZONE).astimezone(UTC)
+
+
+def _event_status_clause(status: str | None):
+    normalized = normalize_churn_status(status)
+    if normalized == AccountStatus.canceled.value:
+        return Subscriber.status == AccountStatus.canceled
+    if normalized == AccountStatus.suspended.value:
+        return Subscriber.status == AccountStatus.suspended
+    return or_(
+        Subscriber.status == AccountStatus.canceled,
+        Subscriber.status == AccountStatus.suspended,
+    )
+
+
+def _churn_event_source(
+    *,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    """Return one normalized churn-event relation for all report projections.
+
+    Trusted lifecycle evidence is authoritative. The legacy branch keeps rows
+    created before lifecycle evidence was available visible until they can be
+    backfilled, but it is disabled for subscribers that already have trusted
+    churn evidence so a transition is never counted twice.
+    """
+    normalized_status = normalize_churn_status(status)
+    start, end = _churn_window(date_from=date_from, date_to=date_to)
+    lifecycle_status = case(
+        (
+            SubscriptionLifecycleEvent.event_type == LifecycleEventType.cancel,
+            literal(AccountStatus.canceled.value),
+        ),
+        else_=literal(AccountStatus.suspended.value),
+    ).label("status")
+    lifecycle = (
+        select(
+            Subscription.subscriber_id.label("subscriber_id"),
+            lifecycle_status,
+            SubscriptionLifecycleEvent.effective_at.label("occurred_at"),
+            SubscriptionLifecycleEvent.reason.label("reason"),
+        )
+        .select_from(SubscriptionLifecycleEvent)
+        .join(
+            Subscription,
+            Subscription.id == SubscriptionLifecycleEvent.subscription_id,
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(
+            subscriber_service.visible_subscriber_clause(),
+            SubscriptionLifecycleEvent.event_type.in_(
+                (LifecycleEventType.cancel, LifecycleEventType.suspend)
+            ),
+            trusted_lifecycle_transition_clause(),
+        )
+    )
+    if normalized_status == AccountStatus.canceled.value:
+        lifecycle = lifecycle.where(
+            SubscriptionLifecycleEvent.event_type == LifecycleEventType.cancel
+        )
+    elif normalized_status == AccountStatus.suspended.value:
+        lifecycle = lifecycle.where(
+            SubscriptionLifecycleEvent.event_type == LifecycleEventType.suspend
+        )
+
+    trusted_churn_exists = (
+        select(1)
+        .select_from(SubscriptionLifecycleEvent)
+        .join(
+            Subscription,
+            Subscription.id == SubscriptionLifecycleEvent.subscription_id,
+        )
+        .where(
+            Subscription.subscriber_id == Subscriber.id,
+            SubscriptionLifecycleEvent.event_type.in_(
+                (LifecycleEventType.cancel, LifecycleEventType.suspend)
+            ),
+            trusted_lifecycle_transition_clause(),
+        )
+        .exists()
+    )
+    legacy_status = case(
+        (
+            Subscriber.status == AccountStatus.canceled,
+            literal(AccountStatus.canceled.value),
+        ),
+        else_=literal(AccountStatus.suspended.value),
+    ).label("status")
+    legacy = select(
+        Subscriber.id.label("subscriber_id"),
+        legacy_status,
+        func.coalesce(Subscriber.updated_at, Subscriber.created_at).label(
+            "occurred_at"
+        ),
+        literal(None, type_=String()).label("reason"),
+    ).where(
+        subscriber_service.visible_subscriber_clause(),
+        Subscriber.status.in_((AccountStatus.canceled, AccountStatus.suspended)),
+        ~trusted_churn_exists,
+    )
+    if normalized_status == AccountStatus.canceled.value:
+        legacy = legacy.where(Subscriber.status == AccountStatus.canceled)
+    elif normalized_status == AccountStatus.suspended.value:
+        legacy = legacy.where(Subscriber.status == AccountStatus.suspended)
+
+    source = union_all(lifecycle, legacy).subquery("churn_events")
+    if start is not None:
+        source = select(source).where(source.c.occurred_at >= start).subquery()
+    if end is not None:
+        source = select(source).where(source.c.occurred_at < end).subquery()
+    return source
 
 
 def _month_starts(months: int = 6) -> list[datetime]:
-    now = datetime.now(UTC)
-    first_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    starts = []
-    year = first_this_month.year
-    month = first_this_month.month - months + 1
-    while month <= 0:
-        month += 12
-        year -= 1
+    starts: list[datetime] = []
+    cursor = _month_start(datetime.now(UTC))
     for _ in range(months):
-        starts.append(datetime(year, month, 1, tzinfo=UTC))
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
+        starts.append(cursor)
+        local = cursor.astimezone(APP_TIMEZONE)
+        if local.month == 1:
+            previous_year, previous_month = local.year - 1, 12
+        else:
+            previous_year, previous_month = local.year, local.month - 1
+        cursor = datetime(
+            previous_year, previous_month, 1, tzinfo=APP_TIMEZONE
+        ).astimezone(UTC)
+    starts.reverse()
     return starts
 
 
@@ -87,37 +289,103 @@ def monthly_customer_growth_series(db: Session, *, months: int = 6) -> dict[str,
     return {"labels": labels, "total": totals, "new": new_counts}
 
 
-def monthly_churn_series(db: Session, *, months: int = 6) -> MonthlyChurnSeries:
-    """Monthly cancellation counts and churn rates for visible subscribers."""
-    starts = _month_starts(months)
+def monthly_churn_series(
+    db: Session,
+    *,
+    months: int = 6,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    population_total: int | None = None,
+) -> MonthlyChurnSeries:
+    """Monthly churn-event counts for the requested status/date window.
+
+    With no explicit dates this retains the report's trailing six calendar
+    months. A custom range clips the first and last bucket, so a range such as
+    ``2026-06-28`` through ``2026-08-28`` cannot leak events from June 1–27
+    or August 29 onward.
+    """
+    now = datetime.now(UTC)
+    parsed_start, parsed_end = _churn_window(date_from=date_from, date_to=date_to)
+    if date_from or date_to:
+        window_end = parsed_end or now
+        window_start = parsed_start or _month_start(
+            window_end - timedelta(days=months * 31)
+        )
+        starts: list[datetime] = []
+        cursor = _month_start(window_start)
+        while cursor < window_end:
+            starts.append(cursor)
+            cursor = _next_month(cursor)
+    else:
+        starts = _month_starts(months)
+        window_start = starts[0]
+        window_end = now
+
+    bucket_ranges: list[tuple[datetime, datetime]] = []
     labels: list[str] = []
-    rates: list[float] = []
-    counts: list[int] = []
     for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
-        total = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.created_at < end,
-                )
-            )
-            or 0
+        end = starts[idx + 1] if idx + 1 < len(starts) else window_end
+        bucket_start = max(start, window_start)
+        bucket_end = min(end, window_end)
+        if bucket_start >= bucket_end:
+            continue
+        bucket_ranges.append((bucket_start, bucket_end))
+        labels.append(
+            start.strftime("%b %Y") if date_from or date_to else start.strftime("%b")
         )
-        cancelled = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.status == AccountStatus.canceled,
-                    Subscriber.updated_at >= start,
-                    Subscriber.updated_at < end,
-                )
-            )
-            or 0
+
+    counts_by_bucket: dict[int, int] = {}
+    if bucket_ranges:
+        source = _churn_event_source(
+            status=status, date_from=date_from, date_to=date_to
         )
-        labels.append(start.strftime("%b"))
-        counts.append(int(cancelled))
-        rates.append(round((int(cancelled) / int(total) * 100) if total else 0, 1))
+        bucket_case = case(
+            *[
+                (
+                    and_(
+                        source.c.occurred_at >= bucket_start,
+                        source.c.occurred_at < bucket_end,
+                    ),
+                    index,
+                )
+                for index, (bucket_start, bucket_end) in enumerate(bucket_ranges)
+            ],
+            else_=None,
+        ).label("bucket")
+        distinct_events = (
+            select(source.c.subscriber_id, bucket_case)
+            .where(
+                source.c.occurred_at >= window_start,
+                source.c.occurred_at < window_end,
+            )
+            .distinct()
+            .subquery()
+        )
+        counts_by_bucket = {
+            int(bucket): int(count)
+            for bucket, count in db.execute(
+                select(distinct_events.c.bucket, func.count())
+                .where(distinct_events.c.bucket.is_not(None))
+                .group_by(distinct_events.c.bucket)
+            ).all()
+        }
+
+    if population_total is None:
+        population_statement = select(func.count(Subscriber.id)).where(
+            subscriber_service.visible_subscriber_clause()
+        )
+        if window_end < now:
+            population_statement = population_statement.where(
+                Subscriber.created_at < window_end
+            )
+        population_total = int(db.scalar(population_statement) or 0)
+
+    counts = [counts_by_bucket.get(index, 0) for index in range(len(bucket_ranges))]
+    rates = [
+        round((count / population_total * 100) if population_total else 0, 1)
+        for count in counts
+    ]
     return MonthlyChurnSeries(
         labels=tuple(labels), rates=tuple(rates), counts=tuple(counts)
     )
@@ -171,75 +439,207 @@ def _derived_cancelled_clause():
     )
 
 
-def churn_summary(db: Session) -> ChurnSummary:
-    """Cancelled / at-risk / total counts over admin-visible subscribers.
+def _population_counts(db: Session, *, end: datetime | None) -> tuple[int, int]:
+    """Return cohort size and active accounts as of the selected period end."""
+    population_filters = [subscriber_service.visible_subscriber_clause()]
+    if end is not None:
+        population_filters.append(Subscriber.created_at < end)
 
-    Replicates in SQL the counts the churn report previously computed by
-    loading every visible subscriber and deriving its status in Python:
-    ``cancelled`` uses the derived-status rule (an explicit ``canceled``
-    status, or a NULL status with a falsy ``is_active``); ``at_risk`` is an
-    explicit ``suspended`` status (a NULL status can never derive to
-    suspended).
+    if end is None:
+        statement = select(
+            func.count(Subscriber.id),
+            func.coalesce(
+                func.sum(case((Subscriber.status == AccountStatus.active, 1), else_=0)),
+                0,
+            ),
+        ).where(*population_filters)
+        total, active = db.execute(statement).one()
+        return int(total or 0), int(active or 0)
+
+    event_rows = (
+        select(
+            Subscription.subscriber_id.label("subscriber_id"),
+            SubscriptionLifecycleEvent.effective_at.label("effective_at"),
+            SubscriptionLifecycleEvent.from_status.label("from_status"),
+            SubscriptionLifecycleEvent.to_status.label("to_status"),
+        )
+        .select_from(SubscriptionLifecycleEvent)
+        .join(
+            Subscription,
+            Subscription.id == SubscriptionLifecycleEvent.subscription_id,
+        )
+        .where(trusted_lifecycle_transition_clause())
+        .subquery("population_lifecycle_events")
+    )
+    before_ranked = (
+        select(
+            event_rows,
+            func.row_number()
+            .over(
+                partition_by=event_rows.c.subscriber_id,
+                order_by=event_rows.c.effective_at.desc(),
+            )
+            .label("event_rank"),
+        )
+        .where(event_rows.c.effective_at <= end)
+        .subquery("population_before_ranked")
+    )
+    before = (
+        select(before_ranked)
+        .where(before_ranked.c.event_rank == 1)
+        .subquery("population_before")
+    )
+    after_ranked = (
+        select(
+            event_rows,
+            func.row_number()
+            .over(
+                partition_by=event_rows.c.subscriber_id,
+                order_by=event_rows.c.effective_at.asc(),
+            )
+            .label("event_rank"),
+        )
+        .where(event_rows.c.effective_at > end)
+        .subquery("population_after_ranked")
+    )
+    after = (
+        select(after_ranked)
+        .where(after_ranked.c.event_rank == 1)
+        .subquery("population_after")
+    )
+    active_at_end = case(
+        (
+            before.c.subscriber_id.is_not(None),
+            case((before.c.to_status == SubscriptionStatus.active, 1), else_=0),
+        ),
+        (
+            and_(
+                after.c.subscriber_id.is_not(None),
+                after.c.from_status.is_not(None),
+            ),
+            case((after.c.from_status == SubscriptionStatus.active, 1), else_=0),
+        ),
+        else_=case((Subscriber.status == AccountStatus.active, 1), else_=0),
+    ).label("active_at_end")
+    population = (
+        select(Subscriber.id, active_at_end)
+        .select_from(Subscriber)
+        .outerjoin(before, before.c.subscriber_id == Subscriber.id)
+        .outerjoin(after, after.c.subscriber_id == Subscriber.id)
+        .where(*population_filters)
+        .subquery("churn_population")
+    )
+    total, active = db.execute(
+        select(
+            func.count(population.c.id),
+            func.coalesce(func.sum(population.c.active_at_end), 0),
+        )
+    ).one()
+    return int(total or 0), int(active or 0)
+
+
+def churn_summary(
+    db: Session,
+    *,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> ChurnSummary:
+    """Cancelled / suspended / total counts over admin-visible subscribers.
+
+    Counts trusted lifecycle cancel/suspend events and falls back to current
+    subscriber state only for subscribers without trusted churn evidence. The
+    population is the visible subscriber base created by the period end.
     """
-    total = (
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause()
-            )
-        )
-        or 0
+    normalized_status = normalize_churn_status(status)
+    _start, end = _churn_window(date_from=date_from, date_to=date_to)
+    total, active_count = _population_counts(db, end=end)
+
+    source = _churn_event_source(
+        status=normalized_status, date_from=date_from, date_to=date_to
     )
-    cancelled = (
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause(),
-                _derived_cancelled_clause(),
-            )
-        )
-        or 0
+    unique_events = (
+        select(source.c.subscriber_id, source.c.status).distinct().subquery()
     )
-    at_risk = (
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause(),
-                Subscriber.status == AccountStatus.suspended,
-            )
-        )
-        or 0
-    )
+    event_counts = db.execute(
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (unique_events.c.status == AccountStatus.canceled.value, 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (unique_events.c.status == AccountStatus.suspended.value, 1),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.count(func.distinct(unique_events.c.subscriber_id)),
+        ).select_from(unique_events)
+    ).one()
+    cancelled, suspended, churn_count = (int(value or 0) for value in event_counts)
     return ChurnSummary(
         total=int(total),
         cancelled_count=int(cancelled),
-        at_risk_count=int(at_risk),
+        suspended_count=int(suspended),
+        active_count=int(active_count or 0),
+        churn_count=int(churn_count or 0),
     )
 
 
-def recent_cancellations(db: Session, *, limit: int = 10) -> list[Subscriber]:
-    """Most recently cancelled admin-visible subscribers.
+def recent_churn_events(
+    db: Session,
+    *,
+    limit: int | None = 10,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[RecentChurnEvent]:
+    """Most recent cancellation/suspension events in the selected window.
 
-    Loads only the derived-cancelled rows (ordered ``created_at`` desc, the
-    same base order the report's full-table load used, so ties sort the same
-    way) and sorts by the effective updated-at in Python because that value
-    can come from imported metadata.
+    Loads at most ``limit`` unique subscribers from the normalized event
+    relation. Ordering and limiting happen in SQL so large event histories do
+    not block the report page.
     """
-    cancelled = list(
-        db.scalars(
-            select(Subscriber)
-            .where(
-                subscriber_service.visible_subscriber_clause(),
-                _derived_cancelled_clause(),
-            )
-            .order_by(Subscriber.created_at.desc())
-        ).all()
+    source = _churn_event_source(status=status, date_from=date_from, date_to=date_to)
+    ranked = select(
+        source,
+        func.row_number()
+        .over(
+            partition_by=source.c.subscriber_id,
+            order_by=source.c.occurred_at.desc(),
+        )
+        .label("event_rank"),
+    ).subquery()
+    statement = (
+        select(
+            Subscriber,
+            ranked.c.status,
+            ranked.c.occurred_at,
+            ranked.c.reason,
+        )
+        .join(ranked, ranked.c.subscriber_id == Subscriber.id)
+        .where(ranked.c.event_rank == 1)
+        .order_by(ranked.c.occurred_at.desc())
     )
-    cancelled.sort(
-        key=lambda x: (
-            subscriber_service.get_effective_updated_at(x)
-            or datetime.min.replace(tzinfo=UTC)
-        ),
-        reverse=True,
-    )
-    return cancelled[:limit]
+    if limit is not None:
+        statement = statement.limit(limit)
+    return [
+        RecentChurnEvent(
+            subscriber=subscriber,
+            status=status_value,
+            occurred_at=occurred_at,
+            reason=reason,
+        )
+        for subscriber, status_value, occurred_at, reason in db.execute(statement).all()
+    ]
 
 
 def status_counts(db: Session) -> dict[str, int]:

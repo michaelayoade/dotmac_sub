@@ -254,6 +254,11 @@ class AutomationEventHandler:
                 target_id=target_id,
                 occurred_at=event.occurred_at,
                 payload=payload,
+                scheduled_rule_version_id=(
+                    _required_uuid(payload, "automation_rule_version_id")
+                    if getattr(trigger, "scheduled", False)
+                    else None
+                ),
             )
             with owner_session(db) as command_db:
                 runs = automation_runtime.prepare_event_runs(
@@ -310,7 +315,9 @@ class AutomationEventHandler:
                         f"Server script action {action.key!r} is not available.",
                         retryable=False,
                     )
-                if action.entity_type != script.target_type:
+                if not automation_capabilities.action_applies_to_entity(
+                    action, script.target_type
+                ):
                     raise _handler_error(
                         f"Server script action {action.key!r} targets "
                         f"{action.entity_type!r}, not {script.target_type!r}."
@@ -472,7 +479,8 @@ class AutomationEventHandler:
             )
         if outcome.error_code:
             raise _handler_error(
-                f"Automation run {run.run_id} stopped with {outcome.error_code}."
+                f"Automation run {run.run_id} stopped with {outcome.error_code}.",
+                retryable=outcome.retryable,
             )
 
 

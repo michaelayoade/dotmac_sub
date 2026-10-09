@@ -45,6 +45,7 @@ from app.models.automation import (  # noqa: F401
     AutomationRunRetry,
     AutomationRunRetryStatus,
     AutomationRunStatus,
+    AutomationScheduledRun,
     AutomationStepRun,
     AutomationStepStatus,
 )
@@ -278,6 +279,10 @@ from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoffStatus,
 )
 from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
+from app.models.customer_region import (  # noqa: F401
+    CustomerRegion,
+    CustomerRegionMatchMode,
+)
 from app.models.customer_subledger import (  # noqa: F401
     CustomerPositionEffect,
     CustomerPostingGroup,
@@ -802,6 +807,7 @@ from app.models.prepaid_coverage import (  # noqa: F401
 )
 from app.models.prepaid_enforcement import PrepaidEnforcementReadiness  # noqa: F401
 from app.models.prepaid_funding import (  # noqa: F401
+    PrepaidActivationFundingOverride,
     PrepaidDraftReconciliationException,
     PrepaidFundingBaseline,
     PrepaidFundingReconstructionBatch,
@@ -953,6 +959,14 @@ from app.models.service_extension import (  # noqa: F401
     ServiceExtensionScope,
     ServiceExtensionStatus,
 )
+from app.models.service_period_purchase import (  # noqa: F401
+    OutageCompensationDecision,
+    OutageCompensationDecisionInterval,
+    OutageCompensationDecisionStatus,
+    PrepaidPeriodPurchase,
+    PrepaidPeriodPurchasePeriod,
+    PrepaidPeriodPurchaseStatus,
+)
 from app.models.service_request import (  # noqa: F401
     ResellerServiceRequest,
     Serviceability,
@@ -1087,7 +1101,6 @@ from app.models.team_inbox import (  # noqa: F401
     InboxMessageTemplate,
     InboxQueueNotification,
     InboxReplyMacro,
-    InboxReplyReminder,
     InboxSavedFilter,
     InboxTeamRole,
     InboxTeamRoundRobinCursor,
@@ -1096,6 +1109,8 @@ from app.models.team_inbox import (  # noqa: F401
     TeamInboxChannelRoute,
     TeamInboxEmailRoute,
 )
+from app.models.test_connection import TestConnectionGrant  # noqa: F401
+from app.models.test_connection_review import TestConnectionFinanceReview  # noqa: F401
 from app.models.ticket_workflow import (  # noqa: F401
     SlaBreach,
     SlaBreachStatus,

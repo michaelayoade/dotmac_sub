@@ -27,6 +27,7 @@ from app.services import web_fup as web_fup_service
 from app.services import (
     web_network_ont_assignments as web_network_ont_assignments_service,
 )
+from app.services import web_prepaid_activation_funding
 from app.services.auth_dependencies import (
     has_permission,
     require_any_permission,
@@ -35,6 +36,9 @@ from app.services.auth_dependencies import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.prepaid_activation_funding_guard import (
+    OVERRIDE_PERMISSION as PREPAID_ACTIVATION_OVERRIDE_PERMISSION,
+)
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
 )
@@ -948,6 +952,19 @@ def catalog_subscription_detail(
     context["warning"] = warning
     context["error"] = error
     subscription_obj = context.get("subscription")
+    context["prepaid_funding_quarantine"] = (
+        web_prepaid_activation_funding.prepaid_funding_quarantine_banner(
+            db,
+            subscription_obj.subscriber_id if subscription_obj is not None else None,
+            can_override=bool(
+                auth
+                and has_permission(auth, db, PREPAID_ACTIVATION_OVERRIDE_PERMISSION)
+            ),
+        )
+    )
+    context["prepaid_funding_return_to"] = (
+        f"/admin/catalog/subscriptions/{subscription_id}"
+    )
     network_path = (
         resolve_customer_path(db, subscription_obj)
         if subscription_obj is not None

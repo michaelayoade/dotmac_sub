@@ -129,7 +129,11 @@ def resolve_desired_connectivity(
 ) -> DesiredConnectivity:
     """Resolve persisted restriction evidence before deriving connectivity."""
 
+    from app.services.test_connection import access_for_subscription
     from app.services.walled_garden_policy import resolve_subscription_restriction
+
+    if access_for_subscription(db, subscription.id) is not None:
+        return derive_desired_connectivity(SubscriptionStatus.active)
 
     restriction = resolve_subscription_restriction(db, subscription)
     return derive_desired_connectivity(

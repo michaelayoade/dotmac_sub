@@ -14,6 +14,7 @@ from __future__ import annotations
 import app.services.billing_mode_transitions  # noqa: F401
 import app.services.customer_portal_flow_changes  # noqa: F401
 import app.services.subscription_correction  # noqa: F401
+import app.services.test_connection  # noqa: F401
 import app.services.web_prepaid_draft_reconciliation  # noqa: F401
 from app.services.form_contracts import (
     FORM_CONTRACT_REGISTRY,

@@ -8,9 +8,11 @@ import logging
 import math
 from datetime import datetime
 from decimal import Decimal
+from typing import cast
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import case, func
+from sqlalchemy import select as db_select
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
 
@@ -30,8 +32,13 @@ from app.models.network import (
 )
 from app.models.subscriber import Address, Subscriber
 from app.schemas.fiber_cost_items import FiberCostEstimate, FiberPricingState
+from app.services import customer_regions, fiber_cost_items, settings_spec
 from app.services import fiber_change_requests as change_request_service
-from app.services import fiber_cost_items, settings_spec
+from app.services.network.radius_sessions import (
+    SubscriptionSessionSnapshot,
+    subscription_session_snapshots,
+)
+from app.services.network_map import resolve_customer_connectivity
 
 logger = logging.getLogger(__name__)
 
@@ -225,9 +232,123 @@ def serialize_asset(asset) -> dict:
     return data
 
 
+def _customer_map_payload(
+    db: Session, map_limit: int | None = None
+) -> dict[str, object]:
+    """Build the bounded customer/region layer shared by fiber map views."""
+
+    if map_limit is None:
+        map_limit = _setting_int(db, SettingDomain.gis, "map_customer_limit", 2000)
+    map_limit = min(max(int(map_limit or 2000), 1), 5000)
+    customer_addresses = customer_regions.customer_map_address_observations(
+        db,
+        limit=map_limit,
+    )
+    subscriber_ids = frozenset(address.subscriber_id for address in customer_addresses)
+    subscriptions = customer_regions.customer_map_subscriptions(
+        db,
+        subscriber_ids=subscriber_ids,
+    )
+    snapshot_by_subscription = subscription_session_snapshots(db, subscriptions)
+    snapshots_by_subscriber: dict[UUID, list[SubscriptionSessionSnapshot]] = {
+        subscriber_id: [] for subscriber_id in subscriber_ids
+    }
+    nas_ids_by_subscriber: dict[UUID, frozenset[UUID]] = {
+        subscriber_id: frozenset() for subscriber_id in subscriber_ids
+    }
+    for subscription in subscriptions:
+        snapshot = snapshot_by_subscription.get(subscription.id)
+        if snapshot is not None:
+            snapshots_by_subscriber.setdefault(subscription.subscriber_id, []).append(
+                snapshot
+            )
+            snapshot_nas = cast(UUID | None, snapshot.nas_device_id)
+            if snapshot_nas is not None:
+                nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                    (
+                        *nas_ids_by_subscriber.get(
+                            subscription.subscriber_id, frozenset()
+                        ),
+                        snapshot_nas,
+                    )
+                )
+        provisioning_nas = cast(UUID | None, subscription.provisioning_nas_device_id)
+        if provisioning_nas is not None:
+            nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                (
+                    *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
+                    provisioning_nas,
+                )
+            )
+    connectivity_by_subscriber = {
+        subscriber_id: resolve_customer_connectivity(snapshots)
+        for subscriber_id, snapshots in snapshots_by_subscriber.items()
+    }
+    inactive_connectivity = resolve_customer_connectivity(())
+    configured_regions = customer_regions.list_regions(db, include_inactive=False)
+    features: list[dict] = []
+    for address in customer_addresses:
+        subscriber_name = (
+            f"{address.first_name or ''} {address.last_name or ''}".strip() or "Unknown"
+        )
+        connectivity = connectivity_by_subscriber.get(
+            address.subscriber_id, inactive_connectivity
+        )
+        region = customer_regions.resolve_region(
+            configured_regions,
+            latitude=float(address.latitude),
+            longitude=float(address.longitude),
+            pop_site_id=address.pop_site_id,
+            nas_device_ids=nas_ids_by_subscriber.get(
+                address.subscriber_id, frozenset()
+            ),
+        )
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [address.longitude, address.latitude],
+                },
+                "properties": {
+                    "id": str(address.address_id),
+                    "type": "customer",
+                    "name": subscriber_name,
+                    "address": address.address_line1,
+                    "city": address.city or "",
+                    "customer_status": (
+                        address.customer_status.value
+                        if address.customer_status
+                        else None
+                    ),
+                    "connectivity": connectivity.to_transport(),
+                    "region_name": region.name if region else None,
+                    "region_color": region.color if region else None,
+                },
+            }
+        )
+    return {
+        "features": features,
+        "customer_regions": [
+            {
+                "name": region.name,
+                "latitude": float(region.latitude),
+                "longitude": float(region.longitude),
+                "radius_meters": float(region.radius_meters),
+                "color": region.color,
+            }
+            for region in configured_regions
+        ],
+        "customer_count": len(customer_addresses),
+        "customer_map_count": len(customer_addresses),
+    }
+
+
 def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
     """Return GeoJSON + stats + cost settings for fiber map page."""
-    features: list[dict] = []
+    features: list[dict[str, object]] = []
+    customer_payload = _customer_map_payload(db)
+    features.extend(cast(list[dict[str, object]], customer_payload["features"]))
 
     fdh_cabinets = (
         db.query(FdhCabinet)
@@ -397,6 +518,9 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
 
     return {
         "geojson_data": {"type": "FeatureCollection", "features": features},
+        "customer_regions": customer_payload["customer_regions"],
+        "customer_count": customer_payload["customer_count"],
+        "customer_map_count": customer_payload["customer_map_count"],
         "stats": stats,
         "cost_state": cost_state,
     }
@@ -477,18 +601,38 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
     stats["segments"] = segment_stats
 
     if map_limit is None:
-        map_limit = _setting_int(db, SettingDomain.gis, "map_customer_limit", 0) or None
-    if map_limit is not None and map_limit <= 0:
-        map_limit = None
+        map_limit = _setting_int(db, SettingDomain.gis, "map_customer_limit", 2000)
+    map_limit = min(max(int(map_limit or 2000), 1), 5000)
 
-    customer_total = (
-        db.query(func.count(Address.id))
-        .join(OntAssignment, OntAssignment.service_address_id == Address.id)
-        .join(Subscriber, Address.subscriber_id == Subscriber.id)
-        .filter(
-            OntAssignment.active.is_(True),
+    primary_address_id = (
+        db_select(Address.id)
+        .where(
+            Address.subscriber_id == Subscriber.id,
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
+        )
+        .order_by(
+            case((Address.is_primary.is_(True), 0), else_=1),
+            Address.id.asc(),
+        )
+        .limit(1)
+        .correlate(Subscriber)
+        .scalar_subquery()
+    )
+    assigned_service_addresses = db_select(OntAssignment.service_address_id).where(
+        OntAssignment.active.is_(True),
+        OntAssignment.service_address_id.isnot(None),
+    )
+
+    customer_total = (
+        db.query(func.count(func.distinct(Address.id)))
+        .join(Subscriber, Address.subscriber_id == Subscriber.id)
+        .filter(
+            Address.id == primary_address_id,
+            Address.id.in_(assigned_service_addresses),
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+            Subscriber.is_active.is_(True),
         )
         .scalar()
         or 0
@@ -503,24 +647,83 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
             Address.longitude,
             Subscriber.first_name,
             Subscriber.last_name,
+            Subscriber.id.label("subscriber_id"),
+            Subscriber.pop_site_id,
+            Subscriber.status.label("customer_status"),
         )
-        .join(OntAssignment, OntAssignment.service_address_id == Address.id)
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
         .filter(
-            OntAssignment.active.is_(True),
+            Address.id == primary_address_id,
+            Address.id.in_(assigned_service_addresses),
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
+            Subscriber.is_active.is_(True),
         )
         .order_by(Address.id)
     )
     if map_limit:
         customer_addresses_query = customer_addresses_query.limit(map_limit)
     customer_addresses = customer_addresses_query.all()
+    configured_regions = customer_regions.list_regions(db, include_inactive=False)
+
+    subscriber_ids = frozenset(address.subscriber_id for address in customer_addresses)
+    subscriptions = customer_regions.customer_map_subscriptions(
+        db,
+        subscriber_ids=subscriber_ids,
+    )
+    snapshot_by_subscription = subscription_session_snapshots(db, subscriptions)
+    snapshots_by_subscriber: dict[UUID, list[SubscriptionSessionSnapshot]] = {
+        subscriber_id: [] for subscriber_id in subscriber_ids
+    }
+    nas_ids_by_subscriber: dict[UUID, frozenset[UUID]] = {
+        subscriber_id: frozenset() for subscriber_id in subscriber_ids
+    }
+    for subscription in subscriptions:
+        snapshot = snapshot_by_subscription.get(subscription.id)
+        if snapshot is not None:
+            snapshots_by_subscriber.setdefault(subscription.subscriber_id, []).append(
+                snapshot
+            )
+            snapshot_nas_id = cast(UUID | None, snapshot.nas_device_id)
+            if snapshot_nas_id is not None:
+                nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                    (
+                        *nas_ids_by_subscriber.get(
+                            subscription.subscriber_id, frozenset()
+                        ),
+                        snapshot_nas_id,
+                    )
+                )
+        provisioning_nas_id = cast(UUID | None, subscription.provisioning_nas_device_id)
+        if provisioning_nas_id is not None:
+            nas_ids_by_subscriber[subscription.subscriber_id] = frozenset(
+                (
+                    *nas_ids_by_subscriber.get(subscription.subscriber_id, frozenset()),
+                    provisioning_nas_id,
+                )
+            )
+    connectivity_by_subscriber = {
+        subscriber_id: resolve_customer_connectivity(snapshots)
+        for subscriber_id, snapshots in snapshots_by_subscriber.items()
+    }
+    inactive_connectivity = resolve_customer_connectivity(())
 
     features: list[dict] = []
     for address in customer_addresses:
         subscriber_name = (
             f"{address.first_name or ''} {address.last_name or ''}".strip() or "Unknown"
+        )
+        connectivity = connectivity_by_subscriber.get(
+            address.subscriber_id, inactive_connectivity
+        )
+        region = customer_regions.resolve_region(
+            configured_regions,
+            latitude=float(address.latitude),
+            longitude=float(address.longitude),
+            pop_site_id=address.pop_site_id,
+            nas_device_ids=nas_ids_by_subscriber.get(
+                address.subscriber_id, frozenset()
+            ),
         )
         features.append(
             {
@@ -535,6 +738,14 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
                     "name": subscriber_name,
                     "address": address.address_line1,
                     "city": address.city or "",
+                    "customer_status": (
+                        address.customer_status.value
+                        if address.customer_status
+                        else None
+                    ),
+                    "connectivity": connectivity.to_transport(),
+                    "region_name": region.name if region else None,
+                    "region_color": region.color if region else None,
                 },
             }
         )
@@ -593,47 +804,19 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
     return {
         "stats": stats,
         "customer_geojson": {"type": "FeatureCollection", "features": features},
+        "customer_regions": [
+            {
+                "name": region.name,
+                "latitude": float(region.latitude),
+                "longitude": float(region.longitude),
+                "radius_meters": float(region.radius_meters),
+                "color": region.color,
+            }
+            for region in configured_regions
+        ],
         "customer_count": customer_total,
         "customer_map_count": len(customer_addresses),
     }
-
-
-def update_asset_position(
-    db: Session,
-    *,
-    asset_type: str,
-    asset_id: str,
-    latitude: float,
-    longitude: float,
-) -> tuple[dict, int]:
-    """Update map position for a supported fiber asset."""
-    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-        return {"error": "Coordinates out of range"}, 400
-
-    asset: FdhCabinet | FiberSpliceClosure | None
-    if asset_type == "fdh_cabinet":
-        asset = db.query(FdhCabinet).filter(FdhCabinet.id == asset_id).first()
-    elif asset_type == "splice_closure":
-        asset = (
-            db.query(FiberSpliceClosure)
-            .filter(FiberSpliceClosure.id == asset_id)
-            .first()
-        )
-    else:
-        return {"error": "Invalid asset type"}, 400
-
-    if not asset:
-        return {"error": "Asset not found"}, 404
-
-    asset.latitude = latitude
-    asset.longitude = longitude
-    db.commit()
-    return {
-        "success": True,
-        "id": str(asset.id),
-        "latitude": latitude,
-        "longitude": longitude,
-    }, 200
 
 
 def find_nearest_cabinet_data(

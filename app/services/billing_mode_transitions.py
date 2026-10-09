@@ -61,6 +61,14 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
+from app.services.prepaid_activation_funding_guard import (
+    OWNER as PREPAID_ACTIVATION_FUNDING_GUARD_OWNER,
+)
+from app.services.prepaid_activation_funding_guard import (
+    PrepaidActivationEntryPoint,
+    assess_prepaid_funding_quarantine,
+    require_prepaid_activation_funding_admitted,
+)
 from app.services.prepaid_enforcement_state import clear_prepaid_enforcement_timers
 from app.services.subscription_billing_treatments import (
     SubscriptionBillingTreatmentError,
@@ -135,6 +143,7 @@ class BillingModeTransitionIssue(StrEnum):
     price_evidence_invalid = "price_evidence_invalid"
     price_currency_mismatch = "price_currency_mismatch"
     prepaid_funding_insufficient = "prepaid_funding_insufficient"
+    prepaid_funding_quarantined = "prepaid_funding_quarantined"
     existing_receivable_preserved = "existing_receivable_preserved"
 
 
@@ -620,6 +629,27 @@ def _preview(
             )
         )
 
+    if target_mode is BillingMode.prepaid and current_mode is not BillingMode.prepaid:
+        funding = assess_prepaid_funding_quarantine(db, account.id)
+        if not funding.admitted:
+            blockers.append(
+                _blocker(
+                    BillingModeTransitionIssue.prepaid_funding_quarantined,
+                    owner=PREPAID_ACTIVATION_FUNDING_GUARD_OWNER,
+                    message=(
+                        "The account has no reviewed prepaid funding opening and "
+                        "would be excluded from prepaid enforcement."
+                    ),
+                    detail=funding.refusal_message(),
+                    observed_at=evaluated_at,
+                    evidence=(
+                        f"Quarantine reason "
+                        f"{funding.reason.value if funding.reason else 'unknown'}; "
+                        f"runbook {funding.runbook.value if funding.runbook else '-'}."
+                    ),
+                )
+            )
+
     available_credit = Decimal("0.00")
     if target_mode is BillingMode.prepaid and len(currencies) == 1:
         currency = next(iter(currencies))
@@ -955,6 +985,15 @@ def confirm_billing_mode_transition(
             )
 
         prior_mode = preview.current_mode
+        if (
+            command.target_mode is BillingMode.prepaid
+            and prior_mode is not BillingMode.prepaid
+        ):
+            require_prepaid_activation_funding_admitted(
+                db,
+                account_id=account.id,
+                entry_point=PrepaidActivationEntryPoint.account_billing_mode_change,
+            )
         changed_ids: list[UUID] = []
         subscriptions = _transition_subscriptions(db, account.id)
         account.billing_mode = command.target_mode

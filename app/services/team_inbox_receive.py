@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -38,6 +39,8 @@ from app.services.events import emit_event
 from app.services.owner_commands import CommandContext
 from app.services.realtime_platform import EventType as RealtimeEventType
 from app.services.sales.selfserve import compute_feasibility
+
+logger = logging.getLogger(__name__)
 
 _MESSAGE_ID_RE = re.compile(r"<[^<>]+>")
 _MAX_EMAIL_REFERENCE_IDS = 32
@@ -225,49 +228,70 @@ def receive_fiber_inquiry(
         )
 
     coverage = None
-    if (
-        payload.is_coverage_request
-        and not identity.identity_review_required
-        and payload.location is not None
-        and payload.location.latitude is not None
-        and payload.location.longitude is not None
-    ):
-        feasibility = compute_feasibility(
-            db,
-            float(payload.location.latitude),
-            float(payload.location.longitude),
-        )
-        coverage_status = str(feasibility["coverage"])
-        summaries = {
-            "covered": (
-                "Fiber service appears to be available at this location. "
-                "Our team will confirm the installation details."
-            ),
-            "survey_required": (
-                "A site survey is required before Fiber availability can be "
-                "confirmed at this location."
-            ),
-            "out_of_area": (
-                "Fiber service is not currently confirmed for this location. "
-                "Our team will review the address."
-            ),
-        }
-        coverage = {
-            "status": coverage_status,
-            "summary": summaries[coverage_status],
-        }
-        if lead_result is not None:
-            emit_event(
-                db,
-                DomainEventType.fiber_coverage_evaluated,
-                {
-                    "lead_id": str(lead_result.lead.id),
-                    "origin_capture_id": str(lead_result.origin.id),
-                    "coverage_status": coverage_status,
-                },
-                actor=context.actor,
-                subscriber_id=lead_result.lead.subscriber_id,
-            )
+    if payload.is_coverage_request and not identity.identity_review_required:
+        if (
+            payload.location is None
+            or payload.location.latitude is None
+            or payload.location.longitude is None
+        ):
+            coverage = {
+                "status": "manual_review",
+                "summary": (
+                    "We need to review the installation address before "
+                    "confirming Fiber availability."
+                ),
+            }
+        else:
+            try:
+                feasibility = compute_feasibility(
+                    db,
+                    float(payload.location.latitude),
+                    float(payload.location.longitude),
+                )
+                coverage_status = str(feasibility["coverage"])
+                summaries = {
+                    "covered": (
+                        "Fiber service appears to be available at this location. "
+                        "Our team will confirm the installation details."
+                    ),
+                    "survey_required": (
+                        "We need to review this location before confirming Fiber "
+                        "availability."
+                    ),
+                    "out_of_area": (
+                        "This location is currently outside our automated Fiber "
+                        "coverage area."
+                    ),
+                }
+                coverage = {
+                    "status": coverage_status,
+                    "summary": summaries[coverage_status],
+                }
+                if lead_result is not None:
+                    emit_event(
+                        db,
+                        DomainEventType.fiber_coverage_evaluated,
+                        {
+                            "lead_id": str(lead_result.lead.id),
+                            "origin_capture_id": str(lead_result.origin.id),
+                            "coverage_status": coverage_status,
+                        },
+                        actor=context.actor,
+                        subscriber_id=lead_result.lead.subscriber_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "fiber_coverage_calculation_failed delivery_id=%s",
+                    delivery_id,
+                )
+                coverage = {
+                    "status": "technical_error",
+                    "summary": (
+                        "We could not complete the automated coverage check. "
+                        "Your enquiry was received and our team will review the "
+                        "address."
+                    ),
+                }
 
     routing = team_inbox_routing.resolve_channel_routing_decision(
         db,

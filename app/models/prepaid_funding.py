@@ -553,3 +553,86 @@ class PrepaidFundingTriggerSubscriptionOutcome(Base):
     invoice = relationship("Invoice")
     invoice_line = relationship("InvoiceLine")
     entitlement = relationship("ServiceEntitlement")
+
+
+class PrepaidActivationFundingOverride(Base):
+    """Staff decision to admit prepaid activation before the opening review.
+
+    An override never changes funding authority or the quarantine itself: the
+    account stays in ``prepaid_funding_incomplete_source_account_ids`` (and in
+    the ``prepaid_funding_quarantined`` signal) until its reviewed baseline or
+    subledger opening exists. It records only that an authorized staff member
+    accepted activating prepaid service for an account that money actions will
+    keep excluding meanwhile.
+    """
+
+    __tablename__ = "prepaid_activation_funding_overrides"
+    __table_args__ = (
+        CheckConstraint(
+            "length(currency) = 3 AND currency = upper(currency)",
+            name="ck_prepaid_activation_override_currency",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 10",
+            name="ck_prepaid_activation_override_reason",
+        ),
+        CheckConstraint(
+            "(revoked_at IS NULL AND revoked_by IS NULL "
+            "AND revoked_by_system_user_id IS NULL AND revoke_reason IS NULL) "
+            "OR (revoked_at IS NOT NULL AND revoked_by IS NOT NULL "
+            "AND revoked_by_system_user_id IS NOT NULL "
+            "AND revoke_reason IS NOT NULL)",
+            name="ck_prepaid_activation_override_revocation_complete",
+        ),
+        Index(
+            "uq_prepaid_activation_override_active_account",
+            "account_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+            sqlite_where=text("revoked_at IS NULL"),
+        ),
+        Index(
+            "uq_prepaid_activation_override_idempotency",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    quarantine_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    remediation_runbook: Mapped[str] = mapped_column(String(160), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    granted_by: Mapped[str] = mapped_column(String(160), nullable=False)
+    granted_by_system_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("system_users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    command_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    correlation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[str | None] = mapped_column(String(160))
+    revoked_by_system_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("system_users.id", ondelete="RESTRICT"),
+    )
+    revoke_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    account = relationship("Subscriber")

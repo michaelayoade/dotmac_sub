@@ -249,6 +249,30 @@ def _audit_activity_items(
         ]
         if change_summary:
             details.append({"label": "Changes", "value": change_summary})
+        test_title: str | None = None
+        if action in {
+            "subscription.test_connection_activated",
+            "subscription.test_connection_expired",
+        }:
+            test_title = (
+                "Test Connection activated"
+                if action.endswith("_activated")
+                else "Test Connection expired"
+            )
+            duration = metadata.get("duration_seconds")
+            if isinstance(duration, int):
+                hours = duration / 3600
+                details.append(
+                    {"label": "Duration granted", "value": f"{hours:g} hour(s)"}
+                )
+            for key, label in (
+                ("activated_at", "Activated at"),
+                ("expires_at", "Expected expiry"),
+            ):
+                value = metadata.get(key)
+                if isinstance(value, str):
+                    details.append({"label": label, "value": value})
+            description = f"{test_title} for this subscription. Normal billing state is preserved."
         request_id = str(event.request_id or "").strip()
         if request_id:
             details.append({"label": "Request ID", "value": request_id})
@@ -256,7 +280,8 @@ def _audit_activity_items(
             {
                 "key": f"audit:{event.id}",
                 "type": "audit",
-                "title": f"{humanize_entity(entity_type)} {humanize_action(action)}",
+                "title": test_title
+                or f"{humanize_entity(entity_type)} {humanize_action(action)}",
                 "action_label": action_label,
                 "object_label": object_label,
                 "actor_kind": actor_kind,

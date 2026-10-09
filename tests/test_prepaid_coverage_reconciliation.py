@@ -390,7 +390,7 @@ def test_blocking_quarantine_creates_and_resolves_owned_work_item(
         db_session.query(AdminAlert).filter(AdminAlert.fingerprint == fingerprint).one()
     )
     assert alert.status.value == "open"
-    assert alert.details["owner"] == "finance-billing"
+    assert alert.details["owner"] == "financial-billing"
     assert alert.details["reason_codes"] == ["malformed_paid_invoice_period"]
     assert alert.details["sla_due_at"]
 

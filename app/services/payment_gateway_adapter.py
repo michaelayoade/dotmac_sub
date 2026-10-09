@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from uuid import UUID
@@ -33,6 +34,18 @@ class PaymentGatewayTransaction:
     metadata: dict[str, object] = field(default_factory=dict)
     memo_prefix: str = ""
     raw: dict[str, object] = field(default_factory=dict)
+    paid_at: datetime | None = None
+
+
+def parse_provider_paid_at(value: object) -> datetime | None:
+    """Accept a provider's explicit capture timestamp, never transaction creation."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(UTC) if parsed.tzinfo is not None else None
 
 
 class PaymentGatewayVerificationOutcome(str, Enum):
@@ -322,6 +335,7 @@ class PaymentGatewayAdapter:
                 provider_fee=Decimal(str(tx.get("app_fee") or 0)),
                 metadata=_string_keyed_mapping(tx.get("meta")),
                 memo_prefix="Flutterwave",
+                paid_at=parse_provider_paid_at(tx.get("paid_at")),
                 raw=dict(tx),
             )
         return PaymentGatewayTransaction(
@@ -332,6 +346,7 @@ class PaymentGatewayAdapter:
             provider_fee=payment_capability.kobo_to_naira(_kobo_value(tx.get("fees"))),
             metadata=_string_keyed_mapping(tx.get("metadata")),
             memo_prefix="Paystack",
+            paid_at=parse_provider_paid_at(tx.get("paid_at") or tx.get("paidAt")),
             raw=dict(tx),
         )
 

@@ -4,22 +4,19 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.fiber_change_request import FiberChangeRequestStatus
-from app.models.network import FiberTerminationPoint
+from app.schemas.network_map_asset_changes import NetworkAssetProposalStatus
 from app.services import fiber_change_requests as change_request_service
+from app.services import fiber_topology as fiber_topology_service
+from app.services import network_map_asset_changes
 from app.services import web_network_core_devices as web_network_core_devices_service
-from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services import web_network_fiber as web_network_fiber_service
 from app.services.audit_helpers import build_audit_activities
 
 logger = logging.getLogger(__name__)
-
-_coerce_float_or_none = web_network_core_runtime_service.coerce_float_or_none
 
 
 def form_optional_str(form: FormData, key: str) -> str | None:
@@ -36,6 +33,8 @@ def change_requests_page_data(
     *,
     bulk_status: str | None,
     skipped: str | None,
+    can_review_map_assets: bool = False,
+    map_asset_actor_id: str = "",
 ) -> dict[str, object]:
     requests = change_request_service.list_requests(
         db, status=FiberChangeRequestStatus.pending
@@ -44,9 +43,29 @@ def change_requests_page_data(
         str(req.id): web_network_fiber_service.has_change_request_conflict(db, req)
         for req in requests
     }
+    map_asset_proposals = network_map_asset_changes.list_proposals(
+        db,
+        status=NetworkAssetProposalStatus.pending,
+        limit=200,
+    )
+    map_asset_items = [
+        {
+            **proposal.to_transport(),
+            "can_review": can_review_map_assets
+            and str(proposal.requested_by_actor_id) != map_asset_actor_id,
+            "is_current_actor_proposer": (
+                str(proposal.requested_by_actor_id) == map_asset_actor_id
+            ),
+        }
+        for proposal in map_asset_proposals.proposals
+    ]
     return {
         "requests": requests,
         "conflicts": conflicts,
+        "map_asset_proposals": map_asset_items,
+        "map_asset_proposals_total": map_asset_proposals.total,
+        "map_asset_proposals_truncated": map_asset_proposals.truncated,
+        "can_review_map_assets": can_review_map_assets,
         "bulk_status": bulk_status,
         "skipped": skipped,
     }
@@ -162,12 +181,9 @@ def as_built_activation_page_data(
     """
     from app.services.network import as_built_plant_projection
 
-    points = list(
-        db.scalars(
-            select(FiberTerminationPoint)
-            .where(FiberTerminationPoint.is_active.is_(True))
-            .order_by(FiberTerminationPoint.name.asc().nullslast())
-        )
+    points = fiber_topology_service.termination_point_options(
+        db,
+        fiber_topology_service.FiberTerminationPointOptionsQuery(active_only=True),
     )
     rows = as_built_plant_projection.awaiting_activation_queue(db)
     return {
@@ -175,49 +191,11 @@ def as_built_activation_page_data(
         "awaiting_activation_count": len(rows),
         "termination_points": [
             {
-                "id": str(point.id),
-                "label": "{} · {}".format(
-                    point.name or str(point.id)[:8],
-                    getattr(point.endpoint_type, "value", point.endpoint_type),
-                ),
+                "id": str(point.point_id),
+                "label": f"{point.name or str(point.point_id)[:8]} · {point.endpoint_type.value}",
             }
             for point in points
         ],
         "activation_error": error,
         "activation_error_as_built_id": error_as_built_id,
     }
-
-
-def update_asset_position_data(
-    db: Session, body: dict[str, object]
-) -> tuple[dict[str, object], int]:
-    asset_type = body.get("type")
-    asset_id = body.get("id")
-    latitude_raw = body.get("latitude")
-    longitude_raw = body.get("longitude")
-
-    if not isinstance(asset_type, str) or not isinstance(asset_id, str):
-        return {"error": "Missing required fields"}, 400
-    if latitude_raw is None or longitude_raw is None:
-        return {"error": "Missing required fields"}, 400
-
-    latitude = _coerce_float_or_none(latitude_raw)
-    longitude = _coerce_float_or_none(longitude_raw)
-    if latitude is None or longitude is None:
-        return {"error": "Invalid coordinates"}, 400
-
-    try:
-        payload, status_code = web_network_fiber_service.update_asset_position(
-            db,
-            asset_type=asset_type,
-            asset_id=asset_id,
-            latitude=latitude,
-            longitude=longitude,
-        )
-        return payload, status_code
-    except HTTPException as exc:
-        db.rollback()
-        return {"error": str(exc.detail)}, exc.status_code
-    except Exception as exc:
-        db.rollback()
-        return {"error": str(exc)}, 500

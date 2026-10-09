@@ -19,7 +19,7 @@ from enum import StrEnum
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select, union_all
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -32,6 +32,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.network import (
     FdhCabinet,
     FiberStrand,
@@ -47,7 +48,7 @@ from app.models.network import (
 from app.models.network_monitoring import CustomerOutageInterval, PopSite
 from app.models.project import Project, ProjectTask
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
-from app.models.subscriber import Address, Subscriber
+from app.models.subscriber import AccountStatus, Address, Subscriber
 from app.models.support import Ticket
 from app.models.team_inbox import InboxConversation, InboxConversationQueueEntry
 from app.models.work_order import WorkOrder
@@ -55,9 +56,11 @@ from app.services import (
     crm_api,
     ip_pool_utilization_snapshot,
     projects,
+    subscriber_growth,
     team_inbox_metrics,
     ticket_sla_reports,
 )
+from app.services import subscriber as subscriber_service
 from app.services.invoice_collectibility import open_invoice_filters
 
 
@@ -1039,18 +1042,135 @@ def subscriber_segment_facts(
     )
 
 
-def subscription_churn_reason_counts(db: Session) -> tuple[tuple[str, int], ...]:
-    """Read authoritative service-cancellation reasons for the churn report."""
+def subscription_churn_reason_counts(
+    db: Session,
+    *,
+    status: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> tuple[tuple[str, int], ...]:
+    """Read cancellation and suspension reasons from the churn window."""
+    normalized_status = subscriber_growth.normalize_churn_status(status)
+    event_types = (
+        (LifecycleEventType.cancel,)
+        if normalized_status == AccountStatus.canceled.value
+        else (LifecycleEventType.suspend,)
+        if normalized_status == AccountStatus.suspended.value
+        else (LifecycleEventType.cancel, LifecycleEventType.suspend)
+    )
+    trusted_reason = case(
+        (
+            SubscriptionLifecycleEvent.event_type == LifecycleEventType.cancel,
+            func.coalesce(
+                SubscriptionLifecycleEvent.reason,
+                Subscription.cancel_reason,
+            ),
+        ),
+        else_=SubscriptionLifecycleEvent.reason,
+    ).label("reason")
+    trusted_churn = (
+        select(
+            Subscription.subscriber_id.label("subscriber_id"),
+            trusted_reason,
+            SubscriptionLifecycleEvent.effective_at.label("occurred_at"),
+        )
+        .select_from(SubscriptionLifecycleEvent)
+        .join(
+            Subscription,
+            Subscription.id == SubscriptionLifecycleEvent.subscription_id,
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(
+            subscriber_service.visible_subscriber_clause(),
+            SubscriptionLifecycleEvent.event_type.in_(event_types),
+            subscriber_growth.trusted_lifecycle_transition_clause(),
+        )
+    )
+    trusted_churn_exists = (
+        select(1)
+        .select_from(SubscriptionLifecycleEvent)
+        .join(
+            Subscription,
+            Subscription.id == SubscriptionLifecycleEvent.subscription_id,
+        )
+        .where(
+            Subscription.subscriber_id == Subscriber.id,
+            SubscriptionLifecycleEvent.event_type.in_(event_types),
+            subscriber_growth.trusted_lifecycle_transition_clause(),
+        )
+        .exists()
+    )
+    legacy_status_filters = []
+    if normalized_status in (None, AccountStatus.canceled.value):
+        legacy_status_filters.append(
+            or_(
+                Subscriber.status == AccountStatus.canceled,
+                Subscription.status == SubscriptionStatus.canceled,
+                Subscription.canceled_at.is_not(None),
+            )
+        )
+    if normalized_status in (None, AccountStatus.suspended.value):
+        legacy_status_filters.append(
+            or_(
+                Subscriber.status == AccountStatus.suspended,
+                Subscription.status == SubscriptionStatus.suspended,
+            )
+        )
+    legacy_reason = case(
+        (
+            Subscription.status == SubscriptionStatus.canceled,
+            Subscription.cancel_reason,
+        ),
+        else_=cast(None, String),
+    ).label("reason")
+    legacy_candidates = (
+        select(
+            Subscriber.id.label("subscriber_id"),
+            legacy_reason,
+            func.coalesce(Subscriber.updated_at, Subscriber.created_at).label(
+                "occurred_at"
+            ),
+            func.row_number()
+            .over(
+                partition_by=Subscriber.id,
+                order_by=(
+                    case(
+                        (Subscription.status == SubscriptionStatus.canceled, 0),
+                        else_=1,
+                    ),
+                    func.coalesce(
+                        Subscription.updated_at,
+                        Subscription.created_at,
+                    ).desc(),
+                ),
+            )
+            .label("event_rank"),
+        )
+        .select_from(Subscriber)
+        .outerjoin(Subscription, Subscription.subscriber_id == Subscriber.id)
+        .where(
+            subscriber_service.visible_subscriber_clause(),
+            or_(*legacy_status_filters),
+            ~trusted_churn_exists,
+        )
+    )
+    legacy_churn = select(
+        legacy_candidates.c.subscriber_id,
+        legacy_candidates.c.reason,
+        legacy_candidates.c.occurred_at,
+    ).where(legacy_candidates.c.event_rank == 1)
+    source = union_all(trusted_churn, legacy_churn).subquery("churn_reasons")
+    statement = select(source.c.reason, func.count(source.c.subscriber_id))
+    if date_from is not None:
+        statement = statement.where(source.c.occurred_at >= date_from)
+    if date_to is not None:
+        statement = statement.where(source.c.occurred_at < date_to)
     return tuple(
         (reason or "Reason not captured", int(count or 0))
         for reason, count in db.execute(
-            select(Subscription.cancel_reason, func.count(Subscription.id))
-            .where(
-                (Subscription.status == SubscriptionStatus.canceled)
-                | (Subscription.canceled_at.is_not(None))
+            statement.group_by(source.c.reason).order_by(
+                func.count(source.c.subscriber_id).desc()
             )
-            .group_by(Subscription.cancel_reason)
-            .order_by(func.count(Subscription.id).desc())
         ).all()
     )
 

@@ -441,6 +441,12 @@ class TestSubscriptionActivation:
         page.locator("#offer_id").select_option(str(offer["id"]))
         page.locator("#status").select_option("active")
         page.get_by_role("button", name="Continue").click()
+        expect(
+            page.get_by_role("heading", name="Plan Selection", exact=True)
+        ).to_be_hidden()
+        expect(
+            page.get_by_role("heading", name="Service Provisioning", exact=True)
+        ).to_be_visible()
 
         provisioning_nas_value = page.locator(
             "input[name='provisioning_nas_device_id'][data-typeahead-hidden]"
@@ -452,6 +458,15 @@ class TestSubscriptionActivation:
         page.locator("#ipv4_method").select_option("dynamic")
 
         page.get_by_role("button", name="Continue").click()
+        # Alpine's leaving panel remains in the layout during x-transition.
+        # A visible submit button can still move after Playwright's two-frame
+        # stability check; wait for the old panel to leave before clicking it.
+        expect(
+            page.get_by_role("heading", name="Service Provisioning", exact=True)
+        ).to_be_hidden()
+        expect(
+            page.get_by_role("heading", name="Quick Options", exact=True)
+        ).to_be_visible()
         page.locator("input[name='send_welcome_email']").uncheck()
         subscription_form = page.locator("form[action='/admin/catalog/subscriptions']")
         invalid_controls: list[str] = subscription_form.evaluate(

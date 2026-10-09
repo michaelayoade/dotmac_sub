@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from app.services import automation_capabilities
@@ -60,6 +63,122 @@ def test_requested_business_targets_are_declared_for_rule_or_script_authoring() 
     } <= targets
 
 
+def test_automation_permissions_match_canonical_module_rbac_contracts() -> None:
+    """Keep the shared client-script gate aligned with the owning form routes."""
+    manifests = automation_capabilities.all_module_manifests()
+    targets = {
+        target.entity_type: target
+        for manifest in manifests
+        for target in manifest.script_targets
+    }
+    expected_target_permissions = {
+        "customer.account": ("customer:read", "customer:update"),
+        "support.ticket": ("support:ticket:read", "support:ticket:update"),
+        "operations.project": ("project:read", "project:update"),
+        "operations.work_order": (
+            "operations:dispatch:read",
+            "operations:dispatch:write",
+        ),
+        "operations.material_request": (
+            "operations:material_request:read",
+            "operations:material_request:write",
+        ),
+        "operations.vendor": ("vendor:read", "vendor:write"),
+        "sales.lead": ("crm:lead:read", "crm:lead:write"),
+        "sales.quote": ("crm:quote:read", "crm:quote:write"),
+        "sales.sales_order": ("crm:sales_order:read", "crm:sales_order:write"),
+    }
+
+    assert {
+        entity_type: (
+            targets[entity_type].read_permission,
+            targets[entity_type].write_permission,
+        )
+        for entity_type in expected_target_permissions
+    } == expected_target_permissions
+
+    triggers = {
+        trigger.key: trigger for manifest in manifests for trigger in manifest.triggers
+    }
+    actions = {
+        action.key: action for manifest in manifests for action in manifest.actions
+    }
+    assert triggers["operations.project.created"].author_permission == "project:read"
+    assert (
+        triggers["operations.material_request.cancellation_requested"].author_permission
+        == "operations:material_request:read"
+    )
+    assert (
+        actions["operations.project.set_status"].author_permission == "project:update"
+    )
+    assert (
+        actions["operations.material_request.enqueue_cancellation"].author_permission
+        == "operations:material_request:write"
+    )
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "required_triggers"),
+    (
+        (
+            "operations.project",
+            (
+                "operations.project.created",
+                "operations.project.updated",
+                "operations.project.completed",
+                "operations.project.canceled",
+                "operations.project.scheduled",
+            ),
+        ),
+        (
+            "operations.material_request",
+            (
+                "operations.material_request.cancellation_requested",
+                "operations.material_request.approved",
+                "operations.material_request.fulfilled",
+            ),
+        ),
+    ),
+)
+def test_expanded_operations_triggers_preserve_submission_permissions(
+    entity_type: str, required_triggers: tuple[str, ...]
+) -> None:
+    """Expanded rule authoring must retain the form-submission RBAC repair."""
+    manifests = automation_capabilities.all_module_manifests()
+    target = next(
+        target
+        for manifest in manifests
+        for target in manifest.script_targets
+        if target.entity_type == entity_type
+    )
+    triggers = {
+        trigger.key: trigger
+        for manifest in manifests
+        for trigger in manifest.triggers
+        if trigger.entity_type == entity_type
+    }
+    assert set(required_triggers) <= triggers.keys()
+    assert all(
+        trigger.author_permission == target.read_permission and trigger.runtime_enabled
+        for trigger in triggers.values()
+    )
+    if entity_type == "operations.project":
+        assert "project_type" in {
+            field.key for field in triggers["operations.project.created"].fields
+        }
+        assert "status" in {
+            field.key for field in triggers["operations.project.updated"].fields
+        }
+        assert triggers["operations.project.scheduled"].scheduled
+    else:
+        assert "reason" in {
+            field.key
+            for field in triggers[
+                "operations.material_request.cancellation_requested"
+            ].fields
+        }
+
+
 def test_script_targets_declare_event_identity_for_independent_server_dispatch() -> (
     None
 ):
@@ -90,6 +209,50 @@ def test_script_targets_declare_event_identity_for_independent_server_dispatch()
     )
 
 
+def test_material_request_automation_uses_assignable_owner_permissions() -> None:
+    manifests = automation_capabilities.all_module_manifests()
+    targets = {
+        target.entity_type: target
+        for manifest in manifests
+        for target in manifest.script_targets
+    }
+    triggers = {
+        trigger.key: trigger for manifest in manifests for trigger in manifest.triggers
+    }
+    actions = {
+        action.key: action for manifest in manifests for action in manifest.actions
+    }
+    seed_path = Path(__file__).resolve().parents[2] / "scripts/seed/seed_rbac.py"
+    seed_tree = ast.parse(
+        seed_path.read_text(encoding="utf-8"), filename=str(seed_path)
+    )
+    seed_assignment = next(
+        node
+        for node in seed_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "DEFAULT_PERMISSIONS"
+            for target in node.targets
+        )
+    )
+    seeded_permissions = {
+        key for key, _description in ast.literal_eval(seed_assignment.value)
+    }
+
+    target = targets["operations.material_request"]
+    assert target.read_permission == "operations:material_request:read"
+    assert target.write_permission == "operations:material_request:write"
+    assert (
+        triggers["operations.material_request.cancellation_requested"].author_permission
+        == target.read_permission
+    )
+    assert (
+        actions["operations.material_request.enqueue_cancellation"].author_permission
+        == target.write_permission
+    )
+    assert {target.read_permission, target.write_permission} <= seeded_permissions
+
+
 def test_rule_actions_report_typed_adapter_readiness_by_module() -> None:
     manifests = automation_capabilities.all_module_manifests()
     actions = {
@@ -107,16 +270,21 @@ def test_rule_actions_report_typed_adapter_readiness_by_module() -> None:
         assert actions[key].runtime_enabled is True
     assert actions["operations.work_order.set_status"].runtime_enabled is True
     assert actions["operations.vendor.set_status"].runtime_enabled is True
+    assert actions["communications.send_notification"].runtime_enabled is True
+    assert actions["communications.send_notification"].target_types == ("*",)
     assert actions["sales.lead.set_status"].inputs[0].enum_values
     assert actions["sales.quote.set_status"].inputs[0].enum_values == (
         "draft",
         "sent",
+        "accepted",
         "rejected",
         "expired",
     )
     assert actions["sales.sales_order.set_status"].inputs[0].enum_values == (
         "draft",
         "confirmed",
+        "paid",
+        "fulfilled",
         "cancelled",
     )
 
@@ -185,6 +353,9 @@ def test_customer_and_support_workflows_expose_owner_produced_events() -> None:
         field.key == "status"
         for field in triggers["customer.account.status_changed"].fields
     )
+    assert {
+        field.key for field in triggers["customer.account.status_changed"].fields
+    } >= {"status", "previous_status", "action"}
     assert any(
         field.key == "status"
         for field in triggers["support.ticket.status_changed"].fields

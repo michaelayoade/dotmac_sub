@@ -59,6 +59,7 @@
                     <th scope="col" class="hidden px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 md:table-cell">PPPoE</th>
                     <th scope="col" class="hidden px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 lg:table-cell">Access</th>
                     <th scope="col" class="hidden px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 xl:table-cell">NAS / Location</th>
+                    <th scope="col" class="hidden px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 xl:table-cell">Region</th>
                     {% set status_sort_dir = 'desc' if list_query.sort_by == 'status' and list_query.sort_dir == 'asc' else 'asc' %}
                     {% set status_sort_url = list_query.url('/admin/customers', page=1, sort_by='status', sort_dir=status_sort_dir) %}
                     <th scope="col"
@@ -186,6 +187,16 @@
                             <span class="text-xs text-slate-400 dark:text-slate-500">—</span>
                             {% endif %}
                         </div>
+                    </td>
+                    <td class="hidden whitespace-nowrap px-4 py-4 xl:table-cell">
+                        {% if customer.region %}
+                        <span class="inline-flex items-center gap-2 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                            <span class="h-2.5 w-2.5 rounded-full" style="background-color: {{ customer.region.color }}" aria-hidden="true"></span>
+                            {{ customer.region.name }}
+                        </span>
+                        {% else %}
+                        <span class="text-xs text-slate-400 dark:text-slate-500">Unassigned</span>
+                        {% endif %}
                     </td>
                     <td class="whitespace-nowrap px-4 py-4">
                         {{ status_presentation_badge(customer.status_presentation, pulse=(customer.status == 'active'), size="sm") }}
@@ -325,14 +336,29 @@
     </div>
 
     <!-- Pagination -->
-    {% if page_meta.total_pages > 1 %}
+    {% if page_meta.total_pages > 1 or page_meta.total_items > 0 %}
     <div class="border-t border-slate-200/60 bg-slate-50/60 px-4 py-3 dark:border-slate-700/60 dark:bg-slate-800/60">
         <div class="flex flex-col items-center justify-between gap-3 sm:flex-row">
-            <p class="text-sm text-slate-500 dark:text-slate-400">
+            <div class="flex flex-wrap items-center gap-4 text-sm text-slate-500 dark:text-slate-400">
+                <label for="customers-page-size" class="font-medium">Show rows</label>
+                <select id="customers-page-size" name="per_page" form="customers-filters"
+                        onchange="document.querySelector('[data-page-input]').value = '1'"
+                        hx-get="/admin/customers"
+                        hx-trigger="change"
+                        hx-target="#customers-table"
+                        hx-push-url="true"
+                        hx-include="#customers-filters, #customers-page-size"
+                        class="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-700 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                    {% for size in [10, 25, 50, 100] %}
+                    <option value="{{ size }}" {% if list_query.per_page == size %}selected{% endif %}>{{ size }}</option>
+                    {% endfor %}
+                </select>
+                <p>
                 Showing <span class="font-semibold text-slate-700 dark:text-slate-300">{{ page_meta.start_item }}</span> to
                 <span class="font-semibold text-slate-700 dark:text-slate-300">{{ page_meta.end_item }}</span> of
                 <span class="font-semibold text-slate-700 dark:text-slate-300">{{ page_meta.total_items }}</span> customers
-            </p>
+                </p>
+            </div>
             <nav class="flex items-center gap-1" aria-label="Customer table pages">
                 <!-- Previous -->
                 {% if page_meta.has_previous %}
@@ -394,12 +420,6 @@
                 {% endif %}
             </nav>
         </div>
-    </div>
-    {% elif page_meta.total_items > 0 %}
-    <div class="border-t border-slate-200/60 bg-slate-50/60 px-4 py-3 dark:border-slate-700/60 dark:bg-slate-800/60">
-        <p class="text-center text-sm text-slate-500 dark:text-slate-400">
-            Showing all <span class="font-semibold text-slate-700 dark:text-slate-300">{{ page_meta.total_items }}</span> customers
-        </p>
     </div>
     {% endif %}
 </div>

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from app.models.notification import (
 from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.models.support import Ticket
 from app.services import web_customer_actions
+from app.services.queue_adapter import QueueDispatchResult
 from app.services.whatsapp_notification_templates import (
     parse_provider_template_body,
     sync_whatsapp_registry_templates,
@@ -59,6 +61,84 @@ def test_customer_bulk_message_preview_does_not_dispatch_delivery(monkeypatch):
 
     assert result is preview_result
     assert dispatch_calls == []
+
+
+@pytest.mark.parametrize("broker_available", [True, False])
+def test_customer_bulk_message_confirmation_returns_durable_acceptance(
+    monkeypatch, broker_available
+):
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from app.services import customer_bulk_messages
+    from app.services.customer_bulk_message_contracts import (
+        BulkMessageCounts,
+        BulkMessageSpec,
+        BulkSendReceipt,
+        BulkSendState,
+        BulkSendStatus,
+    )
+
+    actor_id, request_id = uuid4(), uuid4()
+    spec = BulkMessageSpec(
+        channel="email",
+        template_id=uuid4(),
+        confirmed=True,
+        expected_impact_token="impact-1",
+        customer_ids=(uuid4(),),
+    )
+    receipt = BulkSendReceipt(
+        request_id=request_id,
+        actor_id=actor_id,
+        fingerprint="fingerprint",
+        spec=spec,
+        accepted_at=datetime.now(UTC),
+        counts=BulkMessageCounts(
+            matched_count=1205, queued_count=1200, suppressed_count=5
+        ),
+    )
+    monkeypatch.setattr(
+        customers_web.db_session_adapter, "release_read_transaction", lambda _db: None
+    )
+    monkeypatch.setattr(
+        customer_bulk_messages, "accept", lambda *, db, command: receipt
+    )
+    monkeypatch.setattr(
+        customer_bulk_messages,
+        "status",
+        lambda *, db, query: BulkSendStatus(
+            request_id=request_id,
+            materialization_status=BulkSendState.accepted,
+            matched_count=1205,
+            planned_queued_count=1200,
+            planned_suppressed_count=5,
+            skipped_count=0,
+            status_url=f"/admin/customers/bulk/send-message/{request_id}",
+        ),
+    )
+    monkeypatch.setattr(customers_web, "_get_actor_id", lambda _request: str(actor_id))
+    dispatch_calls = []
+
+    def enqueue(task_name, **kwargs):
+        dispatch_calls.append((task_name, kwargs))
+        return QueueDispatchResult(
+            queued=broker_available,
+            task_id="bulk-task-1",
+            error=None if broker_available else "broker unavailable",
+        )
+
+    monkeypatch.setattr(customers_web, "enqueue_task", enqueue)
+    response = customers_web.bulk_send_customer_message(
+        request=None,
+        data={**spec.model_dump(mode="json"), "request_id": str(request_id)},
+        db=object(),
+    )
+    assert response.status_code == 202
+    body = json.loads(response.body)
+    assert body["accepted"] is True
+    assert body["request_id"] == str(request_id)
+    assert body["planned_queued_count"] == 1200
+    assert dispatch_calls[0][1]["args"] == (str(request_id),)
 
 
 def _confirmed_selected_scope(db_session, *customer_ids: str) -> dict[str, object]:
@@ -179,12 +259,15 @@ def test_customer_bulk_actions_sync_selection_from_checked_rows_before_submit():
     assert (
         "this.selectedIds.filter((item) => !visibleIds.has(item.id))" in page_template
     )
-    assert "Matched ${matched} customer(s)." in page_template
-    assert "skipped due to missing contact details" in page_template
-    assert "excluded because they have open tickets" in page_template
-    assert "suppressed by preferences, dedupe, or other template conditions" in (
-        page_template
+    runtime = (REPO_ROOT / "static/js/customer-bulk-send.js").read_text(
+        encoding="utf-8"
     )
+    assert "Matched ${status.matched_count} customer(s)." in runtime
+    assert "DotmacCustomerBulkSend.send" in page_template
+    assert "${status.skipped_count} skipped." in runtime
+    assert "${status.planned_suppressed_count} suppressed" in runtime
+    assert "messagePreviewOpenTicketCount()" in page_template
+    assert "messagePreviewOtherSuppressionCount()" in page_template
 
 
 def test_bulk_update_customers_requires_explicit_filtered_scope_preview_and_confirmation(
@@ -360,6 +443,53 @@ def test_queue_bulk_message_from_selected_scope_renders_template_and_skips_missi
     assert notification is not None
     assert notification.recipient == "+2348011111111"
     assert notification.body == "Hello Rita Reachable on AC-1001"
+
+
+def test_queue_bulk_message_retry_replays_same_communication_intent(
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.customer_notification_policy.channel_disabled_in_config",
+        lambda _db, _channel: False,
+    )
+    monkeypatch.setattr(
+        "app.services.notification.channel_disabled_in_config",
+        lambda _db, _channel: False,
+    )
+    monkeypatch.setattr(
+        "app.services.customer_notification_policy._setting_int",
+        lambda _db, _key, _default: 0,
+    )
+    customer = Subscriber(
+        first_name="Retry",
+        last_name="Safe",
+        email="retry-safe@example.com",
+        user_type=UserType.customer,
+        is_active=True,
+    )
+    template = NotificationTemplate(
+        name="Retry Safe Email",
+        code="retry_safe_email",
+        channel=NotificationChannel.email,
+        subject="Account update",
+        body="Hello {customer_name}",
+        is_active=True,
+    )
+    db_session.add_all([customer, template])
+    db_session.commit()
+    payload = _previewed_message_payload(
+        db_session,
+        customer_ids=(str(customer.id),),
+        channel="email",
+        template_id=str(template.id),
+    )
+
+    first = web_customer_actions.queue_bulk_message_from_payload(db_session, payload)
+    second = web_customer_actions.queue_bulk_message_from_payload(db_session, payload)
+
+    assert first["notification_ids"] == second["notification_ids"]
+    assert db_session.query(Notification).count() == 1
 
 
 def test_queue_bulk_email_backfills_common_template_aliases(db_session):

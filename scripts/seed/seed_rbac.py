@@ -145,14 +145,28 @@ DEFAULT_PERMISSIONS = [
         "Confirm reviewed billing reconciliation corrections",
     ),
     (
+        "billing:renewal_terms:record",
+        "Request or approve a finance-reviewed prepaid renewal-term record "
+        "(four-eyes; requester and approver must differ)",
+    ),
+    (
         "billing:prepaid_reconciliation:repair",
         "Repair one exact already-paid prepaid invoice's identity and coverage "
         "after reviewed evidence",
+    ),
+    (
+        "billing:prepaid_funding:activation_override",
+        "Admit prepaid activation for a legacy account whose reviewed funding "
+        "opening is still missing (account stays funding-quarantined)",
     ),
     # Billing - Credit Notes
     ("billing:extension:read", "View service extensions"),
     ("billing:extension:create", "Create service extensions"),
     ("billing:extension:apply", "Apply or cancel service extensions"),
+    (
+        "billing:outage_compensation:approve",
+        "Approve reviewed outage time compensation",
+    ),
     (
         "billing:extension:reverse",
         "Reverse applied service extensions after reviewed impact preview",
@@ -194,6 +208,10 @@ DEFAULT_PERMISSIONS = [
     ("catalog:offer:write", "Manage catalog offers"),
     # Subscriptions
     ("subscription:read", "View subscriptions"),
+    (
+        "subscription:test_connection",
+        "Temporarily enable subscription connectivity testing",
+    ),
     ("subscription:create", "Create subscriptions"),
     ("subscription:update", "Update subscriptions"),
     (
@@ -573,6 +591,7 @@ ROLE_PERMISSIONS = {
         "reports:support:read",
     ],
     "customer_experience_manager": [
+        "subscription:test_connection",
         "customer:read",
         "reseller:read",
         "support:ticket:read",
@@ -583,6 +602,7 @@ ROLE_PERMISSIONS = {
         "reports:support:read",
     ],
     "finance_manager": [
+        "subscription:test_connection",
         "billing:invoice:read",
         "billing:invoice:create",
         "billing:invoice:update",
@@ -614,6 +634,7 @@ ROLE_PERMISSIONS = {
         "billing:arrangement:write",
         "billing:treatment:read",
         "billing:treatment:write",
+        "billing:renewal_terms:record",
         "billing:batch:read",
         "billing:batch:write",
         "billing:import:write",

@@ -258,6 +258,10 @@ exit 64
 set -eu
 if [[ "${1:-}" == "${REPO_ROOT}/scripts/deploy.sh" ]]; then
   printf '%s\n' delegated > "${DEPLOY_MARKER}"
+  printf '%s\n' \
+    "HEALTH_TIMEOUT_SECONDS=${HEALTH_TIMEOUT_SECONDS-unset}" \
+    "CANDIDATE_HEALTH_TIMEOUT_SECONDS=${CANDIDATE_HEALTH_TIMEOUT_SECONDS-unset}" \
+    > "${DEPLOY_MARKER}.env"
   exit 0
 fi
 exec /bin/bash "$@"
@@ -464,6 +468,33 @@ def test_equal_and_forward_revisions_delegate_to_deploy(
     assert run.result.returncode == 0, run.result.stderr
     assert message in run.result.stdout
     assert run.deploy_marker.read_text(encoding="utf-8") == "delegated\n"
+
+
+def test_production_delegates_with_the_measured_web_health_budget(
+    tmp_path: Path,
+    history: ReleaseHistory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cold production candidate took ~3.5 min to become ready under load
+    (2026-10-06); a stray shorter caller budget must not be inherited."""
+
+    monkeypatch.setenv("HEALTH_TIMEOUT_SECONDS", "180")
+    monkeypatch.setenv("CANDIDATE_HEALTH_TIMEOUT_SECONDS", "180")
+    run = _run_adapter(
+        tmp_path,
+        history,
+        target_revision=history.child,
+        running_revision=history.parent,
+    )
+
+    assert run.result.returncode == 0, run.result.stderr
+    delegated_env = run.deploy_marker.with_name(
+        run.deploy_marker.name + ".env"
+    ).read_text(encoding="utf-8")
+    assert delegated_env.splitlines() == [
+        "HEALTH_TIMEOUT_SECONDS=600",
+        "CANDIDATE_HEALTH_TIMEOUT_SECONDS=600",
+    ]
 
 
 def test_confirmed_empty_host_requires_exact_typed_bootstrap(

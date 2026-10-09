@@ -77,10 +77,18 @@ def read_legacy_image_rollback_floor(db: Session) -> RollbackCatalogObservation:
                 "rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = session_user"
             )
         ).one_or_none()
+        if identity is None:
+            raise refused
+        session_user, current_user, can_login, is_superuser, bypass_rls = identity
+        # The production runtime role is deployment-specific (currently
+        # ``dotmac_app``). Prove the actual session is a stable, non-privileged
+        # login instead of coupling the rollback floor to one role name.
         if (
-            identity is None
-            or identity[:2] != ("app_user", "app_user")
-            or (identity[2], identity[3], identity[4]) != (True, False, False)
+            not isinstance(session_user, str)
+            or not isinstance(current_user, str)
+            or not session_user
+            or session_user != current_user
+            or (can_login, is_superuser, bypass_rls) != (True, False, False)
         ):
             raise refused
         catalog = db.execute(

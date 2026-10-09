@@ -679,6 +679,19 @@ def update_subscription_sessions(
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
+    from app.services.test_connection import access_for_subscription
+
+    if access_for_subscription(db, subscription.id) is not None:
+        # Reauthentication gets the full test profile and remaining deadline.
+        # Never apply a financial/FUP throttle to the live test session.
+        return disconnect_subscription_sessions(
+            db,
+            subscription_id,
+            reason="test_profile_refresh",
+            refresh_test_access=True,
+            require_terminal=True,
+        )
+
     sessions = (
         db.query(RadiusAccountingSession)
         .filter(RadiusAccountingSession.subscription_id == subscription.id)
@@ -1218,10 +1231,19 @@ def disconnect_subscription_sessions(
     framed_ip_address: str | None = None,
     require_terminal: bool = False,
     authoritative_only: bool = False,
+    refresh_test_access: bool = False,
 ) -> int:
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
+
+    from app.services.test_connection import access_for_subscription
+
+    if (
+        not refresh_test_access
+        and access_for_subscription(db, subscription.id) is not None
+    ):
+        return 0
 
     login = (subscription.login or "").strip()
     expected_framed_ip = str(framed_ip_address or "").strip()
@@ -1787,6 +1809,10 @@ def apply_subscription_address_list_block(db: Session, subscription_id: str) -> 
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         return 0
+    from app.services.test_connection import access_for_subscription
+
+    if access_for_subscription(db, subscription.id) is not None:
+        return 0
     list_name = suspended_address_list(db)
     if not subscription.ipv4_address:
         logger.warning(
@@ -1840,7 +1866,9 @@ def apply_subscription_address_list_block(db: Session, subscription_id: str) -> 
     return count
 
 
-def remove_subscription_address_list_block(db: Session, subscription_id: str) -> int:
+def remove_subscription_address_list_block(
+    db: Session, subscription_id: str, *, require_confirmed: bool = False
+) -> int:
     if not _address_list_block_enabled(db):
         return 0
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
@@ -1880,6 +1908,11 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
                 "reason": "no_open_session_and_no_provisioning_nas_device",
             },
         )
+        if require_confirmed:
+            raise SessionEnforcementError(
+                code="access.session_enforcement.address_list_target_unknown",
+                message="The service has no known NAS on which to confirm removal of its access block.",
+            )
         return 0
     for nas_device in targets.values():
         if _enforce_address_list_on_nas(
@@ -1891,6 +1924,11 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
             subscription_id=subscription.id,
         ):
             count += 1
+        elif require_confirmed:
+            raise SessionEnforcementError(
+                code="access.session_enforcement.address_list_unblock_failed",
+                message="The NAS did not confirm removal of the subscription address-list block.",
+            )
     return count
 
 

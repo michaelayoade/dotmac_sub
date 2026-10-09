@@ -66,6 +66,20 @@ server default {
 	}
 
 	post-auth {
+		# Apply the absolute bound AFTER user/group reply attributes so no
+		# profile Session-Timeout can overwrite it. A test expiring while
+		# authentication runs must not receive another permissive session.
+		if (&control:Tmp-Integer-0 && &control:Tmp-Integer-0 > 0) {
+			update control {
+				Tmp-String-0 := "%{sql:SELECT floor(%{control:Tmp-Integer-0} - extract(epoch from clock_timestamp()))::bigint}"
+			}
+			if (!&control:Tmp-String-0 || &control:Tmp-String-0 =~ /^-/ || &control:Tmp-String-0 == "0") {
+				reject
+			}
+			update reply {
+				Session-Timeout := "%{control:Tmp-String-0}"
+			}
+		}
 		sql
 		Post-Auth-Type REJECT {
 			sql

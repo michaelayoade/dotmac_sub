@@ -66,7 +66,9 @@ def _decision(**overrides):
 
 
 def test_access_state_reports_the_owners_reason_verbatim(monkeypatch):
-    monkeypatch.setattr(details, "resolve_customer_access", lambda _s: _decision())
+    monkeypatch.setattr(
+        details, "resolve_customer_access", lambda _s, *, test_access=None: _decision()
+    )
 
     facts = details._build_access_state_facts(_subscription())
 
@@ -81,7 +83,7 @@ def test_access_state_handles_unprovisioned_service(monkeypatch):
     monkeypatch.setattr(
         details,
         "resolve_customer_access",
-        lambda _s: _decision(
+        lambda _s, *, test_access=None: _decision(
             radius_access_state=None,
             radius_blocked=False,
             access_block_reason=None,
@@ -96,7 +98,7 @@ def test_access_state_handles_unprovisioned_service(monkeypatch):
 
 
 def test_access_state_failure_does_not_break_the_page(monkeypatch):
-    def _boom(_s):
+    def _boom(_s, *, test_access=None):
         raise RuntimeError("resolver unavailable")
 
     monkeypatch.setattr(details, "resolve_customer_access", _boom)
@@ -169,7 +171,9 @@ def test_prefill_reports_an_unresolved_path_explicitly():
 
 
 def test_card_carries_access_state_and_prefill(monkeypatch):
-    monkeypatch.setattr(details, "resolve_customer_access", lambda _s: _decision())
+    monkeypatch.setattr(
+        details, "resolve_customer_access", lambda _s, *, test_access=None: _decision()
+    )
     subscription = _subscription()
     facts = details._build_access_state_facts(subscription)
 
@@ -287,7 +291,9 @@ def test_service_state_failure_does_not_break_the_page(monkeypatch):
 
 
 def test_card_carries_the_known_incident(monkeypatch):
-    monkeypatch.setattr(details, "resolve_customer_access", lambda _s: _decision())
+    monkeypatch.setattr(
+        details, "resolve_customer_access", lambda _s, *, test_access=None: _decision()
+    )
     subscription = _subscription()
     payload = {"area_outage": True, "incident_id": "abc"}
 
@@ -306,7 +312,9 @@ def test_card_carries_the_known_incident(monkeypatch):
 
 
 def test_card_carries_the_matching_service_health_projection(monkeypatch):
-    monkeypatch.setattr(details, "resolve_customer_access", lambda _s: _decision())
+    monkeypatch.setattr(
+        details, "resolve_customer_access", lambda _s, *, test_access=None: _decision()
+    )
     subscription = _subscription()
     service_health = SimpleNamespace(subscription_id=subscription.id)
 

@@ -50,6 +50,7 @@ from app.services.billing import reporting as billing_reporting
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.sales import reports as sales_reports_service
+from app.timezone import APP_TIMEZONE
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/reports", tags=["web-admin-reports"])
@@ -188,9 +189,15 @@ REPORT_HUB_SECTIONS: list[ReportHubSection] = [
                 "permission": "customer:read",
             },
             {
+                "name": "Regional Performance",
+                "url": "/admin/reports/regional-performance",
+                "description": "Revenue and customer status by configured region",
+                "permission": "reports:billing:read",
+            },
+            {
                 "name": "Churn",
                 "url": "/admin/reports/churn",
-                "description": "Retention, churn reasons, and cancellations",
+                "description": "Retention, churn reasons, cancellations, and suspensions",
                 "permission": "customer:read",
             },
             {
@@ -862,6 +869,72 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
 
 
 @router.get(
+    "/regional-performance",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
+def reports_regional_performance(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    region_id: UUID | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    try:
+        report_data = web_reports_service.get_regional_report_data(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            region_id=region_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    context = {
+        "request": request,
+        "active_page": "reports-regional-performance",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "report": report_data,
+        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
+    }
+    return templates.TemplateResponse(
+        "admin/reports/regional_performance.html", context
+    )
+
+
+@router.get(
+    "/regional-performance/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
+)
+def reports_regional_performance_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    region_id: UUID | None = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        report_data = web_reports_service.get_regional_report_data(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            region_id=region_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        web_reports_service.build_regional_report_csv(report_data),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=regional-performance.csv"
+        },
+    )
+
+
+@router.get(
     "/customers",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:read"))],
@@ -950,15 +1023,85 @@ def reports_subscribers_export(
     )
 
 
+def _churn_report_filters(
+    *,
+    period: str | None,
+    status: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, str | None, str | None, str | None]:
+    max_custom_days = 730
+    normalized_period = (period or "").strip().lower() or (
+        "custom" if date_from or date_to else "1m"
+    )
+    if normalized_period not in {"1m", "3m", "custom"}:
+        raise HTTPException(status_code=422, detail="Invalid churn report period")
+    normalized_status = (status or "").strip().lower() or None
+    if normalized_status not in {None, "canceled", "suspended"}:
+        raise HTTPException(status_code=422, detail="Invalid churn status")
+
+    if normalized_period == "custom":
+        if not date_from or not date_to:
+            raise HTTPException(
+                status_code=422,
+                detail="Custom churn report periods require both start and end dates",
+            )
+        parsed_from = _parse_report_date(date_from)
+        parsed_to = _parse_report_date(date_to)
+    else:
+        today = datetime.now(UTC).astimezone(APP_TIMEZONE).date()
+        window_days = 30 if normalized_period == "1m" else 90
+        parsed_from = today - timedelta(days=window_days - 1)
+        parsed_to = today
+
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise HTTPException(
+            status_code=422,
+            detail="Churn report start date must be on or before end date",
+        )
+    if (
+        normalized_period == "custom"
+        and parsed_from
+        and parsed_to
+        and (parsed_to - parsed_from).days + 1 > max_custom_days
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Custom churn report periods cannot exceed 730 days",
+        )
+    return (
+        normalized_period,
+        normalized_status,
+        parsed_from.isoformat() if parsed_from else None,
+        parsed_to.isoformat() if parsed_to else None,
+    )
+
+
 @router.get(
     "/churn",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:read"))],
 )
-def reports_churn(request: Request, db: Session = Depends(get_db)):
+def reports_churn(
+    request: Request,
+    period: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_churn_report_data(db=db)
+    period, status, date_from, date_to = _churn_report_filters(
+        period=period, status=status, date_from=date_from, date_to=date_to
+    )
+    report_data = web_reports_service.get_churn_report_data(
+        db=db,
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
+        period=period,
+    )
 
     context = {
         "request": request,
@@ -970,10 +1113,14 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
         "churn_rate": report_data.churn_rate,
         "retention_rate": report_data.retention_rate,
         "cancelled_count": report_data.cancelled_count,
-        "at_risk_count": report_data.at_risk_count,
+        "suspended_count": report_data.suspended_count,
         "churn_reasons": report_data.churn_reasons,
-        "recent_cancellations": report_data.recent_cancellations,
+        "recent_events": report_data.recent_events,
         "churn_chart": report_data.churn_chart,
+        "period_filter": period,
+        "status_filter": report_data.status_filter,
+        "date_from": report_data.date_from,
+        "date_to": report_data.date_to,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/churn.html", context)
@@ -982,8 +1129,24 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/churn/export", dependencies=[Depends(require_permission("customer:read"))]
 )
-def reports_churn_export(days: int | None = None, db: Session = Depends(get_db)):
-    content = web_reports_service.build_churn_export_csv(db=db, days=days)
+def reports_churn_export(
+    days: int | None = None,
+    period: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    _, status, date_from, date_to = _churn_report_filters(
+        period=period, status=status, date_from=date_from, date_to=date_to
+    )
+    content = web_reports_service.build_churn_export_csv(
+        db=db,
+        days=days,
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
+    )
     return Response(
         content,
         media_type="text/csv",
@@ -2721,12 +2884,26 @@ def _ncc_window_form_dates(start: datetime, end: datetime) -> tuple[str, str]:
     return local_start.isoformat(), local_end.isoformat()
 
 
-def _parse_ncc_date_start(value: str | None) -> datetime | None:
+def _parse_ncc_report_date(value: str | None) -> date | None:
     if not value:
         return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    for date_format in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(cleaned, date_format).date()
+        except (ValueError, TypeError):
+            continue
     try:
-        parsed_date = datetime.fromisoformat(value).date()
+        return datetime.fromisoformat(cleaned).date()
     except (ValueError, TypeError):
+        return None
+
+
+def _parse_ncc_date_start(value: str | None) -> datetime | None:
+    parsed_date = _parse_ncc_report_date(value)
+    if parsed_date is None:
         return None
     return datetime.combine(
         parsed_date,
@@ -2736,11 +2913,8 @@ def _parse_ncc_date_start(value: str | None) -> datetime | None:
 
 
 def _parse_ncc_date_end(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed_date = datetime.fromisoformat(value).date()
-    except (ValueError, TypeError):
+    parsed_date = _parse_ncc_report_date(value)
+    if parsed_date is None:
         return None
     return datetime.combine(
         parsed_date,
@@ -2776,7 +2950,7 @@ def reports_ncc_complaints(
     date_from: str | None = None,
     date_to: str | None = None,
     page: int = Query(default=1, ge=1),
-    per_page: Literal[20, 50, 100] = Query(default=20),
+    per_page: int = Query(default=20, ge=1),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -2788,13 +2962,16 @@ def reports_ncc_complaints(
         query=ncc_complaints_service.NccComplaintsReportQuery(start=start, end=end),
     )
     report = snapshot.as_legacy_dict()
-    requested_list_query = (
-        ncc_complaints_service.NCC_COMPLAINTS_LIST_DEFINITION.build_query(
-            search=None,
-            filters={"date_from": date_from, "date_to": date_to},
-            page=page,
-            per_page=per_page,
-        )
+    requested_list_query = ncc_complaints_service.NCC_COMPLAINTS_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"date_from": effective_date_from, "date_to": effective_date_to},
+        page=page,
+        per_page=(
+            per_page
+            if per_page
+            in ncc_complaints_service.NCC_COMPLAINTS_LIST_DEFINITION.per_page_options
+            else ncc_complaints_service.NCC_COMPLAINTS_LIST_DEFINITION.default_per_page
+        ),
     )
     table_page = ncc_complaints_service.paginate_report(
         snapshot,
@@ -2803,7 +2980,7 @@ def reports_ncc_complaints(
     # Surface, per row, whether it is filable — the workbook's own validator
     # is the authority, so the officer sees exactly what CRM's export would.
     rows = []
-    for record in ncc_workbook.export_rows(
+    for record in ncc_workbook.template_export_rows(
         [item.as_mapping() for item in table_page.records]
     ):
         status = ncc_workbook.validation_status(record)
@@ -2812,7 +2989,7 @@ def reports_ncc_complaints(
         )
     not_filable = sum(
         1
-        for record in ncc_workbook.export_rows(report["records"])
+        for record in ncc_workbook.template_export_rows(report["records"])
         if not ncc_workbook.validation_status(record).startswith("[OK]")
     )
     weekly_configuration = ncc_weekly_delivery_service.get_configuration(db=db)
@@ -2830,8 +3007,8 @@ def reports_ncc_complaints(
         "columns": report["columns"],
         "rows": rows,
         "not_filable": not_filable,
-        "date_from": date_from or effective_date_from,
-        "date_to": date_to or effective_date_to,
+        "date_from": effective_date_from,
+        "date_to": effective_date_to,
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "weekly_configuration": weekly_configuration,
         "weekly_runs": weekly_runs,
