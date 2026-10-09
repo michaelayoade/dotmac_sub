@@ -8,8 +8,8 @@ from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, text
-from sqlalchemy.engine import Engine
+from sqlalchemy import event, select, text
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -92,9 +92,31 @@ def test_expiry_allows_bandwidth_insert_and_blocks_competing_status_writer(
     subscription_id = _seed_subscription(session_factory)
     expiry_locked = Event()
     checked = Event()
+    expiry_sql: list[str] = []
+    with session_factory() as schema:
+        schema_contract = schema.execute(
+            text(
+                "SELECT pg_get_indexdef(indexrelid) FROM pg_index "
+                "WHERE indrelid = 'subscriptions'::regclass"
+            )
+        ).scalars().all()
+
+    def capture_subscription_sql(
+        connection: Connection,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        if "subscriptions" in statement.lower():
+            expiry_sql.append(statement)
 
     def expire_uncommitted() -> None:
         with session_factory() as owner:
+            event.listen(
+                owner.connection(), "before_cursor_execute", capture_subscription_sql
+            )
             expire_subscription(owner, str(subscription_id), emit=False)
             subscription = owner.get(Subscription, subscription_id)
             assert subscription is not None
@@ -138,5 +160,10 @@ def test_expiry_allows_bandwidth_insert_and_blocks_competing_status_writer(
     with ThreadPoolExecutor(max_workers=2) as pool:
         expiry = pool.submit(expire_uncommitted)
         verification = pool.submit(verify_concurrency)
-        expiry.result(timeout=20)
-        verification.result(timeout=20)
+        try:
+            expiry.result(timeout=20)
+            verification.result(timeout=20)
+        except Exception as exc:
+            exc.add_note("Expiry subscription SQL: " + "\\n".join(expiry_sql))
+            exc.add_note("Subscription indexes: " + repr(schema_contract))
+            raise
