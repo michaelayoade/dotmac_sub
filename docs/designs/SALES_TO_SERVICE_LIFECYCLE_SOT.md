@@ -162,6 +162,15 @@ relocation fee remains the authority for the separate plan-change preview path.
 
 ## Named owners
 
+`sales.fiber_feasibility` is the single typed read owner for the existing
+distance-based initial Fiber indication. All Quote and inquiry callers use
+`FiberFeasibilityQuery` and `FiberFeasibilityResult`; serialization occurs at the
+Quote metadata boundary. Plant capacity and final installation approval remain
+staff decisions. The observation coordinator isolates optional inquiry coverage
+through `execute_owner_savepoint`; after a failed spatial statement it records
+`technical_error` in the message and receipt while committing the captured Lead.
+The migrated PostgreSQL failed-statement test guards that transaction boundary.
+
 | Decision or fact | Owner |
 | --- | --- |
 | Verified provider receipt | `integration.inbox` |

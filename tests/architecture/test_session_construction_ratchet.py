@@ -114,7 +114,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +5 from tests/integration/test_subscription_test_connection.py: two
 #: disposable migrated engines and three real sessions prove additive RBAC
 #: migration and serialized subscription activation. Production remains unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 172
+#: +1 from test_support_ticket_comment_idempotency_concurrency.py: an independent
+#: worker session proves ticket-scoped duplicate submissions serialize correctly.
+TEST_FIXTURE_BASELINE_TOTAL = 173
 
 
 def _baseline() -> dict[str, int]:

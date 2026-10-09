@@ -26,7 +26,7 @@ from app.models.network import FiberAccessPoint
 from app.models.project import Project
 from app.models.sales import Quote
 from app.models.subscriber import Subscriber
-from app.services.sales import selfserve
+from app.services.sales import fiber_feasibility, selfserve
 
 
 def _subscriber(db) -> Subscriber:
@@ -188,7 +188,7 @@ def test_nearest_fap_orders_by_knn_on_raw_geom(db_session):
     try:
         # sqlite has no ST_* functions: execution raises, but the compiled SQL
         # is captured by the event before the driver rejects it.
-        selfserve._nearest_fiber_access_point(db_session, 9.0, 7.4)
+        fiber_feasibility._nearest_fiber_access_point(db_session, 9.0, 7.4)
     except Exception:
         pass
     finally:
@@ -228,7 +228,9 @@ def test_nearest_fap_execution_returns_nearest(db_session):
     db_session.add_all([far, mid, near])
     db_session.commit()
 
-    fap, distance = selfserve._nearest_fiber_access_point(db_session, 9.001, 7.401)
+    fap, distance = fiber_feasibility._nearest_fiber_access_point(
+        db_session, 9.001, 7.401
+    )
     assert fap is not None
     assert fap.name == "NAP-near"
     # ~0.001° ≈ 150 m at this latitude; certainly well under a kilometre.

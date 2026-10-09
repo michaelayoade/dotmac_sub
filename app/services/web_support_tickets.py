@@ -977,11 +977,13 @@ def build_ticket_comment_payload(
     is_internal: bool,
     actor_id: str | None,
     uploaded: Sequence[AttachmentMeta],
+    idempotency_key: UUID,
     mentions: tuple[TicketMentionTarget, ...] = (),
 ) -> TicketCommentCreate:
     return TicketCommentCreate(
         body=body,
         is_internal=is_internal,
+        idempotency_key=idempotency_key,
         author_type=TicketCommentAuthorType.staff,
         author_system_user_id=parse_uuid_or_none(actor_id),
         attachments=list(uploaded),
@@ -1185,6 +1187,7 @@ def add_ticket_comment_from_form(
     actor_id: str | None,
     body: str,
     is_internal: bool,
+    idempotency_key: UUID,
     attachments: list,
     mentions: str | None = None,
 ):
@@ -1200,18 +1203,28 @@ def add_ticket_comment_from_form(
     payload = build_ticket_comment_payload(
         body=body,
         is_internal=is_internal,
+        idempotency_key=idempotency_key,
         actor_id=actor_id,
         uploaded=uploaded,
         mentions=mention_targets,
     )
     db_session_adapter.release_read_transaction(db)
-    comment = support_service.tickets.create_comment(
-        db,
-        ticket_id,
-        payload,
-        actor_id=actor_id,
-        request=request,
-    )
+    try:
+        comment = support_service.tickets.create_comment(
+            db,
+            ticket_id=ticket_id,
+            payload=payload,
+            actor_id=actor_id,
+            request=request,
+        )
+    except support_service.SupportTicketError as exc:
+        if exc.code != "ticket_comment_idempotency_conflict":
+            raise
+        raise WebSupportTicketInputError(
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
+        ) from exc
     return comment
 
 
@@ -2034,5 +2047,6 @@ def build_ticket_detail_context(
             db, ticket, actor_id=actor_id
         ),
         "work_order_idempotency_key": uuid4().hex,
+        "comment_idempotency_key": uuid4(),
         "can_assign_ticket": can_assign_ticket,
     }

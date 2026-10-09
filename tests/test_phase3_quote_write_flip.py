@@ -72,7 +72,7 @@ def test_me_quote_request_flag_on_creates_native_quote(db_session, monkeypatch):
     principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
     monkeypatch.setattr(selfserve_service, "native_write_enabled", lambda db: True)
     with patch(
-        "app.services.sales.selfserve._nearest_fiber_access_point",
+        "app.services.sales.fiber_feasibility._nearest_fiber_access_point",
         return_value=(_FAP, 1300.0),
     ):
         out = me_api.my_quote_request(_request(), db=db_session, principal=principal)
@@ -95,7 +95,7 @@ def test_me_quote_request_native_needs_no_crm_link(db_session, monkeypatch):
     principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
     monkeypatch.setattr(selfserve_service, "native_write_enabled", lambda db: True)
     with patch(
-        "app.services.sales.selfserve._nearest_fiber_access_point",
+        "app.services.sales.fiber_feasibility._nearest_fiber_access_point",
         return_value=(_FAP, 1300.0),
     ):
         out = me_api.my_quote_request(_request(), db=db_session, principal=principal)
@@ -112,7 +112,7 @@ def test_reseller_quote_request_flag_on_creates_native_quote(db_session, monkeyp
         lambda db, rid, aid: sub,
     )
     with patch(
-        "app.services.sales.selfserve._nearest_fiber_access_point",
+        "app.services.sales.fiber_feasibility._nearest_fiber_access_point",
         return_value=(_FAP, 1300.0),
     ):
         out = reseller_api.my_reseller_quote_request(

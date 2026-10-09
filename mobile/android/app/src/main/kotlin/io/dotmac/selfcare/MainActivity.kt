@@ -1,4 +1,4 @@
-package com.example.dotmac_portal
+package io.dotmac.selfcare
 
 import android.content.ActivityNotFoundException
 import android.content.Intent

@@ -2585,6 +2585,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_delivery_receipts",
                 "communications.conversation_lead_relationships",
                 "sales.capture",
+                "sales.fiber_feasibility",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_processing",
@@ -2645,6 +2646,13 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 transaction_mode=TransactionMode.COORDINATOR_MANAGED,
+                transaction_contract=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary="One execute_owner_command transaction; optional Fiber coverage uses execute_owner_savepoint and records technical_error evidence after rollback without discarding the captured Lead.",
+                    locking="Lock the normalized provider observation and affected conversation identities.",
+                    idempotency="Replay the exact observation and committed consequence; never repeat its Lead capture.",
+                    retries="Retry the complete coordinator after rollback; optional coverage failure is recorded in the committed message and receipt.",
+                ),
             ),
         ),
         SOTService(

@@ -76,6 +76,22 @@ HTTPS-only**, so point them at `https://selfcare.dotmac.io`.
 | Physical device | `http://<your-machine-LAN-IP>:8001` |
 | Staging / prod | `https://selfcare.dotmac.io` |
 
+### Simulator / emulator tests
+
+`scripts/mobile_sim.sh` boots an iOS simulator or Android emulator and runs
+the on-device smoke test (`integration_test/app_smoke_test.dart`: the app
+launches to login, and signs in when credentials are given):
+
+```bash
+scripts/mobile_sim.sh mobile ios                 # or: android
+scripts/mobile_sim.sh mobile android run         # flutter run with hot reload
+LOCAL_BACKEND=1 SUB_USER=<login> SUB_PASS=<password> scripts/mobile_sim.sh mobile ios
+```
+
+It needs Xcode (iOS) or an Android SDK with a `dotmac_pixel` AVD, and looks
+for Flutter in `~/development/flutter` when it is not on `PATH`. See the
+script header for every option.
+
 ### Android toolchain
 
 Building the APK needs a JDK 17 + the Android SDK (platform-tools, `platforms;android-36`,

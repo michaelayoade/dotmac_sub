@@ -84,6 +84,7 @@ from app.services.list_query import (
 )
 from app.services.owner_commands import CommandContext
 from app.services.sales import (
+    fiber_feasibility,
     lead_authoring,
     pipeline_configuration,
     quote_activity,
@@ -92,7 +93,6 @@ from app.services.sales import (
     quote_documents,
     quote_payment_review,
 )
-from app.services.sales.selfserve import compute_feasibility
 from app.services.sales.service import QuoteLeadSearchMatch
 from app.services.sales_orders import _resolve_project_for_sales_order
 from app.services.team_inbox_projection import list_agent_options
@@ -2205,7 +2205,12 @@ def _install_pin(
         "region": clean_region,
     }
     feasibility = (
-        compute_feasibility(db, lat, lng)
+        fiber_feasibility.assess(
+            db,
+            query=fiber_feasibility.FiberFeasibilityQuery(
+                Decimal(str(lat)), Decimal(str(lng))
+            ),
+        ).as_metadata()
         if lat is not None and lng is not None
         else None
     )

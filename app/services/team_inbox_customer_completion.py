@@ -26,6 +26,7 @@ from app.models.team_inbox import (
     InboxCustomerCompletionPolicyVersion,
     InboxMessage,
 )
+from app.schemas.lead_intake import LeadCandidateReviewReason
 from app.services import (
     conversation_lead_relationships,
     customer_identity_resolution,
@@ -330,6 +331,11 @@ def _classified_sales_candidate_pending(
     requires_follow_up = InboxMessage.metadata_[
         "ai_intake_requires_follow_up"
     ].as_boolean()
+    needs_customer_type = (
+        InboxMessage.metadata_["ai_sales_candidate_review_reason"]
+        .as_string()
+        .in_(tuple(reason.value for reason in LeadCandidateReviewReason))
+    )
     return (
         db.scalar(
             select(InboxMessage.id)
@@ -337,6 +343,7 @@ def _classified_sales_candidate_pending(
                 InboxMessage.conversation_id == conversation.id,
                 InboxMessage.direction == "inbound",
                 or_(
+                    needs_customer_type,
                     InboxMessage.metadata_["ai_lead_candidate_event_id"]
                     .as_string()
                     .is_not(None),
@@ -351,9 +358,12 @@ def _classified_sales_candidate_pending(
                 InboxMessage.metadata_["ai_intent"]
                 .as_string()
                 .in_({"new_connection", "coverage_request"}),
-                InboxMessage.metadata_["ai_party_type"]
-                .as_string()
-                .in_({"individual", "organization"}),
+                or_(
+                    needs_customer_type,
+                    InboxMessage.metadata_["ai_party_type"]
+                    .as_string()
+                    .in_({"individual", "organization"}),
+                ),
             )
             .limit(1)
         )
@@ -413,9 +423,10 @@ def resolution_readiness(
                 owner="sales.lead_intake",
                 customer_message="This sales enquiry must be linked to a Lead.",
                 staff_detail=(
-                    "The final AI sales classification has not produced its "
-                    "Party-backed Lead relationship. Retry the durable consequence "
-                    "or create/link the Lead through the Inbox action."
+                    "Confirmed sales interest needs customer-type review or its "
+                    "Party-backed Lead relationship. Identify the customer type, "
+                    "then create/link the Lead through the Inbox action; replay "
+                    "a staged consequence only when its classification is complete."
                 ),
                 evidence=BlockerEvidence(
                     summary="A qualifying classified sales message has no active Lead link."

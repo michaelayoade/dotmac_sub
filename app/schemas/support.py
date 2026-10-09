@@ -329,6 +329,7 @@ class TicketCommentMentionRead(BaseModel):
 
 
 class TicketCommentCreate(TicketCommentBase):
+    idempotency_key: UUID | None = None
     author_person_id: UUID | None = None
     author_type: TicketCommentAuthorType | str | None = None
     author_system_user_id: UUID | None = None

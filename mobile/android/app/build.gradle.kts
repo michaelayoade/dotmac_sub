@@ -24,7 +24,7 @@ if (hasReleaseKeystore) {
 }
 
 android {
-    namespace = "com.example.dotmac_portal"
+    namespace = "io.dotmac.selfcare"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 

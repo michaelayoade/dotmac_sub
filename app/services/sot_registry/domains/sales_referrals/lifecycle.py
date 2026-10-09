@@ -20,6 +20,95 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="sales.fiber_feasibility",
+        module="app.services.sales.fiber_feasibility",
+        owns=("initial Fiber location feasibility",),
+        depends_on=("network.fiber_asset_changes", "control.settings_spec"),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="initial Fiber location feasibility",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "installation pin",
+                        "active Fiber access points",
+                        "effective feasibility radius",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="installation pin",
+                    owner="sales.fiber_feasibility",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Validated Decimal latitude/longitude in FiberFeasibilityQuery.",
+                ),
+                AuthorityInput(
+                    name="active Fiber access points",
+                    owner="network.fiber_asset_changes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Active FiberAccessPoint geometry and identity; KNN selection and existing EPSG:3857 distance.",
+                ),
+                AuthorityInput(
+                    name="effective feasibility radius",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="selfserve_quote_feasibility_radius_meters, with the existing 2000m fallback.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Flush-free read inside the caller's transaction; optional coverage callers isolate it through execute_owner_savepoint.",
+                locking="No write locks; current statement snapshot.",
+                idempotency="The same geometry, pin and radius produce the same initial indication.",
+                retries="Safe to repeat the read after the transaction owner restores a failed optional savepoint.",
+            ),
+            errors=ErrorContract(
+                domain_codes=("sales.fiber_feasibility.invalid_coordinates",),
+                mapping_owner="Quote and Fiber inquiry adapters/coordinators",
+                fail_closed_on=(
+                    "invalid coordinates",
+                    "database or PostGIS query failure",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner="sales.selfserve.compute_feasibility",
+                new_owner="sales.fiber_feasibility",
+                verification="Typed consumer, KNN and PostgreSQL failed-query retention tests.",
+                cutover_gate="All production feasibility consumers use the same typed query/result.",
+                fallback_retirement="The old primitive-bag function and parallel nearest-point query are removed.",
+            ),
+            steward="sales platform",
+            design_refs=(
+                "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                "docs/runbooks/FIBER_ACQUISITION_ATTRIBUTION.md",
+            ),
+            test_refs=(
+                "tests/test_sales_selfserve.py",
+                "tests/test_sales_selfserve_perf.py",
+                "tests/integration/test_fiber_coverage_failure_retention.py",
+                "tests/architecture/test_fiber_feasibility_boundary.py",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="initial Fiber indication",
+                    input_names=(
+                        "installation pin",
+                        "active Fiber access points",
+                        "effective feasibility radius",
+                    ),
+                    writer="sales.fiber_feasibility",
+                    freshness="Recomputed on each request; recorded receipt results retain their original indication on replay.",
+                    stale_behavior="An indication is not an installation guarantee; staff confirm network capacity and access.",
+                    drift_signal="Changed plant geometry or radius requires a fresh enquiry/assessment, not rewriting the receipt.",
+                    rebuild_operation="assess with FiberFeasibilityQuery",
+                    repair_owner="sales.fiber_feasibility",
+                ),
+            ),
+        ),
+    ),
+    SOTService(
         name="sales.lifecycle_reconciliation",
         module="app.services.sales_lifecycle_reconciliation",
         owns=("sales-to-service projection drift repair orchestration",),
@@ -208,6 +297,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.sales.selfserve",
         owns=("self-serve quote and signup flow",),
         depends_on=(
+            "sales.fiber_feasibility",
             "communications.intents",
             "communications.staff_notifications",
             "events.dispatcher",
