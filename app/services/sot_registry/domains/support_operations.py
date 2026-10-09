@@ -503,6 +503,7 @@ DOMAIN = DomainSOT(
                 "ticket assignment and mention staff notification consequence",
                 "ticket staff/team tag notification consequence",
                 "ticket comments mentions and attachments",
+                "ticket comment submission idempotency",
                 "ticket customer publication visibility",
                 "customer-visible ticket comment realtime invalidation policy",
                 "ticket links duplicates and merges",
@@ -565,6 +566,7 @@ DOMAIN = DomainSOT(
                             "ticket lifecycle timestamps and consequences",
                             "ticket team and person assignment",
                             "ticket comments mentions and attachments",
+                            "ticket comment submission idempotency",
                             "ticket customer publication visibility",
                             "ticket links duplicates and merges",
                             "signed-link and authenticated resolution confirmation/dispute",
@@ -619,6 +621,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "typed TicketCreate, TicketUpdate, TicketMentionTarget, "
+                            "typed per-form TicketCommentCreate idempotency UUID, "
                             "AssignTicketServiceTeamFromAutomationCommand, "
                             "comment, merge, link, resolution, typed "
                             "AttachmentMeta with private StoredFile UUID, bounded comment "
@@ -744,12 +747,17 @@ DOMAIN = DomainSOT(
                     ),
                     locking=(
                         "Existing Ticket mutations lock or operate under the root command; "
+                        "comment creation locks the Ticket before resolving its scoped "
+                        "idempotency UUID; the database uniquely arbitrates ticket/key; "
                         "comment edits lock the Ticket and TicketComment before applying an "
                         "exact mention-set delta; status guards and merge/confirmation state "
                         "are rechecked before writing."
                     ),
                     idempotency=(
-                        "Adapter Idempotency-Key is carried in CommandContext where supplied; "
+                        "The server-generated ticket-comment form UUID and adapter "
+                        "Idempotency-Key are carried in CommandContext where supplied; "
+                        "ticket/comment-key uniqueness plus an immutable material-input "
+                        "fingerprint replays exact commands and rejects conflicting reuse; "
                         "link identity, merge source state, access-token state, exact comment "
                         "mention uniqueness, mention-occurrence notification keys, and "
                         "event/audit evidence make replay observable and bounded."
@@ -784,6 +792,7 @@ DOMAIN = DomainSOT(
                         "ticket_comment_mention_invalid",
                         "ticket_comment_mention_target_unavailable",
                         "ticket_comment_attachment_repair_scope_invalid",
+                        "ticket_comment_idempotency_conflict",
                         "automation_assignment_team_unavailable",
                         "automation_priority_invalid",
                         *owner_command_boundary_error_codes("support.ticket_lifecycle"),
@@ -869,6 +878,8 @@ DOMAIN = DomainSOT(
                     "tests/test_ticket_assignment_authorization.py",
                     "tests/test_ticket_assignment_role_grant_migration.py",
                     "tests/test_support_ticket_comment_realtime.py",
+                    "tests/test_support_ticket_comment_idempotency.py",
+                    "tests/integration/test_support_ticket_comment_idempotency_concurrency.py",
                     "tests/architecture/test_support_ticket_sot_boundary.py",
                 ),
             ),
