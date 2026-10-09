@@ -258,13 +258,30 @@ class TicketAssignee(Base):
 
 class TicketComment(Base):
     __tablename__ = "support_ticket_comments"
-    __table_args__ = (Index("ix_support_ticket_comments_ticket", "ticket_id"),)
+    __table_args__ = (
+        Index("ix_support_ticket_comments_ticket", "ticket_id"),
+        UniqueConstraint(
+            "ticket_id",
+            "idempotency_key",
+            name="uq_support_ticket_comments_ticket_idempotency_key",
+        ),
+        CheckConstraint(
+            "(idempotency_key IS NULL) = (idempotency_fingerprint IS NULL)",
+            name="ck_support_ticket_comments_idempotency_evidence",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     ticket_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("support_tickets.id"), nullable=False
+    )
+    idempotency_key: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    idempotency_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
     author_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")

@@ -97,6 +97,7 @@ def test_comment_upload_contract_persists_viewable_stored_file_id(
     payload = web_support_tickets.build_ticket_comment_payload(
         body="See attached image",
         is_internal=True,
+        idempotency_key=uuid.uuid4(),
         actor_id=None,
         uploaded=(
             AttachmentMeta(
@@ -206,6 +207,7 @@ def test_admin_comment_upload_renders_413_with_validation_message(
         request=SimpleNamespace(),
         ticket_id=ticket.id,
         body="See diagnostics",
+        idempotency_key=uuid.uuid4(),
         reply_to_customer=False,
         mentions=None,
         attachments=[],

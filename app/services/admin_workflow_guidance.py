@@ -746,6 +746,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Link the customer and relevant subscription, invoice, payment, proof, or network facts.",
         "Use ordinary ticket editing for status, priority, description, and assignment details.",
         "Assign or reassign an engineer, manager, service team, or additional assignee from the ticket edit workflow.",
+        "When adding an internal note or customer reply, submit once and wait while the button is disabled; if attachment or form validation returns the page, correct the displayed issue and submit again.",
         "Update the ticket after completing related admin work.",
         notes=(
             "Tickets track communication and follow-up; they do not own billing or service state changes.",
@@ -1651,9 +1652,15 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="support:ticket:update",
         ),
         _action(
+            "add-comment",
+            "Add an internal note or customer reply",
+            4,
+            permission="support:ticket:update",
+        ),
+        _action(
             "complete-follow-up",
             "Record completed follow-up",
-            4,
+            5,
             permission="support:ticket:update",
         ),
     ),

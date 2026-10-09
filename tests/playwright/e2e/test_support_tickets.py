@@ -101,3 +101,39 @@ def test_applied_filter_is_restored_after_returning_from_ticket_detail(
         re.compile(r".*/admin/support/tickets\?.*status=not_closed.*")
     )
     expect(admin_page.locator("#ticket-status-filter")).to_have_value("not_closed")
+
+
+def test_comment_submit_lock_blocks_repeats_and_resets_after_returned_page(
+    admin_page: Page, settings
+) -> None:
+    admin_page.goto(f"{settings.base_url}/admin/support/tickets")
+    admin_page.locator(
+        "#tickets-table tbody a[href^='/admin/support/tickets/']"
+    ).first.click()
+    admin_page.wait_for_url("**/admin/support/tickets/**")
+
+    comment_form = admin_page.locator("form[action$='/comment']")
+    submit = comment_form.locator("button[type='submit']")
+    comment_form.locator("textarea[name='body']").fill("")
+    comment_form.evaluate("form => form.requestSubmit()")
+    expect(submit).to_be_enabled()
+
+    comment_form.locator("textarea[name='body']").fill("Submit lock proof")
+    submission_results = comment_form.evaluate(
+        """form => {
+            const submitEvent = () => new SubmitEvent('submit', {
+                bubbles: true,
+                cancelable: true,
+            });
+            return [
+                form.dispatchEvent(submitEvent()),
+                form.dispatchEvent(submitEvent()),
+            ];
+        }"""
+    )
+
+    assert submission_results == [True, False]
+    expect(submit).to_be_disabled()
+    expect(submit).to_have_attribute("aria-busy", "true")
+    admin_page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow'))")
+    expect(submit).to_be_enabled()

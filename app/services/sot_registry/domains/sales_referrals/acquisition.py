@@ -491,6 +491,7 @@ SERVICES: tuple[SOTService, ...] = (
         name="sales.lead_intake",
         module="app.services.sales.lead_intake",
         owns=(
+            "bounded Inbox sales capture repair and staff-review query",
             "versioned lead-intake template lifecycle",
             "classified Inbox sales candidate materialization and invitation lifecycle",
             "optional Inbox form enrichment and legacy form conversion",
@@ -521,6 +522,14 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="bounded Inbox sales capture repair and staff-review query",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical unknown Inbox conversation state",
+                        "shared customer intake sales handoff",
+                    ),
+                ),
                 ConcernContract(
                     name="versioned lead-intake template lifecycle",
                     role=OwnerRole.APPLICATION_COORDINATOR,
@@ -581,7 +590,8 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "durable ai.intake_lead_candidate_classified event carrying "
                         "a confident new-connection or coverage classification captured "
-                        "before clarification or routing, customer "
+                        "before clarification or routing, or the AI-owned typed "
+                        "customer-type review reason in durable message metadata; customer "
                         "type, operator tenant identity, message identity, and "
                         "allowlisted Meta attribution"
                     ),
@@ -682,6 +692,21 @@ SERVICES: tuple[SOTService, ...] = (
                 replay=(
                     "The deterministic conversation Lead id, active link, assessment, "
                     "invitation completion, and immutable origin reproduce the outcome."
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="Inbox sales capture review queue",
+                    input_names=(
+                        "shared customer intake sales handoff",
+                        "canonical Lead lifecycle state",
+                    ),
+                    writer="sales.lead_intake",
+                    freshness="Read from persisted message evidence and active Lead links on each bounded query.",
+                    stale_behavior="Unlinked uncertain candidates remain pending staff review; never fabricate Party type.",
+                    drift_signal="Qualifying AI evidence or customer-type review reason without an active Lead link.",
+                    rebuild_operation="classified_candidate_drift with an explicit typed time window and limit",
+                    repair_owner="sales.lead_intake",
                 ),
             ),
             migration=MigrationContract(

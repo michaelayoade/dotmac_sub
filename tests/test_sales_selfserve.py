@@ -41,7 +41,7 @@ from app.models.system_user import SystemUser
 from app.schemas.sales import QuoteLineItemCreate, QuoteUpdate
 from app.services.owner_commands import CommandContext
 from app.services.qualification import ServiceQualificationPreview
-from app.services.sales import quote_payment_review, selfserve
+from app.services.sales import fiber_feasibility, quote_payment_review, selfserve
 from app.services.sales.service import quote_line_items
 from app.services.sales.service import quotes as sales_quotes
 from app.services.sales.service_request_types import ServiceRequestOption
@@ -129,7 +129,7 @@ def _offer(
 
 def _patch_fap(result):
     return patch(
-        "app.services.sales.selfserve._nearest_fiber_access_point",
+        "app.services.sales.fiber_feasibility._nearest_fiber_access_point",
         return_value=result,
     )
 
@@ -153,7 +153,12 @@ def _request(db, sub, *, distance=1300.0, address="12 Mississippi St, Maitama", 
 
 def test_feasibility_out_of_area_without_fiber_plant(db_session):
     with _patch_fap((None, None)):
-        out = selfserve.compute_feasibility(db_session, 9.0, 7.4)
+        out = fiber_feasibility.assess(
+            db_session,
+            query=fiber_feasibility.FiberFeasibilityQuery(
+                Decimal("9.0"), Decimal("7.4")
+            ),
+        ).as_metadata()
     assert out == {
         "feasible": False,
         "coverage": "out_of_area",
@@ -165,7 +170,12 @@ def test_feasibility_out_of_area_without_fiber_plant(db_session):
 
 def test_feasibility_covered_within_radius(db_session):
     with _patch_fap((_FAP, 1999.9)):
-        out = selfserve.compute_feasibility(db_session, 9.0, 7.4)
+        out = fiber_feasibility.assess(
+            db_session,
+            query=fiber_feasibility.FiberFeasibilityQuery(
+                Decimal("9.0"), Decimal("7.4")
+            ),
+        ).as_metadata()
     assert out["feasible"] is True
     assert out["coverage"] == "covered"
     assert out["nearest_fap_id"] == str(_FAP.id)
@@ -175,7 +185,12 @@ def test_feasibility_covered_within_radius(db_session):
 
 def test_feasibility_survey_required_beyond_radius(db_session):
     with _patch_fap((_FAP, 2000.1)):
-        out = selfserve.compute_feasibility(db_session, 9.0, 7.4)
+        out = fiber_feasibility.assess(
+            db_session,
+            query=fiber_feasibility.FiberFeasibilityQuery(
+                Decimal("9.0"), Decimal("7.4")
+            ),
+        ).as_metadata()
     assert out["coverage"] == "survey_required"
     assert out["feasible"] is True
 
