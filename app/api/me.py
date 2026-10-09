@@ -1054,7 +1054,7 @@ def my_topup_initiate(
         payment_reference=result["reference"],
         amount=result["requested_amount"],
         currency=result.get("currency", "NGN"),
-        customer_email=customer["username"] or None,
+        customer_email=customer_email or None,
         charged=result.get("charged", False),
         checkout_url=result.get("checkout_url"),
         redirect_url=result.get("redirect_url"),
