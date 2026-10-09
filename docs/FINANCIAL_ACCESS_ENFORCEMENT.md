@@ -966,11 +966,15 @@ anchors.
 it does not change the subscription keys referenced by bandwidth samples.
 It acquires PostgreSQL `FOR NO KEY UPDATE` rather than `FOR UPDATE`, allowing
 concurrent immutable foreign-key references to use `KEY SHARE` while keeping
-competing lifecycle status writers serialized. Expiry eligibility, enforcement
+competing lifecycle status writers serialized. The expiry SELECT bypasses only
+its compiled statement cache: pinned SQLAlchemy 2.0.31 omits `key_share` from
+cache traversal, so a prior `FOR UPDATE` statement otherwise replaces the
+requested `NO KEY UPDATE` SQL. Expiry eligibility, enforcement
 lock resolution, IP release, lifecycle evidence, account/access projection,
 and event staging retain their existing owner and transaction boundary.
 
 `tests/integration/test_expiry_bandwidth_lock_compatibility.py` exercises the
-actual expiry writer against migrated PostgreSQL. It requires a bandwidth
+actual expiry writer against migrated PostgreSQL after explicitly warming the
+same SELECT shape with `FOR UPDATE`. It requires a bandwidth
 insert to complete while expiry remains uncommitted and separately requires a
 competing non-key status writer to be blocked by the same row lock.

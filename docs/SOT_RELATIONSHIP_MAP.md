@@ -1676,7 +1676,9 @@ detailed security and delivery boundary is
 
 The lifecycle owner expires subscriptions under `FOR NO KEY UPDATE`, preserving
 exclusive status-writer serialization while allowing immutable bandwidth
-foreign-key observations. Eligibility, audit, IP release, account/access
+foreign-key observations. Its SELECT bypasses compiled caching because the
+pinned SQLAlchemy omits the lock's `key_share` flag from the cache key.
+Eligibility, audit, IP release, account/access
 projection, and events retain the existing lifecycle transaction boundary.
 
 1. `financial.ledger` owns the append-only record lifecycle and reversal
