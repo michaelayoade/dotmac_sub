@@ -15,6 +15,25 @@ digest that has no matching staging acceptance document, so nothing reaches
 production that a real host has not already run.
 What was removed is the merge, not the proof.
 
+## CI dependency image transport
+
+Application builds, PostgreSQL/RADIUS integration tests, and browser service
+fixtures fetch their dependency images outside Docker Hub's anonymous pull
+quota. Docker Official Python, Ubuntu, and Redis images use
+`public.ecr.aws/docker/library/`. PostGIS and BuildKit use `mirror.gcr.io`, pinned
+to the upstream manifest digests verified when the references were updated.
+These are download-transport changes; the image families, test commands,
+acceptance checks, and application build cache remain unchanged.
+
+When updating these references, compare the upstream and mirror manifests with
+`docker buildx imagetools inspect` and require identical digests. Update the
+PostGIS references in CI and both E2E workflows together, and the BuildKit
+reference in CI and the candidate workflow together. A registry failure must
+fail the existing check; do not fall back to an unverified image or skip the
+real RADIUS, migration, application-health, or browser tests. Changes to the
+Dockerfile also require refreshing and verifying its observation through the
+pinned Kernel composition authority.
+
 ## Release sequence
 
 1. Open the feature pull request against `main` with the appropriate

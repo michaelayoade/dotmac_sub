@@ -68,9 +68,9 @@ jobs:
             -e POSTGRES_USER=postgres -e POSTGRES_HOST_AUTH_METHOD=trust \
             -e POSTGRES_DB=dotmac_sub_e2e \
             --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres" --health-interval 5s \
-            --health-retries 10 postgis/postgis:16-3.4
+            --health-retries 10 mirror.gcr.io/postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5
           docker run -d --name e2e-redis --network e2e-net \
-            -p 127.0.0.1:56379:6379 redis:7
+            -p 127.0.0.1:56379:6379 public.ecr.aws/docker/library/redis:7
           for i in $(seq 1 30); do
             [ "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' e2e-db)" = "healthy" ] && break
             sleep 2
