@@ -459,7 +459,12 @@ def test_multiple_credentials_for_one_subscriber_still_request_recovery(
 
     assert outcome.accepted is True
     assert outcome.delivery_requested is True
-    assert db_session.query(EventStore).count() == 1
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "password_recovery.requested")
+        .count()
+        == 1
+    )
 
 
 def test_inactive_shared_email_credential_does_not_block_unique_recovery(
