@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from functools import partial
 from threading import Event
 from uuid import UUID, uuid4
 
@@ -11,8 +13,9 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
+from app.db import SessionLocal
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import (
     AccessRequirement,
@@ -34,7 +37,7 @@ from app.services.catalog.offer_access_requirement import SystemAdmission
 from app.services.subscriber import _default_reseller_id
 
 
-def _seed_subscription(session_factory: sessionmaker[Session]) -> UUID:
+def _seed_subscription(session_factory: Callable[[], Session]) -> UUID:
     suffix = uuid4().hex[:12]
     with session_factory() as setup:
         subscriber = Subscriber(
@@ -95,7 +98,9 @@ def _seed_subscription(session_factory: sessionmaker[Session]) -> UUID:
 def test_expiry_allows_bandwidth_insert_and_blocks_competing_status_writer(
     engine: Engine,
 ) -> None:
-    session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    session_factory: Callable[[], Session] = partial(
+        SessionLocal, bind=engine, autoflush=False, expire_on_commit=False
+    )
     subscription_id = _seed_subscription(session_factory)
     expiry_locked = Event()
     checked = Event()
