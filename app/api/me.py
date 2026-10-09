@@ -1023,7 +1023,7 @@ def my_topup_initiate(
     request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
-):
+) -> TopupInitiateResponse:
     """Create a Deposit Account Credit intent for the caller's account."""
     customer = _customer(db, principal)
     try:
@@ -1054,7 +1054,9 @@ def my_topup_initiate(
         payment_reference=result["reference"],
         amount=result["requested_amount"],
         currency=result.get("currency", "NGN"),
-        customer_email=customer_email or None,
+        customer_email=(
+            customer_payments._resolve_customer_email(db=db, customer=customer) or None
+        ),
         charged=result.get("charged", False),
         checkout_url=result.get("checkout_url"),
         redirect_url=result.get("redirect_url"),
