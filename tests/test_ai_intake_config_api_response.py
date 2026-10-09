@@ -160,7 +160,7 @@ def test_intake_config_routes_serialize_typed_nested_outcomes(
     assert result.metadata is not None
     assert result.metadata.display_name == "Support"
     assert result.metadata.queue_templates == {
-        "support": "We have queued your request."
+        "support": "We have queued your request.",
     }
     assert result.metadata.clarification_questions == [
         "What do you need help with?",
