@@ -1381,8 +1381,13 @@ def expire_subscription(
     Raises:
         ValueError: If the subscription is already in a terminal state.
     """
+    # Expiry changes status, not the keys referenced by observation rows.
+    # NO KEY UPDATE still serializes lifecycle writers without blocking
+    # bandwidth samples' KEY SHARE foreign-key checks.
     subscription = db.execute(
-        select(Subscription).where(Subscription.id == subscription_id).with_for_update()
+        select(Subscription)
+        .where(Subscription.id == subscription_id)
+        .with_for_update(key_share=True)
     ).scalar_one_or_none()
     if not subscription:
         raise ValueError(f"Subscription {subscription_id} not found")

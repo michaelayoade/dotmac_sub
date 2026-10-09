@@ -959,3 +959,18 @@ authority evidence, cohort membership, approval evidence, permissions, or a
 competing opening/baseline fail closed. The repair has no authority to change
 invoices, payments, subscription/access state, ledger entries, or billing
 anchors.
+
+## Expiry row locks and bandwidth observations
+
+`account_lifecycle.expire_subscription` changes lifecycle and access state;
+it does not change the subscription keys referenced by bandwidth samples.
+It acquires PostgreSQL `FOR NO KEY UPDATE` rather than `FOR UPDATE`, allowing
+concurrent immutable foreign-key references to use `KEY SHARE` while keeping
+competing lifecycle status writers serialized. Expiry eligibility, enforcement
+lock resolution, IP release, lifecycle evidence, account/access projection,
+and event staging retain their existing owner and transaction boundary.
+
+`tests/integration/test_expiry_bandwidth_lock_compatibility.py` exercises the
+actual expiry writer against migrated PostgreSQL. It requires a bandwidth
+insert to complete while expiry remains uncommitted and separately requires a
+competing non-key status writer to be blocked by the same row lock.

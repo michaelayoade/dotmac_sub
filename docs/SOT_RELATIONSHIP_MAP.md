@@ -1674,6 +1674,11 @@ detailed security and delivery boundary is
 
 ## Financial and Access
 
+The lifecycle owner expires subscriptions under `FOR NO KEY UPDATE`, preserving
+exclusive status-writer serialization while allowing immutable bandwidth
+foreign-key observations. Eligibility, audit, IP release, account/access
+projection, and events retain the existing lifecycle transaction boundary.
+
 1. `financial.ledger` owns the append-only record lifecycle and reversal
    invariant. Domain owners decide why money moves.
 2. `financial.payments`, `financial.consolidated_payments`,
