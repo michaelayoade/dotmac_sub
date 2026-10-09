@@ -82,6 +82,9 @@ dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_test:
     sdk: flutter
+  # On-device tests under integration_test/ (scripts/mobile_sim.sh).
+  integration_test:
+    sdk: flutter
   # Generates the native splash screens from the brand assets below
   # (`dart run flutter_native_splash:create` after changing them).
   flutter_native_splash: ^2.4.1
