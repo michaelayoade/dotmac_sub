@@ -1652,9 +1652,15 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="support:ticket:update",
         ),
         _action(
+            "add-comment",
+            "Add an internal note or customer reply",
+            4,
+            permission="support:ticket:update",
+        ),
+        _action(
             "complete-follow-up",
             "Record completed follow-up",
-            4,
+            5,
             permission="support:ticket:update",
         ),
     ),
