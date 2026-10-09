@@ -10,6 +10,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from alembic import op
+from scripts.migration.regional_report_billing_indexes import (
+    INDEX_SPECS,
+    ensure_postgres_indexes,
+)
 
 revision: str = "658_regional_report_billing_indexes"
 down_revision: tuple[str, str] = (
@@ -24,25 +28,15 @@ def upgrade() -> None:
     """Make bounded invoice/payment period scans use their reporting keys."""
 
     bind = op.get_bind()
-    concurrently = " CONCURRENTLY" if bind.dialect.name == "postgresql" else ""
-    statements = (
-        "CREATE INDEX{concurrently} IF NOT EXISTS "
-        "ix_invoices_regional_report_period ON invoices "
-        "(is_active, status, issued_at, account_id)",
-        "CREATE INDEX{concurrently} IF NOT EXISTS "
-        "ix_payments_regional_report_period ON payments "
-        "(is_active, status, paid_at, account_id)",
-    )
-    rendered = tuple(
-        statement.format(concurrently=concurrently) for statement in statements
-    )
     if bind.dialect.name == "postgresql":
         with op.get_context().autocommit_block():
-            for statement in rendered:
-                op.execute(statement)
+            ensure_postgres_indexes(bind, op.execute)
         return
-    for statement in rendered:
-        op.execute(statement)
+    for spec in INDEX_SPECS:
+        op.execute(
+            f"CREATE INDEX IF NOT EXISTS {spec.name} "
+            f"ON {spec.table} ({', '.join(spec.keys)})"
+        )
 
 
 def downgrade() -> None:

@@ -14,6 +14,9 @@ from scripts.migration.radius_session_latest_index import (
     invalid_postgres_indexes,
     validate_postgres_index,
 )
+from scripts.migration.regional_report_billing_indexes import (
+    validate_postgres_indexes as validate_regional_report_indexes,
+)
 
 
 def verify_schema_contracts(bind: Connection) -> None:
@@ -21,6 +24,7 @@ def verify_schema_contracts(bind: Connection) -> None:
         return
 
     validate_postgres_index(bind)
+    validate_regional_report_indexes(bind)
     invalid = invalid_postgres_indexes(bind)
     if invalid:
         rendered = ", ".join(

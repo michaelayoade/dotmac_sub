@@ -21,6 +21,17 @@ The manifest has one canonical graph. Domain, capability/module, and journey
 hierarchies are derived navigation views; they do not own parallel dependency
 lists or service declarations.
 
+## Regional report physical index ownership
+
+`ui.regional_performance_report` remains the read-only report projection owner.
+Alembic owns its physical invoice/payment reporting indexes, not a second
+financial writer or report policy. The typed contract in
+`scripts/migration/regional_report_billing_indexes.py` is shared by revisions
+658/662 and deployment verification. Only exact interrupted non-unique builds
+are repairable; valid indexes and financial records remain untouched. See
+`docs/runbooks/REGIONAL_REPORT_INDEX_RECOVERY.md` and
+`tests/integration/test_regional_report_index_recovery.py`.
+
 ## Lead creation-date query ownership
 
 Inbox sales capture remains owned by `ai.intake` (evidence and transactional
