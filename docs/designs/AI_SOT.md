@@ -120,6 +120,12 @@ deadline and team, department overrides, custom instructions, and campaign
 attribution exclusion. The admin contract refuses email and limits
 clarification to at most five turns.
 
+The AI intake configuration API consumes `AiIntakeConfigOutcome`. Its response
+adapter validates typed department-mapping and metadata outcomes explicitly
+from attributes into the corresponding API schemas. It preserves the selected
+policy values and never drops those fields to work around validation failures.
+Both list and upsert responses use this same boundary.
+
 `app.services.ai_intake` owns typed message understanding and customer-response
 composition. Eligibility remains provider-free. The session processor sends the
 persisted selected inbound to the existing gateway once for classification and
