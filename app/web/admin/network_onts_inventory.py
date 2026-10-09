@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
+from app.http_query import OptionalUUIDQuery
 from app.models.network import OntUnit
 from app.services import web_admin as web_admin_service
 from app.services import web_network_core_devices as web_network_core_devices_service
@@ -163,7 +164,7 @@ def _is_htmx_request(request: Request) -> bool:
 )
 def ont_assignment_subscription_options(
     request: Request,
-    account_id: UUID | None = Query(default=None),
+    account_id: OptionalUUIDQuery = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     options = (
