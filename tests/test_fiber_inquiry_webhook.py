@@ -7,6 +7,8 @@ import hashlib
 import hmac
 import json
 from datetime import datetime
+from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -27,6 +29,7 @@ from app.models.team_inbox import (
 from app.services.integrations.connectors.fiber_inquiry_http import (
     FIBER_INQUIRY_CAPABILITY,
 )
+from app.services.sales import fiber_feasibility
 from tests.integration_platform_helpers import enable_capability
 
 SIGNING_SECRET = "test-fiber-inquiry-signing-secret"
@@ -278,14 +281,14 @@ def test_signed_coverage_request_captures_origin_and_returns_safe_coverage(
 ) -> None:
     binding = _binding(db_session, monkeypatch)
     monkeypatch.setattr(
-        "app.services.team_inbox_receive.compute_feasibility",
-        lambda _db, _lat, _lon: {
-            "feasible": True,
-            "coverage": "covered",
-            "nearest_fap_id": "internal-fap-id",
-            "nearest_fap_name": "Internal FAP name",
-            "distance_meters": 12.3,
-        },
+        "app.services.sales.fiber_feasibility.assess",
+        lambda _db, *, query: fiber_feasibility.FiberFeasibilityResult(
+            True,
+            fiber_feasibility.FiberFeasibilityStatus.covered,
+            uuid4(),
+            "Internal FAP name",
+            Decimal("12.3"),
+        ),
     )
 
     response = _post(
@@ -332,8 +335,10 @@ def test_coverage_delivery_replay_preserves_reference_and_result(
 ) -> None:
     binding = _binding(db_session, monkeypatch)
     monkeypatch.setattr(
-        "app.services.team_inbox_receive.compute_feasibility",
-        lambda _db, _lat, _lon: {"coverage": "survey_required"},
+        "app.services.sales.fiber_feasibility.assess",
+        lambda _db, *, query: fiber_feasibility.FiberFeasibilityResult(
+            True, fiber_feasibility.FiberFeasibilityStatus.survey_required
+        ),
     )
     payload = _coverage_payload()
 
@@ -377,8 +382,10 @@ def test_coverage_accepts_missing_optional_email_area_and_plan(
     # This unit case checks optional-field acceptance and receipt persistence;
     # Spatial SQL calculation is outside this unit database's contract.
     monkeypatch.setattr(
-        "app.services.team_inbox_receive.compute_feasibility",
-        lambda db, latitude, longitude: {"coverage": "covered"},
+        "app.services.sales.fiber_feasibility.assess",
+        lambda db, *, query: fiber_feasibility.FiberFeasibilityResult(
+            True, fiber_feasibility.FiberFeasibilityStatus.covered
+        ),
     )
 
     response = _post(
@@ -399,12 +406,10 @@ def test_coverage_failure_returns_technical_error_without_losing_lead(
 ) -> None:
     binding = _binding(db_session, monkeypatch)
 
-    def fail_coverage(*_args):
+    def fail_coverage(*_args, **_kwargs):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(
-        "app.services.team_inbox_receive.compute_feasibility", fail_coverage
-    )
+    monkeypatch.setattr("app.services.sales.fiber_feasibility.assess", fail_coverage)
 
     response = _post(
         db_session,
@@ -437,8 +442,10 @@ def test_coverage_exact_subscriber_creates_party_linked_lead(
     db_session.commit()
     binding = _binding(db_session, monkeypatch)
     monkeypatch.setattr(
-        "app.services.team_inbox_receive.compute_feasibility",
-        lambda _db, _lat, _lon: {"coverage": "covered"},
+        "app.services.sales.fiber_feasibility.assess",
+        lambda _db, *, query: fiber_feasibility.FiberFeasibilityResult(
+            True, fiber_feasibility.FiberFeasibilityStatus.covered
+        ),
     )
 
     response = _post(

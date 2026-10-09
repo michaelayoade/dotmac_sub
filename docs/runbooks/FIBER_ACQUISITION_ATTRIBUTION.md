@@ -117,8 +117,12 @@ Create and enable an `events.deliver.v1` `webhook.http` binding with URL
 4. Confirm invalid signatures create no durable receipt or business data.
 5. Inspect the marketing delivery payload and confirm it contains none of:
    customer name, email, phone number, or street address.
-6. Submit an address without coordinates and confirm a Lead is created while
-   `coverage` is null.
+6. Submit an address without coordinates and confirm a Lead is created with
+   `coverage.status == manual_review`.
+7. Exercise a failed spatial query on disposable, migrated PostgreSQL and
+   confirm one committed Lead/link, a processed receipt, `technical_error`, and
+   exact replay. The optional assessment uses the owner's authorized savepoint;
+   a real failed statement must not abort enquiry persistence.
 
 Record only the base URL, binding UUID, header names/prefix, migration revision,
 test results, and a redacted response. Hand the website administrator a secret

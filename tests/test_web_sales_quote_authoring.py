@@ -28,7 +28,7 @@ from app.models.sales import (
 from app.models.system_user import SystemUser
 from app.services import web_sales
 from app.services.db_session_adapter import db_session_adapter
-from app.services.sales import quote_authoring
+from app.services.sales import fiber_feasibility, quote_authoring
 from app.services.sales import service as sales_service
 from app.web.admin.sales import templates as sales_templates
 
@@ -62,9 +62,13 @@ def feasible():
     """Keep location coverage data out of the Quote authoring unit boundary."""
 
     with patch.object(
-        quote_authoring,
-        "compute_feasibility",
-        return_value={"coverage": "green", "feasible": True, "distance_meters": 120},
+        fiber_feasibility,
+        "assess",
+        return_value=fiber_feasibility.FiberFeasibilityResult(
+            True,
+            fiber_feasibility.FiberFeasibilityStatus.covered,
+            distance_meters=Decimal("120"),
+        ),
     ) as stub:
         yield stub
 
@@ -580,7 +584,12 @@ def test_install_location_preserves_selfcare_metadata_contract(db_session, feasi
         "address": "12 Aminu Kano Cres",
         "region": "Abuja",
     }
-    feasible.assert_called_once_with(db_session, 9.057, 7.495)
+    feasible.assert_called_once_with(
+        db_session,
+        query=fiber_feasibility.FiberFeasibilityQuery(
+            Decimal("9.057"), Decimal("7.495")
+        ),
+    )
 
 
 def test_sent_is_the_only_non_draft_initial_status(db_session):

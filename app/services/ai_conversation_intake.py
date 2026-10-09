@@ -70,6 +70,7 @@ from app.schemas.lead_intake import (
     AiLeadCandidateClassifiedEvent,
     AiLeadIntakeClassification,
     LeadCandidateAttribution,
+    LeadCandidateReviewReason,
     LeadIntakeIntent,
     LeadIntakePartyType,
 )
@@ -252,17 +253,24 @@ def _stage_lead_candidate_classified(
         }
         or classification is None
         or classification.intent.value not in LEAD_IDENTITY_REQUIRED_INTENTS
-        or classification.party_type.value == LeadIntakePartyType.unknown.value
         or conversation.subscriber_id is not None
     ):
         return
     config = db.get(AiIntakeConfig, outcome.config_id) if outcome.config_id else None
     threshold = float(config.confidence_threshold) if config else 0.75
-    if (
-        classification.confidence < threshold
-        or classification.party_type_confidence < threshold
-    ):
+    if classification.confidence < threshold:
         return
+    review_reason = (
+        LeadCandidateReviewReason.customer_type_required
+        if classification.party_type.value == LeadIntakePartyType.unknown.value
+        else LeadCandidateReviewReason.customer_type_low_confidence
+        if classification.party_type_confidence < threshold
+        else None
+    )
+    if review_reason is not None:
+        metadata["ai_sales_candidate_review_reason"] = review_reason.value
+        return
+    metadata.pop("ai_sales_candidate_review_reason", None)
     event_id = uuid5(inbound.id, "ai-intake-lead-candidate-classified-v1")
     payload = AiLeadCandidateClassifiedEvent(
         tenant_id=OPERATOR_TENANT_ID,
@@ -3966,7 +3974,10 @@ def _process_one_session(
         ]
         # Keep the evidence that staged Sales capture stable for repair and
         # resolution checks. Engine state separately records later routing intent.
-        sales_candidate_staged = bool(metadata.get("ai_lead_candidate_event_id"))
+        sales_candidate_staged = bool(
+            metadata.get("ai_lead_candidate_event_id")
+            or metadata.get("ai_sales_candidate_review_reason")
+        )
         if decision.state.current_intent and not sales_candidate_staged:
             metadata["ai_intent"] = decision.state.current_intent
         if decision.state.category and not sales_candidate_staged:

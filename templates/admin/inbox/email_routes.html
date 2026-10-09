@@ -684,7 +684,7 @@
             <select name="channel_type" required class="h-11 rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
                 {% for channel in ai_channel_options %}<option value="{{ channel.value }}">{{ channel.label }}</option>{% endfor %}
             </select>
-            <select name="intent_key" required class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">Choose an intent</option>{% for intent in ai_intake_intent_definitions %}<option value="{{ intent.key }}">{{ intent.display_name or intent.key|replace('_', ' ')|title }}</option>{% endfor %}</select>
+            <select name="intent_key" required class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">Choose an intent</option>{% for key in ai_intake_supported_intent_keys %}<option value="{{ key }}">{{ key|replace('_', ' ')|title }}</option>{% endfor %}</select>
             <select name="ai_service_team_id" required class="h-11 rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
                 <option value="">Choose a team</option>
                 {% for team in service_team_options %}<option value="{{ team.id }}">{{ team.name }}</option>{% endfor %}

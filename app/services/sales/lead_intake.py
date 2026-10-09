@@ -50,6 +50,7 @@ from app.models.team_inbox import (
 from app.schemas.lead_intake import (
     AiLeadIntakeClassification,
     LeadCandidateAttribution,
+    LeadCandidateReviewReason,
     LeadIntakeIntent,
     LeadIntakeSubmission,
     LeadIntakeTemplateDraft,
@@ -202,6 +203,13 @@ class ClassifiedLeadCandidateDrift:
     provider_label: str | None
     model_label: str | None
     attribution: LeadCandidateAttribution
+    review_reason: LeadCandidateReviewReason | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifiedCandidateDriftQuery:
+    since: datetime
+    limit: int = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -1424,11 +1432,11 @@ def latest_inbound_message_id(db: Session, conversation_id: UUID) -> UUID | None
 
 
 def classified_candidate_drift(
-    db: Session, *, since: datetime, limit: int = 500
+    db: Session, *, query: ClassifiedCandidateDriftQuery
 ) -> tuple[ClassifiedLeadCandidateDrift, ...]:
     """Report final social sales classifications that lack an active Lead link."""
 
-    bounded_limit = max(1, min(limit, 2_000))
+    bounded_limit = max(1, min(query.limit, 2_000))
     rows = db.scalars(
         select(InboxMessage)
         .join(
@@ -1438,8 +1446,9 @@ def classified_candidate_drift(
         .where(
             InboxMessage.direction == "inbound",
             InboxMessage.channel_type.in_(META_CHANNELS),
-            InboxMessage.created_at >= since,
+            InboxMessage.created_at >= query.since,
             InboxConversation.is_active.is_(True),
+            InboxConversation.subscriber_id.is_(None),
         )
         .order_by(InboxMessage.created_at.desc(), InboxMessage.id.desc())
         .limit(min(bounded_limit * 20, 20_000))
@@ -1450,16 +1459,29 @@ def classified_candidate_drift(
         if message.conversation_id in seen_conversations:
             continue
         metadata = dict(message.metadata_ or {})
+        raw_review_reason = metadata.get("ai_sales_candidate_review_reason")
+        try:
+            review_reason = (
+                LeadCandidateReviewReason(str(raw_review_reason))
+                if raw_review_reason
+                else None
+            )
+        except ValueError:
+            continue
         if (
             (
                 not metadata.get("ai_lead_candidate_event_id")
+                and review_reason is None
                 and (
                     metadata.get("ai_intake_status") != "classified"
                     or bool(metadata.get("ai_intake_requires_follow_up"))
                 )
             )
             or metadata.get("ai_intent") not in QUALIFYING_INTENTS
-            or metadata.get("ai_party_type") not in {"individual", "organization"}
+            or (
+                review_reason is None
+                and metadata.get("ai_party_type") not in {"individual", "organization"}
+            )
             or conversation_lead_relationships.active_link(db, message.conversation_id)
             is not None
         ):
@@ -1468,8 +1490,12 @@ def classified_candidate_drift(
             classification = AiLeadIntakeClassification(
                 intent=LeadIntakeIntent(str(metadata["ai_intent"])),
                 intent_confidence=float(metadata["ai_confidence"]),
-                party_type=LeadIntakePartyTypeValue(str(metadata["ai_party_type"])),
-                party_type_confidence=float(metadata["ai_party_type_confidence"]),
+                party_type=LeadIntakePartyTypeValue(
+                    str(metadata.get("ai_party_type") or "unknown")
+                ),
+                party_type_confidence=float(
+                    metadata.get("ai_party_type_confidence") or 0.0
+                ),
             )
             raw_attribution = metadata.get("meta_referral_observation")
             attribution = LeadCandidateAttribution.model_validate(
@@ -1488,6 +1514,7 @@ def classified_candidate_drift(
                 ),
                 model_label=(str(metadata.get("ai_intake_model") or "")[:160] or None),
                 attribution=attribution,
+                review_reason=review_reason,
             )
         )
         seen_conversations.add(message.conversation_id)

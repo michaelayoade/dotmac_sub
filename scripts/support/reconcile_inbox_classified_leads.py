@@ -34,6 +34,7 @@ def _finding_payload(
         "classified_at": finding.classified_at.isoformat(),
         "intent": finding.classification.intent.value,
         "party_type": finding.classification.party_type.value,
+        "review_reason": finding.review_reason.value if finding.review_reason else None,
     }
 
 
@@ -59,7 +60,10 @@ def main() -> int:
     since = datetime.now(UTC) - timedelta(days=args.days)
     with db_session_adapter.owner_command_session() as db:
         findings = lead_intake.classified_candidate_drift(
-            db, since=since, limit=args.limit
+            db,
+            query=lead_intake.ClassifiedCandidateDriftQuery(
+                since=since, limit=args.limit
+            ),
         )
         payload: dict[str, object] = {
             "mode": "apply" if args.apply else "preview",
@@ -72,6 +76,15 @@ def main() -> int:
             repaired: list[dict[str, object]] = []
             failed: list[dict[str, object]] = []
             for finding in findings:
+                if finding.review_reason is not None:
+                    failed.append(
+                        {
+                            **_finding_payload(finding),
+                            "error": "staff_review_required",
+                            "message": "Identify the customer type before materializing this Lead.",
+                        }
+                    )
+                    continue
                 try:
                     outcome = lead_intake.assess_inbound(
                         db,

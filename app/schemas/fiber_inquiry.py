@@ -170,6 +170,13 @@ class FiberCoverageResult(BaseModel):
     summary: str
 
 
+class FiberCoverageEvaluatedEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    lead_id: UUID
+    origin_capture_id: UUID
+    coverage_status: FiberCoverageStatus
+
+
 class FiberInquiryReceipt(BaseModel):
     observation_id: UUID
     conversation_id: UUID

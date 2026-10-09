@@ -39,7 +39,7 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
-from app.services.sales.selfserve import compute_feasibility
+from app.services.sales import fiber_feasibility
 
 _AUTHOR_QUOTE = OwnerCommandDefinition(
     owner="sales.quote_authoring",
@@ -587,9 +587,9 @@ def _install_metadata(db: Session, install: QuoteInstallLocation) -> dict[str, o
         }
     }
     if latitude is not None and longitude is not None:
-        payload["feasibility"] = compute_feasibility(
-            db, float(latitude), float(longitude)
-        )
+        payload["feasibility"] = fiber_feasibility.assess(
+            db, query=fiber_feasibility.FiberFeasibilityQuery(latitude, longitude)
+        ).as_metadata()
     return payload
 
 
