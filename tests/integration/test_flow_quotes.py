@@ -90,7 +90,7 @@ def test_quote_lifecycle_native(db_session):
 
     # 1. Request — native, no CRM link on the subscriber at all.
     with patch(
-        "app.services.sales.selfserve._nearest_fiber_access_point",
+        "app.services.sales.fiber_feasibility._nearest_fiber_access_point",
         return_value=(_FAP, 1300.0),
     ):
         quote = selfserve.selfserve_quotes.request_quote(
@@ -229,7 +229,7 @@ def test_quote_native_ids_are_uuid_namespace(db_session):
     deposit response echoes it and the row resolves by it."""
     sub = _subscriber(db_session)
     with patch(
-        "app.services.sales.selfserve._nearest_fiber_access_point",
+        "app.services.sales.fiber_feasibility._nearest_fiber_access_point",
         return_value=(_FAP, 900.0),
     ):
         quote = selfserve.selfserve_quotes.request_quote(

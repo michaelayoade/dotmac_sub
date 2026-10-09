@@ -41,6 +41,13 @@ the configured threshold. Unknown customer type, low confidence, unavailable
 classification, greetings, and complaints do not qualify. Linked Subscribers
 are excluded. The Sales owner revalidates customer identity and confidence.
 Later intent changes never retract the durable candidate or its Lead link.
+Confident sales intent with unknown or low-confidence customer type records
+`ai_sales_candidate_review_reason` on the same inbound message. This evidence
+is preserved through engine routing, blocks resolution without a Lead link,
+and appears in the bounded typed capture-review query. It does not fabricate a
+Person/Organization or emit a materialization event. Staff identify the type and
+create/link the Lead through the canonical Inbox action. The repair CLI reports
+these findings and refuses to auto-apply them; known Customers are excluded.
 The Sales handler validates the
 tenant before entering its owner; a cross-tenant event is a permanent,
 reviewable refusal. Meta referral data is acquisition evidence, not a

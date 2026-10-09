@@ -215,7 +215,7 @@ _FAP = SimpleNamespace(id=uuid.uuid4(), name="NAP-041")
 def _native_quote(db, sub):
     """A staff-priced native quote with a 37,500 deposit at the default 50%."""
     with patch(
-        "app.services.sales.selfserve._nearest_fiber_access_point",
+        "app.services.sales.fiber_feasibility._nearest_fiber_access_point",
         return_value=(_FAP, 1300.0),
     ):
         quote = selfserve.selfserve_quotes.request_quote(

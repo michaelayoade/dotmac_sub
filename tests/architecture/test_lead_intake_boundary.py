@@ -52,3 +52,20 @@ def test_sales_capture_is_not_gated_on_final_routing_status():
         "app/services/lead_intake_ai.py",
     ):
         assert "ai_lead_candidate_event_id" in Path(path).read_text(encoding="utf-8")
+
+
+def test_uncertain_sales_candidate_review_has_no_parallel_lead_writer():
+    for path in (
+        "app/services/ai_conversation_intake.py",
+        "app/services/team_inbox_customer_completion.py",
+        "app/services/sales/lead_intake.py",
+    ):
+        assert "ai_sales_candidate_review_reason" in Path(path).read_text(
+            encoding="utf-8"
+        )
+    adapter = Path("scripts/support/reconcile_inbox_classified_leads.py").read_text(
+        encoding="utf-8"
+    )
+    assert "staff_review_required" in adapter
+    assert "ClassifiedCandidateDriftQuery(" in adapter
+    assert "Lead(" not in adapter
