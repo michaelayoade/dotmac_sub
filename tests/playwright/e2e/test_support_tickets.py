@@ -101,3 +101,40 @@ def test_applied_filter_is_restored_after_returning_from_ticket_detail(
         re.compile(r".*/admin/support/tickets\?.*status=not_closed.*")
     )
     expect(admin_page.locator("#ticket-status-filter")).to_have_value("not_closed")
+
+
+def test_comment_submit_lock_allows_one_in_flight_request_and_resets_on_error(
+    admin_page: Page, settings
+) -> None:
+    admin_page.goto(f"{settings.base_url}/admin/support/tickets")
+    admin_page.locator(
+        "#tickets-table tbody a[href^='/admin/support/tickets/']"
+    ).first.click()
+    admin_page.wait_for_url("**/admin/support/tickets/**")
+
+    comment_form = admin_page.locator("form[action$='/comment']")
+    comment_form.locator("textarea[name='body']").fill("Submit lock proof")
+    error_page = admin_page.content()
+    held_routes = []
+    admin_page.route(
+        "**/admin/support/tickets/*/comment",
+        lambda route: held_routes.append(route),
+    )
+
+    submit = comment_form.locator("button[type='submit']")
+    submit.click()
+    expect(submit).to_be_disabled()
+    expect(submit).to_have_attribute("aria-busy", "true")
+    comment_form.evaluate("form => form.requestSubmit()")
+
+    assert len(held_routes) == 1
+    held_routes[0].fulfill(
+        status=422,
+        content_type="text/html",
+        body=error_page,
+    )
+    admin_page.wait_for_load_state("domcontentloaded")
+
+    expect(
+        admin_page.locator("form[action$='/comment'] button[type='submit']")
+    ).to_be_enabled()

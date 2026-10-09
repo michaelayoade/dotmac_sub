@@ -172,6 +172,7 @@ def test_parse_mentions_payload_accepts_strings_and_objects():
 def test_comment_form_preserves_person_and_group_mention_tokens(monkeypatch):
     captured = {}
     ticket_id = uuid4()
+    idempotency_key = uuid4()
     person_id = uuid4()
     group_id = uuid4()
 
@@ -188,6 +189,7 @@ def test_comment_form_preserves_person_and_group_mention_tokens(monkeypatch):
 
     def fake_create_comment(db, ticket_id, payload, *, actor_id, request):
         captured["mention_targets"] = payload.mentions
+        captured["idempotency_key"] = payload.idempotency_key
         return object()
 
     monkeypatch.setattr(
@@ -203,6 +205,7 @@ def test_comment_form_preserves_person_and_group_mention_tokens(monkeypatch):
         actor_id=None,
         body="Please check this",
         is_internal=False,
+        idempotency_key=idempotency_key,
         attachments=[],
         mentions=(f'[{{"id":"person:{person_id}","label":"One"}}, "group:{group_id}"]'),
     )
@@ -217,6 +220,7 @@ def test_comment_form_preserves_person_and_group_mention_tokens(monkeypatch):
             target_id=group_id,
         ),
     )
+    assert captured["idempotency_key"] == idempotency_key
 
 
 def test_comment_edit_form_forwards_complete_typed_mention_set(monkeypatch):

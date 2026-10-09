@@ -206,6 +206,20 @@ comments do not trigger this consequence. The durable notification queue owns
 post-commit SMTP delivery and retry; transport failure never removes the saved
 reply.
 
+Admin comment forms carry a server-generated UUID for each rendered submission.
+The lifecycle owner locks the Ticket, then resolves that UUID within the Ticket
+before creating any comment, mention, notification, audit, or realtime
+consequence. An exact replay returns the original comment; reuse with different
+body, visibility, author, attachment, or mention inputs fails as a typed conflict.
+The immutable command fingerprint remains stable if the returned comment is later
+edited. The nullable historical columns and the database uniqueness constraint
+on `(ticket_id, idempotency_key)`
+permit pre-cutover rows while arbitrating concurrent first submissions. A newly
+rendered form receives a new UUID, so a deliberate second comment remains a new
+command. Historical candidates are reported read-only by
+`scripts/support/report_historical_duplicate_ticket_comments.sql`; the cutover
+does not delete or merge existing comments.
+
 Ticket assignment consequences are independent of the legacy customer-support
 notification toggle. Newly assigned direct users and active members of an
 assigned Service Team receive an in-app notification and, when an email address

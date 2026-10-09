@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -226,6 +227,16 @@ def _command_idempotency_key(request: object | None) -> str | None:
     return str(value).strip() or None if value is not None else None
 
 
+def _payload_idempotency_key(
+    args: tuple[object, ...], kwargs: dict[str, Any]
+) -> str | None:
+    payload = kwargs.get("payload")
+    if payload is None and len(args) >= 2:
+        payload = args[1]
+    value = getattr(payload, "idempotency_key", None)
+    return str(value) if value is not None else None
+
+
 def ticket_owner_command(name: str):
     """Enter the canonical Ticket transaction around one typed public method.
 
@@ -273,7 +284,10 @@ def ticket_owner_command(name: str):
                     actor=actor,
                     scope=f"support.ticket:{name}",
                     reason=f"execute canonical Ticket {name} command",
-                    idempotency_key=_command_idempotency_key(kwargs.get("request")),
+                    idempotency_key=(
+                        _payload_idempotency_key(args, kwargs)
+                        or _command_idempotency_key(kwargs.get("request"))
+                    ),
                 )
             )
             result = execute_owner_command(
@@ -909,6 +923,42 @@ def _validate_ticket_lead_alignment(
 
 class TicketComments:
     @staticmethod
+    def _payload_idempotency_fingerprint(payload: TicketCommentCreate) -> str:
+        author_type = _normalize_comment_author_type(payload.author_type)
+        attachment_inputs = [
+            {
+                "file_name": item.file_name,
+                "content_type": item.content_type,
+                "file_size": item.file_size,
+                "storage_key": item.storage_key,
+            }
+            for item in payload.attachments
+        ]
+        material = {
+            "body": payload.body.strip(),
+            "is_internal": payload.is_internal,
+            "author_type": author_type,
+            "author_person_id": (
+                str(payload.author_person_id)
+                if author_type == TicketCommentAuthorType.customer.value
+                and payload.author_person_id is not None
+                else None
+            ),
+            "author_system_user_id": (
+                str(payload.author_system_user_id)
+                if author_type == TicketCommentAuthorType.staff.value
+                and payload.author_system_user_id is not None
+                else None
+            ),
+            "attachments": attachment_inputs,
+            "mentions": sorted(target.token for target in payload.mentions),
+        }
+        encoded = json.dumps(
+            material, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
     def get(db: Session, comment_id: str) -> TicketComment:
         comment = db.get(TicketComment, comment_id)
         if not comment:
@@ -955,6 +1005,12 @@ class TicketComments:
 
         comment = TicketComment(
             ticket_id=ticket.id,
+            idempotency_key=payload.idempotency_key,
+            idempotency_fingerprint=(
+                TicketComments._payload_idempotency_fingerprint(payload)
+                if payload.idempotency_key is not None
+                else None
+            ),
             author_person_id=author_person_id,
             author_type=author_type,
             author_system_user_id=author_system_user_id,
@@ -4152,6 +4208,29 @@ class Tickets:
         if ticket is None or not ticket.is_active:
             raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
+        if payload.idempotency_key is not None:
+            existing = (
+                db.query(TicketComment)
+                .filter(
+                    TicketComment.ticket_id == ticket.id,
+                    TicketComment.idempotency_key == payload.idempotency_key,
+                )
+                .one_or_none()
+            )
+            if existing is not None:
+                if (
+                    existing.idempotency_fingerprint
+                    != TicketComments._payload_idempotency_fingerprint(payload)
+                ):
+                    raise SupportTicketError(
+                        code="ticket_comment_idempotency_conflict",
+                        message=(
+                            "This comment submission key was already used with "
+                            "different details"
+                        ),
+                        retryable=False,
+                    )
+                return existing
         comment = ticket_comments.create(
             db, ticket=ticket, payload=payload, actor_id=actor_id, request=request
         )

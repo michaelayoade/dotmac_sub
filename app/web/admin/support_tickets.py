@@ -781,6 +781,7 @@ def ticket_add_comment(
     request: Request,
     ticket_id: UUID,
     body: str = Form(...),
+    idempotency_key: UUID = Form(...),
     reply_to_customer: bool = Form(False),
     mentions: str | None = Form(default=None),
     attachments: list[UploadFile] = File(default=[]),
@@ -795,10 +796,11 @@ def ticket_add_comment(
             actor_id=actor_id,
             body=body,
             is_internal=not reply_to_customer,
+            idempotency_key=idempotency_key,
             mentions=mentions,
             attachments=attachments,
         )
-    except support_web_service.TicketAttachmentValidationError as exc:
+    except support_web_service.WebSupportTicketInputError as exc:
         context = _ctx(request, db)
         context.update(
             support_web_service.build_ticket_detail_context(
@@ -818,7 +820,8 @@ def ticket_add_comment(
         context["action_error"] = exc.message
         response_status = (
             413
-            if exc.kind is support_web_service.TicketAttachmentValidationKind.too_large
+            if isinstance(exc, support_web_service.TicketAttachmentValidationError)
+            and exc.kind is support_web_service.TicketAttachmentValidationKind.too_large
             else 422
         )
         return templates.TemplateResponse(
