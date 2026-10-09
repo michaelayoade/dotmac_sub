@@ -63,7 +63,7 @@ def test_me_direct_transfer_without_email_keeps_nullable_response(
     subscriber: Subscriber,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    subscriber.email = None
+    subscriber.email = ""
     db_session.flush()
     _assert_topup_email_response(
         db_session, subscriber, monkeypatch, "105000050", "direct_bank_transfer", False
@@ -124,7 +124,7 @@ def _assert_topup_email_response(
         db=db_session,
         principal={"principal_type": "subscriber", "subscriber_id": str(subscriber.id)},
     )
-    assert response.customer_email == subscriber.email
+    assert response.customer_email == (subscriber.email or None)
     assert response.intent_id == str(intent_id)
     assert response.provider_type == provider
     assert response.payment_reference == "topup-email-reference"
