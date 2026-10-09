@@ -68,7 +68,10 @@ from app.models.subscriber import (
 )
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser, SystemUserType
+from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services.credential_crypto import encrypt_credential
+from app.services.customer_financial_ledger import CustomerFinancialEvent
+from app.services.web_billing_ledger import CustomerLedgerQuery
 from app.services.web_customer_details import (
     CustomerDetailNetworkQuery,
     build_business_detail_snapshot,
@@ -504,6 +507,93 @@ def test_customer_billing_ledger_route_renders_ten_rows_and_page_navigation(
     assert "Ledger page row 03" not in second_page
     assert "Showing 11–12 of 12 entries" in second_page
     assert "Page 2 of 2" in second_page
+
+
+def test_customer_billing_ledger_uses_canonical_financial_events(
+    db_session,
+    subscriber,
+    monkeypatch,
+):
+    events = [
+        CustomerFinancialEvent(
+            id="invoice:1",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            amount=Decimal("400.00"),
+            currency="NGN",
+            memo="Invoice",
+            occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        ),
+        CustomerFinancialEvent(
+            id="payment:2",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("2500.00"),
+            currency="NGN",
+            memo="Payment",
+            occurred_at=datetime(2026, 1, 2, tzinfo=UTC),
+        ),
+        CustomerFinancialEvent(
+            id="credit-note:3",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.credit_note,
+            amount=Decimal("500.00"),
+            currency="NGN",
+            memo="Credit note",
+            occurred_at=datetime(2026, 1, 3, tzinfo=UTC),
+        ),
+        CustomerFinancialEvent(
+            id="prepaid-invoice-consumption:4",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            amount=Decimal("1200.00"),
+            currency="NGN",
+            memo="Prepaid usage",
+            occurred_at=datetime(2026, 1, 4, tzinfo=UTC),
+        ),
+        CustomerFinancialEvent(
+            id="invoice-writeoff:5",
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("800.00"),
+            currency="NGN",
+            memo="Write-off",
+            occurred_at=datetime(2026, 1, 5, tzinfo=UTC),
+        ),
+    ]
+    monkeypatch.setattr(
+        web_billing_ledger_service,
+        "list_customer_financial_events",
+        lambda _db, _account_id, *, currency=None: events,
+    )
+
+    view = web_billing_ledger_service.build_customer_ledger_view(
+        db_session,
+        query=CustomerLedgerQuery(account_id=subscriber.id),
+    )
+
+    assert view.total_entries == 5
+    assert view.summary.credit_count == 3
+    assert view.summary.debit_count == 2
+    assert [entry.id for entry in view.entries] == [
+        "invoice-writeoff:5",
+        "prepaid-invoice-consumption:4",
+        "credit-note:3",
+        "payment:2",
+        "invoice:1",
+    ]
+    assert [entry.running_balance for entry in view.entries] == [
+        Decimal("2200.00"),
+        Decimal("1400.00"),
+        Decimal("2600.00"),
+        Decimal("2100.00"),
+        Decimal("-400.00"),
+    ]
 
 
 def test_customer_360_service_health_contains_only_active_services(
