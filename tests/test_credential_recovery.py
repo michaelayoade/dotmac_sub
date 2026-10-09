@@ -426,9 +426,9 @@ def test_shared_email_across_subscribers_requests_no_recovery_delivery(
     assert outcome.delivery_requested is False
     assert db_session.query(EventStore).count() == 0
     assert db_session.query(CommunicationIntentRecord).count() == 0
-    assert credential_recovery.issue_reset_capability_for_email(
-        db_session, email
-    ) is None
+    assert (
+        credential_recovery.issue_reset_capability_for_email(db_session, email) is None
+    )
     assert "password_recovery_identity_ambiguous" in caplog.text
     assert email not in caplog.text
 
