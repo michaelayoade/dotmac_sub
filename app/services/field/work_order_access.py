@@ -21,6 +21,7 @@ from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
 from app.services.domain_errors import DomainError
+from app.services.work_order_commands import technician_header_assignment
 
 
 class FieldActorKind(StrEnum):
@@ -42,7 +43,6 @@ class FieldActor:
     vendor_user_id: UUID | None = None
     native_vendor_id: UUID | None = None
     person_id: UUID | None = None
-    crm_person_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +141,6 @@ def resolve_field_actor(db: Session, query: ResolveFieldActor) -> FieldActor:
         system_user_id=user.id,
         technician_id=profile.id,
         person_id=profile.person_id,
-        crm_person_id=profile.crm_person_id,
     )
 
 
@@ -163,10 +162,12 @@ def scoped_work_orders(db: Session, actor: FieldActor) -> Query[WorkOrder]:
             WorkOrderAssignmentQueue.assigned_technician_id == actor.technician_id
         )
         predicate = WorkOrder.id.in_(assignment)
-        if actor.crm_person_id:
-            predicate = or_(
-                predicate, WorkOrder.assigned_to_crm_person_id == actor.crm_person_id
-            )
+        profile = db.get(TechnicianProfile, actor.technician_id)
+        retained_assignment = (
+            technician_header_assignment(profile) if profile is not None else None
+        )
+        if retained_assignment is not None:
+            predicate = or_(predicate, retained_assignment)
     return db.query(WorkOrder).filter(WorkOrder.is_active.is_(True), predicate)
 
 

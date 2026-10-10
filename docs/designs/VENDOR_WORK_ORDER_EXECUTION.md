@@ -12,7 +12,7 @@ labels are projections; neither header JSON nor imported metadata grants access.
 Installation-project procurement remains a separate workflow.
 
 `FieldVendor.native_vendor_id` is the explicit unique link from the mobile
-membership projection to its authoritative vendor organization. Migration 668
+membership projection to its authoritative vendor organization. Migration 669
 backfills only exact existing organization-ID matches; unmatched projection
 rows remain unlinked and cannot authorize field execution. The legacy string
 field is not an input to the field work-order scope resolver.
@@ -23,6 +23,9 @@ membership, native vendor linkage and current queue assignment. Ambiguous or
 inactive identity fails closed. Vendor identity does not inherit technician
 scope merely because the account also has a technician projection. No synthetic
 technician profile is created.
+
+Retained staff header assignment compatibility is read through the existing
+`operations.work_order_commands` owner. It does not expand vendor queue scope.
 
 Assignments lock the work order, revalidate the target and expected revision,
 replace the opposing assignment, preserve an active execution lifecycle, stage

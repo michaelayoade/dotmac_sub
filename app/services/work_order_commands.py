@@ -20,6 +20,7 @@ from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.audit import AuditActorType
 from app.models.dispatch import (
@@ -70,6 +71,16 @@ from app.services.work_order_assignment_contracts import (
     WorkOrderAssignmentState,
 )
 from app.services.work_order_errors import WorkOrderCommandError
+
+
+def technician_header_assignment(
+    profile: TechnicianProfile,
+) -> ColumnElement[bool] | None:
+    """Adapt the retained staff assignment projection without granting vendor scope."""
+    if profile.crm_person_id:
+        return WorkOrder.assigned_to_crm_person_id == profile.crm_person_id
+    return None
+
 
 _CREATE_ID_NAMESPACE = uuid.UUID("cbf90ef0-a977-49fb-a2ac-a636eb3b2342")
 _QUEUE_STATUSES = frozenset(
