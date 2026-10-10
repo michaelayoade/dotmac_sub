@@ -1228,7 +1228,7 @@
                 editUrl = `/admin/network/core-devices/${p.id}/edit`;
                 break;
             case 'customer':
-                const customerPresentation = p.connectivity?.presentation || { label: 'Unknown', tone: 'neutral', source_owner: 'unknown' };
+                const customerPresentation = p.connectivity ? p.connectivity.presentation : { label: 'Unknown', tone: 'neutral', source_owner: 'unknown' };
                 const visualStatus = customerVisualStatus(p);
                 iconBg = customerStatusColors[visualStatus] || customerStatusColors.offline;
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>';
@@ -1272,7 +1272,7 @@
         if (p.address) html += `<div class="asset-detail-row"><span class="asset-detail-label">Address</span><span class="asset-detail-value">${escapeHtml(p.address)}</span></div>`;
         if (p.city) html += `<div class="asset-detail-row"><span class="asset-detail-label">City</span><span class="asset-detail-value">${escapeHtml(p.city)}</span></div>`;
         if (p.type === 'customer') {
-            const customerPresentation = p.connectivity?.presentation || { label: 'Unknown', tone: 'neutral', source_owner: 'unknown' };
+            const customerPresentation = p.connectivity ? p.connectivity.presentation : { label: 'Unknown', tone: 'neutral', source_owner: 'unknown' };
             const sessionStatus = p.connectivity?.layer === 'connected' ? 'Online' : 'Offline';
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Customer status</span><span class="asset-detail-value" style="color:${customerColor}">${escapeHtml(p.customer_status || 'Unknown')}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Session status</span><span class="asset-detail-value status-foreground status-tone-${semanticTone(customerPresentation.tone)}">${sessionStatus}</span></div>`;

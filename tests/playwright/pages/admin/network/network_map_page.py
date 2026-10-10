@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from playwright.sync_api import Page, expect
+from playwright.sync_api import expect
 
 from tests.playwright.pages.base_page import BasePage
 
