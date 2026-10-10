@@ -352,6 +352,7 @@ class WorkOrderAssignmentQueueCreate(BaseModel):
     reason: str | None = None
     dispatch_rule_id: UUID | None = None
     assigned_technician_id: UUID | None = None
+    assigned_vendor_id: UUID | None = None
 
     @model_validator(mode="after")
     def _require_work_order_ref(self) -> WorkOrderAssignmentQueueCreate:
@@ -365,10 +366,11 @@ class WorkOrderAssignmentQueueUpdate(BaseModel):
     reason: str | None = None
     dispatch_rule_id: UUID | None = None
     assigned_technician_id: UUID | None = None
+    assigned_vendor_id: UUID | None = None
 
 
 class WorkOrderAssignmentQueueRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     id: UUID
     work_order_mirror_id: UUID
@@ -377,18 +379,22 @@ class WorkOrderAssignmentQueueRead(BaseModel):
     reason: str | None = None
     dispatch_rule_id: UUID | None = None
     assigned_technician_id: UUID | None = None
+    assigned_vendor_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class WorkOrderAssignmentPreviewRequest(BaseModel):
-    technician_id: UUID
+    technician_id: UUID | None = None
+    vendor_id: UUID | None = None
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
     status: str = Field(default="dispatched", max_length=20)
 
     @model_validator(mode="after")
     def _valid_schedule(self) -> WorkOrderAssignmentPreviewRequest:
+        if (self.technician_id is None) == (self.vendor_id is None):
+            raise ValueError("Exactly one technician_id or vendor_id is required")
         if (
             self.scheduled_start is not None
             and self.scheduled_end is not None
@@ -398,8 +404,27 @@ class WorkOrderAssignmentPreviewRequest(BaseModel):
         return self
 
 
+class WorkOrderAssignmentRequest(WorkOrderAssignmentPreviewRequest):
+    command_id: UUID
+    expected_revision: datetime
+    reason: str | None = Field(default=None, max_length=2000)
+    dispatch_rule_id: UUID | None = None
+
+
+class WorkOrderAssignmentOutcomeRead(BaseModel):
+    queue_id: UUID
+    work_order_id: str
+    technician_id: UUID | None = None
+    vendor_id: UUID | None = None
+    status: str
+    revision: datetime
+    replayed: bool
+
+
 class WorkOrderAssignmentPreviewState(BaseModel):
     status: str
+    vendor_id: UUID | None = None
+    vendor_name: str | None = None
     technician_id: UUID | None = None
     person_id: UUID | None = None
     technician_name: str | None = None
@@ -409,6 +434,7 @@ class WorkOrderAssignmentPreviewState(BaseModel):
 
 class WorkOrderAssignmentPreviewRead(BaseModel):
     work_order_id: str
+    revision: datetime
     previous: WorkOrderAssignmentPreviewState
     result: WorkOrderAssignmentPreviewState
 
@@ -424,6 +450,7 @@ class FiberFieldVerificationJobPlanRequest(BaseModel):
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
     assigned_technician_id: UUID | None = None
+    assigned_vendor_id: UUID | None = None
     assignment_reason: str | None = Field(default=None, max_length=2000)
     idempotency_key: str = Field(min_length=16, max_length=160)
 
@@ -447,6 +474,7 @@ class FiberFieldVerificationJobPlanExecuteRequest(FiberFieldVerificationJobPlanR
 class FiberFieldVerificationJobPlanCommandRead(BaseModel):
     address: str | None = None
     assigned_technician_id: UUID | None = None
+    assigned_vendor_id: UUID | None = None
     assignment_reason: str | None = None
     description: str | None = None
     idempotency_key: str

@@ -12,15 +12,29 @@ from __future__ import annotations
 import logging
 import math
 import uuid
-from typing import Any
+from dataclasses import dataclass
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.work_order import WorkOrder
-from app.services.field.jobs import _location, _profile_from_principal, _scoped_query
+from app.services.db_session_adapter import db_session_adapter
+from app.services.field.execution_contracts import (
+    ApplyFieldTransition,
+    FieldEvent,
+    FieldTransitionPayload,
+    FieldTransitionSource,
+)
+from app.services.field.jobs import _location
 from app.services.field.transitions import field_transitions
+from app.services.field.work_order_access import (
+    FieldAccessError,
+    FieldActorKind,
+    ResolveFieldActor,
+    resolve_field_actor,
+    scoped_work_orders,
+)
+from app.services.owner_commands import CommandContext
 
 logger = logging.getLogger(__name__)
 
@@ -62,56 +76,76 @@ def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return 2 * radius_m * math.asin(min(1.0, math.sqrt(a)))
 
 
-def evaluate(
-    db: Session,
-    principal: dict[str, Any],
-    latitude: float,
-    longitude: float,
-) -> list[dict[str, Any]]:
-    if not geofence_enabled(db):
-        return []
+@dataclass(frozen=True, slots=True)
+class GeofenceQuery:
+    system_user_id: uuid.UUID
+    latitude: float
+    longitude: float
 
-    profile = _profile_from_principal(db, principal)
+
+@dataclass(frozen=True, slots=True)
+class GeofenceTransition:
+    public_id: str
+    event: FieldEvent
+    distance_m: float
+
+
+def evaluate(db: Session, query: GeofenceQuery) -> tuple[GeofenceTransition, ...]:
+    if not geofence_enabled(db):
+        db_session_adapter.release_read_transaction(db)
+        return ()
+    actor = resolve_field_actor(db, ResolveFieldActor(query.system_user_id))
+    if actor.kind != FieldActorKind.technician:
+        db_session_adapter.release_read_transaction(db)
+        return ()
     radius = arrival_radius_m(db)
-    fired: list[dict[str, Any]] = []
-    for row in _arrivable_jobs(db, profile):
+    candidates: list[tuple[str, float]] = []
+    for row in (
+        scoped_work_orders(db, actor)
+        .filter(WorkOrder.status.in_(_ARRIVABLE_STATUSES))
+        .all()
+    ):
         location = _location(row)
         if location.latitude is None or location.longitude is None:
             continue
         distance = haversine_m(
-            latitude,
-            longitude,
-            float(location.latitude),
-            float(location.longitude),
+            query.latitude, query.longitude, location.latitude, location.longitude
         )
-        if distance > radius:
-            continue
-
-        client_event_id = uuid.uuid5(_GEOFENCE_NS, f"start:{row.public_id}")
+        if distance <= radius:
+            candidates.append((row.public_id, round(distance, 1)))
+    # The query's implicit transaction is read-only. Each selected transition
+    # then enters its own registered command owner and rechecks current scope.
+    db_session_adapter.release_read_transaction(db)
+    fired: list[GeofenceTransition] = []
+    for public_id, distance in candidates:
+        client_event_id = uuid.uuid5(_GEOFENCE_NS, f"start:{public_id}")
         try:
             result = field_transitions.apply(
                 db,
-                principal,
-                row.public_id,
-                event="start",
-                client_event_id=client_event_id,
-                latitude=latitude,
-                longitude=longitude,
-                note="Auto-started on geofence arrival",
-                payload={"source": "geofence", "distance_m": round(distance, 1)},
+                ApplyFieldTransition(
+                    context=CommandContext.system(
+                        actor=str(actor.system_user_id),
+                        scope="field",
+                        reason="Geofence arrival",
+                        idempotency_key=str(client_event_id),
+                    ),
+                    requester_system_user_id=actor.system_user_id,
+                    public_id=public_id,
+                    event=FieldEvent.start,
+                    client_event_id=client_event_id,
+                    latitude=query.latitude,
+                    longitude=query.longitude,
+                    note="Auto-started on geofence arrival",
+                    payload=FieldTransitionPayload(
+                        source=FieldTransitionSource.geofence, distance_m=distance
+                    ),
+                ),
             )
-        except HTTPException:
+        except FieldAccessError:
             continue
-
-        if not result.get("replayed"):
-            fired.append(
-                {
-                    "crm_work_order_id": row.public_id,
-                    "event": "start",
-                    "distance_m": round(distance, 1),
-                }
-            )
-    return fired
+        if not result.replayed:
+            fired.append(GeofenceTransition(public_id, FieldEvent.start, distance))
+    return tuple(fired)
 
 
 def _setting_row(db: Session, key: str) -> DomainSetting | None:
@@ -121,12 +155,4 @@ def _setting_row(db: Session, key: str) -> DomainSetting | None:
         .filter(DomainSetting.key == key)
         .filter(DomainSetting.is_active.is_(True))
         .first()
-    )
-
-
-def _arrivable_jobs(db: Session, profile) -> list[WorkOrder]:
-    return (
-        _scoped_query(db, profile)
-        .filter(WorkOrder.status.in_(_ARRIVABLE_STATUSES))
-        .all()
     )

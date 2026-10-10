@@ -1,7 +1,16 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -14,12 +23,24 @@ class FieldWorkOrderNote(Base):
 
     __tablename__ = "field_work_order_notes"
     __table_args__ = (
+        CheckConstraint(
+            "(author_vendor_user_id IS NULL AND author_technician_id IS NOT NULL AND author_person_id IS NOT NULL) OR (author_vendor_user_id IS NOT NULL AND author_technician_id IS NULL AND author_person_id IS NULL AND author_system_user_id IS NOT NULL)",
+            name="ck_field_work_order_notes_actor",
+        ),
         Index(
             "ix_field_work_order_notes_mirror_created",
             "work_order_mirror_id",
             "created_at",
         ),
         Index("ix_field_work_order_notes_author_technician", "author_technician_id"),
+        Index(
+            "uq_field_notes_vendor_client_ref",
+            "author_vendor_user_id",
+            "client_ref",
+            unique=True,
+            postgresql_where=text("client_ref IS NOT NULL"),
+            sqlite_where=text("client_ref IS NOT NULL"),
+        ),
         Index(
             "uq_field_work_order_notes_author_client_ref",
             "author_system_user_id",
@@ -38,11 +59,14 @@ class FieldWorkOrderNote(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    author_technician_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
+    author_vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("field_vendor_users.id")
     )
-    author_person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False
+    author_technician_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=True
+    )
+    author_person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
     )
     author_system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id")

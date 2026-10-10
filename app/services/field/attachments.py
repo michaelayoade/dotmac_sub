@@ -6,20 +6,38 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.field_attachment import FIELD_ATTACHMENT_KINDS, FieldAttachment
 from app.models.stored_file import StoredFile
 from app.models.work_order import WorkOrder
+from app.schemas.field import FieldAttachmentRead
 from app.services.domain_errors import DomainError
-from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.services.events.owner_outputs import OwnerOutputEnvelope, stage_owner_output
+from app.services.events.types import EventType
+from app.services.field.execution_contracts import (
+    CreateFieldAttachment,
+    DeleteFieldAttachment,
+    FieldAttachmentIdentity,
+    FieldAttachmentQuery,
+)
+from app.services.field.work_order_access import (
+    FieldAccessError,
+    FieldActor,
+    FieldWorkOrderScope,
+    ResolveFieldActor,
+    require_work_order,
+    resolve_field_actor,
+)
 from app.services.file_storage import FileValidationError, file_uploads
 from app.services.object_storage import ObjectNotFoundError, StreamResult
-from app.services.owner_commands import owner_command_active
+from app.services.owner_commands import (
+    OwnerCommandDefinition,
+    execute_owner_command,
+    owner_command_active,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,193 +297,358 @@ def serialize_attachment(attachment: FieldAttachment) -> dict:
 
 class FieldAttachments:
     @staticmethod
-    def create(
-        db: Session,
-        principal: dict[str, Any],
-        *,
-        kind: str,
-        file_name: str,
-        mime_type: str | None,
-        content: bytes,
-        client_ref: UUID | None = None,
-        crm_work_order_id: str | None = None,
-        note_id: UUID | None = None,
-        latitude: float | None = None,
-        longitude: float | None = None,
-        captured_at: datetime | None = None,
-        signer_name: str | None = None,
-        asset_type: str | None = None,
-        asset_id: UUID | None = None,
-    ) -> dict:
-        normalized_kind = kind.strip().lower()
-        if normalized_kind not in FIELD_ATTACHMENT_KINDS:
-            raise HTTPException(
-                status_code=422, detail=f"Unsupported attachment kind: {kind}"
-            )
-        if not content:
-            raise HTTPException(status_code=422, detail="Empty file")
-        if not crm_work_order_id and note_id is None:
-            raise HTTPException(
-                status_code=422, detail="Attachment must reference a job or note"
-            )
-        if (asset_type and asset_id is None) or (asset_id and not asset_type):
-            raise HTTPException(
-                status_code=422,
-                detail="asset_type and asset_id must be provided together",
-            )
+    def create(db: Session, command: CreateFieldAttachment) -> FieldAttachmentRead:
+        def operation() -> FieldAttachmentRead:
+            return _create_attachment(db, command)
 
-        profile = _profile_from_principal(db, principal)
-        row = _resolve_work_order(db, principal, crm_work_order_id, note_id)
-        if client_ref:
-            existing = (
-                db.query(FieldAttachment)
-                .filter(FieldAttachment.client_ref == client_ref)
-                .filter(FieldAttachment.uploaded_by_person_id == profile.person_id)
-                .one_or_none()
-            )
-            if existing is not None:
-                return serialize_attachment(existing)
-
-        try:
-            stored = file_uploads.upload(
-                db=db,
-                domain="attachments",
-                entity_type="field_attachment",
-                entity_id=row.public_id,
-                original_filename=file_name or "upload",
-                content_type=mime_type,
-                data=content,
-                uploaded_by=None,
-                owner_subscriber_id=None,
-            )
-        except FileValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-        attachment = FieldAttachment(
-            work_order_mirror_id=row.id,
-            note_id=note_id,
-            stored_file_id=stored.id,
-            kind=normalized_kind,
-            file_name=stored.original_filename,
-            mime_type=stored.content_type or mime_type or "application/octet-stream",
-            size_bytes=stored.file_size,
-            latitude=latitude,
-            longitude=longitude,
-            captured_at=captured_at,
-            signer_name=signer_name,
-            uploaded_by_technician_id=profile.id,
-            uploaded_by_person_id=profile.person_id,
-            uploaded_by_system_user_id=profile.system_user_id,
-            client_ref=client_ref,
-            asset_type=asset_type,
-            asset_id=asset_id,
+        return execute_owner_command(
+            db,
+            definition=OwnerCommandDefinition(
+                owner="operations.field_attachments",
+                concern="native field attachment creation",
+                name="create_field_attachment",
+            ),
+            context=command.context,
+            operation=operation,
         )
-        db.add(attachment)
-        db.commit()
-        db.refresh(attachment)
-        return serialize_attachment(attachment)
 
     @staticmethod
     def list(
-        db: Session,
-        principal: dict[str, Any],
-        *,
-        crm_work_order_id: str | None = None,
-        note_id: UUID | None = None,
-        kind: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[dict]:
-        row = _resolve_work_order(db, principal, crm_work_order_id, note_id)
-        query = (
-            db.query(FieldAttachment)
-            .filter(FieldAttachment.work_order_mirror_id == row.id)
-            .filter(FieldAttachment.is_active.is_(True))
+        db: Session, query: FieldAttachmentQuery
+    ) -> tuple[FieldAttachmentRead, ...]:
+        actor = resolve_field_actor(
+            db, ResolveFieldActor(query.requester_system_user_id)
         )
-        if note_id is not None:
-            query = query.filter(FieldAttachment.note_id == note_id)
-        if kind:
-            query = query.filter(FieldAttachment.kind == kind.strip().lower())
-        rows = (
-            query.order_by(FieldAttachment.created_at.desc())
-            .offset(offset)
-            .limit(limit)
+        row = _resolve_work_order(db, actor, query.public_id, query.note_id)
+        statement = db.query(FieldAttachment).filter(
+            FieldAttachment.work_order_mirror_id == row.id,
+            FieldAttachment.is_active.is_(True),
+        )
+        if query.note_id is not None:
+            statement = statement.filter(FieldAttachment.note_id == query.note_id)
+        if query.kind:
+            statement = statement.filter(
+                FieldAttachment.kind == query.kind.strip().lower()
+            )
+        return tuple(
+            FieldAttachmentRead.model_validate(serialize_attachment(item))
+            for item in statement.order_by(FieldAttachment.created_at.desc())
+            .offset(query.offset)
+            .limit(query.limit)
             .all()
         )
-        return [serialize_attachment(row) for row in rows]
 
     @staticmethod
-    def get(
-        db: Session,
-        principal: dict[str, Any],
-        attachment_id: str,
-    ) -> FieldAttachment:
-        attachment = db.get(FieldAttachment, attachment_id)
-        if attachment is None or not attachment.is_active:
-            raise HTTPException(status_code=404, detail="Attachment not found")
-        _resolve_work_order(
-            db,
-            principal,
-            None,
-            None,
-            work_order_mirror_id=attachment.work_order_mirror_id,
+    def get(db: Session, query: FieldAttachmentIdentity) -> FieldAttachmentRead:
+        return FieldAttachmentRead.model_validate(
+            serialize_attachment(_get_attachment(db, query))
         )
-        return attachment
 
     @staticmethod
     def get_content(
-        db: Session,
-        principal: dict[str, Any],
-        attachment_id: str,
-    ) -> tuple[FieldAttachment, StreamResult]:
-        attachment = FieldAttachments.get(db, principal, attachment_id)
-        stored_file = db.get(StoredFile, attachment.stored_file_id)
-        if stored_file is None or stored_file.is_deleted:
-            raise HTTPException(status_code=404, detail="Attachment content not found")
+        db: Session, query: FieldAttachmentIdentity
+    ) -> tuple[FieldAttachmentRead, StreamResult]:
+        attachment = _get_attachment(db, query)
+        stored = db.get(StoredFile, attachment.stored_file_id)
+        if stored is None or stored.is_deleted:
+            raise FieldAccessError(
+                code="operations.field_attachments.not_found",
+                message="Attachment content not found",
+                retryable=False,
+            )
         try:
-            return attachment, file_uploads.stream_file(stored_file)
+            return FieldAttachmentRead.model_validate(
+                serialize_attachment(attachment)
+            ), file_uploads.stream_file(stored)
         except ObjectNotFoundError as exc:
-            raise HTTPException(
-                status_code=404, detail="Attachment content not found"
+            raise FieldAccessError(
+                code="operations.field_attachments.not_found",
+                message="Attachment content not found",
+                retryable=False,
             ) from exc
 
     @staticmethod
-    def delete(db: Session, principal: dict[str, Any], attachment_id: str) -> None:
-        attachment = FieldAttachments.get(db, principal, attachment_id)
-        stored_file = db.get(StoredFile, attachment.stored_file_id)
-        attachment.is_active = False
-        if stored_file is not None and not stored_file.is_deleted:
-            file_uploads.soft_delete(db=db, file=stored_file, hard_delete_object=True)
-        db.commit()
+    def delete(
+        db: Session, command: DeleteFieldAttachment
+    ) -> FieldAttachmentDeletionOutcome:
+        def operation() -> FieldAttachmentDeletionOutcome:
+            from app.models.system_user import SystemUser
+
+            db.query(SystemUser).filter(
+                SystemUser.id == command.requester_system_user_id
+            ).with_for_update().one_or_none()
+            actor = resolve_field_actor(
+                db, ResolveFieldActor(command.requester_system_user_id)
+            )
+            attachment = db.get(FieldAttachment, command.attachment_id)
+            if attachment is None:
+                raise FieldAccessError(
+                    code="operations.field_attachments.not_found",
+                    message="Attachment not found",
+                    retryable=False,
+                )
+            _resolve_work_order(
+                db,
+                actor,
+                None,
+                None,
+                work_order_mirror_id=attachment.work_order_mirror_id,
+                lock=True,
+            )
+            if not attachment.is_active:
+                return FieldAttachmentDeletionOutcome(attachment.id, replayed=True)
+            attachment.is_active = False
+            stored = db.get(StoredFile, attachment.stored_file_id)
+            if stored is not None and not stored.is_deleted:
+                file_uploads.stage_soft_delete(db=db, file=stored)
+            db.flush()
+            stage_owner_output(
+                db,
+                OwnerOutputEnvelope(
+                    event_type=EventType.field_attachment_deleted,
+                    producer_owner="operations.field_attachments",
+                    source_kind="field_attachment",
+                    source_id=attachment.id,
+                ),
+                {
+                    "attachment_id": str(attachment.id),
+                    "work_order_id": str(attachment.work_order_mirror_id),
+                    "system_user_id": str(actor.system_user_id),
+                },
+                context=command.context,
+            )
+            return FieldAttachmentDeletionOutcome(attachment.id, replayed=False)
+
+        return execute_owner_command(
+            db,
+            definition=OwnerCommandDefinition(
+                owner="operations.field_attachments",
+                concern="native field attachment deletion",
+                name="delete_field_attachment",
+            ),
+            context=command.context,
+            operation=operation,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FieldAttachmentDeletionOutcome:
+    attachment_id: UUID
+    replayed: bool
+
+
+def _get_attachment(db: Session, query: FieldAttachmentIdentity) -> FieldAttachment:
+    attachment = db.get(FieldAttachment, query.attachment_id)
+    if attachment is None or not attachment.is_active:
+        raise FieldAccessError(
+            code="operations.field_attachments.not_found",
+            message="Attachment not found",
+            retryable=False,
+        )
+    actor = resolve_field_actor(db, ResolveFieldActor(query.requester_system_user_id))
+    _resolve_work_order(
+        db, actor, None, None, work_order_mirror_id=attachment.work_order_mirror_id
+    )
+    return attachment
+
+
+def _create_attachment(
+    db: Session, command: CreateFieldAttachment
+) -> FieldAttachmentRead:
+    from app.models.system_user import SystemUser
+
+    db.query(SystemUser).filter(
+        SystemUser.id == command.requester_system_user_id
+    ).with_for_update().one_or_none()
+    kind, file_name, mime_type, content = (
+        command.kind,
+        command.file_name,
+        command.mime_type,
+        command.content,
+    )
+    client_ref, crm_work_order_id, note_id = (
+        command.client_ref,
+        command.public_id,
+        command.note_id,
+    )
+    latitude, longitude, captured_at, signer_name = (
+        command.latitude,
+        command.longitude,
+        command.captured_at,
+        command.signer_name,
+    )
+    asset_type, asset_id = command.asset_type, command.asset_id
+    normalized_kind = kind.strip().lower()
+    if normalized_kind not in FIELD_ATTACHMENT_KINDS:
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message=f"Unsupported attachment kind: {kind}",
+        )
+    if not content:
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message="Empty file",
+        )
+    if not crm_work_order_id and note_id is None:
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message="Attachment must reference a job or note",
+        )
+    if (asset_type and asset_id is None) or (asset_id and not asset_type):
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message="asset_type and asset_id must be provided together",
+        )
+
+    profile = resolve_field_actor(
+        db, ResolveFieldActor(command.requester_system_user_id)
+    )
+    row = _resolve_work_order(db, profile, crm_work_order_id, note_id, lock=True)
+    if client_ref:
+        existing = (
+            db.query(FieldAttachment)
+            .filter(FieldAttachment.client_ref == client_ref)
+            .one_or_none()
+        )
+        if existing is not None:
+            stored = db.get(StoredFile, existing.stored_file_id)
+            safe_name, final_mime = file_uploads.validate(
+                config=file_uploads.get_domain_config("attachments"),
+                filename=file_name or "upload",
+                content_type=mime_type,
+                data=content,
+            )
+            if (
+                existing.work_order_mirror_id != row.id
+                or existing.uploaded_by_system_user_id != profile.system_user_id
+                or existing.uploaded_by_vendor_user_id != profile.vendor_user_id
+                or not existing.is_active
+                or stored is None
+                or stored.checksum != hashlib.sha256(content).hexdigest()
+                or existing.kind != normalized_kind
+                or existing.note_id != note_id
+                or existing.file_name != safe_name
+                or existing.mime_type != final_mime
+                or existing.latitude != latitude
+                or existing.longitude != longitude
+                or existing.signer_name != signer_name
+                or existing.asset_type != asset_type
+                or existing.asset_id != asset_id
+                or (
+                    existing.captured_at.replace(tzinfo=UTC)
+                    if existing.captured_at and existing.captured_at.tzinfo is None
+                    else existing.captured_at
+                )
+                != (
+                    captured_at.replace(tzinfo=UTC)
+                    if captured_at and captured_at.tzinfo is None
+                    else captured_at
+                )
+            ):
+                raise FieldAccessError(
+                    code="operations.field_attachments.idempotency_conflict",
+                    message="Attachment identity was reused with different details",
+                    retryable=False,
+                )
+            return FieldAttachmentRead.model_validate(serialize_attachment(existing))
+
+    try:
+        stored = file_uploads.stage_upload(
+            db=db,
+            domain="attachments",
+            entity_type="field_attachment",
+            entity_id=row.public_id,
+            original_filename=file_name or "upload",
+            content_type=mime_type,
+            data=content,
+            uploaded_by=None,
+            owner_subscriber_id=None,
+        )
+    except FileValidationError as exc:
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request", message=str(exc)
+        ) from exc
+
+    attachment = FieldAttachment(
+        work_order_mirror_id=row.id,
+        note_id=note_id,
+        stored_file_id=stored.id,
+        kind=normalized_kind,
+        file_name=stored.original_filename,
+        mime_type=stored.content_type or mime_type or "application/octet-stream",
+        size_bytes=stored.file_size,
+        latitude=latitude,
+        longitude=longitude,
+        captured_at=captured_at,
+        signer_name=signer_name,
+        uploaded_by_technician_id=profile.technician_id,
+        uploaded_by_vendor_user_id=profile.vendor_user_id,
+        uploaded_by_person_id=profile.person_id,
+        uploaded_by_system_user_id=profile.system_user_id,
+        client_ref=client_ref,
+        asset_type=asset_type,
+        asset_id=asset_id,
+    )
+    db.add(attachment)
+    db.flush()
+    stage_owner_output(
+        db,
+        OwnerOutputEnvelope(
+            event_type=EventType.field_attachment_created,
+            producer_owner="operations.field_attachments",
+            source_kind="field_attachment",
+            source_id=attachment.id,
+        ),
+        {
+            "attachment_id": str(attachment.id),
+            "work_order_id": str(row.id),
+            "work_order_public_id": row.public_id,
+            "system_user_id": str(profile.system_user_id),
+            "kind": attachment.kind,
+        },
+        context=command.context,
+    )
+    return FieldAttachmentRead.model_validate(serialize_attachment(attachment))
 
 
 def _resolve_work_order(
     db: Session,
-    principal: dict[str, Any],
+    profile: FieldActor,
     crm_work_order_id: str | None,
     note_id: UUID | None,
     work_order_mirror_id: UUID | None = None,
+    *,
+    lock: bool = False,
 ) -> WorkOrder:
     from app.models.field_note import FieldWorkOrderNote
 
-    profile = _profile_from_principal(db, principal)
-    query = _scoped_query(db, profile)
+    query = db.query(WorkOrder)
     if work_order_mirror_id is not None:
         query = query.filter(WorkOrder.id == work_order_mirror_id)
     elif note_id is not None:
         note = db.get(FieldWorkOrderNote, note_id)
         if note is None:
-            raise HTTPException(status_code=404, detail="Note not found")
+            raise FieldAccessError(
+                code="operations.field_work_order_access.not_found",
+                message="Note not found",
+            )
         query = query.filter(WorkOrder.id == note.work_order_mirror_id)
     elif crm_work_order_id:
         query = query.filter(WorkOrder.public_id == crm_work_order_id)
     else:
-        raise HTTPException(status_code=422, detail="crm_work_order_id is required")
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message="crm_work_order_id is required",
+        )
 
     row = query.one_or_none()
     if row is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return row
+        raise FieldAccessError(
+            code="operations.field_work_order_access.not_found", message="Job not found"
+        )
+    return require_work_order(
+        db, FieldWorkOrderScope(profile, row.public_id, lock=lock)
+    )
 
 
 def parse_captured_at(value: str | None) -> datetime | None:
@@ -474,8 +657,9 @@ def parse_captured_at(value: str | None) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=422, detail="Invalid captured_at timestamp"
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message="Invalid captured_at timestamp",
         ) from exc
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 

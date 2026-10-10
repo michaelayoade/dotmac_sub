@@ -26,6 +26,10 @@ class FieldJobEvent(Base):
 
     __tablename__ = "field_job_events"
     __table_args__ = (
+        CheckConstraint(
+            "(author_vendor_user_id IS NULL AND author_technician_id IS NOT NULL AND person_id IS NOT NULL) OR (author_vendor_user_id IS NOT NULL AND author_technician_id IS NULL AND person_id IS NULL AND system_user_id IS NOT NULL)",
+            name="ck_field_job_events_actor",
+        ),
         Index(
             "ix_field_job_events_mirror_occurred", "work_order_mirror_id", "occurred_at"
         ),
@@ -48,10 +52,15 @@ class FieldJobEvent(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    author_technician_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
+    author_vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("field_vendor_users.id")
     )
-    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    author_technician_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=True
+    )
+    person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id")
     )

@@ -43,9 +43,18 @@ class ProfileScreen extends ConsumerWidget {
     final vendorMe = auth is Authenticated && auth.mode == LoginMode.vendor
         ? ref.watch(vendorProfileProvider)
         : null;
-    final pending = ref.watch(pendingOutboxProvider).value ?? [];
-    final conflicts = ref.watch(conflictOutboxProvider).value ?? [];
-    final pendingPhotos = ref.watch(pendingPhotosProvider).value ?? 0;
+    final pendingState = ref.watch(pendingOutboxProvider);
+    final conflictState = ref.watch(conflictOutboxProvider);
+    final photosState = ref.watch(pendingPhotosProvider);
+    final queueUnavailable =
+        pendingState.hasError || conflictState.hasError || photosState.hasError;
+    final queuesReady =
+        pendingState.asData != null &&
+        conflictState.asData != null &&
+        photosState.asData != null;
+    final pending = pendingState.asData?.value;
+    final conflicts = conflictState.asData?.value;
+    final pendingPhotos = photosState.asData?.value;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Profile')),
@@ -60,18 +69,39 @@ class ProfileScreen extends ConsumerWidget {
                     child: Text(data.name.isEmpty ? '?' : data.name[0]),
                   ),
                   title: Text(data.name),
-                  subtitle: Text(
-                    [
-                      data.vendorName,
-                      if (data.vendorRole != null &&
-                          data.vendorRole!.isNotEmpty)
+                  subtitle:
+                      [
+                        data.email,
+                        data.vendorName,
                         data.vendorRole,
-                    ].join(' · '),
+                      ].whereType<String>().any((value) => value.isNotEmpty)
+                      ? Text(
+                          [data.email, data.vendorName, data.vendorRole]
+                              .whereType<String>()
+                              .where((value) => value.isNotEmpty)
+                              .join(' · '),
+                        )
+                      : null,
+                ),
+              ),
+              loading: () => const Card(
+                child: ListTile(
+                  leading: CircularProgressIndicator(),
+                  title: Text('Loading profile…'),
+                ),
+              ),
+              error: (_, _) => Card(
+                child: ListTile(
+                  leading: const Icon(Icons.error_outline),
+                  title: const Text('Could not load your profile'),
+                  subtitle: const Text('Check your connection and try again.'),
+                  trailing: TextButton(
+                    key: const Key('retry-vendor-profile'),
+                    onPressed: () => ref.invalidate(vendorProfileProvider),
+                    child: const Text('Retry'),
                   ),
                 ),
               ),
-              loading: () => const SizedBox(height: 72),
-              error: (_, _) => const SizedBox.shrink(),
             )
           else if (me != null)
             me.when(
@@ -98,11 +128,29 @@ class ProfileScreen extends ConsumerWidget {
                 children: [
                   Text('Sync', style: Theme.of(context).textTheme.titleSmall),
                   const SizedBox(height: 8),
-                  Text(
-                    '${pending.length} queued actions · $pendingPhotos queued photos',
-                    key: const Key('sync-counts'),
-                  ),
-                  if (conflicts.isNotEmpty)
+                  if (queueUnavailable) ...[
+                    const Text('Sync status unavailable'),
+                    const Text('Could not read the local queues. Try again.'),
+                    TextButton(
+                      key: const Key('retry-sync-status'),
+                      onPressed: () {
+                        ref.invalidate(pendingOutboxProvider);
+                        ref.invalidate(conflictOutboxProvider);
+                        ref.invalidate(pendingPhotosProvider);
+                      },
+                      child: const Text('Retry'),
+                    ),
+                  ] else if (!queuesReady)
+                    const Text('Loading sync status…')
+                  else
+                    Text(
+                      '${pending!.length} queued actions · $pendingPhotos queued photos',
+                      key: const Key('sync-counts'),
+                    ),
+                  if (!queueUnavailable &&
+                      queuesReady &&
+                      conflicts != null &&
+                      conflicts.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(
@@ -113,21 +161,26 @@ class ProfileScreen extends ConsumerWidget {
                         ),
                       ),
                     ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    key: const Key('sync-now'),
-                    icon: const Icon(Icons.sync),
-                    label: const Text('Sync now'),
-                    onPressed: () async {
-                      final sync = ref.read(syncServiceProvider);
-                      await sync.flushAll();
-                    },
-                  ),
+                  if (!queueUnavailable && queuesReady) ...[
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      key: const Key('sync-now'),
+                      icon: const Icon(Icons.sync),
+                      label: const Text('Sync now'),
+                      onPressed: () async {
+                        final sync = ref.read(syncServiceProvider);
+                        await sync.flushAll();
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
-          if (conflicts.isNotEmpty) ...[
+          if (!queueUnavailable &&
+              queuesReady &&
+              conflicts != null &&
+              conflicts.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(
               'Needs review',

@@ -16,6 +16,7 @@ from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.equipment import field_equipment
+from app.services.field.execution_contracts import FieldJobQuery
 from app.services.field.jobs import field_jobs
 
 
@@ -124,7 +125,12 @@ def test_record_equipment_links_ont_subscription_pon_and_job(
     assert assignment.pon_port_id == pon.id
     assert assignment.active is True
     assert assignment.notes == "Installed in sitting room"
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-equip-link")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-equip-link"
+        ),
+    )
     assert detail.equipment is not None
     assert detail.equipment.serial_number == "ZTE123"
 

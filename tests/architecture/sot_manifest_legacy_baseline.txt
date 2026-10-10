@@ -114,10 +114,8 @@ observability.channel_health_contracts
 observability.metrics
 observability.recording
 observability.task_reliability
-operations.field_completion
 operations.provisioning_context
 operations.provisioning_workflow
-operations.work_order_commands
 operations.work_order_status
 operations.work_orders
 party.contact_inbox_audit

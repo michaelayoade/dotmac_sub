@@ -7,16 +7,86 @@ import '../auth/auth_state.dart';
 import '../execution/execution_controller.dart';
 import 'job_models.dart';
 
+enum FieldCapability {
+  attendance,
+  locationTracking,
+  fiberEvidence,
+  chat,
+  materials,
+  expenses,
+  equipment,
+}
+
+class FieldCapabilityAvailability {
+  const FieldCapabilityAvailability({this.available = false, this.reason});
+  final bool available;
+  final String? reason;
+  factory FieldCapabilityAvailability.fromJson(Object? raw) {
+    if (raw is! Map) return const FieldCapabilityAvailability();
+    return FieldCapabilityAvailability(
+      available: raw['available'] == true,
+      reason: raw['reason'] is String ? raw['reason'] as String : null,
+    );
+  }
+}
+
+class FieldExecutionCapabilities {
+  const FieldExecutionCapabilities({
+    this.attendance = const FieldCapabilityAvailability(),
+    this.locationTracking = const FieldCapabilityAvailability(),
+    this.fiberEvidence = const FieldCapabilityAvailability(),
+    this.chat = const FieldCapabilityAvailability(),
+    this.materials = const FieldCapabilityAvailability(),
+    this.expenses = const FieldCapabilityAvailability(),
+    this.equipment = const FieldCapabilityAvailability(),
+  });
+  final FieldCapabilityAvailability attendance;
+  final FieldCapabilityAvailability locationTracking;
+  final FieldCapabilityAvailability fiberEvidence;
+  final FieldCapabilityAvailability chat;
+  final FieldCapabilityAvailability materials;
+  final FieldCapabilityAvailability expenses;
+  final FieldCapabilityAvailability equipment;
+  factory FieldExecutionCapabilities.fromJson(Object? raw) {
+    final data = raw is Map ? raw : const <String, Object?>{};
+    return FieldExecutionCapabilities(
+      attendance: FieldCapabilityAvailability.fromJson(data['attendance']),
+      locationTracking: FieldCapabilityAvailability.fromJson(
+        data['location_tracking'],
+      ),
+      fiberEvidence: FieldCapabilityAvailability.fromJson(
+        data['fiber_evidence'],
+      ),
+      chat: FieldCapabilityAvailability.fromJson(data['chat']),
+      materials: FieldCapabilityAvailability.fromJson(data['materials']),
+      expenses: FieldCapabilityAvailability.fromJson(data['expenses']),
+      equipment: FieldCapabilityAvailability.fromJson(data['equipment']),
+    );
+  }
+  FieldCapabilityAvailability forCapability(FieldCapability capability) =>
+      switch (capability) {
+        FieldCapability.attendance => attendance,
+        FieldCapability.locationTracking => locationTracking,
+        FieldCapability.fiberEvidence => fiberEvidence,
+        FieldCapability.chat => chat,
+        FieldCapability.materials => materials,
+        FieldCapability.expenses => expenses,
+        FieldCapability.equipment => equipment,
+      };
+}
+
 class MeSummary {
   const MeSummary({
     required this.name,
     required this.openJobs,
     required this.completedToday,
+    this.capabilities = const FieldExecutionCapabilities(),
   });
 
   final String name;
   final int openJobs;
   final int completedToday;
+  final FieldExecutionCapabilities capabilities;
 }
 
 /// A job list plus whether it came from the offline cache (drives the banner).
@@ -36,6 +106,18 @@ JobSummary _summaryFromCache(CachedJob row) => JobSummary(
   scheduledStart: row.scheduledStart,
 );
 
+bool _allowsOfflineJobFallback(DioException error) {
+  final status = error.response?.statusCode;
+  if (status != null) return status >= 500 && status < 600;
+  return switch (error.type) {
+    DioExceptionType.connectionTimeout ||
+    DioExceptionType.sendTimeout ||
+    DioExceptionType.receiveTimeout ||
+    DioExceptionType.connectionError => true,
+    _ => false,
+  };
+}
+
 class JobsRepository {
   JobsRepository(this._read);
 
@@ -51,6 +133,7 @@ class JobsRepository {
       name: data['name'] as String? ?? '',
       openJobs: data['open_jobs'] as int? ?? 0,
       completedToday: data['completed_today'] as int? ?? 0,
+      capabilities: FieldExecutionCapabilities.fromJson(data['capabilities']),
     );
   }
 
@@ -80,7 +163,8 @@ class JobsRepository {
             .map((item) => JobSummary.fromJson(item.cast<String, dynamic>()))
             .toList(),
       );
-    } on DioException {
+    } on DioException catch (error) {
+      if (!_allowsOfflineJobFallback(error)) rethrow;
       // Offline / server unreachable: serve the cache so the tech still works.
       final cached = await sync.readCachedJobs(status: status);
       if (cached.isEmpty) rethrow;
@@ -101,7 +185,8 @@ class JobsRepository {
         JobDetail.fromJson(data),
         await sync.offlineNotesForJob(jobId),
       );
-    } on DioException {
+    } on DioException catch (error) {
+      if (!_allowsOfflineJobFallback(error)) rethrow;
       final cached = await sync.readCachedDetail(jobId);
       if (cached == null) rethrow;
       return _withOfflineNotes(
@@ -195,8 +280,20 @@ class JobsRepository {
 final jobsRepositoryProvider = Provider<JobsRepository>(JobsRepository.new);
 
 final meProvider = FutureProvider<MeSummary>((ref) {
-  ref.watch(authControllerProvider);
+  final auth = ref.watch(authControllerProvider);
+  if (auth is! Authenticated) throw StateError("Field session is unavailable");
   return ref.watch(jobsRepositoryProvider).fetchMe();
+});
+
+// Loading, failed, and missing capability evidence all fail closed. Previous
+// data retained by AsyncValue must not authorize an unsupported request.
+final fieldCapabilitiesProvider = Provider<FieldExecutionCapabilities>((ref) {
+  final evidence = ref.watch(meProvider);
+  if (evidence.isLoading || evidence.hasError) {
+    return const FieldExecutionCapabilities();
+  }
+  return evidence.asData?.value.capabilities ??
+      const FieldExecutionCapabilities();
 });
 
 final jobsFilterProvider = StateProvider<String?>((ref) => null);
@@ -241,9 +338,15 @@ final jobDestinationsProvider =
           ref.watch(jobsRepositoryProvider).fetchDestinations(jobId),
     );
 
-final jobChatProvider = FutureProvider.family<JobChatThread, String>(
-  (ref, jobId) => ref.watch(jobsRepositoryProvider).fetchChat(jobId),
-);
+final jobChatProvider = FutureProvider.family<JobChatThread, String>((
+  ref,
+  jobId,
+) async {
+  if (!ref.watch(fieldCapabilitiesProvider).chat.available) {
+    throw StateError('Customer chat is unavailable for this account.');
+  }
+  return ref.watch(jobsRepositoryProvider).fetchChat(jobId);
+});
 
 bool _isSameLocalDay(DateTime? value, DateTime day) {
   if (value == null) return false;

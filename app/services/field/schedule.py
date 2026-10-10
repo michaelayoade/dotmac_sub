@@ -8,14 +8,20 @@ authored in sub.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.dispatch import AvailabilityBlock, Shift
 from app.models.work_order import WorkOrder
-from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.schemas.field import FieldScheduleEntry
+from app.services.field.execution_contracts import FieldJobsQuery
+from app.services.field.work_order_access import (
+    FieldAccessError,
+    FieldActorKind,
+    ResolveFieldActor,
+    resolve_field_actor,
+    scoped_work_orders,
+)
 
 _DEFAULT_WINDOW_DAYS = 7
 _MAX_WINDOW_DAYS = 31
@@ -37,7 +43,10 @@ def _window(
     )
     end = _as_utc(date_to) if date_to else start + timedelta(days=_DEFAULT_WINDOW_DAYS)
     if end <= start:
-        raise HTTPException(status_code=422, detail="'to' must be after 'from'")
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message="'to' must be after 'from'",
+        )
     if (end - start) > timedelta(days=_MAX_WINDOW_DAYS):
         end = start + timedelta(days=_MAX_WINDOW_DAYS)
     return start, end
@@ -45,24 +54,24 @@ def _window(
 
 class FieldSchedule:
     @staticmethod
-    def timeline(
-        db: Session,
-        principal: dict[str, Any],
-        *,
-        date_from: datetime | None = None,
-        date_to: datetime | None = None,
-    ) -> list[dict]:
-        profile = _profile_from_principal(db, principal)
-        start, end = _window(date_from, date_to)
+    def timeline(db: Session, query: FieldJobsQuery) -> list[FieldScheduleEntry]:
+        profile = resolve_field_actor(
+            db, ResolveFieldActor(query.requester_system_user_id)
+        )
+        start, end = _window(query.date_from, query.date_to)
         entries: list[dict] = []
 
         shifts = (
-            db.query(Shift)
-            .filter(Shift.technician_id == profile.id)
-            .filter(Shift.is_active.is_(True))
-            .filter(Shift.end_at >= start)
-            .filter(Shift.start_at <= end)
-            .all()
+            (
+                db.query(Shift)
+                .filter(Shift.technician_id == profile.technician_id)
+                .filter(Shift.is_active.is_(True))
+                .filter(Shift.end_at >= start)
+                .filter(Shift.start_at <= end)
+                .all()
+            )
+            if profile.kind == FieldActorKind.technician
+            else []
         )
         entries.extend(
             {
@@ -76,12 +85,16 @@ class FieldSchedule:
         )
 
         blocks = (
-            db.query(AvailabilityBlock)
-            .filter(AvailabilityBlock.technician_id == profile.id)
-            .filter(AvailabilityBlock.is_active.is_(True))
-            .filter(AvailabilityBlock.end_at >= start)
-            .filter(AvailabilityBlock.start_at <= end)
-            .all()
+            (
+                db.query(AvailabilityBlock)
+                .filter(AvailabilityBlock.technician_id == profile.technician_id)
+                .filter(AvailabilityBlock.is_active.is_(True))
+                .filter(AvailabilityBlock.end_at >= start)
+                .filter(AvailabilityBlock.start_at <= end)
+                .all()
+            )
+            if profile.kind == FieldActorKind.technician
+            else []
         )
         entries.extend(
             {
@@ -95,7 +108,7 @@ class FieldSchedule:
         )
 
         jobs = (
-            _scoped_query(db, profile)
+            scoped_work_orders(db, profile)
             .filter(WorkOrder.scheduled_start.isnot(None))
             .filter(WorkOrder.scheduled_start >= start)
             .filter(WorkOrder.scheduled_start <= end)
@@ -110,10 +123,11 @@ class FieldSchedule:
                 "reference_id": row.public_id,
             }
             for row in jobs
+            if row.scheduled_start is not None
         )
 
         entries.sort(key=lambda item: item["start_at"])
-        return entries
+        return [FieldScheduleEntry.model_validate(item) for item in entries]
 
 
 field_schedule = FieldSchedule()

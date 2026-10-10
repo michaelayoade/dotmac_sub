@@ -484,15 +484,22 @@ class FieldLocationTracking:
 
                 transitions = [
                     LocationTransition(
-                        crm_work_order_id=item["crm_work_order_id"],
-                        event=item["event"],
-                        distance_m=item["distance_m"],
+                        crm_work_order_id=item.public_id,
+                        event=item.event.value,
+                        distance_m=item.distance_m,
                     )
                     for item in geofence.evaluate(
                         db,
-                        principal,
-                        presence.last_latitude,
-                        presence.last_longitude,
+                        geofence.GeofenceQuery(
+                            system_user_id=UUID(
+                                str(
+                                    principal.get("principal_id")
+                                    or principal.get("person_id")
+                                )
+                            ),
+                            latitude=presence.last_latitude,
+                            longitude=presence.last_longitude,
+                        ),
                     )
                 ]
             except Exception:

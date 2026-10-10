@@ -12,6 +12,8 @@ from app.models.system_user import SystemUser
 from app.schemas.dispatch import TechnicianProfileCreate
 from app.services import dispatch
 from app.services import web_dispatch_work_orders as web_dispatch
+from app.services.owner_commands import CommandContext
+from app.services.work_order_assignment_contracts import WorkOrderAssignmentCommand
 
 
 def test_work_order_list_query_defaults_come_from_the_owner():
@@ -372,18 +374,26 @@ def test_update_and_queue_from_form(db_session):
     )
     assert updated.requires_as_built_evidence is False
 
+    selection = web_dispatch.WorkOrderAssignmentFormInput(
+        target_selection=f"technician:{tech.id}", reason="Morning route"
+    )
+    preview = web_dispatch.preview_assignment_from_form(
+        db_session, work_order_id="sub-web-wo-2", selection=selection
+    )
     queued = web_dispatch.queue_assignment_from_form(
         db_session,
-        "sub-web-wo-2",
-        {
-            "assigned_technician_id": str(tech.id),
-            "status": "assigned",
-            "reason": "Morning route",
-        },
+        command=WorkOrderAssignmentCommand(
+            work_order_public_id="sub-web-wo-2",
+            target=selection.assignment_target,
+            reason=selection.reason,
+            expected_revision=preview.revision,
+        ),
+        context=CommandContext.system(
+            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+        ),
     )
-
-    assert queued.crm_work_order_id == "sub-web-wo-2"
-    assert queued.status == "assigned"
+    assert queued.work_order_id == "sub-web-wo-2"
+    assert queued.status == "dispatched"
     db_session.refresh(updated)
     assert updated.status == "dispatched"
     assert updated.assigned_to_name == "Ade Tech"
@@ -436,22 +446,6 @@ def test_detail_page_rejects_unknown_public_id(db_session):
     assert exc.value.status_code == 404
 
 
-def test_queue_assignment_requires_technician(db_session):
-    sub = _subscriber(db_session)
-    web_dispatch.create_from_form(
-        db_session,
-        {
-            "public_id": "sub-web-wo-3",
-            "subscriber_id": str(sub.id),
-            "title": "Install",
-            "status": "scheduled",
-        },
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        web_dispatch.queue_assignment_from_form(
-            db_session,
-            "sub-web-wo-3",
-            {"assigned_technician_id": "", "status": "assigned"},
-        )
-    assert exc.value.status_code == 422
+def test_queue_assignment_requires_typed_target():
+    with pytest.raises(ValueError, match="Select a technician or vendor"):
+        web_dispatch.WorkOrderAssignmentFormInput(target_selection="invalid")

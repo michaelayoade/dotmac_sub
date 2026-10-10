@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.field_note import FieldWorkOrderNote
-from app.models.work_order import WorkOrder
-from app.services.field.jobs import (
-    _profile_from_principal,
-    _scoped_query,
+from app.schemas.field import FieldNoteRead
+from app.services.field.execution_contracts import FieldJobQuery
+from app.services.field.work_order_access import (
+    FieldWorkOrderScope,
+    ResolveFieldActor,
+    require_work_order,
+    resolve_field_actor,
 )
 
 
@@ -35,35 +35,18 @@ def _serialize(note: FieldWorkOrderNote) -> dict:
 
 class FieldNotes:
     @staticmethod
-    def list_for_job(
-        db: Session,
-        principal: dict[str, Any],
-        crm_work_order_id: str,
-    ) -> list[dict]:
-        row = _scoped_work_order(db, principal, crm_work_order_id)
+    def list_for_job(db: Session, query: FieldJobQuery) -> tuple[FieldNoteRead, ...]:
+        actor = resolve_field_actor(
+            db, ResolveFieldActor(query.requester_system_user_id)
+        )
+        row = require_work_order(db, FieldWorkOrderScope(actor, query.public_id))
         notes = (
             db.query(FieldWorkOrderNote)
             .filter(FieldWorkOrderNote.work_order_mirror_id == row.id)
             .order_by(FieldWorkOrderNote.created_at.asc())
             .all()
         )
-        return [_serialize(note) for note in notes]
-
-
-def _scoped_work_order(
-    db: Session,
-    principal: dict[str, Any],
-    crm_work_order_id: str,
-) -> WorkOrder:
-    profile = _profile_from_principal(db, principal)
-    row = (
-        _scoped_query(db, profile)
-        .filter(WorkOrder.public_id == crm_work_order_id)
-        .one_or_none()
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return row
+        return tuple(FieldNoteRead.model_validate(_serialize(note)) for note in notes)
 
 
 field_notes = FieldNotes()

@@ -72,6 +72,7 @@ def _rendered_token() -> str:
         "/admin/dispatch/work-orders",
         "/admin/dispatch/work-orders/sub-csrf-test",
         "/admin/dispatch/work-orders/sub-csrf-test/queue",
+        "/admin/dispatch/work-orders/sub-csrf-test/assignment",
         "/admin/dispatch/work-orders/sub-csrf-test/expenses",
     ],
 )
@@ -85,6 +86,7 @@ def test_dispatch_form_post_without_token_is_rejected(path):
         "/admin/dispatch/work-orders",
         "/admin/dispatch/work-orders/sub-csrf-test",
         "/admin/dispatch/work-orders/sub-csrf-test/queue",
+        "/admin/dispatch/work-orders/sub-csrf-test/assignment",
         "/admin/dispatch/work-orders/sub-csrf-test/expenses",
     ],
 )
@@ -96,8 +98,15 @@ def test_dispatch_form_post_with_rendered_token_is_accepted(path):
 def test_create_update_and_queue_forms_enclose_the_csrf_component():
     list_source = (TEMPLATES / "admin/dispatch/work_orders.html").read_text()
     detail_source = (TEMPLATES / "admin/dispatch/work_order_detail.html").read_text()
+    preview_source = (
+        TEMPLATES / "admin/dispatch/work_order_assignment_preview.html"
+    ).read_text()
 
     for source, action_fragment in (
+        (
+            preview_source,
+            'action="/admin/dispatch/work-orders/{{ preview.work_order_id }}/assignment"',
+        ),
         (list_source, 'action="/admin/dispatch/work-orders"'),
         (
             detail_source,

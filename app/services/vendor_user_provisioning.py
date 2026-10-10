@@ -314,23 +314,47 @@ def _active_local_credential(
     )
 
 
-def _require_editable_membership(
+def _lock_membership_principal(
     db: Session, membership_id: UUID
-) -> tuple[FieldVendorUser, SystemUser, UserCredential]:
+) -> tuple[FieldVendorUser, SystemUser | None]:
+    """Use the execution owner's User-before-membership identity lock order."""
+    identity = db.scalar(
+        select(FieldVendorUser.system_user_id).where(
+            FieldVendorUser.id == membership_id
+        )
+    )
+    if identity is None:
+        raise VendorUserProvisioningError(
+            "membership_not_found", "Vendor user not found.", kind="not_found"
+        )
+    principal = db.scalar(
+        select(SystemUser)
+        .where(SystemUser.id == identity)
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
     membership = db.scalar(
         select(FieldVendorUser)
-        .where(FieldVendorUser.id == coerce_uuid(membership_id))
+        .where(FieldVendorUser.id == membership_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if membership is None:
         raise VendorUserProvisioningError(
             "membership_not_found", "Vendor user not found.", kind="not_found"
         )
-    principal = db.scalar(
-        select(SystemUser)
-        .where(SystemUser.id == membership.system_user_id)
-        .with_for_update()
-    )
+    if membership.system_user_id != identity:
+        raise VendorUserProvisioningError(
+            "membership_identity_changed",
+            "Vendor user identity changed; reload before retrying.",
+        )
+    return membership, principal
+
+
+def _require_editable_membership(
+    db: Session, membership_id: UUID
+) -> tuple[FieldVendorUser, SystemUser, UserCredential]:
+    membership, principal = _lock_membership_principal(db, membership_id)
     if principal is None or principal.user_type != UserType.vendor:
         raise VendorUserProvisioningError(
             "principal_not_vendor", "Vendor user principal is not available."
@@ -514,7 +538,7 @@ def import_vendor_contact_login(
 
         field_vendor = db.scalar(
             select(FieldVendor)
-            .where(FieldVendor.crm_vendor_id == str(vendor.id))
+            .where(FieldVendor.native_vendor_id == vendor.id)
             .with_for_update()
         )
         if field_vendor is None:
@@ -540,6 +564,7 @@ def import_vendor_contact_login(
                     "staff must review it before importing this contact.",
                 )
             field_vendor = FieldVendor(
+                native_vendor_id=vendor.id,
                 crm_vendor_id=str(vendor.id),
                 name=vendor.name,
                 code=vendor.code,
@@ -719,11 +744,7 @@ def enable_login(
     actor: str = _SYSTEM_ACTOR,
     context: CommandContext | None = None,
 ) -> VendorUserLoginEnablement:
-    membership = db.get(FieldVendorUser, coerce_uuid(command.membership_id))
-    if membership is None:
-        raise VendorUserProvisioningError(
-            "membership_not_found", "Vendor user not found.", kind="not_found"
-        )
+    membership, principal = _lock_membership_principal(db, command.membership_id)
     if not membership.is_active:
         raise VendorUserProvisioningError(
             "membership_inactive", "Vendor user access is revoked."
@@ -733,7 +754,6 @@ def enable_login(
         raise VendorUserProvisioningError(
             "vendor_inactive", "Cannot enable login for an inactive vendor."
         )
-    principal = db.get(SystemUser, membership.system_user_id)
     if principal is None or principal.user_type != UserType.vendor:
         raise VendorUserProvisioningError(
             "principal_not_vendor", "Vendor user principal is not available."
@@ -806,11 +826,7 @@ def set_role(
     *,
     actor: str = _SYSTEM_ACTOR,
 ) -> FieldVendorUser:
-    membership = db.get(FieldVendorUser, coerce_uuid(membership_id))
-    if membership is None:
-        raise VendorUserProvisioningError(
-            "membership_not_found", "Vendor user not found.", kind="not_found"
-        )
+    membership, principal = _lock_membership_principal(db, coerce_uuid(membership_id))
     membership.role = normalize_role(role)
     db.flush()
     emit_event(
@@ -862,13 +878,8 @@ def revoke(
     leaving it enabled is the same class of half-revocation that made vendor
     deactivation unsafe.
     """
-    membership = db.get(FieldVendorUser, coerce_uuid(membership_id))
-    if membership is None:
-        raise VendorUserProvisioningError(
-            "membership_not_found", "Vendor user not found.", kind="not_found"
-        )
+    membership, principal = _lock_membership_principal(db, coerce_uuid(membership_id))
     membership.is_active = False
-    principal = db.get(SystemUser, membership.system_user_id)
     if principal is not None and principal.user_type == UserType.vendor:
         principal.is_active = False
         # Deactivating the principal is not the revocation — it is the flag. The

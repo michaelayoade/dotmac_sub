@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -28,21 +30,32 @@ from app.schemas.dispatch import (
     TechnicianSkillCreate,
     TechnicianSkillRead,
     TechnicianSkillUpdate,
+    WorkOrderAssignmentOutcomeRead,
     WorkOrderAssignmentPreviewRead,
     WorkOrderAssignmentPreviewRequest,
     WorkOrderAssignmentQueueCreate,
     WorkOrderAssignmentQueueRead,
     WorkOrderAssignmentQueueUpdate,
+    WorkOrderAssignmentRequest,
     WorkOrderHeaderCreate,
     WorkOrderHeaderRead,
     WorkOrderHeaderUpdate,
 )
 from app.services import dispatch as dispatch_service
 from app.services.auth_dependencies import require_permission
+from app.services.db_session_adapter import db_session_adapter
 from app.services.network.fiber_field_verification_job_plans import (
     FiberFieldVerificationJobPlanError,
     execute_fiber_field_verification_job_plan,
     preview_fiber_field_verification_job_plan,
+)
+from app.services.owner_commands import CommandContext
+from app.services.work_order_assignment_contracts import (
+    AssignmentTarget,
+    TechnicianAssignmentTarget,
+    VendorAssignmentTarget,
+    WorkOrderAssignmentCommand,
+    WorkOrderAssignmentQuery,
 )
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
@@ -50,6 +63,31 @@ router = APIRouter(prefix="/dispatch", tags=["dispatch"])
 # Granular gates. The router is mounted with an operations:dispatch:read floor
 # (main.py), so read endpoints inherit it; mutations declare their own permission.
 _DISPATCH_WRITE = Depends(require_permission("operations:dispatch:write"))
+
+
+def _assignment_context(
+    auth: dict, *, request_id: str | None, command_id: UUID | None = None
+) -> CommandContext:
+    identity = command_id or (
+        uuid5(NAMESPACE_URL, f"work-order-assignment:{request_id}")
+        if request_id
+        else uuid4()
+    )
+    return CommandContext(
+        command_id=identity,
+        correlation_id=uuid5(NAMESPACE_URL, request_id) if request_id else identity,
+        actor=str(auth.get("principal_id") or "dispatch"),
+        scope="operations:dispatch:assign",
+        reason="Dispatch work-order assignment",
+        idempotency_key=str(identity),
+    )
+
+
+def _assignment_target(payload: WorkOrderAssignmentPreviewRequest) -> AssignmentTarget:
+    if payload.vendor_id is not None:
+        return VendorAssignmentTarget(payload.vendor_id)
+    assert payload.technician_id is not None
+    return TechnicianAssignmentTarget(payload.technician_id)
 
 
 @router.post(
@@ -450,11 +488,56 @@ def preview_work_order_assignment(
     del auth  # Authorization is enforced by the dependency; previews do not write.
     return dispatch_service.work_order_commands.preview_assignment(
         db,
-        work_order_id,
-        technician_id=payload.technician_id,
+        query=WorkOrderAssignmentQuery(
+            work_order_public_id=work_order_id,
+            target=_assignment_target(payload),
+            scheduled_start=payload.scheduled_start,
+            scheduled_end=payload.scheduled_end,
+            status=payload.status,
+        ),
+    )
+
+
+@router.post(
+    "/work-orders/{work_order_id}/assignment",
+    response_model=WorkOrderAssignmentOutcomeRead,
+)
+def assign_work_order(
+    work_order_id: str,
+    payload: WorkOrderAssignmentRequest,
+    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
+):
+    command = WorkOrderAssignmentCommand(
+        work_order_public_id=work_order_id,
+        target=_assignment_target(payload),
         scheduled_start=payload.scheduled_start,
         scheduled_end=payload.scheduled_end,
         status=payload.status,
+        reason=payload.reason,
+        dispatch_rule_id=payload.dispatch_rule_id,
+        expected_revision=payload.expected_revision,
+    )
+    context = _assignment_context(
+        auth, request_id=request_id, command_id=payload.command_id
+    )
+    db_session_adapter.release_read_transaction(db)
+    outcome = dispatch_service.work_order_commands.assign(
+        db, command=command, context=context
+    )
+    return WorkOrderAssignmentOutcomeRead(
+        queue_id=outcome.queue_id,
+        work_order_id=outcome.work_order_id,
+        technician_id=outcome.target.technician_id
+        if isinstance(outcome.target, TechnicianAssignmentTarget)
+        else None,
+        vendor_id=outcome.target.vendor_id
+        if isinstance(outcome.target, VendorAssignmentTarget)
+        else None,
+        status=outcome.status,
+        revision=outcome.revision,
+        replayed=outcome.replayed,
     )
 
 
@@ -469,11 +552,12 @@ def create_assignment_queue_item(
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
+    context = _assignment_context(auth, request_id=request_id)
+    db_session_adapter.release_read_transaction(db)
     return dispatch_service.assignment_queue.create(
         db,
         payload,
-        auth=auth,
-        request_id=request_id,
+        context=context,
     )
 
 
@@ -485,6 +569,7 @@ def list_assignment_queue(
     status: str | None = None,
     crm_work_order_id: str | None = None,
     assigned_technician_id: str | None = None,
+    assigned_vendor_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -494,6 +579,7 @@ def list_assignment_queue(
         status=status,
         crm_work_order_id=crm_work_order_id,
         assigned_technician_id=assigned_technician_id,
+        assigned_vendor_id=assigned_vendor_id,
         limit=limit,
         offset=offset,
     )
@@ -510,10 +596,11 @@ def update_assignment_queue_item(
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
+    context = _assignment_context(auth, request_id=request_id)
+    db_session_adapter.release_read_transaction(db)
     return dispatch_service.assignment_queue.update(
         db,
         queue_id,
         payload,
-        auth=auth,
-        request_id=request_id,
+        context=context,
     )

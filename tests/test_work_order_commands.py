@@ -17,6 +17,12 @@ from app.schemas.dispatch import (
     WorkOrderHeaderUpdate,
 )
 from app.services import work_order_commands as work_order_command_module
+from app.services.owner_commands import CommandContext
+from app.services.work_order_assignment_contracts import (
+    TechnicianAssignmentTarget,
+    WorkOrderAssignmentCommand,
+    WorkOrderAssignmentQuery,
+)
 from app.services.work_order_commands import work_order_commands
 from app.services.work_order_errors import WorkOrderCommandError
 from tests.staff_identity_fixtures import add_bound_staff_user
@@ -299,11 +305,13 @@ def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
 
     preview = work_order_commands.preview_assignment(
         db_session,
-        work_order.public_id,
-        technician_id=technician.id,
+        query=WorkOrderAssignmentQuery(
+            work_order_public_id=work_order.public_id,
+            target=TechnicianAssignmentTarget(technician.id),
+        ),
     )
-    assert preview["previous"]["status"] == "scheduled"
-    assert preview["result"]["status"] == "dispatched"
+    assert preview.previous.status == "scheduled"
+    assert preview.result.status == "dispatched"
     assert (
         db_session.query(WorkOrderAssignmentQueue)
         .filter(WorkOrderAssignmentQueue.work_order_mirror_id == work_order.id)
@@ -311,29 +319,26 @@ def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
         == 0
     )
 
-    assigned = work_order_commands.assign(
-        db_session,
-        work_order.public_id,
-        technician_id=technician.id,
+    command = WorkOrderAssignmentCommand(
+        work_order_public_id=work_order.public_id,
+        target=TechnicianAssignmentTarget(technician.id),
         reason="field_verification",
-        auth=auth,
-        request_id="assignment-command-1",
     )
-    replayed = work_order_commands.assign(
-        db_session,
-        work_order.public_id,
-        technician_id=technician.id,
-        reason="field_verification",
-        auth=auth,
-        request_id="assignment-command-1",
+    context = CommandContext.system(
+        actor=auth["principal_id"],
+        scope="work_order:assignment",
+        reason="field verification",
     )
-
-    assert replayed.id == assigned.id
+    db_session.commit()
+    assigned = work_order_commands.assign(db_session, command=command, context=context)
+    replayed = work_order_commands.assign(db_session, command=command, context=context)
+    assert replayed.queue_id == assigned.queue_id
+    assert replayed.replayed
     db_session.refresh(work_order)
     assert work_order.status == "dispatched"
     assert work_order.assigned_to_name == "Ada Technician"
-    assert assigned.status == "assigned"
-    assert assigned.assigned_technician_id == technician.id
+    assert assigned.status == "dispatched"
+    assert assigned.target == TechnicianAssignmentTarget(technician.id)
     events = (
         db_session.query(AuditEvent)
         .filter(AuditEvent.action == "work_order.assigned")
@@ -342,18 +347,20 @@ def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
     )
     assert len(events) == 1
     assert events[0].actor_type == AuditActorType.user
-    assert events[0].request_id == "assignment-command-1"
-    assert events[0].metadata_["queue_id"] == str(assigned.id)
+    assert events[0].request_id == str(context.correlation_id)
+    assert events[0].metadata_["queue_id"] == str(assigned.queue_id)
     assert events[0].metadata_["previous"]["status"] == "scheduled"
     assert events[0].metadata_["result"]["status"] == "dispatched"
     assert events[0].metadata_["result"]["technician_id"] == str(technician.id)
 
+    db_session.commit()
     skipped = work_order_commands.update_queue_entry(
         db_session,
-        str(assigned.id),
+        str(assigned.queue_id),
         WorkOrderAssignmentQueueUpdate(status="skipped"),
-        auth=auth,
-        request_id="assignment-command-2",
+        context=CommandContext.system(
+            actor=auth["principal_id"], scope="work_order:assignment", reason="skip"
+        ),
     )
     db_session.refresh(work_order)
     assert skipped.status == "skipped"

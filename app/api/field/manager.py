@@ -1,5 +1,5 @@
 from dataclasses import asdict
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -155,6 +155,19 @@ def _invoice_review_context(auth: dict, *, invoice_id: str) -> CommandContext:
         actor=str(auth["principal_id"]),
         scope=invoice_id,
         reason="field_manager_vendor_purchase_invoice_review",
+    )
+
+
+def _assignment_context(
+    auth: dict, *, command_id: UUID, request_id: str | None
+) -> CommandContext:
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=uuid5(NAMESPACE_URL, request_id) if request_id else command_id,
+        actor=str(auth.get("principal_id") or "field_manager"),
+        scope="operations:dispatch:assign",
+        reason="Manager work-order assignment",
+        idempotency_key=str(command_id),
     )
 
 
@@ -426,12 +439,10 @@ def field_manager_assign_job(
     return field_manager.assign_job(
         db,
         crm_work_order_id,
-        person_id=payload.person_id,
-        scheduled_start=payload.scheduled_start,
-        scheduled_end=payload.scheduled_end,
-        status=payload.status,
-        auth=auth,
-        request_id=request_id,
+        payload=payload,
+        context=_assignment_context(
+            auth, command_id=payload.command_id, request_id=request_id
+        ),
     )
 
 
@@ -446,6 +457,13 @@ def field_manager_unassign_job(
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
+    command_id = (
+        uuid5(NAMESPACE_URL, f"work-order-unassign:{request_id}")
+        if request_id
+        else uuid4()
+    )
+    context = _assignment_context(auth, command_id=command_id, request_id=request_id)
+    db_session_adapter.release_read_transaction(db)
     return work_order_commands.update_queue_entry(
         db=db,
         queue_id=str(assignment_queue_id),
@@ -453,8 +471,7 @@ def field_manager_unassign_job(
             status="skipped",
             reason=payload.reason,
         ),
-        auth=auth,
-        request_id=request_id,
+        context=context,
     )
 
 

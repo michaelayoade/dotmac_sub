@@ -1,7 +1,15 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +21,10 @@ class FieldWorkLog(Base):
 
     __tablename__ = "field_worklogs"
     __table_args__ = (
+        CheckConstraint(
+            "(author_vendor_user_id IS NULL AND author_technician_id IS NOT NULL AND person_id IS NOT NULL) OR (author_vendor_user_id IS NOT NULL AND author_technician_id IS NULL AND person_id IS NULL AND system_user_id IS NOT NULL)",
+            name="ck_field_worklogs_actor",
+        ),
         Index("ix_field_worklogs_mirror_start", "work_order_mirror_id", "start_at"),
         Index("ix_field_worklogs_author_start", "author_technician_id", "start_at"),
         Index("ix_field_worklogs_client_ref", "client_ref", unique=True),
@@ -26,10 +38,15 @@ class FieldWorkLog(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    author_technician_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
+    author_vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("field_vendor_users.id")
     )
-    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    author_technician_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=True
+    )
+    person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id")
     )

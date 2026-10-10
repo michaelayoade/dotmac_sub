@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.api.field import router
 from app.db import get_db
@@ -17,15 +19,28 @@ from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
+from app.schemas.field import FieldAttachmentRead
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
 from app.services.field import attachments as attachments_module
-from app.services.field.attachments import field_attachments
+from app.services.field.attachments import (
+    FieldAttachmentDeletionOutcome,
+    field_attachments,
+)
+from app.services.field.execution_contracts import (
+    CreateFieldAttachment,
+    DeleteFieldAttachment,
+    FieldAttachmentIdentity,
+    FieldAttachmentQuery,
+    FieldJobQuery,
+)
 from app.services.field.jobs import field_jobs
 from app.services.field.note_commands import (
     CreateFieldWorkOrderNote,
     create_field_work_order_note,
 )
+from app.services.field.work_order_access import FieldAccessError
+from app.services.file_storage import UnifiedFileUploadService
 from app.services.owner_commands import CommandContext
 
 
@@ -36,25 +51,26 @@ class _Stream:
     content_length: int
 
 
-class _FakeUploads:
+class _FakeUploads(UnifiedFileUploadService):
     def __init__(self):
         self.contents: dict[str, bytes] = {}
         self.deleted: list[str] = []
 
-    def upload(self, **kwargs):
+    def stage_upload(self, **kwargs):
         record = StoredFile(
             entity_type=kwargs["entity_type"],
             entity_id=kwargs["entity_id"],
             original_filename=kwargs["original_filename"],
             storage_key_or_relative_path=f"attachments/{uuid4().hex}",
             file_size=len(kwargs["data"]),
+            checksum=hashlib.sha256(kwargs["data"]).hexdigest(),
             content_type=kwargs["content_type"],
             storage_provider="s3",
             uploaded_by=kwargs["uploaded_by"],
             owner_subscriber_id=kwargs["owner_subscriber_id"],
         )
         kwargs["db"].add(record)
-        kwargs["db"].commit()
+        kwargs["db"].flush()
         kwargs["db"].refresh(record)
         self.contents[str(record.id)] = kwargs["data"]
         return record
@@ -63,10 +79,10 @@ class _FakeUploads:
         data = self.contents[str(record.id)]
         return _Stream(iter([data]), record.content_type, len(data))
 
-    def soft_delete(self, *, db, file, hard_delete_object=True):
+    def stage_soft_delete(self, *, db, file, hard_delete_object=True):
         file.is_deleted = True
         self.deleted.append(str(file.id))
-        db.commit()
+        db.flush()
         return file
 
 
@@ -151,46 +167,80 @@ def test_upload_attachment_list_content_delete_and_job_detail(db_session, fake_u
     )
     db_session.commit()
 
-    attachment = field_attachments.create(
-        db_session,
-        _auth(user),
-        kind="photo",
-        file_name="drop.jpg",
-        mime_type="image/jpeg",
-        content=b"image-bytes",
-        crm_work_order_id="wo-attach-detail",
-        latitude=9.071,
-        longitude=7.451,
+    attachment = _attachments_create(
+        db=db_session,
+        command=CreateFieldAttachment(
+            requester_system_user_id=user.id,
+            kind="photo",
+            file_name="drop.jpg",
+            mime_type="image/jpeg",
+            content=b"image-bytes",
+            public_id="wo-attach-detail",
+            latitude=9.071,
+            longitude=7.451,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
-    assert attachment["file_name"] == "drop.jpg"
-    assert attachment["work_order_id"] == "wo-attach-detail"
-    assert attachment["download_path"].endswith("/content")
+    assert attachment.file_name == "drop.jpg"
+    assert attachment.work_order_id == "wo-attach-detail"
+    assert attachment.download_path.endswith("/content")
     stored = db_session.query(FieldAttachment).one()
     assert stored.work_order_mirror_id == work_order.id
 
     listed = field_attachments.list(
-        db_session, _auth(user), crm_work_order_id="wo-attach-detail"
+        db=db_session,
+        query=FieldAttachmentQuery(
+            requester_system_user_id=user.id, public_id="wo-attach-detail"
+        ),
     )
-    assert [item["id"] for item in listed] == [attachment["id"]]
+    assert [item.id for item in listed] == [attachment.id]
 
     got, stream = field_attachments.get_content(
-        db_session, _auth(user), str(attachment["id"])
+        db=db_session,
+        query=FieldAttachmentIdentity(
+            requester_system_user_id=user.id, attachment_id=attachment.id
+        ),
     )
-    assert got.id == attachment["id"]
+    assert got.id == attachment.id
     assert b"".join(stream.chunks) == b"image-bytes"
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-attach-detail")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-attach-detail"
+        ),
+    )
     assert len(detail.attachments) == 1
     assert detail.attachments[0].file_name == "drop.jpg"
 
-    field_attachments.delete(db_session, _auth(user), str(attachment["id"]))
+    _attachments_delete(
+        db=db_session,
+        command=DeleteFieldAttachment(
+            requester_system_user_id=user.id,
+            attachment_id=attachment.id,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
+    )
     assert fake_uploads.deleted == [str(stored.stored_file_id)]
     assert (
         field_attachments.list(
-            db_session, _auth(user), crm_work_order_id="wo-attach-detail"
+            db=db_session,
+            query=FieldAttachmentQuery(
+                requester_system_user_id=user.id, public_id="wo-attach-detail"
+            ),
         )
-        == []
+        == ()
     )
 
 
@@ -202,28 +252,44 @@ def test_attachment_client_ref_dedupes_retry(db_session, fake_uploads):
     client_ref = uuid4()
     db_session.commit()
 
-    first = field_attachments.create(
-        db_session,
-        _auth(user),
-        kind="document",
-        file_name="proof.pdf",
-        mime_type="application/pdf",
-        content=b"%PDF-1.4",
-        crm_work_order_id="wo-attach-dedupe",
-        client_ref=client_ref,
+    first = _attachments_create(
+        db=db_session,
+        command=CreateFieldAttachment(
+            requester_system_user_id=user.id,
+            kind="document",
+            file_name="proof.pdf",
+            mime_type="application/pdf",
+            content=b"%PDF-1.4",
+            public_id="wo-attach-dedupe",
+            client_ref=client_ref,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    second = field_attachments.create(
-        db_session,
-        _auth(user),
-        kind="document",
-        file_name="proof.pdf",
-        mime_type="application/pdf",
-        content=b"%PDF-1.4",
-        crm_work_order_id="wo-attach-dedupe",
-        client_ref=client_ref,
+    second = _attachments_create(
+        db=db_session,
+        command=CreateFieldAttachment(
+            requester_system_user_id=user.id,
+            kind="document",
+            file_name="proof.pdf",
+            mime_type="application/pdf",
+            content=b"%PDF-1.4",
+            public_id="wo-attach-dedupe",
+            client_ref=client_ref,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
-    assert first["id"] == second["id"]
+    assert first.id == second.id
     assert db_session.query(FieldAttachment).count() == 1
 
 
@@ -233,14 +299,22 @@ def test_note_can_link_same_job_attachment(db_session, fake_uploads):
     subscriber = _subscriber(db_session)
     _work_order(db_session, subscriber, crm_work_order_id="wo-note-photo")
     db_session.commit()
-    attachment = field_attachments.create(
-        db_session,
-        _auth(user),
-        kind="photo",
-        file_name="drop.jpg",
-        mime_type="image/jpeg",
-        content=b"image-bytes",
-        crm_work_order_id="wo-note-photo",
+    attachment = _attachments_create(
+        db=db_session,
+        command=CreateFieldAttachment(
+            requester_system_user_id=user.id,
+            kind="photo",
+            file_name="drop.jpg",
+            mime_type="image/jpeg",
+            content=b"image-bytes",
+            public_id="wo-note-photo",
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
     request_id = uuid4()
@@ -258,7 +332,7 @@ def test_note_can_link_same_job_attachment(db_session, fake_uploads):
         request_id=request_id,
         body="See photo",
         is_internal=True,
-        attachment_ids=(attachment["id"],),
+        attachment_ids=(attachment.id,),
     )
     db_session_adapter.release_read_transaction(db_session)
     note = create_field_work_order_note(
@@ -266,8 +340,8 @@ def test_note_can_link_same_job_attachment(db_session, fake_uploads):
         command,
     )
 
-    assert note.attachments[0].id == attachment["id"]
-    stored = db_session.get(FieldAttachment, attachment["id"])
+    assert note.attachments[0].id == attachment.id
+    stored = db_session.get(FieldAttachment, attachment.id)
     assert stored.note_id == note.id
 
 
@@ -285,18 +359,26 @@ def test_attachment_hidden_job_404(db_session, fake_uploads):
     )
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        field_attachments.create(
-            db_session,
-            _auth(user),
-            kind="photo",
-            file_name="drop.jpg",
-            mime_type="image/jpeg",
-            content=b"image-bytes",
-            crm_work_order_id="wo-attach-hidden",
+    with pytest.raises(FieldAccessError) as exc:
+        _attachments_create(
+            db=db_session,
+            command=CreateFieldAttachment(
+                requester_system_user_id=user.id,
+                kind="photo",
+                file_name="drop.jpg",
+                mime_type="image/jpeg",
+                content=b"image-bytes",
+                public_id="wo-attach-hidden",
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
 
-    assert exc.value.status_code == 404
+    assert exc.value.code.endswith("not_found")
 
 
 def test_attachment_api(db_session, fake_uploads):
@@ -332,3 +414,17 @@ def test_attachment_api(db_session, fake_uploads):
 
     deleted = client.delete(f"/api/v1/field/attachments/{attachment_id}")
     assert deleted.status_code == 204
+
+
+def _attachments_create(
+    db: Session, command: CreateFieldAttachment
+) -> FieldAttachmentRead:
+    db_session_adapter.release_read_transaction(db)
+    return field_attachments.create(db=db, command=command)
+
+
+def _attachments_delete(
+    db: Session, command: DeleteFieldAttachment
+) -> FieldAttachmentDeletionOutcome:
+    db_session_adapter.release_read_transaction(db)
+    return field_attachments.delete(db=db, command=command)

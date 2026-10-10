@@ -22,10 +22,11 @@ from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
-from app.schemas.field import FieldManagerTechniciansQuery
+from app.schemas.field import FieldManagerJobAssignRequest, FieldManagerTechniciansQuery
 from app.schemas.geocoding import ReverseGeocodeResult
 from app.services.auth_dependencies import require_user_auth
 from app.services.field import expense_categories as expense_categories_module
+from app.services.field.execution_contracts import FieldJobsQuery
 from app.services.field.expense_recovery import ExpensePaymentDeliveryRecoveryPreview
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
@@ -44,6 +45,7 @@ from app.services.field.expense_requests import (
 from app.services.field.jobs import field_jobs
 from app.services.field.manager import field_manager
 from app.services.owner_commands import CommandContext
+from app.services.work_order_errors import WorkOrderCommandError
 
 
 @pytest.fixture(autouse=True)
@@ -315,11 +317,14 @@ def test_manager_jobs_and_assign_flow(db_session):
     assigned = field_manager.assign_job(
         db_session,
         "wo-assign",
-        person_id=str(profile.person_id),
+        payload=FieldManagerJobAssignRequest(person_id=str(profile.person_id)),
+        context=CommandContext.system(
+            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+        ),
     )
-    assert assigned["assigned_to_person_id"] == profile.person_id
-    assert assigned["assigned_to_label"] == "Tech Staff"
-    assert assigned["status"] == "dispatched"
+    assert assigned.assigned_to_person_id == profile.person_id
+    assert assigned.assigned_to_label == "Tech Staff"
+    assert assigned.status == "dispatched"
 
     db_session.refresh(row)
     assert row.assigned_to_crm_person_id == "crm-assign-tech"
@@ -336,7 +341,9 @@ def test_manager_jobs_and_assign_flow(db_session):
     assert queue.status == "assigned"
 
     # The technician now sees the job in their scoped list.
-    mine = field_jobs.list(db_session, _auth(tech_user, roles=[]))
+    mine = field_jobs.list(
+        db=db_session, query=FieldJobsQuery(requester_system_user_id=tech_user.id)
+    )
     assert "wo-assign" in [job.id for job in mine]
 
     # Filtering the manager board by the technician works both ways.
@@ -355,11 +362,18 @@ def test_manager_assign_queue_only_technician(db_session):
     db_session.commit()
 
     assigned = field_manager.assign_job(
-        db_session, "wo-native-assign", person_id=str(profile.person_id)
+        db_session,
+        "wo-native-assign",
+        payload=FieldManagerJobAssignRequest(person_id=str(profile.person_id)),
+        context=CommandContext.system(
+            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+        ),
     )
-    assert assigned["assigned_to_person_id"] == profile.person_id
+    assert assigned.assigned_to_person_id == profile.person_id
 
-    mine = field_jobs.list(db_session, _auth(tech_user, roles=[]))
+    mine = field_jobs.list(
+        db=db_session, query=FieldJobsQuery(requester_system_user_id=tech_user.id)
+    )
     assert "wo-native-assign" in [job.id for job in mine]
 
 
@@ -369,24 +383,48 @@ def test_manager_assign_validation(db_session):
     db_session.commit()
 
     with pytest.raises(HTTPException) as missing_job:
-        field_manager.assign_job(db_session, "wo-nope", person_id=str(uuid4()))
+        field_manager.assign_job(
+            db_session,
+            "wo-nope",
+            payload=FieldManagerJobAssignRequest(person_id=str(uuid4())),
+            context=CommandContext.system(
+                actor="test",
+                scope="operations:dispatch:assign",
+                reason="test assignment",
+            ),
+        )
     assert missing_job.value.status_code == 404
 
     with pytest.raises(HTTPException) as missing_tech:
-        field_manager.assign_job(db_session, "wo-assign-bad", person_id=str(uuid4()))
+        field_manager.assign_job(
+            db_session,
+            "wo-assign-bad",
+            payload=FieldManagerJobAssignRequest(person_id=str(uuid4())),
+            context=CommandContext.system(
+                actor="test",
+                scope="operations:dispatch:assign",
+                reason="test assignment",
+            ),
+        )
     assert missing_tech.value.status_code == 404
 
     tech_user = _user(db_session, "Tech")
     profile = _profile(db_session, tech_user)
     db_session.commit()
-    with pytest.raises(HTTPException) as bad_status:
+    with pytest.raises(WorkOrderCommandError) as bad_status:
         field_manager.assign_job(
             db_session,
             "wo-assign-bad",
-            person_id=str(profile.person_id),
-            status="completed",
+            payload=FieldManagerJobAssignRequest(
+                person_id=str(profile.person_id), status="completed"
+            ),
+            context=CommandContext.system(
+                actor="test",
+                scope="operations:dispatch:assign",
+                reason="test assignment",
+            ),
         )
-    assert bad_status.value.status_code == 422
+    assert bad_status.value.kind == "invalid"
 
 
 def test_manager_expense_approve_and_reject(db_session):
