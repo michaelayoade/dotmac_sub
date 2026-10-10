@@ -1878,6 +1878,236 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="financial.prepaid_renewal_origin_correction",
+        module="app.services.prepaid_renewal_origin_correction",
+        owns=("reviewed prepaid renewal adjustment origin correction",),
+        depends_on=(
+            "auth.permission_gate",
+            "financial.account_adjustments",
+            "financial.prepaid_service_coverage_reconciliation",
+            "financial.prepaid_service_renewals",
+            "observability.audit_log",
+        ),
+        notes=(
+            "The sanctioned repair for malformed_renewal_origin quarantine when "
+            "Finance has decided the renewal debit is legitimate and only its "
+            "origin_ref is wrong. The canonical <subscription>:<start>:<end> "
+            "reference is derived from structured coverage evidence, never typed "
+            "in: exactly one entitlement already linked to the debit, one "
+            "existing entitlement Finance names (the owner records the debit "
+            "link through the entitlement writer's flush-only participant), or "
+            "an entitlement created through the existing wallet-debit writer "
+            "for a Finance-supplied subscription and period. The read-only "
+            "preview shows before/after, the planned entitlement action, "
+            "blockers, warnings that need acknowledgement, and the projected "
+            "quarantine effect computed with the reconciliation owner's own "
+            "queries. Confirmation rechecks under account, adjustment, ledger, "
+            "subscription, and entitlement locks, requires the identical "
+            "fingerprint, rewrites only origin_ref through the adjustment "
+            "owner's flush-only participant, and stages audit and a domain "
+            "event. Money, the ledger debit, and every balance never change."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="reviewed prepaid renewal adjustment origin correction",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "authenticated renewal origin correction command",
+                        "unreversed prepaid renewal adjustment debit",
+                        "funded service entitlement intervals",
+                        "prepaid coverage quarantine classification",
+                    ),
+                    canonical_writer="financial.prepaid_renewal_origin_correction",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="authenticated renewal origin correction command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:prepaid_reconciliation:repair grant for an active "
+                        "staff principal, plus the operator-supplied disposition, "
+                        "entitlement or subscription and period, acknowledgements, "
+                        "reason, evidence reference and SHA-256, preview "
+                        "fingerprint, and idempotency key"
+                    ),
+                ),
+                AuthorityInput(
+                    name="unreversed prepaid renewal adjustment debit",
+                    owner="financial.account_adjustments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "one unreversed prepaid_service_renewal internet-service "
+                        "AccountAdjustment whose active ledger debit agrees on "
+                        "account, amount, and currency and whose origin_ref is "
+                        "not the canonical subscription:start:end"
+                    ),
+                ),
+                AuthorityInput(
+                    name="funded service entitlement intervals",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active ServiceEntitlement rows: the one linked to or "
+                        "named for the debit, and rows overlapping a proposed "
+                        "new period"
+                    ),
+                ),
+                AuthorityInput(
+                    name="prepaid coverage quarantine classification",
+                    owner="financial.prepaid_service_coverage_reconciliation",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "the origin_ref parser, "
+                        "malformed_prepaid_renewal_origin_adjustment_ids, and the "
+                        "owner's preview used to project the quarantine effect"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "The correction enters execute_owner_command once on a "
+                    "transaction-free session. The optional entitlement link or "
+                    "creation, the origin_ref rewrite, the audit row, and the "
+                    "prepaid_renewal_origin.corrected event commit or roll back "
+                    "together."
+                ),
+                locking=(
+                    "Lock the account, adjustment, ledger entry, subscription, "
+                    "and the subscription's entitlements FOR UPDATE in that "
+                    "order, expire, and recompute the preview before comparing "
+                    "its fingerprint; each participant re-locks and re-verifies "
+                    "its row."
+                ),
+                idempotency=(
+                    "The correction identity is uuid5 of the business "
+                    "idempotency key (same key and proposal replays the stored "
+                    "outcome; a different proposal conflicts). After success the "
+                    "reference is canonical, so a new key is refused as "
+                    "origin_ref_already_canonical; the active-ledger-entry "
+                    "unique index arbitrates concurrent entitlement links."
+                ),
+                retries=(
+                    "Retry with the same key. Changed evidence returns "
+                    "stale_preview and needs a new preview."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "financial.prepaid_renewal_origin_correction"
+                    ),
+                    "financial.prepaid_renewal_origin_correction.adjustment_not_found",
+                    "financial.prepaid_renewal_origin_correction.idempotency_conflict",
+                    "financial.prepaid_renewal_origin_correction.incomplete_correction",
+                    "financial.prepaid_renewal_origin_correction.invalid_acknowledgement",
+                    "financial.prepaid_renewal_origin_correction.invalid_actor",
+                    "financial.prepaid_renewal_origin_correction.invalid_disposition",
+                    "financial.prepaid_renewal_origin_correction.invalid_evidence",
+                    "financial.prepaid_renewal_origin_correction.invalid_period",
+                    "financial.prepaid_renewal_origin_correction.invalid_reason",
+                    "financial.prepaid_renewal_origin_correction.ledger_entry_not_found",
+                    "financial.prepaid_renewal_origin_correction.missing_idempotency_key",
+                    "financial.prepaid_renewal_origin_correction.not_actionable",
+                    "financial.prepaid_renewal_origin_correction.participant_rejected",
+                    "financial.prepaid_renewal_origin_correction.permission_denied",
+                    "financial.prepaid_renewal_origin_correction.stale_preview",
+                ),
+                mapping_owner="prepaid renewal origin correction operator CLI",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "a reversed, non-renewal, or inconsistent adjustment and debit",
+                    "an origin_ref that is already canonical",
+                    "an entitlement that is not active, on another account, or "
+                    "linked to another debit",
+                    "several entitlements linked to one debit",
+                    "an unnamed overlapping entitlement for a new period",
+                    "a canonical reference already used by another adjustment",
+                    "an unacknowledged amount, invoice, or cadence warning",
+                    "a missing staff permission",
+                    "a stale preview fingerprint",
+                ),
+            ),
+            events=EventContract(
+                event_types=("prepaid_renewal_origin.corrected",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries the correction id, adjustment, account, "
+                    "subscription, previous and canonical reference, disposition, "
+                    "entitlement id and action, ledger entry, zero economic "
+                    "delta, fingerprint, reason, evidence reference and SHA-256, "
+                    "and the staff identity. Additions are backward compatible."
+                ),
+                replay=(
+                    "Consumers deduplicate by event id; replaying the command "
+                    "returns the stored outcome and writes nothing."
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="reviewed prepaid renewal origin reference",
+                    input_names=(
+                        "authenticated renewal origin correction command",
+                        "unreversed prepaid renewal adjustment debit",
+                        "funded service entitlement intervals",
+                    ),
+                    writer="financial.prepaid_renewal_origin_correction",
+                    freshness=(
+                        "Computed from the current database snapshot at preview "
+                        "and again under lock at confirmation."
+                    ),
+                    stale_behavior=(
+                        "A changed fingerprint rejects the confirmation and "
+                        "requires a new preview."
+                    ),
+                    drift_signal=(
+                        "Open prepaid-coverage:quarantine work items whose "
+                        "reason_codes include malformed_renewal_origin, and the "
+                        "read-only diagnostic's renewal-origin findings."
+                    ),
+                    rebuild_operation=(
+                        "preview_renewal_origin_correction deterministically "
+                        "re-derives the proposal's before/after and fingerprint."
+                    ),
+                    repair_owner="financial.prepaid_renewal_origin_correction",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                old_owner=None,
+                new_owner="financial.prepaid_renewal_origin_correction",
+                verification=(
+                    "Preview blocker and warning, disposition, stale, replay, "
+                    "quarantine-closure, and PostgreSQL concurrency tests."
+                ),
+                cutover_gate=(
+                    "The quarantine review names this owner as the sanctioned "
+                    "route for a legitimate renewal debit with a malformed "
+                    "origin_ref."
+                ),
+                fallback_retirement=(
+                    "The engineering_renewal_origin_correction escalation route "
+                    "is retired."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md",
+                "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_prepaid_renewal_origin_correction.py",
+                "tests/integration/test_prepaid_renewal_origin_correction_concurrency.py",
+                "tests/architecture/test_prepaid_renewal_origin_correction_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.prepaid_threshold",
         module="app.services.prepaid_threshold",
         owns=(
