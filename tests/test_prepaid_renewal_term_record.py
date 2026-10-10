@@ -18,6 +18,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.admin_alert import AdminAlert
+from app.models.audit import AuditEvent
 from app.models.catalog import (
     BillingCycle,
     BillingMode,
@@ -47,6 +48,12 @@ from app.services.prepaid_renewal_terms_backfill import (
     list_renewal_term_record_requests,
     preview_prepaid_renewal_terms_backfill,
     request_reviewed_renewal_term_record,
+)
+from tests.sole_approver_support import (
+    DECISION_REF,
+    JUSTIFICATION,
+    configure_sole_approver_exception,
+    future_review_due,
 )
 
 _SHA = "a" * 64
@@ -180,6 +187,7 @@ def _approve(
     amount: str = "17500.00",
     key: str = "record-approve",
     permission_granted: bool = True,
+    sole_justification: str | None = None,
 ):
     approver_id = approver.id
     context = _context(approver, key)
@@ -191,6 +199,7 @@ def _approve(
             approved_amount=Decimal(amount),
             approved_by=approver_id,
             permission_granted=permission_granted,
+            sole_approver_justification=sole_justification,
         ),
         context=context,
     )
@@ -751,3 +760,107 @@ def test_cli_permission_resolver_uses_real_role_grants(db_session):
     assert not cli._renewal_term_record_permission_granted(
         db_session, system_user_id=uuid4()
     )
+
+
+# --- governed sole-approver exception ---------------------------------------
+
+
+def _refused_self_approval(db_session, subscription, *, configure, justification):
+    _block(db_session, subscription)
+    requester = _staff(db_session, "Michael")
+    other = _staff(db_session, "Other")
+    requested = _request(db_session, subscription, requester)
+    configure(requester, other)
+    with pytest.raises(PrepaidRenewalTermsBackfillError) as captured:
+        _approve(
+            db_session,
+            requested.request_id,
+            requester,
+            sole_justification=justification,
+        )
+    assert _code(captured) == "self_approval_forbidden"
+    db_session.rollback()
+    db_session.refresh(subscription)
+    assert subscription.unit_price is None
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "approval.sole_approver_exception_used")
+        .count()
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "case", ["disabled", "expired", "wrong_principal", "missing_justification"]
+)
+def test_sole_approver_exception_refusals_leave_self_approval_forbidden(
+    db_session, subscription, case
+):
+    def configure(requester, other):
+        configure_sole_approver_exception(
+            db_session,
+            enabled=case != "disabled",
+            principal=other.id if case == "wrong_principal" else requester.id,
+            review_due=(
+                future_review_due() - timedelta(days=60)
+                if case == "expired"
+                else future_review_due()
+            ),
+        )
+
+    _refused_self_approval(
+        db_session,
+        subscription,
+        configure=configure,
+        justification=None if case == "missing_justification" else JUSTIFICATION,
+    )
+
+
+def test_sole_approver_exception_allows_self_approval_with_evidence(
+    db_session, subscription
+):
+    _block(db_session, subscription)
+    requester = _staff(db_session, "Michael")
+    requested = _request(db_session, subscription, requester)
+    configure_sole_approver_exception(
+        db_session, principal=requester.id, review_due=future_review_due()
+    )
+
+    recorded = _approve(
+        db_session,
+        requested.request_id,
+        requester,
+        sole_justification=JUSTIFICATION,
+    )
+
+    assert recorded.status is RenewalTermRecordStatus.recorded
+    db_session.refresh(subscription)
+    assert subscription.unit_price == Decimal("17500.00")
+    event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "prepaid_renewal_terms.recorded")
+        .one()
+    )
+    assert event.payload["sole_approver_exception"] is True
+    assert event.payload["sole_approver_exception_decision_ref"] == DECISION_REF
+    assert event.payload["sole_approver_exception_justification"] == JUSTIFICATION
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "approval.sole_approver_exception_used")
+        .one()
+    )
+    assert audit.entity_id == str(subscription.id)
+    assert audit.metadata_["sole_approver_exception_decision_ref"] == DECISION_REF
+
+
+def test_distinct_approval_records_no_exception(db_session, subscription):
+    _block(db_session, subscription)
+    requested = _request(db_session, subscription, _staff(db_session, "Ada"))
+    _approve(db_session, requested.request_id, _staff(db_session, "Bola"))
+    event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "prepaid_renewal_terms.recorded")
+        .one()
+    )
+    assert event.payload["sole_approver_exception"] is False
+    assert "sole_approver_exception_decision_ref" not in event.payload

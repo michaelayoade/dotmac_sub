@@ -32,7 +32,10 @@ Every such subscription carries one admin work item with fingerprint
 - Never add a catalog price row to an offer that exists to describe
   per-customer free service ("... - Non Billing", staff offers). That turns
   a concession into billed service for everyone on the offer.
-- Never approve your own request. The record command refuses it.
+- Never approve your own request. The record command refuses it, except under
+  the governed, time-boxed sole-approver exception
+  ([`SOLE_APPROVER_EXCEPTION.md`](SOLE_APPROVER_EXCEPTION.md)): off by default,
+  Michael only, with `--sole-approver-justification` and recorded evidence.
 - Never decide from an offer's name: work from the structured decision and
   reasons on the work item.
 

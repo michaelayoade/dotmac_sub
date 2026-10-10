@@ -1990,6 +1990,25 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_CREDIT_NOTE_NUMBER_START", "1"),
     )
+    # Governed sole-approver exception: seeded OFF and inert; never from env.
+    billing_settings.ensure_by_key(
+        db,
+        key="sole_approver_exception_enabled",
+        value_type=SettingValueType.boolean,
+        value_text="false",
+        value_json=False,
+    )
+    for exception_key in (
+        "sole_approver_exception_principal",
+        "sole_approver_exception_review_due",
+        "sole_approver_exception_decision_ref",
+    ):
+        billing_settings.ensure_by_key(
+            db,
+            key=exception_key,
+            value_type=SettingValueType.string,
+            value_text="",
+        )
 
 
 def seed_catalog_settings(db: Session) -> None:

@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -52,8 +54,14 @@ class CarriedSourceIdentityAdjudication(Base):
             name="uq_carried_source_identity_adjudications_command",
         ),
         CheckConstraint(
-            "reviewed_by_id <> approved_by_id",
+            "reviewed_by_id <> approved_by_id OR sole_approver_exception",
             name="ck_carried_source_identity_distinct_reviewers",
+        ),
+        CheckConstraint(
+            "NOT sole_approver_exception OR ("
+            "length(trim(coalesce(sole_approver_exception_ref, ''))) > 0 AND "
+            "length(trim(coalesce(sole_approver_justification, ''))) > 0)",
+            name="ck_carried_source_identity_sole_approver_evidence",
         ),
         CheckConstraint(
             "length(preview_fingerprint) = 64 AND "
@@ -103,6 +111,14 @@ class CarriedSourceIdentityAdjudication(Base):
         nullable=False,
     )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Governed sole-approver exception (governance.sole_approver_exception):
+    #: true only when reviewer == approver was admitted by the time-boxed
+    #: Governance exception, with its decision reference and justification.
+    sole_approver_exception: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    sole_approver_exception_ref: Mapped[str | None] = mapped_column(String(240))
+    sole_approver_justification: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     command_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     command_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)

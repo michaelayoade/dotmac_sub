@@ -116,6 +116,7 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     assert repository_heads() == frozenset(
         {
             "668_native_vendor_work_order_assignment",
+            "668_sole_approver_adjudication_evidence",
             "bi_0001_billing",
             "cl_0001_collections",
             "ib_0001_conversations",
