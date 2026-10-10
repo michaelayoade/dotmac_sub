@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from scripts.architecture.subscriber_metadata_census import (
+    RETIRED_SPLYNX_KEYS,
     Access,
     _Census,
     _string_constants,
@@ -29,10 +30,15 @@ from scripts.architecture.subscriber_metadata_census import (
     metadata_readers,
     metadata_writers,
     render_writer_baseline,
+    retired_key_references,
     unclassified_receivers,
 )
 
 BASELINE = Path(__file__).with_name("subscriber_metadata_writers_baseline.txt")
+PURGE_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "alembic/versions/664_purge_retired_splynx_metadata_keys.py"
+)
 
 REGENERATE = (
     "Regenerate with `python -m scripts.architecture.subscriber_metadata_census "
@@ -315,3 +321,96 @@ def test_duplicate_column_projections_are_still_present(key: str) -> None:
         "retired, delete this parametrisation and the matching row in "
         "docs/SUBSCRIBER_METADATA_OWNERSHIP.md in the same change."
     )
+
+
+# --------------------------------------------------------------------------
+# keys purged by migration 664 stay purged
+# --------------------------------------------------------------------------
+
+
+def _purge_migration_keys() -> tuple[str, ...]:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "purge_retired_splynx_metadata_keys", PURGE_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return tuple(module.RETIRED_KEYS)
+
+
+def test_retired_key_list_matches_the_purge_migration() -> None:
+    """One list, two copies: the migration cannot import app/scripts code."""
+
+    assert RETIRED_SPLYNX_KEYS == _purge_migration_keys()
+
+
+def test_retired_splynx_keys_are_not_declared() -> None:
+    """Declaring a purged key would let the owner accept it again."""
+
+    from app.services.subscriber_metadata_keys import DECLARED_METADATA_KEYS
+
+    redeclared = sorted(set(RETIRED_SPLYNX_KEYS) & set(DECLARED_METADATA_KEYS))
+    assert not redeclared, (
+        "these keys were purged from every row by migration "
+        "664_purge_retired_splynx_metadata_keys and must not be declared "
+        "again:\n  " + "\n  ".join(redeclared)
+    )
+
+
+def test_no_product_code_references_a_retired_splynx_key() -> None:
+    """A reader of a purged key would read absence forever; a writer recreates it."""
+
+    references = retired_key_references()
+    assert not references, (
+        "these files reference `subscribers.metadata` keys purged by migration "
+        "664_purge_retired_splynx_metadata_keys. The values no longer exist; "
+        "a new fact belongs in a typed column with an owner:\n  "
+        + "\n  ".join(f"{path}: {key}" for path, key in references)
+    )
+
+
+def test_no_retired_splynx_key_is_accessed_per_the_census() -> None:
+    accessed = sorted(
+        {
+            key
+            for operations in keys_by_module().values()
+            for keys in operations.values()
+            for key in keys
+        }
+        & set(RETIRED_SPLYNX_KEYS)
+    )
+    assert not accessed, accessed
+
+
+def test_still_read_splynx_keys_are_not_retired() -> None:
+    """Keys a reader still consumes must survive the purge."""
+
+    still_read = {
+        "splynx_date_add",
+        "splynx_last_update",
+        "splynx_deleted",
+        "splynx_status",
+        "splynx_last_online",
+        "splynx_gps",
+        "splynx_location_id",
+        "splynx_billing_email",
+    }
+    assert not still_read & set(RETIRED_SPLYNX_KEYS)
+    # And the scan really sees the readers that keep them alive.
+    seen = {key for _, key in retired_key_references(tuple(sorted(still_read)))}
+    assert {"splynx_last_online", "splynx_gps", "splynx_location_id"} <= seen
+    assert "splynx_billing_email" in seen
+
+
+def test_the_retired_key_scan_detects_a_reference_sensitivity(
+    tmp_path, monkeypatch
+) -> None:
+    from scripts.architecture import subscriber_metadata_census as census
+
+    probe = tmp_path / "app" / "probe.py"
+    probe.parent.mkdir()
+    probe.write_text("value = metadata.get('splynx_login')\n", encoding="utf-8")
+    monkeypatch.setattr(census, "REPOSITORY_ROOT", tmp_path)
+    assert census.retired_key_references() == [("app/probe.py", "splynx_login")]

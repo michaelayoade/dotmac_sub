@@ -537,6 +537,77 @@ missing or undecryptable. Active or captive access that cannot be built is
 reported as `unbuildable` and its existing external row is preserved; a scoped
 repair cannot delete a paying customer's only working row and report success.
 
+### Walled-garden router module and readiness
+
+With `radius.group_routing_enabled=false`, a captive subscriber gets a normal
+session plus `Mikrotik-Address-List := <suspended_address_list>`; the router
+firewall enforces the walled garden. Routers historically carried a hand-made
+quarantine (`dotmac suspended quarantine` jump into chain `dotmac-suspended`,
+an empty `splynx-allowed-resources` list, no HTTP redirect), so payment
+providers were unreachable and OS captive-portal detection never opened the
+portal.
+
+`access.walled_garden_router_module` renders the replacement as one
+versioned, idempotent RouterOS command set (`v1`). Every element carries a
+`dotmac-wg:v1:<element>` comment tag:
+
+- address-list `dotmac-wg-allow`: the derived, always-present `portal` entry
+  (`captive_portal_ip` plus the host of `captive_portal_url`) and every
+  ENABLED named entry of `radius.walled_garden_allowed_resources`, tagged
+  `dotmac-wg:v1:allow:<key>:<host>`;
+- `chain=forward action=jump jump-target=dotmac-wg
+  src-address-list=<suspended_address_list>`, placed before the legacy
+  `dotmac suspended quarantine` jump (else at the top of `forward`). The jump
+  deliberately does not exclude `dotmac-wg-allow`: while the legacy jump still
+  follows it, an excluded destination would fall into the legacy chain and be
+  dropped. The module chain accepts allowed web traffic itself;
+- chain `dotmac-wg`: accept rate-limited DNS (udp/53 and tcp/53), accept
+  tcp 80,443 to `dotmac-wg-allow`, reject (rate-limited), then drop;
+- `chain=dstnat` dst-nat of tcp/80 from the suspended list, excluding
+  `dotmac-wg-allow`, to `captive_portal_ip:80`, so OS captive-portal
+  detection opens the portal. **The portal host must answer HTTP requests for
+  foreign `Host` headers with a redirect to `captive_portal_url`**; that
+  web-server change is outside this module.
+
+The operator script removes and re-adds only `dotmac-wg:v1:` rows. The REST
+form contains `add` commands only and passes `check_dangerous_commands` and
+`parse_routeros_rest_commands`; placement is a typed directive because REST
+`place-before` needs a device-local id. Nothing is pushed: there is no push or
+template wiring, and the module never contacts a router.
+`RouterConfigTemplate`/`create_push` are not used because pushes accept only
+`RouterSotIntent` rows (`dotmac-sot:` markers, a field policy without
+`dst-limit`/`limit`/`reject-with`, and append-only adds with no placement), and
+storing a rendered body as a Jinja template would create a second copy of
+this owner's output.
+
+Allowed resources are named entries `{key, label, kind, hosts, enabled}` with
+`kind` one of `payment`, `dns`, `support`, `other` (`portal` is reserved for
+the derived entry). Keys are unique and hostnames must be FQDNs; every
+settings write path validates the value against
+`app.schemas.walled_garden.WalledGardenAllowedResources`. A disabled Paystack
+preset (`checkout.paystack.com`, `api.paystack.co`, `js.paystack.co`,
+`standard.paystack.co`) is seeded; an operator enables it explicitly. Until
+the admin UI exists, operators change entries through the settings owner
+(`apply_admin_settings_form_updates`, scope `control:settings:write`, audited
+as `control.settings_form_updated`). Toggling one entry changes only that
+entry's tagged elements.
+
+`access.walled_garden_router_readiness` compares the module rendered from
+current settings with each router's latest `router_config_snapshots` export
+(backslash continuations joined) and returns `ready`, `not_ready` with typed
+findings, `stale` (snapshot older than 48h by default), `no_snapshot`, or
+`not_configured`. Findings name missing enabled entries by key; a disabled
+entry still present on the router is `disabled_entry_present` drift. It also
+reports how many legacy quarantine rules remain and how many static
+`suspended` entries are enabled or disabled. Captive must fail closed: only a
+`ready` serving router may carry captive subscribers. Inspect with
+`python -m scripts.network.walled_garden_router_module render|readiness`.
+
+Legacy retirement is a separate, explicitly approved operator step: the
+module returns `legacy_elements_to_retire` (the six legacy comments) and never
+removes them itself. Static `suspended` entries should be retired separately,
+because membership must come only from RADIUS (dynamic, session-scoped).
+
 ### Non-RADIUS connectivity enforcement
 
 Everything above assumes `Subscription.login` exists. A subscription with

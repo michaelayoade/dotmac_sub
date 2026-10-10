@@ -30,6 +30,10 @@
 # two direct Subscriber writes: email verification reset and the declared
 # notification preference projection. Profile values are saved in its one
 # owner-managed transaction; the portal adapter has no parallel writer.
+#
+# 2026-10-10 — migration 664 adds one write site: the single UPDATE that
+# removes retired Splynx keys from `subscribers.metadata` (contract step, no
+# new fact). Total 122 -> 123.
 
 2 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 2 cli_script|scripts/migration/backfill_party_status.py
@@ -42,6 +46,7 @@
 1 migration|alembic/versions/267_brand_profiles.py
 2 migration|alembic/versions/277_lifecycle_communications_sot.py
 2 migration|alembic/versions/383_replaceable_backoffice_boundary.py
+1 migration|alembic/versions/664_purge_retired_splynx_metadata_keys.py
 1 service|app/services/account_deletion.py
 10 service|app/services/account_lifecycle.py
 1 service|app/services/billing_cleanup_remediation.py
@@ -66,4 +71,4 @@
 1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 122
+TOTAL 123
