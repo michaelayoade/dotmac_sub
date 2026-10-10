@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingCreate
+from app.schemas.walled_garden import DEFAULT_WALLED_GARDEN_ALLOWED_RESOURCES
 from app.services.channel_health_contracts import (
     DEFAULT_CHANNEL_HEALTH_CONTRACTS,
     reconcile_persisted_channel_health_contracts,
@@ -1697,6 +1699,14 @@ def seed_radius_settings(db: Session) -> None:
         key="captive_portal_url",
         value_type=SettingValueType.string,
         value_text=os.getenv("RADIUS_CAPTIVE_PORTAL_URL", ""),
+    )
+    # Named walled-garden allowed resources. Presets (Paystack) ship disabled;
+    # ensure_by_key never overwrites an operator-edited row.
+    radius_settings.ensure_by_key(
+        db,
+        key="walled_garden_allowed_resources",
+        value_type=SettingValueType.json,
+        value_json=copy.deepcopy(DEFAULT_WALLED_GARDEN_ALLOWED_RESOURCES),
     )
 
 

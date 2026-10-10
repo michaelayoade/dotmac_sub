@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -12,6 +13,10 @@ from sqlalchemy import select
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.schemas.walled_garden import (
+    DEFAULT_WALLED_GARDEN_ALLOWED_RESOURCES,
+    walled_garden_allowed_resources_error,
+)
 from app.services import domain_settings as settings_service
 from app.services.brand_theme import (
     DEFAULT_HEX,
@@ -1938,6 +1943,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default=None,
         label="Captive Portal URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="walled_garden_allowed_resources",
+        env_var=None,
+        # {"entries": [{key, label, kind, hosts, enabled}]}; validated on every
+        # write by app.schemas.walled_garden (see TYPED_JSON_SETTING_VALIDATORS)
+        # and re-validated, fail-closed, by the walled-garden router module.
+        value_type=SettingValueType.json,
+        default=DEFAULT_WALLED_GARDEN_ALLOWED_RESOURCES,
+        label="Walled-Garden Allowed Resources",
     ),
     # PPPoE auto-generation settings (credentials are always generated on activation)
     SettingSpec(
@@ -5863,6 +5879,30 @@ for _spec in SETTINGS_SPECS:
         )
     _SPECS_BY_KEY[(str(_spec.domain), _spec.key)] = _spec
 del _spec
+
+
+#: Value contracts for JSON settings whose shape is a typed domain value.
+#: ``DomainSettings`` consults this on every write path, so a malformed value
+#: is refused before it is stored rather than discovered by a reader.
+TYPED_JSON_SETTING_VALIDATORS: dict[
+    tuple[SettingDomain, str], Callable[[object], str | None]
+] = {
+    (
+        SettingDomain.radius,
+        "walled_garden_allowed_resources",
+    ): walled_garden_allowed_resources_error,
+}
+
+
+def typed_setting_value_error(
+    domain: SettingDomain, key: str, value: object
+) -> str | None:
+    """Return a safe validation message for a typed JSON setting, else None."""
+
+    validator = TYPED_JSON_SETTING_VALIDATORS.get((domain, key))
+    if validator is None:
+        return None
+    return validator(value)
 
 
 def get_spec(domain: SettingDomain, key: str) -> SettingSpec | None:
