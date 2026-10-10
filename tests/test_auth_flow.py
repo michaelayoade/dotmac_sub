@@ -1127,6 +1127,9 @@ def test_password_reset_does_not_bypass_mfa(db_session, person, monkeypatch):
     result = request_password_reset(db_session, person.email)
     assert result
     reset_password(db_session, result["token"], "Brandnew1!")
+    # The legacy compatibility redemption joins this session's transaction;
+    # login (phase A) requires a transaction-free session, so settle it.
+    db_session.commit()
 
     login_result = AuthFlow.login(
         db_session, person.email, "Brandnew1!", _make_request(), None

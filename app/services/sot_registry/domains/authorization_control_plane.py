@@ -1269,6 +1269,254 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="auth.password_authentication",
+            module="app.services.password_authentication",
+            owns=(
+                "password authentication success transition",
+                "MFA challenge completion",
+                "authentication failure counters",
+                "authenticated password change",
+            ),
+            depends_on=(
+                "auth.token_signing",
+                "app_sessions.auth",
+                "party.staff_session_projection",
+                "control.settings_spec",
+                "observability.audit_log",
+            ),
+            notes=(
+                "Credential standing is version-bound. Password verification "
+                "and eligibility run read-only first; the success transition is "
+                "ONE owner transaction whose first write is a conditional "
+                "UPDATE on user_credentials.credential_version, so a reset that "
+                "commits between verification and session issuance fails the "
+                "gate instead of leaving an unrevoked session. MFA challenges "
+                "carry the credential binding and re-run the gate. PPPoE "
+                "(access credential) authentication never touches "
+                "user_credentials. The hash-representation hook "
+                "replace_password_representation is built but not called by "
+                "login."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="password authentication success transition",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "canonical authenticating principal state",
+                            "authentication policy settings",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                    ConcernContract(
+                        name="MFA challenge completion",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "canonical authenticating principal state",
+                            "verified MFA challenge envelope",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                    ConcernContract(
+                        name="authentication failure counters",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "authentication policy settings",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                    ConcernContract(
+                        name="authenticated password change",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "authentication policy settings",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authentication command evidence",
+                        owner="auth.password_authentication",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "typed CommandContext carrying the authenticating "
+                            "principal as actor, the authentication scope and "
+                            "a reason; verified phase-A snapshots carry only "
+                            "identifiers and the credential_version, never a "
+                            "password, hash or token"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="credential standing record",
+                        owner="auth.password_authentication",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "user_credentials row: credential_version, "
+                            "is_active, provider, must_change_password, lock "
+                            "window and failure counter; mfa_methods and "
+                            "mfa_recovery_codes rows; access_credentials "
+                            "active flag and update marker for PPPoE sources"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical authenticating principal state",
+                        owner="party.staff_session_projection",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "active subscriber, reseller user or Party-bound "
+                            "staff principal re-read inside the gate "
+                            "transaction without a principal lock"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="authentication policy settings",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "failed-login and MFA attempt limits, lockout "
+                            "minutes and password minimum length, resolved in "
+                            "phase A before the owner transaction opens"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="verified MFA challenge envelope",
+                        owner="auth.token_signing",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "signature and expiry verified version-2 mfa or "
+                            "mfa_enrollment claims binding principal, audience, "
+                            "source and credential id plus version"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Each public command enters execute_owner_command once "
+                        "on a session that phase A has returned transaction-free. "
+                        "The credential gate, session insert, presence, "
+                        "recovery-code spend, method update and success audit "
+                        "commit or roll back together; failure counters run in "
+                        "their own small owner transaction."
+                    ),
+                    locking=(
+                        "No SELECT FOR UPDATE and no lock while hashing. A "
+                        "session-minting command first takes FOR KEY SHARE on "
+                        "the principal row (the lock its session foreign key "
+                        "needs anyway), so its order matches reset: principal, "
+                        "credential. The first write is then a conditional "
+                        "UPDATE on the credential row; it waits on a concurrent "
+                        "reset and PostgreSQL re-evaluates the predicate on the "
+                        "new row version. Order: principal (key share), "
+                        "credential, recovery codes, MFA method, sessions. "
+                        "lock_timeout is 5s and maps to a retryable refusal."
+                    ),
+                    idempotency=(
+                        "A command is single-shot: a repeat re-verifies "
+                        "against the current credential_version. A spent "
+                        "recovery code or a changed credential fails the gate "
+                        "and consumes nothing. Challenges are bound to "
+                        "credential_version but not yet single use."
+                    ),
+                    retries=(
+                        "A deadlock (40P01) retries the whole phase B once; "
+                        "the gate re-evaluates the version so phase A stays "
+                        "valid. Zero gate rows are never retried or re-verified."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.password_authentication.invalid_credentials",
+                        "auth.password_authentication.locked",
+                        "auth.password_authentication.must_change_password",
+                        "auth.password_authentication.account_disabled",
+                        "auth.password_authentication.admin_required",
+                        "auth.password_authentication.invalid_mfa_token",
+                        "auth.password_authentication.invalid_mfa_code",
+                        "auth.password_authentication.mfa_locked",
+                        "auth.password_authentication.credential_changed",
+                        "auth.password_authentication.lock_timeout",
+                        *owner_command_boundary_error_codes(
+                            "auth.password_authentication"
+                        ),
+                    ),
+                    mapping_owner=(
+                        "app.services.auth_flow and the web or API "
+                        "authentication adapters"
+                    ),
+                    retryable_codes=("auth.password_authentication.lock_timeout",),
+                    fail_closed_on=(
+                        "stale credential_version or changed credential standing",
+                        "challenge without the version-2 credential binding",
+                        "inactive or unresolvable principal at the gate",
+                        "changed PPPoE secret during an MFA window",
+                        "a failure-counter write error (never becomes success)",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "auth.login_succeeded",
+                        "auth.password_step_succeeded",
+                        "auth.password_changed",
+                    ),
+                    schema_version=1,
+                    delivery_owner="observability.audit_log",
+                    compatibility=(
+                        "These are audit rows staged in the owner transaction "
+                        "(schema_version 1 metadata); no domain event is "
+                        "emitted. Metadata carries identifiers and the "
+                        "credential_version only, never a secret, hash, token "
+                        "or raw body."
+                    ),
+                    replay=(
+                        "Audit rows are immutable evidence; credential state "
+                        "stays authoritative and is not rebuilt from them."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "app.services.auth_flow.AuthFlow.login, mfa_verify and "
+                        "change_password with adapter-owned commits"
+                    ),
+                    new_owner="auth.password_authentication",
+                    verification=(
+                        "Unit gate, challenge and PPPoE-separation tests plus "
+                        "PostgreSQL concurrency tests against a real database."
+                    ),
+                    cutover_gate=(
+                        "AuthFlow login, MFA and password change call only the "
+                        "owner for credential success, failure counters and "
+                        "password writes; customer-portal parity is a follow-up."
+                    ),
+                    fallback_retirement=(
+                        "The read-modify-write failure counters, the "
+                        "SELECT-then-update recovery-code spend and the "
+                        "unbound MFA challenge are removed from AuthFlow."
+                    ),
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/adr/0002-owner-command-transaction-boundary.md",
+                ),
+                test_refs=(
+                    "tests/test_password_authentication.py",
+                    "tests/architecture/test_password_authentication_boundary.py",
+                    "tests/integration/test_password_auth_credential_race.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="auth.customer_credential_enrollment",
             module="app.services.customer_credential_enrollment",
             owns=(

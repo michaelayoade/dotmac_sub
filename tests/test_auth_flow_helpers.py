@@ -400,13 +400,62 @@ def test_mfa_confirm_commit_error(db_session, person, monkeypatch):
         )
 
 
+def _v2_mfa_token(db_session, person, *, with_credential=True):
+    """A genuine v2 challenge for ``person``'s local credential."""
+    from app.services import password_authentication
+
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username=f"{person.id}@example.com",
+        password_hash=auth_flow_service.hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+    verified = password_authentication.VerifiedCredential(
+        src=password_authentication.SRC_USER_CREDENTIAL,
+        principal_type="subscriber",
+        principal_id=str(person.id),
+        audience="general",
+        staff_binding=None,
+        mfa_required=True,
+        enrollment_required=False,
+        credential_id=credential.id,
+        credential_version=1,
+        provider=AuthProvider.local,
+    )
+    payload = password_authentication._challenge_payload(  # noqa: SLF001
+        verified,
+        typ="mfa",
+        credential_version=1,
+        now=datetime.now(UTC),
+    )
+    return auth_flow_service._jwt_encode_token(  # noqa: SLF001
+        payload, "test-secret", "HS256"
+    )
+
+
 def test_mfa_verify_missing_method(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
-    with pytest.raises(HTTPException):
+    mfa_token = _v2_mfa_token(db_session, person)
+    with pytest.raises(HTTPException) as excinfo:
         auth_flow_service.AuthFlow.mfa_verify(
             db_session, mfa_token, "123456", _make_request()
         )
+    assert excinfo.value.status_code == 404
+
+
+def test_mfa_verify_rejects_legacy_unbound_token(db_session, person, monkeypatch):
+    """No legacy fallback: a challenge without the v2 binding is refused."""
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    legacy = auth_flow_service._issue_mfa_token(None, str(person.id))  # noqa: SLF001
+    with pytest.raises(HTTPException) as excinfo:
+        auth_flow_service.AuthFlow.mfa_verify(
+            db_session, legacy, "123456", _make_request()
+        )
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.detail == "Invalid MFA token"
 
 
 def test_mfa_verify_missing_sub(monkeypatch, db_session):
@@ -433,11 +482,13 @@ def test_mfa_verify_invalid_code(db_session, person, monkeypatch):
     auth_flow_service.AuthFlow.mfa_confirm(
         db_session, str(setup["method_id"]), code, str(person.id)
     )
-    mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
-    with pytest.raises(HTTPException):
+    mfa_token = _v2_mfa_token(db_session, person)
+    with pytest.raises(HTTPException) as excinfo:
         auth_flow_service.AuthFlow.mfa_verify(
             db_session, mfa_token, "000000", _make_request()
         )
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.detail == "Invalid MFA code"
 
 
 def test_mfa_verify_response_success(db_session, person, monkeypatch):
@@ -460,7 +511,10 @@ def test_mfa_verify_response_success(db_session, person, monkeypatch):
     auth_flow_service.AuthFlow.mfa_confirm(
         db_session, str(setup["method_id"]), code, str(person.id)
     )
-    mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
+    login_result = auth_flow_service.AuthFlow.login(
+        db_session, "mfa@example.com", "secret", _make_request(), None
+    )
+    mfa_token = login_result["mfa_token"]
     response = auth_flow_service.AuthFlow.mfa_verify_response(
         db_session, mfa_token, pyotp.TOTP(setup["secret"]).now(), _make_request()
     )
