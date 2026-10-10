@@ -326,7 +326,12 @@ def test_purge_removes_only_retired_keys_and_audits_counts(
     db_session.expire_all()
     assert db_session.get(Subscriber, subscriber.id).metadata_ == kept
     assert db_session.get(Subscriber, other.id).metadata_ == {"splynx_status": "active"}
-    assert db_session.get(Subscriber, array_row.id).metadata_ == ["splynx_login"]
+    # Read the non-object row through SQL: the ORM attribute only accepts objects.
+    array_metadata = db_session.execute(
+        text("SELECT metadata::jsonb FROM subscribers WHERE id = :id"),
+        {"id": array_row.id},
+    ).scalar_one()
+    assert array_metadata == ["splynx_login"]
 
     audits = _audit_rows(db_session, PURGE_ACTOR)
     assert len(audits) == prior_audits + 1
