@@ -1111,3 +1111,29 @@ def test_create_preview_shows_coverage_end_before_and_after(
     assert preview.actionable, preview.blockers
     assert preview.position_impact.coverage_end_before is None
     assert preview.position_impact.coverage_end_after == _one_cycle_end()
+
+
+def test_preview_tolerates_a_missing_prepaid_funding_baseline(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    from app.services import customer_financial_position
+    from app.services.prepaid_funding_reconstruction import (
+        PrepaidFundingBaselineMissingError,
+    )
+
+    def _missing(*_args, **_kwargs):
+        raise PrepaidFundingBaselineMissingError("not materialized")
+
+    monkeypatch.setattr(
+        customer_financial_position, "prepaid_available_balance", _missing
+    )
+    _prepare(db_session, subscriber_account, subscription)
+    adjustment, _ledger = _debit(db_session, subscriber_account, origin_ref="renewal")
+
+    preview = preview_renewal_origin_correction(
+        db_session, _create_query(adjustment, subscription), as_of=NOW
+    )
+
+    assert preview.actionable, preview.blockers
+    assert preview.position_impact.prepaid_available_balance_before is None
+    assert preview.position_impact.prepaid_available_balance_after is None

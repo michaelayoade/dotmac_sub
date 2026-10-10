@@ -105,6 +105,9 @@ from app.services.prepaid_coverage_reconciliation import (
     parse_prepaid_renewal_origin_ref,
     preview_prepaid_coverage_reconciliation,
 )
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.services.service_entitlements import (
     EntitlementLinkError,
     ReviewedFundingDebitLink,
@@ -666,7 +669,8 @@ def _position_impact(
             else _ZERO
         )
         balance_after = _money(balance_before + removed)
-    except (ValueError, DomainError):
+    except (ValueError, DomainError, PrepaidFundingBaselineMissingError):
+        # No materialized funding authority: the balance is informational only.
         balance_before = balance_after = None
     coverage_before: datetime | None = None
     coverage_after: datetime | None = None
