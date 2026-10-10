@@ -2305,9 +2305,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),
     "service-period-review": ("billing:extension:read",),
-    "subledger-opening-correction": (
-        "billing:customer_subledger_opening:correct",
-    ),
+    "subledger-opening-correction": ("billing:customer_subledger_opening:correct",),
     "payments": ("billing:payment:read",),
     "payment-proofs": ("billing:proof:read",),
     "payment-reconciliation": ("billing:ledger:read",),
