@@ -90,6 +90,16 @@ def test_network_guidance_explains_independent_map_proposal_review() -> None:
     assert "canonical asset change" in content
 
 
+def test_network_guidance_explains_map_layer_visibility_controls() -> None:
+    guide = guidance_for_path("/admin/network/map")
+
+    assert guide is not None
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "all layers or none" in content
+    assert "individual layer checkbox" in content
+    assert "do not modify canonical network data" in content
+
+
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
     expected = {
         "/admin/dashboard": "admin-workspace",
