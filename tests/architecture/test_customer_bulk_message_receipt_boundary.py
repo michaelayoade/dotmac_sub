@@ -23,6 +23,33 @@ def test_bulk_message_adapter_uses_receipt_identity_and_status() -> None:
     assert "request_id=request_id" in body
 
 
+def test_bulk_message_receipt_uses_authenticated_principal_for_staff_users() -> None:
+    source = (ROOT / "app/web/admin/customers.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    helper = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_get_bulk_message_actor_id"
+    )
+    helper_body = ast.get_source_segment(source, helper)
+    assert 'auth.get("principal_id")' in helper_body
+    assert "return UUID(str(principal_id))" in helper_body
+
+    for route_name in (
+        "bulk_send_customer_message",
+        "customer_bulk_message_status",
+    ):
+        route = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.FunctionDef) and node.name == route_name
+        )
+        body = ast.get_source_segment(source, route)
+        assert "_get_bulk_message_actor_id(request)" in body
+        assert "_get_actor_id(request)" not in body
+
+
 def test_materialization_participant_cannot_commit_or_run_without_owner() -> None:
     source = (ROOT / "app/services/web_customer_actions.py").read_text(encoding="utf-8")
     module = ast.parse(source)

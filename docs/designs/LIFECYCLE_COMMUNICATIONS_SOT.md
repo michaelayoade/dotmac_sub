@@ -133,12 +133,14 @@ by the existing delivery outbox consumer.
 Every receipt transition stages `customer_bulk_message.changed` version-1
 record-only audit evidence in the same transaction, containing only the request
 UUID, state and attempt. Dispatch work is represented by the receipt row itself.
-Receipt status is a fresh owner query, scoped to the admitting actor and send
-permission. Delivery counters come from its linked notifications; retryable
-failed attempts remain pending, and provider-submitted messages remain distinct
-from delivered messages. Missing receipts and denied access never imply an
-accepted send. A stale preparation lease is the drift signal; the permanent
-receipt drain is the idempotent repair path and this owner is the repair owner.
+Receipt status is a fresh owner query, scoped to the authenticated principal
+that admitted the send and send permission. This includes staff system users,
+whose principal ID is not a subscriber ID. Delivery counters come from its
+linked notifications; retryable failed attempts remain pending, and
+provider-submitted messages remain distinct from delivered messages. Missing
+receipts and denied access never imply an accepted send. A stale preparation
+lease is the drift signal; the permanent receipt drain is the idempotent repair
+path and this owner is the repair owner.
 
 ### Customer send status page contract
 
