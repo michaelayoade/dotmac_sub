@@ -307,11 +307,15 @@ class TestCommentSchema:
 
 
 class TestCaptiveRedirectPersistence:
-    def test_subscriber_update_schema_accepts_captive_redirect_flag(self) -> None:
+    def test_subscriber_update_schema_refuses_retired_captive_flag(self) -> None:
+        """The flag is a retired decision input: captive policy rules decide."""
+        import pytest
+        from pydantic import ValidationError
+
         from app.schemas.subscriber import SubscriberUpdate
 
-        payload = SubscriberUpdate(captive_redirect_enabled=True)
-        assert payload.captive_redirect_enabled is True
+        with pytest.raises(ValidationError):
+            SubscriberUpdate(captive_redirect_enabled=True)
 
     def test_save_radius_config_persists_explicit_captive_redirect_toggle(
         self, db_session
@@ -331,7 +335,7 @@ class TestCaptiveRedirectPersistence:
         setting = radius_settings.get_by_key(db_session, "captive_redirect_enabled")
         assert setting.value_text == "true"
 
-    def test_billing_override_payload_sets_captive_redirect_flag(self) -> None:
+    def test_billing_override_payload_no_longer_writes_captive_flag(self) -> None:
         from app.services.web_customer_actions import _billing_override_payload
 
         payload = _billing_override_payload(
@@ -340,12 +344,11 @@ class TestCaptiveRedirectPersistence:
             payment_due_days=None,
             grace_period_days=None,
             min_balance=None,
-            captive_redirect_enabled="true",
             tax_rate_id=None,
             payment_method=None,
         )
 
-        assert payload["captive_redirect_enabled"] is True
+        assert "captive_redirect_enabled" not in payload
 
 
 class TestRestrictedContextHelpers:

@@ -23,6 +23,9 @@ from app.services.sot_manifest import (
     TransactionMode,
     owner_command_boundary_error_codes,
 )
+from app.services.sot_registry.captive_access_contracts import (
+    SERVICES as CAPTIVE_ACCESS_SERVICES,
+)
 from app.services.sot_registry.domains.financial_access.test_connections import (
     ACTIONS as TEST_CONNECTION_ACTIONS,
 )
@@ -101,6 +104,12 @@ DOMAIN = DomainSOT(
                 "extends the billing anchor by exact elapsed pause time on resume; "
                 "Suspend is an enforcement lock that stops access and future "
                 "recurring billing without preserving unused period time."
+                " Each lock persists the requested treatment "
+                "(requested_access_mode) and the effective one (access_mode); "
+                "reevaluate_enforcement_lock_access_modes is the only post-"
+                "creation writer of access_mode, called by "
+                "access.captive_access_policy_change, and never raises a lock "
+                "above its request."
             ),
         ),
         SOTService(
@@ -980,31 +989,35 @@ DOMAIN = DomainSOT(
             name="access.walled_garden_policy",
             module="app.services.walled_garden_policy",
             owns=(
-                "captive account eligibility",
+                "captive safety rails",
                 "captive network readiness",
                 "effective hard-reject/captive restriction",
                 "most-restrictive-active-lock resolution",
             ),
             depends_on=(
                 "access.subscription_lifecycle",
+                "access.captive_access_policy",
+                "access.captive_router_gate",
                 "control.settings_spec",
                 "customer.accounts",
                 "customer.identity_scope",
             ),
             notes=(
-                "Hard reject is the fail-closed default. Captive access "
-                "requires explicit account opt-in, eligible direct-house "
-                "residential scope, ready network settings, and no more-"
-                "restrictive active lock."
+                "Hard reject is the fail-closed default. Captive access for a "
+                "subscription requires a captive request, the fixed safety rails "
+                "(customer principal, active service-eligible account, non-"
+                "terminal service), an allow from access.captive_access_policy, "
+                "ready network settings, every serving router ready per "
+                "access.captive_router_gate, and no more-restrictive active lock."
             ),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
-                        name="captive account eligibility",
+                        name="captive safety rails",
                         role=OwnerRole.POLICY,
                         input_names=(
                             "canonical subscriber access identity",
-                            "canonical reseller scope",
+                            "canonical subscription lifecycle state",
                             "captive restriction protocol",
                         ),
                     ),
@@ -1024,6 +1037,8 @@ DOMAIN = DomainSOT(
                             "canonical reseller scope",
                             "canonical captive network settings",
                             "canonical enforcement locks",
+                            "captive access policy resolution",
+                            "serving-router walled-garden readiness",
                             "captive restriction protocol",
                         ),
                     ),
@@ -1044,7 +1059,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
                             "Subscriber user type, active and lifecycle state, "
-                            "explicit category evidence, and captive opt-in"
+                            "and explicit category evidence"
                         ),
                     ),
                     AuthorityInput(
@@ -1076,6 +1091,25 @@ DOMAIN = DomainSOT(
                         owner="access.subscription_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=("active per-subscription EnforcementLock access modes"),
+                    ),
+                    AuthorityInput(
+                        name="captive access policy resolution",
+                        owner="access.captive_access_policy",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "per-subscription rule resolution: account > "
+                            "customer_set > plan_family > global, deny beats "
+                            "allow, default deny"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="serving-router walled-garden readiness",
+                        owner="access.captive_router_gate",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "every router serving the subscription is ready "
+                            "per access.walled_garden_router_readiness"
+                        ),
                     ),
                     AuthorityInput(
                         name="captive restriction protocol",
@@ -1115,10 +1149,12 @@ DOMAIN = DomainSOT(
                         "financial, lifecycle, event, RADIUS, and status adapters"
                     ),
                     fail_closed_on=(
-                        "missing explicit residential or direct-house evidence",
-                        "inactive or ineligible account scope",
+                        "non-customer principal or inactive/ineligible account",
+                        "no allow rule (default deny) or a winning deny rule",
                         "disabled or invalid captive network settings",
+                        "unresolved or not-ready serving router",
                         "terminal subscription state or ambiguous active locks",
+                        "a request without subscription scope",
                     ),
                 ),
                 migration=MigrationContract(
@@ -1129,9 +1165,9 @@ DOMAIN = DomainSOT(
                     ),
                     new_owner="access.walled_garden_policy",
                     verification=(
-                        "Eligibility, opt-in, network readiness, terminal status, "
-                        "most-restrictive-lock, RADIUS projection, and architecture "
-                        "tests."
+                        "Safety-rail, policy-precedence, network readiness, "
+                        "router-gate, terminal status, most-restrictive-lock, "
+                        "RADIUS projection, and architecture tests."
                     ),
                     cutover_gate=(
                         "Financial, event, RADIUS, connectivity, and service-status "
@@ -1150,6 +1186,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_walled_garden_policy.py",
+                    "tests/test_captive_access_policy.py",
                     "tests/test_radius_shadow_handler_integration.py",
                     "tests/architecture/test_grace_walled_garden_ownership.py",
                     "tests/architecture/test_walled_garden_policy_boundary.py",
@@ -1165,7 +1202,6 @@ DOMAIN = DomainSOT(
                 "legacy suspended-quarantine retirement worklist",
             ),
             depends_on=(
-                "access.walled_garden_policy",
                 "control.settings_spec",
                 "network.routeros_sot",
             ),
@@ -1413,6 +1449,7 @@ DOMAIN = DomainSOT(
                 ),
             ),
         ),
+        *CAPTIVE_ACCESS_SERVICES,
         SOTService(
             name="access.radius_state",
             module="app.services.radius_access_state",

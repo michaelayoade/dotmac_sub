@@ -487,7 +487,6 @@ def test_an_absent_billing_day_does_not_clear_a_legacy_value():
         "payment_due_days": None,
         "grace_period_days": None,
         "min_balance": None,
-        "captive_redirect_enabled": None,
         "tax_rate_id": None,
         "payment_method": None,
     }

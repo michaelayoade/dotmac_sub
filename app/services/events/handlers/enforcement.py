@@ -53,6 +53,7 @@ HANDLED_EVENT_TYPES = frozenset(
         EventType.payment_received,
         EventType.account_credit_deposited,
         EventType.invoice_overdue,
+        EventType.enforcement_lock_access_mode_changed,
     }
 )
 
@@ -118,6 +119,32 @@ class EnforcementHandler:
             self._handle_payment_received(db, event)
         elif event.event_type == EventType.invoice_overdue:
             self._handle_invoice_overdue(db, event)
+        elif event.event_type == EventType.enforcement_lock_access_mode_changed:
+            self._handle_lock_access_mode_change(db, event)
+
+    def _handle_lock_access_mode_change(self, db: Session, event: Event) -> None:
+        """Reproject a re-evaluated restriction and refresh its sessions.
+
+        The lifecycle owner already persisted the new effective lock mode and
+        the access-state projection. This consequence uses the same path as a
+        suspension: synchronous RADIUS projection to every target, then the
+        out-of-band session cleanup (CoA/disconnect) only after projection
+        converged, so the next authentication receives the new treatment.
+        """
+
+        subscription_id = event.subscription_id or event.payload.get("subscription_id")
+        if not subscription_id:
+            logger.warning("Skipping access-mode refresh: event missing subscription")
+            return
+        subscription = db.get(Subscription, subscription_id)
+        if subscription is None or subscription.status == SubscriptionStatus.active:
+            # Restored meanwhile: the restore consequence owns its refresh.
+            return
+        self._enforce_subscription_block(
+            db,
+            str(subscription_id),
+            reason="captive_policy_change",
+        )
 
     def _enqueue_subscription_session_cleanup(
         self, subscription_id: str, *, reason: str
@@ -481,6 +508,7 @@ class EnforcementHandler:
         fup_block_downgraded = False
 
         fup_access_mode = None
+        fup_requested_mode = None
         if action is FupEnforcementAction.BLOCK:
             from app.models.enforcement_lock import AccessRestrictionMode
             from app.models.subscriber import Subscriber
@@ -495,7 +523,9 @@ class EnforcementHandler:
                 db,
                 subscriber,
                 requested_mode=AccessRestrictionMode.captive,
+                subscription=db.get(Subscription, subscription_id),
             )
+            fup_requested_mode = AccessRestrictionMode.captive
             fup_access_mode = decision.effective_mode
             action = FupEnforcementAction.SUSPEND
             fup_block_downgraded = fup_access_mode == AccessRestrictionMode.hard_reject
@@ -523,6 +553,7 @@ class EnforcementHandler:
                     reason=EnforcementReason.fup,
                     source=fup_source,
                     access_mode=fup_access_mode or AccessRestrictionMode.hard_reject,
+                    requested_access_mode=fup_requested_mode,
                     emit=False,  # prevent re-entrant dispatch
                 )
                 # Apply RADIUS enforcement directly (emit=False skips the
