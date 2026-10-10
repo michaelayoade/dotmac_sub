@@ -41,6 +41,11 @@ from app.services.owner_commands import (
     execute_owner_command,
 )
 from app.services.prepaid_funding_reconstruction import LEGACY_FINANCIAL_HANDOFF_AT
+from app.services.sole_approver_exception import (
+    SoleApproverExceptionGrant,
+    authorize_sole_approver,
+    stage_sole_approver_exception_audit,
+)
 
 ResultT = TypeVar("ResultT")
 OWNER = "billing.carried_source_identity_adjudication"
@@ -109,6 +114,9 @@ class ConfirmCarriedSourceIdentityCommand:
     evidence_sha256: str
     reviewed_by_id: UUID
     approved_by_id: UUID
+    #: Only for ``reviewed_by_id == approved_by_id`` under the governed
+    #: sole-approver exception; ignored (and never required) otherwise.
+    sole_approver_justification: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,12 +343,26 @@ def _active_reviewers(
     db: Session,
     reviewed_by_id: UUID,
     approved_by_id: UUID,
-) -> None:
+    *,
+    context: CommandContext,
+    sole_approver_justification: str | None,
+) -> SoleApproverExceptionGrant | None:
+    """Require two active reviewers, or one under the governed exception."""
+
+    grant: SoleApproverExceptionGrant | None = None
     if reviewed_by_id == approved_by_id:
-        raise _error(
-            "reviewer_conflict",
-            "The reviewer and independent approver must be different staff users.",
-        )
+        grant = authorize_sole_approver(
+            db,
+            flow=OWNER,
+            approver_id=approved_by_id,
+            actor=context.actor,
+            justification=sole_approver_justification,
+        ).grant
+        if grant is None:
+            raise _error(
+                "reviewer_conflict",
+                "The reviewer and independent approver must be different staff users.",
+            )
     rows = list(
         db.scalars(
             select(SystemUser)
@@ -356,6 +378,7 @@ def _active_reviewers(
             "Both reviewers must be active staff principals.",
             reviewer_ids=[str(value) for value in missing],
         )
+    return grant
 
 
 def _command_fingerprint(
@@ -365,18 +388,24 @@ def _command_fingerprint(
     evidence_ref: str,
     evidence_sha256: str,
 ) -> str:
-    return _digest(
-        {
-            "account_id": str(command.account_id),
-            "approved_by_id": str(command.approved_by_id),
-            "evidence_ref": evidence_ref,
-            "evidence_sha256": evidence_sha256,
-            "expected_preview_fingerprint": command.expected_preview_fingerprint,
-            "idempotency_key": idempotency_key,
-            "reason": command.context.reason.strip(),
-            "reviewed_by_id": str(command.reviewed_by_id),
-        }
-    )
+    material = {
+        "account_id": str(command.account_id),
+        "approved_by_id": str(command.approved_by_id),
+        "evidence_ref": evidence_ref,
+        "evidence_sha256": evidence_sha256,
+        "expected_preview_fingerprint": command.expected_preview_fingerprint,
+        "idempotency_key": idempotency_key,
+        "reason": command.context.reason.strip(),
+        "reviewed_by_id": str(command.reviewed_by_id),
+    }
+    if command.reviewed_by_id == command.approved_by_id:
+        # Self-approval exists only under the governed exception; its
+        # justification is part of the command's identity. Distinct-reviewer
+        # commands keep their original fingerprint unchanged.
+        material["sole_approver_justification"] = (
+            command.sole_approver_justification or ""
+        ).strip()
+    return _digest(material)
 
 
 def _outcome(
@@ -474,7 +503,13 @@ def _confirm(
             "The source-identity evidence changed after review.",
             current_preview_fingerprint=preview.fingerprint,
         )
-    _active_reviewers(db, command.reviewed_by_id, command.approved_by_id)
+    exception_grant = _active_reviewers(
+        db,
+        command.reviewed_by_id,
+        command.approved_by_id,
+        context=command.context,
+        sole_approver_justification=command.sole_approver_justification,
+    )
 
     decision = CarriedSourceIdentityAdjudication(
         account_id=account.id,
@@ -488,6 +523,13 @@ def _confirm(
         reviewed_by_id=command.reviewed_by_id,
         approved_by_id=command.approved_by_id,
         reason=reason,
+        sole_approver_exception=exception_grant is not None,
+        sole_approver_exception_ref=(
+            exception_grant.decision_ref if exception_grant is not None else None
+        ),
+        sole_approver_justification=(
+            exception_grant.justification if exception_grant is not None else None
+        ),
         idempotency_key=idempotency_key,
         command_fingerprint=fingerprint,
         command_id=command.context.command_id,
@@ -516,9 +558,22 @@ def _confirm(
                 "reviewed_by_id": str(command.reviewed_by_id),
                 "approved_by_id": str(command.approved_by_id),
                 "reason": reason,
+                **(
+                    exception_grant.evidence()
+                    if exception_grant is not None
+                    else {"sole_approver_exception": False}
+                ),
             },
         ),
     )
+    if exception_grant is not None:
+        stage_sole_approver_exception_audit(
+            db,
+            exception_grant,
+            entity_type="subscriber",
+            entity_id=str(account.id),
+            evidence_ref=f"{OWNER}:{decision.id}",
+        )
     emit_event(
         db,
         EventType.carried_source_identity_adjudicated,

@@ -5405,6 +5405,50 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
 ]
 
+# Governed sole-approver exception (Governance decision style of 53). Off by
+# default and inert on or after the review date; no environment bootstrap on
+# purpose, so only the settings owner (control:settings:write, audited) can
+# change it. Read only through app.services.sole_approver_exception.
+SETTINGS_SPECS.extend(
+    [
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_enabled",
+            env_var=None,
+            value_type=SettingValueType.boolean,
+            default=False,
+            label="Sole-approver exception enabled",
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_principal",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception principal (system user UUID)",
+            inherits=False,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_review_due",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception review date (YYYY-MM-DD, inert on or after)",
+            inherits=False,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_decision_ref",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception decision reference",
+            inherits=False,
+        ),
+    ]
+)
+
 # These cadence and worker-tuning settings were previously resolved through
 # scheduler-local call-site defaults. Registering them here makes the schema,
 # default, coercion, and optional bootstrap environment name authoritative.

@@ -36,6 +36,11 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
+from app.services.sole_approver_exception import (
+    SoleApproverExceptionGrant,
+    authorize_sole_approver,
+    stage_sole_approver_exception_audit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1148,6 +1153,9 @@ class ApproveRenewalTermRecordCommand:
     approved_amount: Decimal
     approved_by: UUID
     permission_granted: bool
+    #: Only for ``approved_by == requested_by`` under the governed
+    #: sole-approver exception (``governance.sole_approver_exception``).
+    sole_approver_justification: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1587,11 +1595,20 @@ def _approve_record(
         raise _error(
             "request_not_found", "The renewal-term record request was not found."
         )
+    exception_grant: SoleApproverExceptionGrant | None = None
     if command.approved_by == request.requested_by:
-        raise _error(
-            "self_approval_forbidden",
-            "The approver must be a different staff member from the requester.",
-        )
+        exception_grant = authorize_sole_approver(
+            db,
+            flow=OWNER,
+            approver_id=command.approved_by,
+            actor=context.actor,
+            justification=command.sole_approver_justification,
+        ).grant
+        if exception_grant is None:
+            raise _error(
+                "self_approval_forbidden",
+                "The approver must be a different staff member from the requester.",
+            )
     if _money(command.approved_amount) != request.reviewed_amount:
         raise _error(
             "approval_amount_mismatch",
@@ -1666,6 +1683,11 @@ def _approve_record(
             "evidence_sha256": request.evidence_sha256,
             "requested_by_system_user_id": str(request.requested_by),
             "approved_by_system_user_id": str(command.approved_by),
+            **(
+                exception_grant.evidence()
+                if exception_grant is not None
+                else {"sole_approver_exception": False}
+            ),
             "approved_at": now.isoformat(),
             "actor": context.actor,
             "command_id": str(context.command_id),
@@ -1679,6 +1701,14 @@ def _approve_record(
         account_id=subscription.subscriber_id,
         subscription_id=subscription.id,
     )
+    if exception_grant is not None:
+        stage_sole_approver_exception_audit(
+            db,
+            exception_grant,
+            entity_type="subscription",
+            entity_id=str(subscription.id),
+            evidence_ref=f"{OWNER}:{request.request_id}",
+        )
     logger.info(
         "prepaid_renewal_term_recorded: request=%s subscription=%s "
         "work_item_resolved=%s",
