@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import sqlalchemy as sa
@@ -40,14 +40,13 @@ def _state(spec: contract.IndexSpec = INVOICE) -> contract.IndexState:
 
 
 @pytest.fixture
-def bind() -> Iterator[sa.engine.Connection]:
-    # No schema claims: catalog reads are replaced by typed observations.
-    engine = sa.create_engine("sqlite://")
-    try:
-        with engine.connect() as connection:
-            yield connection
-    finally:
-        engine.dispose()
+def bind() -> sa.engine.Connection:
+    # No SQL is executed: every catalog observation is replaced below. Keep
+    # this unit seam as a typed sentinel rather than constructing an engine.
+    return cast(
+        sa.engine.Connection,
+        SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+    )
 
 
 @pytest.mark.parametrize("spec", contract.INDEX_SPECS)
