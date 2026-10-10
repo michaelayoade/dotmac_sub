@@ -1163,6 +1163,22 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use audit and health evidence when a saved setting does not produce the expected behavior.",
     ),
     _guide(
+        "walled-garden",
+        "Settings",
+        "Manage walled-garden allowed resources",
+        "Network and settings administrators",
+        "Choose which named resources suspended subscribers can still reach while captive, and check whether routers carry them.",
+        ("/admin/system/config/walled-garden",),
+        "Review the derived captive portal entry, each configured resource and its hosts, and whether it is enabled.",
+        "Add a resource or edit an existing one's label, kind, and hosts; correct any highlighted field and save again, because nothing is saved while a field is invalid.",
+        "Enable, disable, or remove a resource; if the page reports that the setting changed, reload it and repeat the change.",
+        "Check Router readiness: a saved change is desired state only, and routers report missing or still-present resources until the walled-garden module is re-applied.",
+        notes=(
+            "The portal entry comes from the Captive Portal URL and IP on the RADIUS Configuration page and cannot be edited here.",
+            "Resource keys cannot change after creation because routers carry them in rule tags; remove and re-add a resource to rename its key.",
+        ),
+    ),
+    _guide(
         "meta-connection",
         "Meta connection",
         "Manage the Meta connection",
@@ -2040,6 +2056,22 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("investigate-setting", "Investigate setting behavior", 3),
     ),
+    "walled-garden": (
+        _action("review-walled-garden", "Review allowed resources", 0),
+        _action(
+            "save-walled-garden-resource",
+            "Add or edit a resource",
+            1,
+            permission="system:settings:write",
+        ),
+        _action(
+            "toggle-walled-garden-resource",
+            "Enable, disable, or remove a resource",
+            2,
+            permission="system:settings:write",
+        ),
+        _action("check-walled-garden-readiness", "Check router readiness", 3),
+    ),
     "meta-connection": (
         _action("review-meta-connection", "Review the Meta connection", 0),
         _action(
@@ -2209,7 +2241,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
     AdminHelpNavigationSection(
         "settings",
         "Settings",
-        ("settings", "smtp-senders", "custom-fields-center"),
+        ("settings", "walled-garden", "smtp-senders", "custom-fields-center"),
         "system:settings:read",
     ),
     AdminHelpNavigationSection(
