@@ -282,6 +282,29 @@ def list_contacts(db: Session, customer: dict) -> list[SubscriberContact]:
     )
 
 
+def account_billing_email(db: Session, subscriber: Subscriber) -> str | None:
+    """The account's billing email, from typed sources only.
+
+    A contact flagged `is_billing_contact` is where an account names a distinct
+    billing address (`communication_intents` narrows billing mail to such
+    contacts); the oldest one with an email wins so the answer is stable.
+    Without one, billing goes to the account holder's own `Subscriber.email`,
+    which is also what invoices and receipts address.
+    """
+    designated = db.scalar(
+        select(SubscriberContact.email)
+        .where(
+            SubscriberContact.subscriber_id == subscriber.id,
+            SubscriberContact.is_billing_contact.is_(True),
+            SubscriberContact.email.is_not(None),
+            SubscriberContact.email != "",
+        )
+        .order_by(SubscriberContact.created_at.asc(), SubscriberContact.id.asc())
+        .limit(1)
+    )
+    return (designated or "").strip() or (subscriber.email or "").strip() or None
+
+
 def get_owned_contact(
     db: Session, customer: dict, contact_id: str
 ) -> SubscriberContact | None:
