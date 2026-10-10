@@ -1157,6 +1157,263 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="access.walled_garden_router_module",
+            module="app.services.walled_garden_router_module",
+            owns=(
+                "versioned walled-garden RouterOS module desired configuration",
+                "walled-garden allowed-resource address-list projection",
+                "legacy suspended-quarantine retirement worklist",
+            ),
+            depends_on=(
+                "access.walled_garden_policy",
+                "control.settings_spec",
+                "network.routeros_sot",
+            ),
+            notes=(
+                "Pure renderer. Every element carries a dotmac-wg:v1:<element> "
+                "comment tag; the operator script removes and re-adds only "
+                "those tags. Allowed resources are named, individually enabled "
+                "entries in radius.walled_garden_allowed_resources (validated on "
+                "every settings write); the portal entry is derived from "
+                "captive_portal_url/captive_portal_ip and always present. Legacy "
+                "hand-made quarantine rules are returned as a typed retirement "
+                "worklist and never removed by this owner. It does not connect "
+                "to routers and has no push wiring."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name=(
+                            "versioned walled-garden RouterOS module desired "
+                            "configuration"
+                        ),
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "canonical captive network settings",
+                            "canonical suspended address-list name",
+                            "walled-garden module protocol",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="walled-garden allowed-resource address-list projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical captive network settings",
+                            "canonical walled-garden allowed resources",
+                            "walled-garden module protocol",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="legacy suspended-quarantine retirement worklist",
+                        role=OwnerRole.POLICY,
+                        input_names=("walled-garden module protocol",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical captive network settings",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="typed radius.captive_portal_url and captive_portal_ip",
+                    ),
+                    AuthorityInput(
+                        name="canonical suspended address-list name",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="typed radius.suspended_address_list",
+                    ),
+                    AuthorityInput(
+                        name="canonical walled-garden allowed resources",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "radius.walled_garden_allowed_resources validated by "
+                            "app.schemas.walled_garden.WalledGardenAllowedResources"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="walled-garden module protocol",
+                        owner="access.walled_garden_router_module",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "module version, dotmac-wg tag vocabulary, chain and "
+                            "allow-list names, placement directive, and legacy "
+                            "quarantine comment set"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Caller creates and closes the session; the renderer only "
+                        "reads settings and returns an immutable module."
+                    ),
+                    locking="none",
+                    idempotency=(
+                        "The same settings snapshot renders byte-identical REST "
+                        "and script output; toggling one allowed-resource entry "
+                        "changes only that entry's tagged elements."
+                    ),
+                    retries=(
+                        "Not retried: invalid settings or an unsafe render raise a "
+                        "typed refusal deterministically."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "portal_url_invalid",
+                        "portal_ip_invalid",
+                        "suspended_address_list_invalid",
+                        "allowed_resources_invalid",
+                        "unsafe_render",
+                    ),
+                    mapping_owner="scripts.network.walled_garden_router_module",
+                    fail_closed_on=(
+                        "non-https or hostless captive_portal_url",
+                        "captive_portal_ip that is not one IPv4 host",
+                        "invalid allowed-resource entries or hostnames",
+                        "any rendered command outside the tagged module surface",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.SHADOWING,
+                    old_owner=(
+                        "hand-made per-router dotmac-suspended quarantine and the "
+                        "empty splynx-allowed-resources list"
+                    ),
+                    new_owner="access.walled_garden_router_module",
+                    verification=(
+                        "Readiness verifier compares each router's latest config "
+                        "snapshot with the rendered module and counts legacy rules."
+                    ),
+                    cutover_gate=(
+                        "Module applied ahead of the legacy jump on every serving "
+                        "router and reported ready by "
+                        "access.walled_garden_router_readiness."
+                    ),
+                    fallback_retirement=(
+                        "Legacy rules in legacy_elements_to_retire are removed in a "
+                        "separately approved operator step; static suspended "
+                        "address-list entries are retired separately."
+                    ),
+                ),
+                steward="network access",
+                design_refs=(
+                    "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_walled_garden_router_module.py",
+                    "tests/test_walled_garden_allowed_resources_setting.py",
+                    "tests/architecture/test_walled_garden_router_module_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="access.walled_garden_router_readiness",
+            module="app.services.walled_garden_router_readiness",
+            owns=(
+                "per-router walled-garden module readiness",
+                "fleet walled-garden module readiness",
+            ),
+            depends_on=(
+                "access.walled_garden_router_module",
+                "network.identity",
+            ),
+            notes=(
+                "Reads the latest router_config_snapshots export (no router "
+                "contact) and returns ready, not_ready (typed findings), stale, "
+                "no_snapshot, or not_configured, plus legacy-rule and static "
+                "suspended-entry counts. Captive policy consumers must treat "
+                "anything but ready as not ready."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="per-router walled-garden module readiness",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "rendered walled-garden module",
+                            "router inventory identity",
+                            "router configuration export snapshots",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="fleet walled-garden module readiness",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "rendered walled-garden module",
+                            "router inventory identity",
+                            "router configuration export snapshots",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="rendered walled-garden module",
+                        owner="access.walled_garden_router_module",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="render_walled_garden_module_from_settings",
+                    ),
+                    AuthorityInput(
+                        name="router inventory identity",
+                        owner="network.identity",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="routers rows (id, name, is_active)",
+                    ),
+                    AuthorityInput(
+                        name="router configuration export snapshots",
+                        owner="external:mikrotik_routeros",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "latest router_config_snapshots /export text captured "
+                            "by the scheduled router snapshot task"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Caller creates and closes the session; the resolver reads "
+                        "routers, snapshots, and settings without writes."
+                    ),
+                    locking="none",
+                    idempotency=(
+                        "The same settings, snapshot rows, threshold, and "
+                        "evaluation instant produce the same typed outcome."
+                    ),
+                    retries=(
+                        "Transient reads may be retried; stale, missing, or "
+                        "unrenderable evidence is a typed outcome, not an error."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=("router_not_found",),
+                    mapping_owner="scripts.network.walled_garden_router_module",
+                    fail_closed_on=(
+                        "snapshot older than the freshness threshold",
+                        "no snapshot for the router",
+                        "settings that cannot render the module",
+                        "any missing, drifted, duplicated, disabled, misplaced, "
+                        "or unexpected module element",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="access.walled_garden_router_readiness",
+                ),
+                steward="network access",
+                design_refs=(
+                    "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_walled_garden_router_readiness.py",
+                    "tests/architecture/test_walled_garden_router_module_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="access.radius_state",
             module="app.services.radius_access_state",
             owns=("pure desired RADIUS access-state mapping",),

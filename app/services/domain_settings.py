@@ -159,6 +159,11 @@ class DomainSettings(ListResponseMixin):
             validate_setting_change(db, domain, key, value)
         except ControlRelationshipError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        from app.services.settings_spec import typed_setting_value_error
+
+        typed_error = typed_setting_value_error(domain, key, value)
+        if typed_error is not None:
+            raise HTTPException(status_code=400, detail=typed_error)
 
     def _prepare_create_payload(
         self, db: Session, key: str, payload: DomainSettingCreate
