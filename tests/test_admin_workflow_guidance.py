@@ -399,7 +399,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 60
+    assert len(guides) == 61
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -473,3 +473,15 @@ def test_walled_garden_page_has_its_own_guide() -> None:
     settings = guidance_for_path("/admin/system/config/radius")
     assert settings is not None
     assert settings.id == "settings"
+
+
+def test_subledger_opening_correction_pages_have_their_own_guide() -> None:
+    base = "/admin/billing/accounts/11111111-1111-1111-1111-111111111111"
+    for suffix in ("", "/preview", "/confirm"):
+        path = f"{base}/subledger-opening/NGN/correction{suffix}"
+        guide = guidance_for_path(path)
+        assert guide is not None, path
+        assert guide.id == "subledger-opening-correction", path
+    account = guidance_for_path(base)
+    assert account is not None
+    assert account.id == "billing-accounts"

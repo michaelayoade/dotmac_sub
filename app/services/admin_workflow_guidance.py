@@ -693,6 +693,27 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "subledger-opening-correction",
+        "Billing",
+        "Correct a customer subledger opening balance",
+        "Finance reviewers and billing leads",
+        "Correct a wrong migrated opening balance for one account and currency, with a reviewed preview and an audit trail.",
+        (),
+        "Open the correction from the account's subledger opening panel and confirm the account, currency, and current opening amount.",
+        "Enter the corrected opening amount, a clear reason, and the review reference that supports it, then request a preview.",
+        "Review the preview of the resulting opening and balance change; correct any highlighted field and preview again, because nothing is changed until you confirm.",
+        "Tick the confirmation and confirm only the preview you reviewed; if the evidence changed, reload and review again.",
+        "Return to the account and verify the opening panel, the ledger, and the audit record show the correction.",
+        notes=(
+            "A stale preview or confirmation is rejected; the opening is never changed by the preview itself.",
+            "Only staff with the opening correction permission can use this page.",
+        ),
+        route_templates=(
+            "/admin/billing/accounts/{account_id}/subledger-opening/{currency}/correction",
+            "/admin/billing/accounts/{account_id}/subledger-opening/{currency}/correction/**",
+        ),
+    ),
+    _guide(
         "payments",
         "Payments",
         "Record and allocate payments",
@@ -1609,6 +1630,23 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("verify-period-review", "Verify the reviewed result", 4),
     ),
+    "subledger-opening-correction": (
+        _action("review-opening-correction", "Review the opening", 0),
+        _action(
+            "preview-opening-correction",
+            "Enter and preview a correction",
+            1,
+            2,
+            permission="billing:customer_subledger_opening:correct",
+        ),
+        _action(
+            "confirm-opening-correction",
+            "Confirm a reviewed correction",
+            3,
+            permission="billing:customer_subledger_opening:correct",
+        ),
+        _action("verify-opening-correction", "Verify the correction", 4),
+    ),
     "payments": (
         _action(
             "filter-export-payments",
@@ -2155,6 +2193,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "credit",
             "service-extension",
             "service-period-review",
+            "subledger-opening-correction",
             "payments",
             "payment-proofs",
             "payment-reconciliation",
@@ -2266,6 +2305,9 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),
     "service-period-review": ("billing:extension:read",),
+    "subledger-opening-correction": (
+        "billing:customer_subledger_opening:correct",
+    ),
     "payments": ("billing:payment:read",),
     "payment-proofs": ("billing:proof:read",),
     "payment-reconciliation": ("billing:ledger:read",),
