@@ -42,4 +42,3 @@ class NetworkMapPage(BasePage):
         expect(checkboxes).to_have_count(13)
         for index in range(checkboxes.count()):
             expect(checkboxes.nth(index)).to_be_checked()
-
