@@ -496,8 +496,28 @@ def malformed_prepaid_renewal_origin_account_ids(
     as_of: datetime,
 ) -> frozenset[UUID]:
     """Read-only: accounts this owner quarantines for ``malformed_renewal_origin``."""
-    _grouped, malformed = _adjustment_evidence(db, list(subscriptions), _utc(as_of))
+    _grouped, malformed, _adjustment_ids = _adjustment_evidence(
+        db, list(subscriptions), _utc(as_of)
+    )
     return frozenset(malformed)
+
+
+def malformed_prepaid_renewal_origin_adjustment_ids(
+    db: Session,
+    subscriptions: Sequence[Subscription],
+    *,
+    as_of: datetime,
+) -> frozenset[UUID]:
+    """Read-only: the exact adjustments behind ``malformed_renewal_origin``.
+
+    Same predicate as :func:`malformed_prepaid_renewal_origin_account_ids`, but
+    per adjustment, so a reviewed correction can prove that rewriting one
+    reference leaves no other malformed renewal evidence on the account.
+    """
+    _grouped, _malformed, adjustment_ids = _adjustment_evidence(
+        db, list(subscriptions), _utc(as_of)
+    )
+    return frozenset(adjustment_ids)
 
 
 def _paid_invoice_evidence(
@@ -549,13 +569,14 @@ def _adjustment_evidence(
     db: Session,
     subscriptions: list[Subscription],
     as_of: datetime,
-) -> tuple[dict[UUID, list[_AdjustmentEvidence]], set[UUID]]:
+) -> tuple[dict[UUID, list[_AdjustmentEvidence]], set[UUID], set[UUID]]:
     grouped: dict[UUID, list[_AdjustmentEvidence]] = defaultdict(list)
     malformed_accounts: set[UUID] = set()
+    malformed_adjustments: set[UUID] = set()
     account_ids = {subscription.subscriber_id for subscription in subscriptions}
     subscription_ids = {subscription.id for subscription in subscriptions}
     if not account_ids:
-        return grouped, malformed_accounts
+        return grouped, malformed_accounts, malformed_adjustments
     rows = db.execute(
         select(AccountAdjustment, LedgerEntry)
         .join(LedgerEntry, LedgerEntry.id == AccountAdjustment.ledger_entry_id)
@@ -573,6 +594,7 @@ def _adjustment_evidence(
         parsed = _parse_adjustment_origin(adjustment.origin_ref)
         if parsed is None:
             malformed_accounts.add(adjustment.account_id)
+            malformed_adjustments.add(adjustment.id)
             continue
         subscription_id, starts_at, ends_at = parsed
         if subscription_id not in subscription_ids:
@@ -583,6 +605,7 @@ def _adjustment_evidence(
             or adjustment.currency != ledger_entry.currency
         ):
             malformed_accounts.add(adjustment.account_id)
+            malformed_adjustments.add(adjustment.id)
             continue
         if starts_at <= as_of < ends_at:
             grouped[subscription_id].append(
@@ -594,7 +617,7 @@ def _adjustment_evidence(
                     ends_at=ends_at,
                 )
             )
-    return grouped, malformed_accounts
+    return grouped, malformed_accounts, malformed_adjustments
 
 
 def resolve_prepaid_coverage_enforcement_blockers(
@@ -762,9 +785,11 @@ def preview_prepaid_coverage_reconciliation(
     invoice_evidence, malformed_invoice_subscriptions = _paid_invoice_evidence(
         db, ids, observed_at
     )
-    adjustment_evidence, malformed_adjustment_accounts = _adjustment_evidence(
-        db, subscriptions, observed_at
-    )
+    (
+        adjustment_evidence,
+        malformed_adjustment_accounts,
+        _malformed_adjustment_ids,
+    ) = _adjustment_evidence(db, subscriptions, observed_at)
     invoice_source_ids = {
         candidate.line.id
         for values in invoice_evidence.values()
@@ -1370,6 +1395,7 @@ __all__ = [
     "is_malformed_paid_invoice_period",
     "malformed_paid_invoice_ids_by_subscription",
     "malformed_prepaid_renewal_origin_account_ids",
+    "malformed_prepaid_renewal_origin_adjustment_ids",
     "parse_prepaid_renewal_origin_ref",
     "split_prepaid_renewal_origin_ref",
     "preview_prepaid_coverage_reconciliation",

@@ -23,19 +23,27 @@ def test_carried_source_identity_adjudication_schema_is_migration_owned(
         "reviewed_by_id",
         "approved_by_id",
         "reason",
+        "sole_approver_exception",
+        "sole_approver_exception_ref",
+        "sole_approver_justification",
         "idempotency_key",
         "command_fingerprint",
         "command_id",
         "correlation_id",
         "created_at",
     } == set(columns)
-    assert all(not item["nullable"] for item in columns.values())
+    optional = {"sole_approver_exception_ref", "sole_approver_justification"}
+    assert all(
+        not item["nullable"] for name, item in columns.items() if name not in optional
+    )
+    assert all(columns[name]["nullable"] for name in optional)
 
     checks = {item["name"] for item in inspector.get_check_constraints(TABLE)}
     assert {
         "ck_carried_source_identity_distinct_reviewers",
         "ck_carried_source_identity_digest_lengths",
         "ck_carried_source_identity_review_evidence",
+        "ck_carried_source_identity_sole_approver_evidence",
     } <= checks
     unique_constraints = {
         item["name"] for item in inspector.get_unique_constraints(TABLE)

@@ -208,7 +208,10 @@ poetry run python -m scripts.billing.repair_prepaid_paid_invoice_period approve 
   --approver <different-system-user-uuid> --idempotency-key <unique-key>
 ```
 
-Self-approval is refused. Under lock, the owner recomputes the preview and
+Self-approval is refused, except under the governed, time-boxed sole-approver
+exception ([`SOLE_APPROVER_EXCEPTION.md`](SOLE_APPROVER_EXCEPTION.md)): off by
+default, Michael only, with `--sole-approver-justification` and recorded
+evidence. Under lock, the owner recomputes the preview and
 requires the identical fingerprint; any change since the request returns
 `stale_preview` and needs a new request. It then, in one transaction:
 
@@ -254,10 +257,10 @@ they will:
      `correct-unused-prepaid-renewal`. The owner reverses the debit and the
      entitlement together. The reversed adjustment no longer counts as
      evidence.
-   - **Service was received.** There is no sanctioned repair, because the debit
-     is legitimate and only its reference is wrong. Route:
-     `engineering_renewal_origin_correction`. The linked entitlement proves the
-     correct reference, which the diagnostic shows.
+   - **Service was received.** The debit is legitimate and only its reference
+     is wrong. Route: `reviewed_renewal_origin_correction` (see "Renewal origin
+     correction" below). The linked entitlement proves the correct reference,
+     which the diagnostic shows.
 3. **No entitlement is linked to the debit.**
    - **Finance confirms the debit was raised in error** (it bought no service
      period). This route is sanctioned: a reviewed account-adjustment reversal
@@ -266,11 +269,78 @@ they will:
      `POST /api/v1/account-adjustments/<adjustment-id>/reversal/preview` with
      the approval reference as `reason`. Confirm with `POST .../reversal`,
      passing the exact `preview_fingerprint` and a unique `idempotency_key`.
-   - **Otherwise** there is no sanctioned repair. Route:
-     `engineering_renewal_origin_correction`.
-4. **Any other linked shape** (several entitlements, an invoice-linked
-   entitlement, or an amount or currency mismatch) has no sanctioned repair.
-   Escalate it.
+   - **The debit is legitimate** (the customer received the service). Route:
+     `reviewed_renewal_origin_correction`: Finance names the existing
+     entitlement the debit funded, or supplies the subscription and exact period
+     when none exists.
+4. **Exactly one active entitlement is linked, but it is invoice-backed or its
+   amount differs from the debit** (for example a pre-tax entitlement beside a
+   tax-inclusive debit). The unused-renewal correction does not apply. If the
+   service was received, route `reviewed_renewal_origin_correction` with
+   `entitlement_already_linked`; the owner asks Finance to acknowledge the
+   amount and invoice-backing warnings.
+5. **Any other linked shape** (several entitlements, an inactive or foreign
+   entitlement) has no sanctioned repair. Escalate it
+   (`engineering_renewal_origin_correction`).
+
+#### Renewal origin correction
+
+Owner `financial.prepaid_renewal_origin_correction`, permission
+`billing:prepaid_reconciliation:repair`, CLI
+`scripts/billing/correct_prepaid_renewal_origin.py`. Two steps, no money moves.
+
+```bash
+# 1. Read-only preview (exit 2 while blockers remain):
+poetry run python -m scripts.billing.correct_prepaid_renewal_origin preview \
+  --adjustment-id <adjustment> --disposition entitlement_already_linked \
+  --entitlement-id <entitlement> [--acknowledge-warning <warning> ...]
+# 2. Confirm, restating the preview fingerprint:
+poetry run python -m scripts.billing.correct_prepaid_renewal_origin confirm \
+  <same proposal arguments> --fingerprint <sha256> \
+  --reason "<Finance determination and documents relied on>" \
+  --evidence-ref <finance-ticket-or-document-ref> \
+  --evidence-sha256 <sha256 of the evidence file> \
+  --actor <system-user-uuid> --idempotency-key <unique-key>
+```
+
+Dispositions:
+
+- `entitlement_already_linked`: exactly one active entitlement is already
+  linked to the debit. Its subscription and period are the canonical reference.
+- `link_existing_entitlement`: Finance names one existing active entitlement the
+  debit funded that carries no ledger-debit link (`--entitlement-id`). The owner
+  records the link through the entitlement writer's flush-only participant. No
+  coverage is created or extended.
+- `create_entitlement_from_debit`: no entitlement exists. Finance supplies
+  `--subscription-id`, `--period-start`, `--period-end`; the entitlement is
+  created only through the existing wallet-debit entitlement writer. An active
+  entitlement overlapping the period blocks it unless named with
+  `--acknowledge-overlap`.
+
+The preview shows `origin_ref_before`/`origin_ref_after`, the planned entitlement
+action, `warnings` (acknowledge exactly those shown, after Finance confirms them
+from source documents), `blockers`, and `quarantine_effect`
+(`malformed_adjustment_ids_before`/`after`, `projected_blocking_reasons`,
+`work_item_resolves_on_next_sweep`). Blockers include a reversed, non-renewal, or
+ledger-inconsistent adjustment; an already canonical reference; an inactive,
+foreign, or other-debit-linked entitlement; and a canonical reference already
+carried by another adjustment. Three further blockers cannot be acknowledged:
+`entitlement_invoice_already_settled` (link mode: the entitlement's source
+invoice is already fully settled by payments, credit notes or opening
+consumption, so the wallet debit would fund the period twice);
+`would_make_invoice_documentary` (the change would add a paid prepaid invoice
+with the same subscription, period, amount and currency to the direct-renewal
+documentary set, silently removing its customer-position consumption; the
+preview lists `position_impact.invoices_made_documentary` and the
+`prepaid_available_balance` before/after, and Finance must decide the invoice
+first); and, in create mode, `period_not_one_billing_cycle`,
+`period_exceeds_one_billing_cycle`, `period_start_outside_debit_cycle` (start
+more than one cycle from the debit's effective date) and
+`cycle_already_covered_by_invoice` (an invoice-backed entitlement or paid
+invoice already covers the period). `position_impact` also shows the current
+coverage end before/after. Re-running the same confirmation returns the
+stored outcome (`replayed: true`); a stale fingerprint returns `stale_preview`.
+Exit code `3` means the owner refused; the JSON `error` names why.
 
 Every sanctioned route returns the debit to the customer's prepaid funding.
 Use one only when Finance has decided the charge itself was wrong, never just
@@ -327,7 +397,8 @@ After a sanctioned correction:
 - Never edit invoice periods, invoice lines, adjustments, `origin_ref`, ledger
   entries, or entitlements with SQL, the admin shell, or a one-off script. The
   paid-invoice period repair is the only sanctioned way to set a paid invoice's
-  period.
+  period, and the renewal origin correction is the only sanctioned way to
+  rewrite a renewal adjustment's `origin_ref`.
 - Never record a period, or acknowledge a warning, that Finance has not
   established from source documents just to clear the quarantine.
 - Never infer a period or a subscription from memo, description, or note text,

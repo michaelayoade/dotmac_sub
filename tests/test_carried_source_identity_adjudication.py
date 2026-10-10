@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -24,6 +24,12 @@ from app.services.carried_source_identity_adjudication import (
     preview_carried_source_identity_adjudication,
 )
 from app.services.owner_commands import CommandContext
+from tests.sole_approver_support import (
+    DECISION_REF,
+    JUSTIFICATION,
+    configure_sole_approver_exception,
+    future_review_due,
+)
 
 
 def _qualify(subscriber) -> None:  # noqa: ANN001
@@ -199,3 +205,121 @@ def test_same_staff_cannot_review_and_approve(db_session, subscriber):
 
     assert exc.value.code.endswith("reviewer_conflict")
     assert db_session.query(CarriedSourceIdentityAdjudication).count() == 0
+
+
+# --- governed sole-approver exception ---------------------------------------
+
+
+def _sole_command(db_session, subscriber, user, *, justification, actor=None):
+    preview = preview_carried_source_identity_adjudication(db_session, subscriber.id)
+    command = _command(subscriber, preview.fingerprint, user, user)
+    context = CommandContext.system(
+        actor=actor or f"user:{user.id}",
+        scope=OWNER,
+        reason=command.context.reason,
+        idempotency_key=command.context.idempotency_key,
+    )
+    return ConfirmCarriedSourceIdentityCommand(
+        context=context,
+        account_id=command.account_id,
+        expected_preview_fingerprint=command.expected_preview_fingerprint,
+        evidence_ref=command.evidence_ref,
+        evidence_sha256=command.evidence_sha256,
+        reviewed_by_id=user.id,
+        approved_by_id=user.id,
+        sole_approver_justification=justification,
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["disabled", "expired", "wrong_principal", "missing_justification", "api_key"],
+)
+def test_sole_approver_exception_refusals_leave_reviewer_conflict(
+    db_session, subscriber, case
+):
+    _qualify(subscriber)
+    user, other = _reviewers(db_session)
+    db_session.commit()
+    configure_sole_approver_exception(
+        db_session,
+        enabled=case != "disabled",
+        principal=other.id if case == "wrong_principal" else user.id,
+        review_due=(
+            future_review_due() - timedelta(days=60)
+            if case == "expired"
+            else future_review_due()
+        ),
+    )
+    command = _sole_command(
+        db_session,
+        subscriber,
+        user,
+        justification=None if case == "missing_justification" else JUSTIFICATION,
+        actor=f"api_key:{user.id}" if case == "api_key" else None,
+    )
+    db_session.rollback()
+
+    with pytest.raises(CarriedSourceIdentityAdjudicationError) as exc:
+        confirm_carried_source_identity_adjudication(db_session, command)
+
+    assert exc.value.code.endswith("reviewer_conflict")
+    assert db_session.query(CarriedSourceIdentityAdjudication).count() == 0
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "approval.sole_approver_exception_used")
+        .count()
+        == 0
+    )
+
+
+def test_sole_approver_exception_allows_one_reviewer_with_evidence(
+    db_session, subscriber
+):
+    _qualify(subscriber)
+    user, _other = _reviewers(db_session)
+    db_session.commit()
+    configure_sole_approver_exception(
+        db_session, principal=user.id, review_due=future_review_due()
+    )
+    command = _sole_command(db_session, subscriber, user, justification=JUSTIFICATION)
+    db_session.rollback()
+
+    created = confirm_carried_source_identity_adjudication(db_session, command)
+    replayed = confirm_carried_source_identity_adjudication(db_session, command)
+
+    assert created.replayed is False
+    assert replayed.replayed is True
+    decision = db_session.get(CarriedSourceIdentityAdjudication, created.decision_id)
+    assert decision.reviewed_by_id == decision.approved_by_id == user.id
+    assert decision.sole_approver_exception is True
+    assert decision.sole_approver_exception_ref == DECISION_REF
+    assert decision.sole_approver_justification == JUSTIFICATION
+    adjudicated = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "carried_source_identity_adjudicated")
+        .one()
+    )
+    assert adjudicated.metadata_["sole_approver_exception"] is True
+    used = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "approval.sole_approver_exception_used")
+        .all()
+    )
+    assert len(used) == 1  # the replay does not emit a second use
+    assert used[0].metadata_["sole_approver_exception_justification"] == JUSTIFICATION
+
+
+def test_distinct_reviewers_record_no_exception(db_session, subscriber):
+    _qualify(subscriber)
+    reviewed_by, approved_by = _reviewers(db_session)
+    db_session.commit()
+    preview = preview_carried_source_identity_adjudication(db_session, subscriber.id)
+    command = _command(subscriber, preview.fingerprint, reviewed_by, approved_by)
+    db_session.rollback()
+
+    created = confirm_carried_source_identity_adjudication(db_session, command)
+
+    decision = db_session.get(CarriedSourceIdentityAdjudication, created.decision_id)
+    assert decision.sole_approver_exception is False
+    assert decision.sole_approver_exception_ref is None

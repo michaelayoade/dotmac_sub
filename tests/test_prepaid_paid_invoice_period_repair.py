@@ -60,6 +60,12 @@ from app.services.prepaid_paid_invoice_period_repair import (
     preview_paid_invoice_period_repair,
     request_paid_invoice_period_repair,
 )
+from tests.sole_approver_support import (
+    DECISION_REF,
+    JUSTIFICATION,
+    configure_sole_approver_exception,
+    future_review_due,
+)
 
 NOW = datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
 PAST_START = datetime(2026, 4, 22, 12, 0, tzinfo=UTC)
@@ -193,7 +199,9 @@ def _request(db, query, requester, *, fingerprint=None, key=None, granted=True):
     )
 
 
-def _approve(db, request_id, fingerprint, approver, *, key=None):
+def _approve(
+    db, request_id, fingerprint, approver, *, key=None, sole_justification=None
+):
     approver_id = approver.id
     context = _context(approver, key or f"approve-{uuid4()}")
     db.commit()  # adapters hand owners a transaction-free session
@@ -204,6 +212,7 @@ def _approve(db, request_id, fingerprint, approver, *, key=None):
             preview_fingerprint=fingerprint,
             approved_by=approver_id,
             permission_granted=True,
+            sole_approver_justification=sole_justification,
         ),
         context=context,
     )
@@ -934,3 +943,105 @@ def test_cli_preview_request_approve_and_refusal(
     assert cli.main(["preview", *proposal]) == 2
     blocked = json.loads(capsys.readouterr().out)
     assert "invoice_period_not_malformed" in blocked["blockers"]
+
+
+# --- governed sole-approver exception ---------------------------------------
+
+
+def _requested_by_one_staff(db_session, subscriber_account, subscription):
+    _prepare(db_session, subscriber_account, subscription)
+    invoice, line = _paid_invoice(
+        db_session, subscriber_account, subscription, kind="base_subscription"
+    )
+    _open_work_item(db_session)
+    requester = _staff(db_session, "Michael")
+    other = _staff(db_session, "Other")
+    requested = _request(db_session, _query(invoice, line, subscription), requester)
+    return invoice, requester, other, requested
+
+
+@pytest.mark.parametrize(
+    "case", ["disabled", "expired", "wrong_principal", "missing_justification"]
+)
+def test_sole_approver_exception_refusals_leave_self_approval_forbidden(
+    db_session, subscriber_account, subscription, case
+):
+    invoice, requester, other, requested = _requested_by_one_staff(
+        db_session, subscriber_account, subscription
+    )
+    configure_sole_approver_exception(
+        db_session,
+        enabled=case != "disabled",
+        principal=other.id if case == "wrong_principal" else requester.id,
+        review_due=(
+            future_review_due() - timedelta(days=60)
+            if case == "expired"
+            else future_review_due()
+        ),
+    )
+
+    with pytest.raises(PaidInvoicePeriodRepairError) as refused:
+        _approve(
+            db_session,
+            requested.request_id,
+            requested.preview_fingerprint,
+            requester,
+            sole_justification=None
+            if case == "missing_justification"
+            else JUSTIFICATION,
+        )
+
+    assert refused.value.code.endswith("self_approval_forbidden")
+    db_session.rollback()
+    db_session.refresh(invoice)
+    assert invoice.billing_period_start is None
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "approval.sole_approver_exception_used")
+        .count()
+        == 0
+    )
+
+
+def test_sole_approver_exception_allows_self_approval_with_evidence(
+    db_session, subscriber_account, subscription
+):
+    invoice, requester, _other, requested = _requested_by_one_staff(
+        db_session, subscriber_account, subscription
+    )
+    configure_sole_approver_exception(
+        db_session, principal=requester.id, review_due=future_review_due()
+    )
+
+    applied = _approve(
+        db_session,
+        requested.request_id,
+        requested.preview_fingerprint,
+        requester,
+        sole_justification=JUSTIFICATION,
+    )
+
+    assert applied.status is PaidInvoicePeriodRepairStatus.applied
+    db_session.expire_all()
+    event = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "prepaid_paid_invoice_period.repaired")
+        .one()
+    )
+    assert event.payload["sole_approver_exception"] is True
+    assert event.payload["sole_approver_exception_decision_ref"] == DECISION_REF
+    assert event.payload["sole_approver_exception_justification"] == JUSTIFICATION
+    repair_audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "repair_paid_prepaid_invoice_period")
+        .one()
+    )
+    assert repair_audit.metadata_["sole_approver_exception"] is True
+    used = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "approval.sole_approver_exception_used")
+        .one()
+    )
+    assert used.entity_id == str(invoice.id)
+    assert used.actor_id == str(requester.id)
+    assert used.metadata_["sole_approver_exception_decision_ref"] == DECISION_REF
