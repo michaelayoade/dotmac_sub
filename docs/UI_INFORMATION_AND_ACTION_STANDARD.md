@@ -869,6 +869,46 @@ implementation.
   queued or failed notes do not appear until delivery succeeds; no UI may imply
   otherwise.
 
+## Walled-Garden Allowed Resources Page Contract
+
+- Screen and type: `/admin/system/config/walled-garden`, control-plane editor.
+  Audience: network and settings administrators deciding which named
+  resources suspended subscribers may reach while captive, and whether routers
+  carry that desired state.
+- Authority: `control.settings_spec` resolves
+  `radius.walled_garden_allowed_resources`, validated by
+  `app.schemas.walled_garden`; `access.walled_garden_router_module` derives the
+  portal entry; `access.walled_garden_router_readiness` owns per-router status
+  and findings; `control.settings_form_updates` owns every write, its stale
+  lock, and its audit record. `app.services.web_walled_garden_settings`
+  composes the page and turns one entry edit into the complete value; the
+  route and template are adapters.
+- First viewport: enabled versus configured entries, routers ready of active,
+  routers missing an enabled entry, routers still carrying a disabled entry,
+  and the single primary **Add resource** action (write permission only).
+- Entries table: resource (label and copyable key), kind, hosts, state
+  (Enabled/Disabled, text plus tone), and source. The derived portal row is
+  always first, read-only, and links to RADIUS Configuration; an unrenderable
+  portal shows the owner's configuration error rather than invented hosts.
+  Row actions: one visible Enable/Disable, with Edit and Remove in a **More**
+  menu. Remove asks for confirmation and states that routers drop the hosts
+  only after the module is re-applied.
+- Editor: label, key (add only; immutable afterwards), kind (portal excluded),
+  hosts (one FQDN per line), and **Enable now** on add. Validation failures
+  return status 400 with the submitted values and messages beside the affected
+  control; a stale fingerprint or a vanished entry returns 409 with a reload
+  instruction and writes nothing.
+- Readiness: attention-first router table (status, snapshot time, missing
+  enabled entry keys, disabled entry keys still present, finding count) with
+  evaluation time, module version, and the 48-hour stale threshold.
+  `unavailable` (the query failed), `No active routers`, `not_configured`,
+  `no_snapshot`, and `stale` remain distinct; the page never contacts a router.
+- Permissions: viewing requires `system:settings:read`; every mutation route
+  requires `system:settings:write` and the owner rechecks scope
+  `control:settings:write`. Read-only viewers see no edit controls.
+- Responsive behavior: summary tiles stack; both tables scroll horizontally
+  with identity first; the editor collapses to one column.
+
 ## ONT Assignment Subscription Picker Contract
 
 - Authority: `web_network_ont_assignments.assignment_subscription_options`
@@ -881,3 +921,46 @@ implementation.
   Malformed non-empty UUIDs remain validation failures, and the route retains
   its `network:ont:read` permission requirement. Assignment commands still
   recheck ownership and eligibility through their canonical owner.
+
+## Customer-Subledger Opening Correction Page Contract
+
+- Screen and type: `admin.customer_subledger_opening_correction`, an editor
+  reached from the admin account billing detail page
+  (`/admin/billing/accounts/{account_id}`), plus its read-only panel there.
+- Audience and job: finance-authorised staff correcting a captured opening
+  position after Finance confirms a variance (the 2026-10-08/09 capture policy
+  recorded zero where no opening existed). Decision: should this exact
+  before/after/delta be appended as a correction?
+- Authority: `financial.customer_subledger_opening_positions` owns the opening
+  facts, correction history, correctability (`correction_available` and its
+  reason), the correction preview, the read-only impact preview, and the
+  append-only correction command. `financial.access_resolution` supplies the
+  funding decision behind the resulting available balance and enforcement
+  consequence. `web_subledger_opening_corrections` only parses input, signs the
+  actor-bound confirmation, and projects action forms; templates derive nothing.
+- Panel (glance and investigation): current opening per currency, captured
+  amount when corrected, position time, capture time and actor, evidence
+  reference and fingerprint, and the correction history table (applied, before,
+  after, delta, reason with review reference, applied by; newest first). It is
+  absent when no opening was captured. The single action, **Correct opening**,
+  renders only for `billing:customer_subledger_opening:correct`; when the owner
+  says correction is unavailable, its reason replaces the action.
+- Editor: first viewport repeats the captured opening and prior corrections,
+  then one entry form (signed amount, reason ≤ 500, review reference ≤ 200).
+  The preview step shows the owner's before, after, delta, current and
+  resulting available balance, requirement, enforcement consequence with its
+  explanation, preview fingerprint, and confirmation expiry, followed by one
+  confirm form; revising is secondary and collapsed. Unknown or not-applicable
+  balances render as "Not applicable", never zero.
+- Mutation: every route requires the dedicated permission and a staff
+  principal. Confirmation carries a ten-minute signed token bound to actor,
+  account, currency, and fingerprint; the owner re-previews under an account
+  lock and refuses stale fingerprints. The token identifier is the idempotency
+  key, so a repeated submission records one correction. The owner defines no
+  two-person approval, so the screen has no pending state.
+- States: validation errors render beside their field (400); stale, changed, or
+  expired confirmations re-render a fresh preview with the reason (409); a
+  missing opening returns to the account with the reason; unauthorised users
+  never see the action and are refused by the route (403).
+- Responsive: panel facts stack; the history table scrolls horizontally inside
+  its card; the editor is a single column at every width.

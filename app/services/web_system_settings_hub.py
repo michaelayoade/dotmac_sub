@@ -197,6 +197,12 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Reject IPs, MAC binding, debug",
             },
             {
+                "name": "Walled Garden",
+                "url": "/admin/system/config/walled-garden",
+                "description": "Resources reachable while captive; router readiness",
+                "permission": "system:settings:read",
+            },
+            {
                 "name": "Monitoring",
                 "url": "/admin/system/config/monitoring",
                 "description": "Vendors, device types, alert groups",

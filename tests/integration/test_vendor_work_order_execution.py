@@ -310,7 +310,7 @@ def test_predecessor_upgrade_preserves_staff_assignment_and_enforces_vendor_xor(
     fresh_migration_database: URL,
 ):
     url = fresh_migration_database
-    command.upgrade(Config("alembic.ini"), "664_purge_retired_splynx_metadata_keys")
+    command.upgrade(Config("alembic.ini"), "667_captive_access_policy_backfill")
     engine = create_engine(url)
     tech_id, person_id, job_id, queue_id = (uuid4() for _ in range(4))
     with Session(engine) as db:
@@ -335,7 +335,7 @@ def test_predecessor_upgrade_preserves_staff_assignment_and_enforces_vendor_xor(
             ),
             {"id": queue_id, "job": job_id, "tech": tech_id},
         )
-    command.upgrade(Config("alembic.ini"), "665_native_vendor_work_order_assignment")
+    command.upgrade(Config("alembic.ini"), "668_native_vendor_work_order_assignment")
     with engine.connect() as conn:
         assert conn.execute(
             text(

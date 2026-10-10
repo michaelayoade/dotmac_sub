@@ -144,6 +144,12 @@ HIGH_IMPACT_EDITORS: tuple[HighImpactEditor, ...] = (
         contract_key="admin.prepaid_draft_reconciliation",
     ),
     HighImpactEditor(
+        key="admin.customer_subledger_opening_correction",
+        surface="admin billing customer-subledger opening correction",
+        status="contracted",
+        contract_key="admin.customer_subledger_opening_correction",
+    ),
+    HighImpactEditor(
         key="admin.credit_note_create",
         surface="admin billing credit-note issue",
         status="pending",

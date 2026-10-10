@@ -263,7 +263,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Enter verified identity, contact, address, and service-location information.",
         "Review the profile, then create the billing account or continue to subscription setup when needed.",
         route_templates=("/admin/customers/new", "/admin/customers/wizard"),
-        notes=("Do not use placeholder identity data for a production customer.",),
+        notes=(
+            "Do not use placeholder identity data for a production customer.",
+            "Payment-portal access during a suspension is not set on this form. "
+            "Network operations grant it per service through the captive access "
+            "policy, and only on routers whose walled garden is ready.",
+        ),
     ),
     _guide(
         "customer-detail",
@@ -685,6 +690,27 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "An outage event creates a proposal; it does not grant service time before Finance approval.",
             "Recovery does not charge the customer again or manufacture a refund. Use the existing provider-confirmed refund workflow when needed.",
             "Unclear historical extension credits require reviewed attestation before another overlapping award.",
+        ),
+    ),
+    _guide(
+        "subledger-opening-correction",
+        "Billing",
+        "Correct a customer subledger opening balance",
+        "Finance reviewers and billing leads",
+        "Correct a wrong migrated opening balance for one account and currency, with a reviewed preview and an audit trail.",
+        (),
+        "Open the correction from the account's subledger opening panel and confirm the account, currency, and current opening amount.",
+        "Enter the corrected opening amount, a clear reason, and the review reference that supports it, then request a preview.",
+        "Review the preview of the resulting opening and balance change; correct any highlighted field and preview again, because nothing is changed until you confirm.",
+        "Tick the confirmation and confirm only the preview you reviewed; if the evidence changed, reload and review again.",
+        "Return to the account and verify the opening panel, the ledger, and the audit record show the correction.",
+        notes=(
+            "A stale preview or confirmation is rejected; the opening is never changed by the preview itself.",
+            "Only staff with the opening correction permission can use this page.",
+        ),
+        route_templates=(
+            "/admin/billing/accounts/{account_id}/subledger-opening/{currency}/correction",
+            "/admin/billing/accounts/{account_id}/subledger-opening/{currency}/correction/**",
         ),
     ),
     _guide(
@@ -1163,6 +1189,22 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use audit and health evidence when a saved setting does not produce the expected behavior.",
     ),
     _guide(
+        "walled-garden",
+        "Settings",
+        "Manage walled-garden allowed resources",
+        "Network and settings administrators",
+        "Choose which named resources suspended subscribers can still reach while captive, and check whether routers carry them.",
+        ("/admin/system/config/walled-garden",),
+        "Review the derived captive portal entry, each configured resource and its hosts, and whether it is enabled.",
+        "Add a resource or edit an existing one's label, kind, and hosts; correct any highlighted field and save again, because nothing is saved while a field is invalid.",
+        "Enable, disable, or remove a resource; if the page reports that the setting changed, reload it and repeat the change.",
+        "Check Router readiness: a saved change is desired state only, and routers report missing or still-present resources until the walled-garden module is re-applied.",
+        notes=(
+            "The portal entry comes from the Captive Portal URL and IP on the RADIUS Configuration page and cannot be edited here.",
+            "Resource keys cannot change after creation because routers carry them in rule tags; remove and re-add a resource to rename its key.",
+        ),
+    ),
+    _guide(
         "meta-connection",
         "Meta connection",
         "Manage the Meta connection",
@@ -1587,6 +1629,23 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="billing:outage_compensation:approve",
         ),
         _action("verify-period-review", "Verify the reviewed result", 4),
+    ),
+    "subledger-opening-correction": (
+        _action("review-opening-correction", "Review the opening", 0),
+        _action(
+            "preview-opening-correction",
+            "Enter and preview a correction",
+            1,
+            2,
+            permission="billing:customer_subledger_opening:correct",
+        ),
+        _action(
+            "confirm-opening-correction",
+            "Confirm a reviewed correction",
+            3,
+            permission="billing:customer_subledger_opening:correct",
+        ),
+        _action("verify-opening-correction", "Verify the correction", 4),
     ),
     "payments": (
         _action(
@@ -2040,6 +2099,22 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("investigate-setting", "Investigate setting behavior", 3),
     ),
+    "walled-garden": (
+        _action("review-walled-garden", "Review allowed resources", 0),
+        _action(
+            "save-walled-garden-resource",
+            "Add or edit a resource",
+            1,
+            permission="system:settings:write",
+        ),
+        _action(
+            "toggle-walled-garden-resource",
+            "Enable, disable, or remove a resource",
+            2,
+            permission="system:settings:write",
+        ),
+        _action("check-walled-garden-readiness", "Check router readiness", 3),
+    ),
     "meta-connection": (
         _action("review-meta-connection", "Review the Meta connection", 0),
         _action(
@@ -2118,6 +2193,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "credit",
             "service-extension",
             "service-period-review",
+            "subledger-opening-correction",
             "payments",
             "payment-proofs",
             "payment-reconciliation",
@@ -2209,7 +2285,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
     AdminHelpNavigationSection(
         "settings",
         "Settings",
-        ("settings", "smtp-senders", "custom-fields-center"),
+        ("settings", "walled-garden", "smtp-senders", "custom-fields-center"),
         "system:settings:read",
     ),
     AdminHelpNavigationSection(
@@ -2229,6 +2305,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),
     "service-period-review": ("billing:extension:read",),
+    "subledger-opening-correction": ("billing:customer_subledger_opening:correct",),
     "payments": ("billing:payment:read",),
     "payment-proofs": ("billing:proof:read",),
     "payment-reconciliation": ("billing:ledger:read",),

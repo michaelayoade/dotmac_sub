@@ -1,0 +1,290 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, animation_styles, icon_shield %}
+{% block title %}Walled Garden - Admin{% endblock %}
+{% block content %}
+{% set fleet = page.fleet %}
+{% set form = page.form %}
+{% set field_errors = form.field_errors %}
+{% set notice_messages = {
+    'added': 'Resource added.',
+    'updated': 'Resource updated.',
+    'enabled': 'Resource enabled.',
+    'disabled': 'Resource disabled.',
+    'removed': 'Resource removed.',
+} %}
+{{ ambient_background("blue", "cyan") }}
+<div class="relative space-y-6">
+    {% call page_header(title="Walled Garden", subtitle="Named resources suspended subscribers can still reach while captive, and whether each router carries them.", icon=icon_shield(), color="blue", color2="cyan") %}
+        {% if can_edit %}
+        <a href="{{ request.url.path }}#entry-form" class="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Add resource
+        </a>
+        {% endif %}
+    {% endcall %}
+
+    {% if notice %}
+    <div role="status" class="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+        <span class="font-semibold">{{ notice_messages[notice] }}</span>
+        {% if notice_key %}<span class="font-mono">{{ notice_key }}</span>.{% endif %}
+        The saved setting is now the desired state. Routers keep their current rows until the walled-garden module is re-applied, so readiness below reports the difference until then.
+    </div>
+    {% endif %}
+    {% if page_error %}
+    <div role="alert" class="rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">{{ page_error }}</div>
+    {% endif %}
+    {% if page.stored_value_error %}
+    <div role="alert" class="rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">{{ page.stored_value_error }} Edits are refused until the stored value is repaired.</div>
+    {% endif %}
+
+    <section aria-label="Summary" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Enabled resources</p>
+            <p class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">{{ page.enabled_entry_count }} <span class="text-sm font-normal text-slate-500 dark:text-slate-400">of {{ page.entries | length }} configured</span></p>
+        </div>
+        {% if fleet.available %}
+        <div class="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Routers ready</p>
+            <p class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">{{ fleet.ready_router_count }} <span class="text-sm font-normal text-slate-500 dark:text-slate-400">of {{ fleet.router_count }} active</span></p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Missing an enabled resource</p>
+            <p class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">{{ fleet.routers_missing_enabled_entries }} <span class="text-sm font-normal text-slate-500 dark:text-slate-400">routers</span></p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Still carrying a disabled resource</p>
+            <p class="mt-1 text-xl font-semibold text-slate-900 dark:text-white">{{ fleet.routers_carrying_disabled_entries }} <span class="text-sm font-normal text-slate-500 dark:text-slate-400">routers</span></p>
+        </div>
+        {% else %}
+        <div class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300 sm:col-span-1 lg:col-span-3">
+            Router readiness is unavailable right now. Resource settings below are still current.
+        </div>
+        {% endif %}
+    </section>
+
+    {% call card("Allowed resources", color="blue", padding=False) %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-900/40">
+                <tr class="text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    <th scope="col" class="px-5 py-3">Resource</th>
+                    <th scope="col" class="px-5 py-3">Kind</th>
+                    <th scope="col" class="px-5 py-3">Hosts</th>
+                    <th scope="col" class="px-5 py-3">State</th>
+                    <th scope="col" class="px-5 py-3">Source</th>
+                    {% if can_edit %}<th scope="col" class="px-5 py-3 text-right">Actions</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                <tr class="bg-slate-50/50 dark:bg-slate-900/20">
+                    {% if page.portal.entry %}
+                    {% set portal = page.portal.entry %}
+                    <td class="px-5 py-3">
+                        <p class="font-medium text-slate-900 dark:text-white">{{ portal.label }}</p>
+                        <p class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ portal.key }}</p>
+                    </td>
+                    <td class="px-5 py-3 text-slate-700 dark:text-slate-300">{{ portal.kind.value | title }}</td>
+                    <td class="px-5 py-3">
+                        <ul class="space-y-0.5 font-mono text-xs text-slate-700 dark:text-slate-300">{% for host in portal.hosts %}<li>{{ host }}</li>{% endfor %}</ul>
+                    </td>
+                    <td class="px-5 py-3">{{ status_badge("Always on", variant="positive", size="sm") }}</td>
+                    {% else %}
+                    <td class="px-5 py-3">
+                        <p class="font-medium text-slate-900 dark:text-white">Captive portal</p>
+                        <p class="font-mono text-xs text-slate-500 dark:text-slate-400">portal</p>
+                    </td>
+                    <td class="px-5 py-3 text-slate-700 dark:text-slate-300">Portal</td>
+                    <td class="px-5 py-3 text-xs text-rose-700 dark:text-rose-300">{{ page.portal.configuration_error }}</td>
+                    <td class="px-5 py-3">{{ status_badge("Not configured", variant="negative", size="sm") }}</td>
+                    {% endif %}
+                    <td class="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">
+                        Derived from Captive Portal URL and IP. Read-only here;
+                        <a href="/admin/system/config/radius" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">change in RADIUS Configuration</a>.
+                    </td>
+                    {% if can_edit %}<td class="px-5 py-3"></td>{% endif %}
+                </tr>
+                {% for entry in page.entries %}
+                <tr id="entry-{{ entry.key }}">
+                    <td class="px-5 py-3">
+                        <p class="font-medium text-slate-900 dark:text-white">{{ entry.label }}</p>
+                        <p class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ entry.key }}</p>
+                    </td>
+                    <td class="px-5 py-3 text-slate-700 dark:text-slate-300">{{ entry.kind.value | title }}</td>
+                    <td class="px-5 py-3">
+                        <ul class="space-y-0.5 font-mono text-xs text-slate-700 dark:text-slate-300">{% for host in entry.hosts %}<li>{{ host }}</li>{% endfor %}</ul>
+                    </td>
+                    <td class="px-5 py-3">
+                        {% if entry.enabled %}{{ status_badge("Enabled", variant="positive", size="sm") }}{% else %}{{ status_badge("Disabled", variant="disabled", size="sm") }}{% endif %}
+                    </td>
+                    <td class="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">Allowed-resource setting</td>
+                    {% if can_edit %}
+                    <td class="px-5 py-3">
+                        <div class="flex items-center justify-end gap-2">
+                            <form method="post" action="{{ request.url.path }}/entries/{{ entry.key }}/enabled">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="expected_fingerprint" value="{{ page.value_fingerprint }}">
+                                <input type="hidden" name="enabled" value="{{ 'false' if entry.enabled else 'true' }}">
+                                <button type="submit" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">
+                                    {{ 'Disable' if entry.enabled else 'Enable' }}<span class="sr-only"> {{ entry.label }}</span>
+                                </button>
+                            </form>
+                            <details class="relative">
+                                <summary class="cursor-pointer list-none rounded-lg border border-slate-300 px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700" aria-label="More actions for {{ entry.label }}">More</summary>
+                                <div class="absolute right-0 z-10 mt-1 w-40 rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                                    <a href="{{ request.url.path }}?edit={{ entry.key | urlencode }}#entry-form" class="block rounded px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">Edit</a>
+                                    <form method="post" action="{{ request.url.path }}/entries/{{ entry.key }}/remove"
+                                          onsubmit="return confirm('Remove this resource from the walled garden?Captive subscribers lose access to its hosts once routers re-apply the module; until then routers report its rows as unexpected.');">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <input type="hidden" name="expected_fingerprint" value="{{ page.value_fingerprint }}">
+                                        <button type="submit" class="block w-full rounded px-3 py-2 text-left text-xs text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-900/20">Remove</button>
+                                    </form>
+                                </div>
+                            </details>
+                        </div>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="{{ 6 if can_edit else 5 }}" class="px-5 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No allowed resources are configured. Only the captive portal is reachable while captive.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <p class="border-t border-slate-100 px-5 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+        Setting <span class="font-mono">radius.walled_garden_allowed_resources</span>.
+        Last changed {{ page.last_changed_at | app_datetime('%b %d, %Y %H:%M', 'never (registered default)') }}.
+        Changes are recorded in the <a href="/admin/system/audit?entity_type=domain_settings" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">audit log</a>.
+    </p>
+    {% endcall %}
+
+    {% if can_edit %}
+    <div id="entry-form" class="scroll-mt-6">
+    {% call card("Edit resource" if form.mode.value == 'edit' else "Add resource", color="blue") %}
+    <form method="post" action="{{ request.url.path }}/entries" class="space-y-4" novalidate>
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="expected_fingerprint" value="{{ page.value_fingerprint }}">
+        {% if form.mode.value == 'edit' %}<input type="hidden" name="original_key" value="{{ form.original_key }}">{% endif %}
+        {% if form.form_error %}
+        <div role="alert" class="rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">{{ form.form_error }}</div>
+        {% endif %}
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+                <label for="wg-label" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Label</label>
+                <input id="wg-label" type="text" name="label" value="{{ form.label }}" maxlength="80" required
+                       {% if field_errors.get('label') %}aria-invalid="true" aria-describedby="wg-label-error"{% endif %}
+                       class="mt-1 w-full rounded-lg text-sm dark:bg-slate-700 dark:text-white {% if field_errors.get('label') %}border-rose-400 dark:border-rose-500{% else %}border-slate-300 dark:border-slate-600{% endif %}" placeholder="Flutterwave">
+                {% if field_errors.get('label') %}<p id="wg-label-error" class="mt-1 text-xs text-rose-700 dark:text-rose-300">{{ field_errors.get('label') }}</p>{% endif %}
+            </div>
+            <div>
+                <label for="wg-key" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Key</label>
+                {% if form.mode.value == 'edit' %}
+                <input id="wg-key" type="text" value="{{ form.key }}" readonly aria-describedby="wg-key-help"
+                       class="mt-1 w-full rounded-lg border-slate-200 bg-slate-100 font-mono text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                <p id="wg-key-help" class="mt-1 text-xs text-slate-500 dark:text-slate-400">Keys identify router rows and cannot change. Remove and re-add to rename.</p>
+                {% else %}
+                <input id="wg-key" type="text" name="key" value="{{ form.key }}" maxlength="40"
+                       aria-describedby="{% if field_errors.get('key') %}wg-key-error {% endif %}wg-key-help"
+                       {% if field_errors.get('key') %}aria-invalid="true"{% endif %}
+                       class="mt-1 w-full rounded-lg font-mono text-sm dark:bg-slate-700 dark:text-white {% if field_errors.get('key') %}border-rose-400 dark:border-rose-500{% else %}border-slate-300 dark:border-slate-600{% endif %}" placeholder="flutterwave">
+                {% if field_errors.get('key') %}<p id="wg-key-error" class="mt-1 text-xs text-rose-700 dark:text-rose-300">{{ field_errors.get('key') }}</p>{% endif %}
+                <p id="wg-key-help" class="mt-1 text-xs text-slate-500 dark:text-slate-400">Lower-case letters, digits and inner hyphens. Leave blank to derive it from the label. It cannot change later.</p>
+                {% endif %}
+            </div>
+            <div>
+                <label for="wg-kind" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Kind</label>
+                <select id="wg-kind" name="kind"
+                        {% if field_errors.get('kind') %}aria-invalid="true" aria-describedby="wg-kind-error"{% endif %}
+                        class="mt-1 w-full rounded-lg text-sm dark:bg-slate-700 dark:text-white {% if field_errors.get('kind') %}border-rose-400 dark:border-rose-500{% else %}border-slate-300 dark:border-slate-600{% endif %}">
+                    {% for kind in page.kinds %}
+                    <option value="{{ kind.value }}" {% if form.kind == kind.value %}selected{% endif %}>{{ kind.value | title }}</option>
+                    {% endfor %}
+                </select>
+                {% if field_errors.get('kind') %}<p id="wg-kind-error" class="mt-1 text-xs text-rose-700 dark:text-rose-300">{{ field_errors.get('kind') }}</p>{% endif %}
+            </div>
+            {% if form.mode.value == 'add' %}
+            <div class="flex items-start gap-3 sm:mt-10">
+                <input id="wg-enabled" type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}
+                       class="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                <div>
+                    <label for="wg-enabled" class="text-sm text-slate-700 dark:text-slate-300">Enable now</label>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">New resources are disabled unless enabled here.</p>
+                </div>
+            </div>
+            {% endif %}
+            <div class="sm:col-span-2">
+                <label for="wg-hosts" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Hosts</label>
+                <textarea id="wg-hosts" name="hosts" rows="4"
+                          aria-describedby="{% if field_errors.get('hosts') %}wg-hosts-error {% endif %}wg-hosts-help"
+                          {% if field_errors.get('hosts') %}aria-invalid="true"{% endif %}
+                          class="mt-1 w-full rounded-lg font-mono text-sm dark:bg-slate-700 dark:text-white {% if field_errors.get('hosts') %}border-rose-400 dark:border-rose-500{% else %}border-slate-300 dark:border-slate-600{% endif %}" placeholder="checkout.flutterwave.com">{{ form.hosts_text }}</textarea>
+                {% if field_errors.get('hosts') %}<p id="wg-hosts-error" class="mt-1 text-xs text-rose-700 dark:text-rose-300">{{ field_errors.get('hosts') }}</p>{% endif %}
+                <p id="wg-hosts-help" class="mt-1 text-xs text-slate-500 dark:text-slate-400">One fully qualified hostname per line, up to 32. No IP addresses, wildcards, schemes, ports or paths: routers resolve these names themselves.</p>
+            </div>
+        </div>
+        <div class="flex flex-wrap justify-end gap-3">
+            {% if form.mode.value == 'edit' %}
+            <a href="{{ request.url.path }}" class="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Cancel</a>
+            {% endif %}
+            <button type="submit" class="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700">{{ 'Save changes' if form.mode.value == 'edit' else 'Save resource' }}</button>
+        </div>
+    </form>
+    {% endcall %}
+    </div>
+    {% endif %}
+
+    {% call card("Router readiness", color="blue", padding=False) %}
+    <div class="space-y-3 px-5 py-4">
+        <p class="text-xs text-slate-500 dark:text-slate-400">
+            Compares each active router's latest configuration snapshot with the module rendered from the current settings. It never contacts a router.
+            Snapshots older than {{ fleet.max_snapshot_age_hours }} hours are stale and never count as ready.
+            {% if fleet.available %}Evaluated {{ fleet.evaluated_at | app_datetime('%b %d, %Y %H:%M', 'just now') }}{% if fleet.module_version %}, module {{ fleet.module_version }}{% endif %}.{% endif %}
+        </p>
+        {% if fleet.available and fleet.configuration_error %}
+        <div role="alert" class="rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">The module cannot be rendered from the current settings: {{ fleet.configuration_error }}</div>
+        {% endif %}
+        {% if fleet.available and fleet.routers %}
+        <ul class="flex flex-wrap gap-2" aria-label="Routers by readiness status">
+            {% for item in fleet.status_counts %}{% if item.count %}
+            <li>{{ status_badge(item.status_label ~ ': ' ~ item.count, variant=item.status_variant, size="sm") }}</li>
+            {% endif %}{% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+    {% if not fleet.available %}
+    <p class="border-t border-slate-100 px-5 py-6 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Readiness could not be evaluated. Reload the page to try again.</p>
+    {% elif not fleet.routers %}
+    <p class="border-t border-slate-100 px-5 py-6 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No active routers.</p>
+    {% else %}
+    <div class="overflow-x-auto border-t border-slate-100 dark:border-slate-700">
+        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-900/40">
+                <tr class="text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    <th scope="col" class="px-5 py-3">Router</th>
+                    <th scope="col" class="px-5 py-3">Status</th>
+                    <th scope="col" class="px-5 py-3">Snapshot</th>
+                    <th scope="col" class="px-5 py-3">Missing enabled resources</th>
+                    <th scope="col" class="px-5 py-3">Disabled resources still present</th>
+                    <th scope="col" class="px-5 py-3 text-right">Findings</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                {% for router in fleet.routers %}
+                <tr>
+                    <td class="px-5 py-3 font-medium text-slate-900 dark:text-white">{{ router.router_name }}</td>
+                    <td class="px-5 py-3">{{ status_badge(router.status_label, variant=router.status_variant, size="sm") }}</td>
+                    <td class="px-5 py-3 text-xs text-slate-600 dark:text-slate-300">{{ router.snapshot_captured_at | app_datetime('%b %d, %Y %H:%M', 'None') }}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-slate-700 dark:text-slate-300">{{ router.missing_entry_keys | join(', ') if router.missing_entry_keys else '—' }}</td>
+                    <td class="px-5 py-3 font-mono text-xs text-slate-700 dark:text-slate-300">{{ router.drifted_entry_keys | join(', ') if router.drifted_entry_keys else '—' }}</td>
+                    <td class="px-5 py-3 text-right tabular-nums text-slate-700 dark:text-slate-300">{{ router.finding_count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% endcall %}
+</div>
+{{ animation_styles() }}
+{% endblock %}

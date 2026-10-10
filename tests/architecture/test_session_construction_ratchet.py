@@ -119,7 +119,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +12 from tests/integration/test_vendor_work_order_execution.py: disposable
 #: migrated engines and independent sessions prove assignment, revocation and
 #: actor lock-order concurrency; no production construction allowance is added.
-TEST_FIXTURE_BASELINE_TOTAL = 185
+#: +1 from test_prepaid_paid_invoice_period_repair_concurrency.py: independent
+#: worker sessions prove concurrent four-eyes period-repair approvals serialize.
+TEST_FIXTURE_BASELINE_TOTAL = 186
 
 
 def _baseline() -> dict[str, int]:

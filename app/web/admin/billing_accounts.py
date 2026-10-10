@@ -15,6 +15,9 @@ from app.models.subscriber import Subscriber
 from app.services import web_action_readiness
 from app.services import web_billing_accounts as web_billing_accounts_service
 from app.services import web_billing_statements as web_billing_statements_service
+from app.services import (
+    web_subledger_opening_corrections as web_opening_corrections,
+)
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import has_permission, require_permission
 from app.services.billing_mode_transitions import (
@@ -283,6 +286,9 @@ def account_detail(
     statement_range = web_billing_statements_service.parse_statement_range(
         statement_start, statement_end
     )
+    subledger_opening = web_opening_corrections.account_opening_panel(
+        db, account_id=account_id
+    )
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
@@ -304,6 +310,16 @@ def account_detail(
             "billing_mode_idempotency_key": f"billing-mode:{uuid4()}",
             "billing_mode_message": request.query_params.get("billing_mode_message"),
             "billing_mode_error": request.query_params.get("billing_mode_error"),
+            "subledger_opening": subledger_opening,
+            "opening_correction_permission": (
+                web_opening_corrections.ACTION_PERMISSION
+            ),
+            "opening_correction_message": request.query_params.get(
+                "opening_correction_message"
+            ),
+            "opening_correction_error": request.query_params.get(
+                "opening_correction_error"
+            ),
         },
     )
 

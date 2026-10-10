@@ -86,7 +86,7 @@ Failed reads render a retry state; an empty offline cache does not prove that
 there is no work. Vendor account identity uses `/api/v1/auth/me`; profile failures
 remain visible and retryable. Installation projects remain a separate workflow.
 
-This change requires backend migration 665 and a new mobile build; earlier
+This change requires backend migration 668 and a new mobile build; earlier
 TestFlight builds do not include native vendor work-order execution.
 
 ## Useful Commands

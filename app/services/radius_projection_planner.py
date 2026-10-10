@@ -183,7 +183,14 @@ def plan_login_radius_projections(
         else {}
     )
     selected: dict[str, LoginRadiusProjection] = {}
-    from app.services.walled_garden_policy import resolve_subscription_restriction
+    from app.services.walled_garden_policy import (
+        WalledGardenEvaluation,
+        resolve_subscription_restriction,
+    )
+
+    # One evaluation per run: captive rules, network settings, and router
+    # readiness are read once, not once per subscription.
+    evaluation = WalledGardenEvaluation(db)
 
     for subscription in subscriptions:
         login = str(subscription.login or "").strip()
@@ -193,6 +200,7 @@ def plan_login_radius_projections(
             db,
             subscription,
             account=subscription.subscriber,
+            evaluation=evaluation,
         )
         candidate = LoginRadiusProjection(
             login=login,

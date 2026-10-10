@@ -1,7 +1,7 @@
 """Expand native vendor assignment and explicit vendor field actors.
 
-Revision ID: 665_native_vendor_work_order_assignment
-Revises: 664_purge_retired_splynx_metadata_keys
+Revision ID: 668_native_vendor_work_order_assignment
+Revises: 667_captive_access_policy_backfill
 """
 
 import sqlalchemy as sa
@@ -9,8 +9,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "665_native_vendor_work_order_assignment"
-down_revision = "664_purge_retired_splynx_metadata_keys"
+revision = "668_native_vendor_work_order_assignment"
+down_revision = "667_captive_access_policy_backfill"
 branch_labels = None
 depends_on = None
 
