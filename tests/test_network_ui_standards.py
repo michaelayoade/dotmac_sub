@@ -344,8 +344,8 @@ def test_network_map_layer_controls_bind_before_batched_feature_rendering() -> N
     assert "mapFeatures.forEach" not in source
     assert "function processMapFeatureBatch()" in source
     assert "requestMapFrame(processMapFeatureBatch);" in source
-    assert "p.connectivity?.layer === 'connected'" in source
-    assert "p.connectivity.presentation" not in source
+    assert "p.connectivity ? p.connectivity.layer : 'unknown'" in source
+    assert "p.connectivity ? p.connectivity.presentation" in source
     assert "let pendingSearchQuery = null;" in source
     assert "if (!mapFeaturesReady)" in source
     assert "mapViewInteracted" in source

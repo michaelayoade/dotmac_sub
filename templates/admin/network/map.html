@@ -1273,7 +1273,8 @@
         if (p.city) html += `<div class="asset-detail-row"><span class="asset-detail-label">City</span><span class="asset-detail-value">${escapeHtml(p.city)}</span></div>`;
         if (p.type === 'customer') {
             const customerPresentation = p.connectivity ? p.connectivity.presentation : { label: 'Unknown', tone: 'neutral', source_owner: 'unknown' };
-            const sessionStatus = p.connectivity?.layer === 'connected' ? 'Online' : 'Offline';
+            const customerConnectivityLayer = p.connectivity ? p.connectivity.layer : 'unknown';
+            const sessionStatus = customerConnectivityLayer === 'connected' ? 'Online' : 'Offline';
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Customer status</span><span class="asset-detail-value" style="color:${customerColor}">${escapeHtml(p.customer_status || 'Unknown')}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Session status</span><span class="asset-detail-value status-foreground status-tone-${semanticTone(customerPresentation.tone)}">${sessionStatus}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Connectivity</span><span class="asset-detail-value">${escapeHtml(customerPresentation.label)}</span></div>`;
