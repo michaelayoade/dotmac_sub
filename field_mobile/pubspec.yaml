@@ -49,6 +49,7 @@ dev_dependencies:
   integration_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  firebase_core_platform_interface: ^6.0.3
   drift_dev: ^2.28.0
   build_runner: ^2.7.0
   # Generates native splash screens from the brand assets below

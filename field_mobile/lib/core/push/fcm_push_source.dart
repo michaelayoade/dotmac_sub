@@ -14,12 +14,31 @@ import 'push_source.dart';
 /// compile-time dependency on a generated `firebase_options.dart`.
 class FcmPushSource implements PushSource {
   FcmPushSource._(this._fm) {
+    _messages = StreamController<PushMessage>.broadcast(onListen: _start);
     FirebaseMessaging.onMessage.listen(_emit);
     FirebaseMessaging.onMessageOpenedApp.listen((m) => _emit(m, fromTap: true));
   }
 
   final FirebaseMessaging _fm;
-  final _messages = StreamController<PushMessage>.broadcast();
+  late final StreamController<PushMessage> _messages;
+  bool _started = false;
+
+  void _start() {
+    if (_started) return;
+    _started = true;
+    // Optional native push calls must not gate the first Flutter frame.
+    // Capture a cold-launch tap only once a consumer can receive it.
+    unawaited(_requestPermission());
+    unawaited(_captureInitialMessage());
+  }
+
+  Future<void> _requestPermission() async {
+    try {
+      await _fm.requestPermission(alert: true, badge: true, sound: true);
+    } catch (_) {
+      // Push permission failure must not prevent login or job access.
+    }
+  }
 
   /// Initialize Firebase + FCM. Returns null (→ NoopPushSource) when Firebase is
   /// not yet configured, so the app always boots regardless of Firebase setup.
@@ -30,15 +49,7 @@ class FcmPushSource implements PushSource {
       // Firebase not configured (run `flutterfire configure`) — push stays off.
       return null;
     }
-    final fm = FirebaseMessaging.instance;
-    try {
-      await fm.requestPermission(alert: true, badge: true, sound: true);
-    } catch (_) {
-      // Permission prompt failures shouldn't block startup.
-    }
-    final source = FcmPushSource._(fm);
-    await source._captureInitialMessage();
-    return source;
+    return FcmPushSource._(FirebaseMessaging.instance);
   }
 
   /// Surface a notification tap that cold-launched the app from terminated state.
