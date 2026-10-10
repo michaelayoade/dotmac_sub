@@ -199,6 +199,10 @@ class EventType(enum.Enum):
         "prepaid_paid_invoice_period_repair.requested"
     )
     prepaid_paid_invoice_period_repaired = "prepaid_paid_invoice_period.repaired"
+    prepaid_renewal_origin_corrected = "prepaid_renewal_origin.corrected"
+    payment_allocation_over_allocation_returned = (
+        "payment_allocation.over_allocation_returned"
+    )
     prepaid_draft_reconciled = "prepaid_draft.reconciled"
     prepaid_reviewed_draft_settled = "prepaid_reviewed_draft.settled"
     prepaid_invoice_sequence_reconstructed = "prepaid_invoice_sequence.reconstructed"

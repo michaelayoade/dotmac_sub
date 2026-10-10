@@ -14,7 +14,9 @@ no automatic repair:
 
 This query explains such a quarantine record by record and names the existing
 reviewed owner (if any) that may correct each one. A malformed paid-invoice
-period is corrected by ``financial.prepaid_paid_invoice_period_repair``. It reuses the owner's own
+period is corrected by ``financial.prepaid_paid_invoice_period_repair``; a
+legitimate renewal debit whose reference is malformed is corrected by
+``financial.prepaid_renewal_origin_correction``. It reuses the owner's own
 predicates so it cannot drift from what enforcement blocks on. It never
 writes, never infers a period from memo or description text, and never
 decides the correction: it states which facts Finance must establish before a
@@ -69,6 +71,8 @@ RUNBOOK = "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
 _UNUSED_RENEWAL_RUNBOOK = "docs/runbooks/UNUSED_PREPAID_RENEWAL_CORRECTION.md"
 _PERIOD_REPAIR_OWNER = "financial.prepaid_paid_invoice_period_repair"
 _PERIOD_REPAIR_CLI = "scripts.billing.repair_prepaid_paid_invoice_period"
+_ORIGIN_CORRECTION_OWNER = "financial.prepaid_renewal_origin_correction"
+_ORIGIN_CORRECTION_CLI = "scripts.billing.correct_prepaid_renewal_origin"
 _RENEWAL_ORIGIN = AccountAdjustmentOrigin.prepaid_service_renewal
 _BASE_LINE_KIND = "base_subscription"
 _DERIVED_LINE_PERIOD_SOURCES = frozenset({"paid_at_manual_invoice"})
@@ -104,6 +108,7 @@ class ResolutionRoute(StrEnum):
     unused_prepaid_renewal_correction = "unused_prepaid_renewal_correction"
     reviewed_account_adjustment_reversal = "reviewed_account_adjustment_reversal"
     reviewed_paid_invoice_period_repair = "reviewed_paid_invoice_period_repair"
+    reviewed_renewal_origin_correction = "reviewed_renewal_origin_correction"
     engineering_non_service_line_classification = (
         "engineering_non_service_line_classification"
     )
@@ -734,6 +739,57 @@ def _renewal_defects(
     return tuple(defects), subscription_id, starts_at, ends_at
 
 
+def _origin_correction_option(
+    adjustment: AccountAdjustment,
+    *,
+    linked_entitlement: EntitlementEvidence | None,
+) -> ResolutionOption:
+    """Sanctioned reference correction; the preview is READ-ONLY."""
+    base = (
+        f"poetry run python -m {_ORIGIN_CORRECTION_CLI} preview "
+        f"--adjustment-id {adjustment.id} "
+    )
+    if linked_entitlement is not None:
+        return ResolutionOption(
+            route=ResolutionRoute.reviewed_renewal_origin_correction,
+            sanctioned=True,
+            when=(
+                "Finance confirms the service WAS delivered, so the debit is "
+                "legitimate and only its origin reference is malformed. The "
+                "linked entitlement structurally proves "
+                f"{linked_entitlement.subscription_id}:"
+                f"{linked_entitlement.starts_at.isoformat()}:"
+                f"{linked_entitlement.ends_at.isoformat()}. Money does not move."
+            ),
+            owner=_ORIGIN_CORRECTION_OWNER,
+            runbook=RUNBOOK,
+            command=(
+                base + "--disposition entitlement_already_linked "
+                f"--entitlement-id {linked_entitlement.entitlement_id}"
+            ),
+            missing_capability=None,
+        )
+    return ResolutionOption(
+        route=ResolutionRoute.reviewed_renewal_origin_correction,
+        sanctioned=True,
+        when=(
+            "Finance confirms the service WAS delivered, so the debit is "
+            "legitimate, and names the existing active entitlement it funded "
+            "(link_existing_entitlement), or supplies the subscription and "
+            "exact period when no entitlement exists "
+            "(create_entitlement_from_debit, which creates one through the "
+            "existing coverage writer). Money does not move."
+        ),
+        owner=_ORIGIN_CORRECTION_OWNER,
+        runbook=RUNBOOK,
+        command=(
+            base + "--disposition link_existing_entitlement "
+            "--entitlement-id <finance-named-entitlement>"
+        ),
+        missing_capability=None,
+    )
+
+
 def _renewal_options(
     *,
     adjustment: AccountAdjustment,
@@ -807,30 +863,22 @@ def _renewal_options(
             )
         )
         options.append(
-            ResolutionOption(
-                route=ResolutionRoute.engineering_renewal_origin_correction,
-                sanctioned=False,
-                when=(
-                    "Finance confirms the service WAS delivered, so the debit is "
-                    "legitimate and only its origin reference is malformed. The "
-                    "linked entitlement structurally proves "
-                    f"{entitlement.subscription_id}:"
-                    f"{entitlement.starts_at.isoformat()}:"
-                    f"{entitlement.ends_at.isoformat()}."
-                ),
-                owner=None,
-                runbook=RUNBOOK,
-                command=None,
-                missing_capability=(
-                    "No reviewed owner corrects origin_ref on an existing "
-                    "renewal adjustment; the legacy tax-invoice correction "
-                    "requires an already exact origin_ref. Needs an "
-                    "engineering-built reviewed origin correction from the "
-                    "linked entitlement."
-                ),
-            )
+            _origin_correction_option(adjustment, linked_entitlement=entitlement)
         )
         return tuple(options)
+    exactly_one_linked = [
+        row
+        for row in linked
+        if row.status == ServiceEntitlementStatus.active.value
+        and row.account_id == adjustment.account_id
+        and row.currency == currency
+    ]
+    if len(linked) == 1 and len(exactly_one_linked) == 1 and adjustment_debit:
+        return (
+            _origin_correction_option(
+                adjustment, linked_entitlement=exactly_one_linked[0]
+            ),
+        )
     if not linked and adjustment_debit:
         options.append(
             ResolutionOption(
@@ -850,26 +898,30 @@ def _renewal_options(
                 missing_capability=None,
             )
         )
-    options.append(
-        ResolutionOption(
-            route=ResolutionRoute.engineering_renewal_origin_correction,
-            sanctioned=False,
-            when=(
-                "The debit is legitimate (or the linked evidence is not exactly "
-                "one active non-invoice entitlement), so the period cannot be "
-                "proven from structured data."
-            ),
-            owner=None,
-            runbook=RUNBOOK,
-            command=None,
-            missing_capability=(
-                "No reviewed owner records a Finance-documented period for a "
-                "renewal adjustment whose origin_ref is malformed and whose "
-                "period is not proven by exactly one linked entitlement. Needs "
-                "engineering; the account stays quarantined meanwhile."
-            ),
+    if not linked and adjustment_debit:
+        options.append(_origin_correction_option(adjustment, linked_entitlement=None))
+    else:
+        options.append(
+            ResolutionOption(
+                route=ResolutionRoute.engineering_renewal_origin_correction,
+                sanctioned=False,
+                when=(
+                    "The debit is legitimate but the linked evidence is not "
+                    "exactly one active entitlement on this account (several "
+                    "entitlements, an inactive or foreign one, or a debit that "
+                    "is not a plain adjustment debit)."
+                ),
+                owner=None,
+                runbook=RUNBOOK,
+                command=None,
+                missing_capability=(
+                    "The reviewed origin correction needs exactly one active "
+                    "linked entitlement, or none linked. Needs engineering "
+                    "investigation of the linked entitlements; the account "
+                    "stays quarantined meanwhile."
+                ),
+            )
         )
-    )
     return tuple(options)
 
 
