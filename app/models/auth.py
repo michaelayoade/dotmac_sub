@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -156,6 +157,11 @@ class UserCredential(Base):
             "authentication_binding_id",
             name="uq_user_credentials_tenant_party_auth_binding",
         ),
+        # Migration 669. See ``credential_version`` below.
+        CheckConstraint(
+            "credential_version >= 1",
+            name="ck_user_credentials_credential_version_positive",
+        ),
         CheckConstraint(
             # Exactly one principal: subscriber (customer), system_user (admin),
             # or reseller_user (Layer 3 — reseller portal login as its own
@@ -240,6 +246,18 @@ class UserCredential(Base):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     password_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
+    )
+    # Migration 669. Names the SECRET and its standing, not the hash
+    # representation: bumped by password change/reset/admin set, ``is_active``
+    # toggles, ``must_change_password`` false->true and provider/username/
+    # principal changes; NOT bumped by a representation-only rehash or by
+    # counters/``locked_until``/``last_login_at``. Consumers (the login commit
+    # gate, MFA challenges) bind to it so a stale verification cannot mint a
+    # session after the credential changed. Never exposed in schemas/auth.py.
+    # A PostgreSQL trigger bumps it for any legacy writer that changes
+    # credential standing without bumping it (see migration 669).
+    credential_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=1, server_default=text("1")
     )
 
     failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0)
