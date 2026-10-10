@@ -93,6 +93,7 @@ _WRITE_TIER_VERBS = frozenset(
         "cancel",
         "commission",
         "configure",
+        "correct",  # Appends a reviewed customer-subledger opening correction.
         "create",
         "db_admin",
         "delete",

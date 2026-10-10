@@ -252,6 +252,228 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="financial.legacy_over_allocation_correction",
+        module="app.services.billing.legacy_over_allocation_correction",
+        owns=("reviewed legacy payment over-allocation return to account credit",),
+        depends_on=(
+            "auth.permission_gate",
+            "financial.invoices",
+            "financial.ledger",
+            "financial.payments",
+            "observability.audit_log",
+        ),
+        notes=(
+            "The reviewed reversal in financial.payments refuses a Splynx-era "
+            "allocation (no paired ledger evidence) and is limited to void "
+            "invoices. This owner returns an over-allocation on a PAID invoice "
+            "to account credit, and only for legacy evidence: an active "
+            "allocation with no ledger links and no preview or idempotency "
+            "evidence, on an unrefunded, unreversed, settlement-less customer "
+            "payment whose only active allocation it is, whose whole amount is "
+            "already one invoice-free ledger credit with no consumption debit, "
+            "and where the invoice stays exactly paid by its remaining "
+            "allocations and credit notes. Because the ledger already holds "
+            "that credit, the correct posting is none; a reversal credit would "
+            "double-count it. The read-only preview restates and proves every "
+            "amount; confirmation rechecks under account, invoice, payment, "
+            "and allocation locks, requires the identical fingerprint, "
+            "deactivates the allocation through the payment owner's flush-only "
+            "participant, and stages audit and a domain event. The invoice "
+            "status and balance, the payment, and every ledger entry never "
+            "change."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="reviewed legacy payment over-allocation return to account credit",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "authenticated legacy over-allocation return command",
+                        "legacy payment allocation without ledger evidence",
+                        "fully paid invoice settlement",
+                        "payment account-credit ledger evidence",
+                    ),
+                    canonical_writer="financial.legacy_over_allocation_correction",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="authenticated legacy over-allocation return command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:payment:update grant for an active staff "
+                        "principal, plus the restated allocation, invoice total "
+                        "and remaining settlement amounts, reason, evidence "
+                        "reference and SHA-256, preview fingerprint, and "
+                        "idempotency key"
+                    ),
+                ),
+                AuthorityInput(
+                    name="legacy payment allocation without ledger evidence",
+                    owner="financial.payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "one active PaymentAllocation with no ledger, "
+                        "consumption, preview, idempotency, or reversal evidence "
+                        "on an active succeeded payment that has no settlement, "
+                        "refund, reversal, or purchase reservation"
+                    ),
+                ),
+                AuthorityInput(
+                    name="fully paid invoice settlement",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "one active non-proforma PAID invoice with zero balance "
+                        "whose active allocations plus applied credit notes "
+                        "exceed its total by exactly the allocation"
+                    ),
+                ),
+                AuthorityInput(
+                    name="payment account-credit ledger evidence",
+                    owner="financial.ledger",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "exactly one active invoice-free payment credit equal to "
+                        "the payment amount and no account-credit consumption "
+                        "debit for the payment"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "The return enters execute_owner_command once on a "
+                    "transaction-free session. The allocation deactivation, the "
+                    "audit row, and the payment_allocation.over_allocation_returned "
+                    "event commit or roll back together."
+                ),
+                locking=(
+                    "Lock the account, invoice, payment, and every allocation "
+                    "of the invoice FOR UPDATE in that order, expire, and "
+                    "recompute the preview before comparing its fingerprint; "
+                    "the payment participant re-locks and re-verifies the "
+                    "allocation."
+                ),
+                idempotency=(
+                    "The correction identity is uuid5 of the business "
+                    "idempotency key (same key and proposal replays the stored "
+                    "outcome; a different proposal conflicts). The allocation's "
+                    "reversal idempotency key is unique, and a returned "
+                    "allocation is inactive, so a new key is refused."
+                ),
+                retries=(
+                    "Retry with the same key. Changed evidence returns "
+                    "stale_preview and needs a new preview."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "financial.legacy_over_allocation_correction"
+                    ),
+                    "financial.legacy_over_allocation_correction.allocation_evidence_incomplete",
+                    "financial.legacy_over_allocation_correction.allocation_not_found",
+                    "financial.legacy_over_allocation_correction.idempotency_conflict",
+                    "financial.legacy_over_allocation_correction.invalid_actor",
+                    "financial.legacy_over_allocation_correction.invalid_evidence",
+                    "financial.legacy_over_allocation_correction.invalid_reason",
+                    "financial.legacy_over_allocation_correction.missing_idempotency_key",
+                    "financial.legacy_over_allocation_correction.not_actionable",
+                    "financial.legacy_over_allocation_correction.participant_rejected",
+                    "financial.legacy_over_allocation_correction.permission_denied",
+                    "financial.legacy_over_allocation_correction.stale_preview",
+                ),
+                mapping_owner="legacy over-allocation return operator CLI",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "an allocation with any ledger, native, or reversal evidence",
+                    "a payment with a settlement, refund, reversal, reservation, "
+                    "or another active allocation",
+                    "a payment whose whole amount is not one invoice-free ledger "
+                    "credit, or that has a consumption debit",
+                    "an invoice that is not paid or would not stay exactly paid",
+                    "an allocation that is not exactly the excess",
+                    "restated amounts that differ from the stored amounts",
+                    "a missing staff permission",
+                    "a stale preview fingerprint",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment_allocation.over_allocation_returned",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries the correction id, allocation, payment, "
+                    "invoice, account, amount, currency, settlement before and "
+                    "after, the account-credit ledger entry, empty ledger "
+                    "postings, zero economic delta, fingerprint, reason, "
+                    "evidence reference and SHA-256, and the staff identity. "
+                    "Additions are backward compatible."
+                ),
+                replay=(
+                    "Consumers deduplicate by event id; replaying the command "
+                    "returns the stored outcome and writes nothing."
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="reviewed legacy payment allocation settlement",
+                    input_names=(
+                        "authenticated legacy over-allocation return command",
+                        "legacy payment allocation without ledger evidence",
+                        "fully paid invoice settlement",
+                    ),
+                    writer="financial.legacy_over_allocation_correction",
+                    freshness=(
+                        "Computed from the current database snapshot at preview "
+                        "and again under lock at confirmation."
+                    ),
+                    stale_behavior=(
+                        "A changed fingerprint rejects the confirmation and "
+                        "requires a new preview."
+                    ),
+                    drift_signal=(
+                        "Paid invoices whose active allocations plus applied "
+                        "credit notes exceed their total."
+                    ),
+                    rebuild_operation=(
+                        "preview_legacy_over_allocation_return deterministically "
+                        "re-derives the proposal's before/after and fingerprint."
+                    ),
+                    repair_owner="financial.legacy_over_allocation_correction",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                old_owner=None,
+                new_owner="financial.legacy_over_allocation_correction",
+                verification=(
+                    "Preview blocker, exact-amount, ledger-evidence, stale, "
+                    "replay, and PostgreSQL concurrency tests."
+                ),
+                cutover_gate=(
+                    "The reviewed payment-allocation reversal still refuses "
+                    "legacy allocations; this owner is the only route for them."
+                ),
+                fallback_retirement=(
+                    "Manual SQL deactivation of legacy over-allocations is retired."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/runbooks/LEGACY_OVER_ALLOCATION_RETURN.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_legacy_over_allocation_correction.py",
+                "tests/integration/test_legacy_over_allocation_correction_concurrency.py",
+                "tests/architecture/test_legacy_over_allocation_correction_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.import_payment_batch_reversals",
         module="app.services.financial_import_batch_reversals",
         owns=(

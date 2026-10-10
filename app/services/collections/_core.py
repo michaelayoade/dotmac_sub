@@ -88,7 +88,11 @@ from app.services.payment_arrangements import (
 )
 from app.services.prepaid_enforcement_state import clear_prepaid_enforcement_timers
 from app.services.response import ListResponseMixin
-from app.services.walled_garden_policy import resolve_walled_garden_decision
+from app.services.walled_garden_policy import (
+    WalledGardenEvaluation,
+    aggregate_walled_garden_decisions,
+    resolve_walled_garden_decision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -498,6 +502,7 @@ def preview_financial_access_consequence(
     prepaid_target_ids: set[UUID] | None = None
     grace_decision: dict | None = None
     access_decision: dict | None = None
+    subscription_access_decisions: dict[str, dict] | None = None
     shield_reason: str | None = None
     health_reasons: list[str] = []
     profile_payload: dict = {"valid": False, "automation_safe": False}
@@ -715,11 +720,27 @@ def preview_financial_access_consequence(
                 if action == FinancialAccessAction.suspend
                 else AccessRestrictionMode.hard_reject
             )
-            access_decision = resolve_walled_garden_decision(
-                db,
-                account,
-                requested_mode=requested_mode,
+            # Captive is resolved per SUBSCRIPTION (policy scope, plan family,
+            # serving-router readiness). The account-level ``access_decision``
+            # is captive only when every target subscription resolved captive.
+            evaluation = WalledGardenEvaluation(db)
+            per_subscription = [
+                resolve_walled_garden_decision(
+                    db,
+                    account,
+                    requested_mode=requested_mode,
+                    subscription=db.get(Subscription, subscription_id),
+                    evaluation=evaluation,
+                )
+                for subscription_id in target_subscriptions
+            ]
+            access_decision = aggregate_walled_garden_decisions(
+                requested_mode, per_subscription
             ).as_dict()
+            subscription_access_decisions = {
+                str(decision.subscription_id): decision.as_dict()
+                for decision in per_subscription
+            }
 
     inputs = {
         "account_status": (
@@ -730,6 +751,7 @@ def preview_financial_access_consequence(
         "prepaid_funding": prepaid_funding,
         "grace_decision": grace_decision,
         "access_decision": access_decision,
+        "subscription_access_decisions": subscription_access_decisions,
         "shield_reason": shield_reason,
         "billing_health_reasons": health_reasons,
         "dedicated_bundle": dedicated_bundle,
@@ -888,19 +910,29 @@ def confirm_financial_access_consequence(
     }:
         from app.services.account_lifecycle import suspend_subscription
 
-        access_mode = AccessRestrictionMode(
-            preview.decision_inputs["access_decision"]["effective_mode"]
+        account_decision = preview.decision_inputs["access_decision"]
+        requested_mode = AccessRestrictionMode(account_decision["requested_mode"])
+        per_subscription = (
+            preview.decision_inputs.get("subscription_access_decisions") or {}
         )
 
         for subscription_id in preview.target_subscription_ids:
             subscription = db.get(Subscription, subscription_id)
             before = subscription.status if subscription is not None else None
+            # A target without its own decision fails closed to hard reject.
+            subscription_decision = per_subscription.get(str(subscription_id))
+            access_mode = (
+                AccessRestrictionMode(subscription_decision["effective_mode"])
+                if subscription_decision
+                else AccessRestrictionMode.hard_reject
+            )
             lock = suspend_subscription(
                 db,
                 str(subscription_id),
                 reason=reason,
                 source=source,
                 access_mode=access_mode,
+                requested_access_mode=requested_mode,
             )
             lock_results.append(lock)
             if before not in {

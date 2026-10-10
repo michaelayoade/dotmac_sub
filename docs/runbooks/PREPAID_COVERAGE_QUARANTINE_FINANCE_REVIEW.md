@@ -94,38 +94,145 @@ description, or note text as evidence.
 
 ### A. `malformed_paid_invoice_period`
 
-As of this runbook, **no reviewed owner can correct this record**. Work out
-which case applies, record it, and escalate to engineering. Leave the account
-quarantined until then. It stays protected while quarantined.
+The sanctioned repair is the four-eyes paid-invoice period repair (owner
+`financial.prepaid_paid_invoice_period_repair`, permission
+`billing:prepaid_reconciliation:repair`, CLI
+`scripts/billing/repair_prepaid_paid_invoice_period.py`). Finance states which
+subscription and which service period the payment bought; the owner checks
+that statement against the records and restores the period and its coverage
+together. It never changes money, the invoice status, allocations, ledger
+entries, or the line's `kind`.
 
-1. **A line is not a service charge.** The diagnostic shows a line `kind` other
-   than `base_subscription`. Finance confirms from source documents that the
-   line was a one-off charge, such as installation, equipment, or a fee. Route:
-   `engineering_non_service_line_classification`. The missing capability is a
-   reviewed way to mark a paid, subscription-linked line as "not a service
-   period".
-2. **The period is proven by structured data.** `period_proof` is
-   `source_entitlement` (exactly one active entitlement was created from each
-   line) or `line_metadata_period` (the line's structured
-   `billing_period_start`/`billing_period_end`). Finance confirms
-   `proven_period_start`..`proven_period_end` is the period the payment bought.
-   Route: `engineering_paid_invoice_period_restoration`. Escalate with the
-   proposed values.
-3. **The period is not proven.** `period_proof` is `none`, `conflicting`, or
-   `derived_line_metadata_period`. A derived period was inferred from the
-   payment date, so it is not proof. Finance determines the paid period from
+First decide which case applies. The diagnostic's
+`reviewed_paid_invoice_period_repair` option carries a prefilled read-only
+preview command.
+
+1. **The period is proven by structured data.** `period_proof` is
+   `source_entitlement` or `line_metadata_period`. The prefilled command already
+   contains `proven_period_start`..`proven_period_end`. Finance confirms that is
+   the period the payment bought.
+2. **The period is not proven.** `period_proof` is `none`, `conflicting`, or
+   `derived_line_metadata_period` (a derived period was inferred from the
+   payment date, so it is not proof). Finance determines the paid period from
    source documents: the original or Splynx invoice, the payment receipt, and
-   the customer order. Memo text is never a source. Route:
-   `engineering_documentary_paid_invoice_period`.
+   the customer order. Memo or description text is never a source.
+3. **A line is not a service charge.** The line `kind` is not
+   `base_subscription` and Finance confirms from source documents that it was a
+   one-off charge (installation, equipment, a fee) that bought no service
+   period. There is still no sanctioned repair: route
+   `engineering_non_service_line_classification`. Do **not** invent a period to
+   clear the quarantine. A proration (upgrade) charge did buy service for the
+   upgraded days; Finance may repair it with that exact period, acknowledging
+   the warnings below.
 
-These existing tools **do not** fix this code. Do not run them hoping they
-will:
+#### Preview (read-only)
+
+```bash
+poetry run python -m scripts.billing.repair_prepaid_paid_invoice_period preview \
+  --invoice-id <invoice> --line-id <line> --subscription-id <subscription> \
+  --period-start <ISO-8601 with offset> --period-end <ISO-8601 with offset>
+```
+
+Exit `0` means actionable; `2` means blockers remain. The JSON shows:
+
+- `before`/`after`: the invoice period and the line's subscription and period;
+- `planned_entitlement`: the entitlement the paid-line entitlement writer will
+  create (`create_from_paid_line`), or the existing one that already funds the
+  payment (`existing_entitlement_funds_line`);
+- `overlapping_entitlements`, `terms`, `settlement`;
+- `warnings` and `blockers`;
+- `quarantine_effect`: current and projected blocking reasons, and
+  `work_item_resolves_on_next_sweep`;
+- `fingerprint`.
+
+**Blockers** (fix the cause or escalate; they cannot be acknowledged):
+
+| Blocker | Meaning and route |
+|---|---|
+| `invoice_not_paid` | Not an active, non-proforma, fully paid invoice. Not this runbook. |
+| `invoice_period_not_malformed` | The period is already valid. Nothing to repair. |
+| `settlement_does_not_match_total` | Active payment allocations plus applied credit notes do not equal the invoice total (for example, over-allocation). Correct the allocation through its owner first; Finance decides where the excess belongs. |
+| `currency_mismatch` | Invoice currency is not the prepaid enforcement currency. Escalate. |
+| `subscription_account_mismatch`, `subscription_not_prepaid`, `line_linked_to_other_subscription` | The proposed subscription is wrong for this invoice or line. |
+| `invoice_has_other_subscription_lines` | The invoice has a second subscription-linked charge; the invoice-level period would assert both. Escalate. |
+| `line_already_has_entitlement` | An entitlement is already sourced from this line. Use `--adopt-entitlement-id` with that entitlement. |
+| `overlapping_entitlement_unresolved` | An active entitlement for the subscription overlaps the period. See "Overlaps" below. |
+| `adopted_entitlement_*` | The entitlement named with `--adopt-entitlement-id` is not active for this subscription, is not structurally linked to this invoice or line, has a different period, or a different currency. |
+| `unacknowledged_warning`, `acknowledged_warning_not_present` | Acknowledge exactly the warnings shown, no more. |
+
+**Warnings** (each needs `--acknowledge-warning <name>` after Finance confirms
+it from source documents):
+
+- `line_not_base_subscription`: the line is not tagged as a base subscription
+  charge (for example a proration). Finance confirms it bought this period.
+- `amount_differs_from_subscription_terms`: the line amount differs from the
+  subscription's `unit_price`.
+- `subscription_terms_unpriced`: the subscription has no contracted amount.
+- `period_not_one_billing_cycle`: the period is not exactly one billing cycle.
+- `adopted_entitlement_amount_differs`: the adopted entitlement's funded amount
+  differs from the line amount.
+
+**Overlaps.** If an active entitlement already funds *this* payment (the
+diagnostic or the entitlement's structured `paid_invoice_id` shows it), pass
+`--adopt-entitlement-id <id>` with exactly its period. No second entitlement is
+created, so the payment is not counted twice. If a different entitlement
+legitimately coexists (for example a base cycle under an upgrade proration),
+pass `--acknowledge-overlap <id>` for each; the owner retains it and creates the
+new one. Anything else is an escalation.
+
+#### Request (staff member 1)
+
+Re-run with `request`, the same proposal arguments, and the preview
+fingerprint:
+
+```bash
+poetry run python -m scripts.billing.repair_prepaid_paid_invoice_period request \
+  <same proposal arguments> --fingerprint <sha256> \
+  --reason "<Finance determination and documents relied on>" \
+  --evidence-ref <finance-ticket-or-document-ref> \
+  --evidence-sha256 <sha256 of the evidence file> \
+  --actor <system-user-uuid> --idempotency-key <unique-key>
+```
+
+The request changes no invoice. It records the proposal, both acknowledgements,
+the reason, and the evidence SHA-256 (event
+`prepaid_paid_invoice_period_repair.requested`). It is refused when the
+fingerprint is stale or any blocker remains.
+
+#### Approve (staff member 2, a different person)
+
+```bash
+poetry run python -m scripts.billing.repair_prepaid_paid_invoice_period list
+poetry run python -m scripts.billing.repair_prepaid_paid_invoice_period approve \
+  --request <request-id> --fingerprint <same sha256> \
+  --approver <different-system-user-uuid> --idempotency-key <unique-key>
+```
+
+Self-approval is refused, except under the governed, time-boxed sole-approver
+exception ([`SOLE_APPROVER_EXCEPTION.md`](SOLE_APPROVER_EXCEPTION.md)): off by
+default, Michael only, with `--sole-approver-justification` and recorded
+evidence. Under lock, the owner recomputes the preview and
+requires the identical fingerprint; any change since the request returns
+`stale_preview` and needs a new request. It then, in one transaction:
+
+- writes the period on the invoice and the line (and links an unlinked line to
+  the subscription) through the invoice owner;
+- creates the entitlement through the paid-line entitlement writer, or records
+  the adopted one;
+- records an audit row (`repair_paid_prepaid_invoice_period`) and the event
+  `prepaid_paid_invoice_period.repaired`, with both staff identities.
+
+Re-running the same approval returns the stored outcome (`replayed: true`).
+Exit code `3` means the owner refused; the JSON `error` names why.
+
+These existing tools still **do not** fix this code. Do not run them hoping
+they will:
 
 - the admin invoice "prepaid coverage reconciliation" screen and
   `scripts/billing/prepaid_coverage_reconcile.py`, which only create
   entitlements from an exact period;
 - `reconcile_prepaid_drafts --repair-paid-invoice`, which only repairs an
-  unlinked line;
+  unlinked line with an exact settlement period;
 - `REVIEWED_PREPAID_INVOICE_SEQUENCE_RECONSTRUCTION.md`, which refuses paid
   invoices;
 - calendar reconciliation, which requires a stored period;
@@ -150,10 +257,10 @@ will:
      `correct-unused-prepaid-renewal`. The owner reverses the debit and the
      entitlement together. The reversed adjustment no longer counts as
      evidence.
-   - **Service was received.** There is no sanctioned repair, because the debit
-     is legitimate and only its reference is wrong. Route:
-     `engineering_renewal_origin_correction`. The linked entitlement proves the
-     correct reference, which the diagnostic shows.
+   - **Service was received.** The debit is legitimate and only its reference
+     is wrong. Route: `reviewed_renewal_origin_correction` (see "Renewal origin
+     correction" below). The linked entitlement proves the correct reference,
+     which the diagnostic shows.
 3. **No entitlement is linked to the debit.**
    - **Finance confirms the debit was raised in error** (it bought no service
      period). This route is sanctioned: a reviewed account-adjustment reversal
@@ -162,11 +269,78 @@ will:
      `POST /api/v1/account-adjustments/<adjustment-id>/reversal/preview` with
      the approval reference as `reason`. Confirm with `POST .../reversal`,
      passing the exact `preview_fingerprint` and a unique `idempotency_key`.
-   - **Otherwise** there is no sanctioned repair. Route:
-     `engineering_renewal_origin_correction`.
-4. **Any other linked shape** (several entitlements, an invoice-linked
-   entitlement, or an amount or currency mismatch) has no sanctioned repair.
-   Escalate it.
+   - **The debit is legitimate** (the customer received the service). Route:
+     `reviewed_renewal_origin_correction`: Finance names the existing
+     entitlement the debit funded, or supplies the subscription and exact period
+     when none exists.
+4. **Exactly one active entitlement is linked, but it is invoice-backed or its
+   amount differs from the debit** (for example a pre-tax entitlement beside a
+   tax-inclusive debit). The unused-renewal correction does not apply. If the
+   service was received, route `reviewed_renewal_origin_correction` with
+   `entitlement_already_linked`; the owner asks Finance to acknowledge the
+   amount and invoice-backing warnings.
+5. **Any other linked shape** (several entitlements, an inactive or foreign
+   entitlement) has no sanctioned repair. Escalate it
+   (`engineering_renewal_origin_correction`).
+
+#### Renewal origin correction
+
+Owner `financial.prepaid_renewal_origin_correction`, permission
+`billing:prepaid_reconciliation:repair`, CLI
+`scripts/billing/correct_prepaid_renewal_origin.py`. Two steps, no money moves.
+
+```bash
+# 1. Read-only preview (exit 2 while blockers remain):
+poetry run python -m scripts.billing.correct_prepaid_renewal_origin preview \
+  --adjustment-id <adjustment> --disposition entitlement_already_linked \
+  --entitlement-id <entitlement> [--acknowledge-warning <warning> ...]
+# 2. Confirm, restating the preview fingerprint:
+poetry run python -m scripts.billing.correct_prepaid_renewal_origin confirm \
+  <same proposal arguments> --fingerprint <sha256> \
+  --reason "<Finance determination and documents relied on>" \
+  --evidence-ref <finance-ticket-or-document-ref> \
+  --evidence-sha256 <sha256 of the evidence file> \
+  --actor <system-user-uuid> --idempotency-key <unique-key>
+```
+
+Dispositions:
+
+- `entitlement_already_linked`: exactly one active entitlement is already
+  linked to the debit. Its subscription and period are the canonical reference.
+- `link_existing_entitlement`: Finance names one existing active entitlement the
+  debit funded that carries no ledger-debit link (`--entitlement-id`). The owner
+  records the link through the entitlement writer's flush-only participant. No
+  coverage is created or extended.
+- `create_entitlement_from_debit`: no entitlement exists. Finance supplies
+  `--subscription-id`, `--period-start`, `--period-end`; the entitlement is
+  created only through the existing wallet-debit entitlement writer. An active
+  entitlement overlapping the period blocks it unless named with
+  `--acknowledge-overlap`.
+
+The preview shows `origin_ref_before`/`origin_ref_after`, the planned entitlement
+action, `warnings` (acknowledge exactly those shown, after Finance confirms them
+from source documents), `blockers`, and `quarantine_effect`
+(`malformed_adjustment_ids_before`/`after`, `projected_blocking_reasons`,
+`work_item_resolves_on_next_sweep`). Blockers include a reversed, non-renewal, or
+ledger-inconsistent adjustment; an already canonical reference; an inactive,
+foreign, or other-debit-linked entitlement; and a canonical reference already
+carried by another adjustment. Three further blockers cannot be acknowledged:
+`entitlement_invoice_already_settled` (link mode: the entitlement's source
+invoice is already fully settled by payments, credit notes or opening
+consumption, so the wallet debit would fund the period twice);
+`would_make_invoice_documentary` (the change would add a paid prepaid invoice
+with the same subscription, period, amount and currency to the direct-renewal
+documentary set, silently removing its customer-position consumption; the
+preview lists `position_impact.invoices_made_documentary` and the
+`prepaid_available_balance` before/after, and Finance must decide the invoice
+first); and, in create mode, `period_not_one_billing_cycle`,
+`period_exceeds_one_billing_cycle`, `period_start_outside_debit_cycle` (start
+more than one cycle from the debit's effective date) and
+`cycle_already_covered_by_invoice` (an invoice-backed entitlement or paid
+invoice already covers the period). `position_impact` also shows the current
+coverage end before/after. Re-running the same confirmation returns the
+stored outcome (`replayed: true`); a stale fingerprint returns `stale_preview`.
+Exit code `3` means the owner refused; the JSON `error` names why.
 
 Every sanctioned route returns the debit to the customer's prepaid funding.
 Use one only when Finance has decided the charge itself was wrong, never just
@@ -180,9 +354,10 @@ Each correction has two roles:
   source documents; and
 - a separate **operator**, who runs the preview and apply.
 
-The two must be different people. The existing owners record one actor. The
-approver is recorded through the approval reference in `--reason`/`reason` and
-in the finance ticket.
+The two must be different people. The paid-invoice period repair enforces this
+in code (request and approve by different staff, both recorded). The other
+owners record one actor; for them the approver is recorded through the approval
+reference in `--reason`/`reason` and in the finance ticket.
 
 Record the following in the finance ticket:
 
@@ -220,7 +395,12 @@ After a sanctioned correction:
 - Never suspend, restrict, or "unblock" the account by hand because of this
   work item. Never treat ambiguous evidence as debt.
 - Never edit invoice periods, invoice lines, adjustments, `origin_ref`, ledger
-  entries, or entitlements with SQL, the admin shell, or a one-off script.
+  entries, or entitlements with SQL, the admin shell, or a one-off script. The
+  paid-invoice period repair is the only sanctioned way to set a paid invoice's
+  period, and the renewal origin correction is the only sanctioned way to
+  rewrite a renewal adjustment's `origin_ref`.
+- Never record a period, or acknowledge a warning, that Finance has not
+  established from source documents just to clear the quarantine.
 - Never infer a period or a subscription from memo, description, or note text,
   or from `next_billing_at`.
 - Never void, credit-note, refund, or reverse a charge just to clear the

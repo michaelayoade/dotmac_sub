@@ -225,10 +225,21 @@ def test_missing_invoice_period_is_listed_with_no_structured_proof(
     assert finding.lines[0].line_kind == "base_subscription"
     assert finding.period_proof == PeriodProof.none
     assert finding.proven_period_start is None
-    assert finding.sanctioned_repair_available is False
+    assert finding.sanctioned_repair_available is True
     assert _routes(finding.options) == {
-        ResolutionRoute.engineering_documentary_paid_invoice_period: False
+        ResolutionRoute.reviewed_paid_invoice_period_repair: True
     }
+    (option,) = finding.options
+    assert option.owner == "financial.prepaid_paid_invoice_period_repair"
+    assert option.missing_capability is None
+    # A prefilled READ-ONLY preview; Finance supplies the documented period.
+    assert option.command is not None
+    assert "repair_prepaid_paid_invoice_period preview" in option.command
+    assert f"--invoice-id {invoice.id}" in option.command
+    assert f"--line-id {line.id}" in option.command
+    assert f"--subscription-id {subscription.id}" in option.command
+    assert "<finance-documented-start>" in option.command
+    assert "memo" in option.when
     # The diagnostic explains exactly what enforcement blocks on.
     blockers = resolve_prepaid_coverage_enforcement_blockers(
         db_session, [subscription], as_of=NOW
@@ -257,8 +268,12 @@ def test_inverted_invoice_period_reports_entitlement_proof_without_repairing(
     assert finding.proven_period_end == PAST_END
     assert finding.lines[0].source_entitlements[0].entitlement_id == entitlement.id
     assert _routes(finding.options) == {
-        ResolutionRoute.engineering_paid_invoice_period_restoration: False
+        ResolutionRoute.reviewed_paid_invoice_period_repair: True
     }
+    (option,) = finding.options
+    assert option.command is not None
+    assert f"--period-start {PAST_START.isoformat()}" in option.command
+    assert f"--period-end {PAST_END.isoformat()}" in option.command
     db_session.refresh(invoice)
     assert invoice.billing_period_end.replace(tzinfo=UTC) == PAST_START
 
@@ -288,8 +303,16 @@ def test_non_service_line_and_derived_metadata_are_never_treated_as_proof(
     assert finding.period_proof == PeriodProof.derived_line_metadata_period
     assert _routes(finding.options) == {
         ResolutionRoute.engineering_non_service_line_classification: False,
-        ResolutionRoute.engineering_documentary_paid_invoice_period: False,
+        ResolutionRoute.reviewed_paid_invoice_period_repair: True,
     }
+    repair = next(
+        option
+        for option in finding.options
+        if option.route == ResolutionRoute.reviewed_paid_invoice_period_repair
+    )
+    # A derived (payment-date) period is not proof, so nothing is prefilled.
+    assert repair.command is not None
+    assert "<finance-documented-start>" in repair.command
 
 
 def test_unparseable_renewal_origin_without_entitlement_routes_to_reviewed_reversal(
@@ -315,7 +338,7 @@ def test_unparseable_renewal_origin_without_entitlement_routes_to_reviewed_rever
     assert finding.linked_entitlements == ()
     assert _routes(finding.options) == {
         ResolutionRoute.reviewed_account_adjustment_reversal: True,
-        ResolutionRoute.engineering_renewal_origin_correction: False,
+        ResolutionRoute.reviewed_renewal_origin_correction: True,
     }
     reversal = next(
         option
@@ -381,7 +404,7 @@ def test_non_positive_origin_with_linked_entitlement_routes_to_unused_correction
     ]
     assert _routes(finding.options) == {
         ResolutionRoute.unused_prepaid_renewal_correction: True,
-        ResolutionRoute.engineering_renewal_origin_correction: False,
+        ResolutionRoute.reviewed_renewal_origin_correction: True,
     }
     unused = next(option for option in finding.options if option.sanctioned)
     assert unused.owner == "financial.prepaid_service_renewals"

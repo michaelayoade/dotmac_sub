@@ -196,6 +196,20 @@ class FleetWalledGardenReadinessQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class RoutersWalledGardenReadinessQuery:
+    """Readiness for an explicit router set, rendering the module once.
+
+    Used by captive policy consumers that need only the routers serving the
+    subscriptions they evaluate. Unknown ids are omitted from the result; the
+    consumer treats a missing router as not ready.
+    """
+
+    router_ids: frozenset[uuid.UUID]
+    max_snapshot_age: timedelta = DEFAULT_MAX_SNAPSHOT_AGE
+    evaluated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class FleetWalledGardenReadiness:
     evaluated_at: datetime
     module_version: str
@@ -548,11 +562,41 @@ def resolve_fleet_walled_garden_readiness(
     )
 
 
+def resolve_routers_walled_garden_readiness(
+    db: Session, *, query: RoutersWalledGardenReadinessQuery
+) -> Mapping[uuid.UUID, WalledGardenRouterReadiness]:
+    """Return readiness for the requested routers (read-only, one render)."""
+
+    if not query.router_ids:
+        return {}
+    evaluated_at = _aware(query.evaluated_at or datetime.now(UTC))
+    module, error = _render_or_error(db)
+    routers = db.scalars(
+        select(Router)
+        .where(Router.id.in_(sorted(query.router_ids)))
+        .order_by(Router.name)
+    ).all()
+    results: dict[uuid.UUID, WalledGardenRouterReadiness] = {}
+    for router in routers:
+        result = _evaluate_router(
+            db,
+            router=router,
+            module=module,
+            configuration_error=error,
+            max_snapshot_age=query.max_snapshot_age,
+            evaluated_at=evaluated_at,
+        )
+        _log(result)
+        results[router.id] = result
+    return results
+
+
 __all__ = [
     "DEFAULT_MAX_SNAPSHOT_AGE",
     "FleetWalledGardenReadiness",
     "FleetWalledGardenReadinessQuery",
     "RouterOsExportEntry",
+    "RoutersWalledGardenReadinessQuery",
     "WalledGardenExportEvaluation",
     "WalledGardenFinding",
     "WalledGardenFindingIssue",
@@ -565,4 +609,5 @@ __all__ = [
     "parse_routeros_export",
     "resolve_fleet_walled_garden_readiness",
     "resolve_router_walled_garden_readiness",
+    "resolve_routers_walled_garden_readiness",
 ]

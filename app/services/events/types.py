@@ -195,6 +195,14 @@ class EventType(enum.Enum):
     prepaid_proforma_adopted = "prepaid_proforma.adopted"
     prepaid_paid_invoice_repaired = "prepaid_paid_invoice.repaired"
     prepaid_paid_invoice_coverage_corrected = "prepaid_paid_invoice.coverage_corrected"
+    prepaid_paid_invoice_period_repair_requested = (
+        "prepaid_paid_invoice_period_repair.requested"
+    )
+    prepaid_paid_invoice_period_repaired = "prepaid_paid_invoice_period.repaired"
+    prepaid_renewal_origin_corrected = "prepaid_renewal_origin.corrected"
+    payment_allocation_over_allocation_returned = (
+        "payment_allocation.over_allocation_returned"
+    )
     prepaid_draft_reconciled = "prepaid_draft.reconciled"
     prepaid_reviewed_draft_settled = "prepaid_reviewed_draft.settled"
     prepaid_invoice_sequence_reconstructed = "prepaid_invoice_sequence.reconstructed"
@@ -415,9 +423,15 @@ class EventType(enum.Enum):
     dunning_resolved = "dunning.resolved"
     dunning_paused = "dunning.paused"
 
-    # Enforcement locks (2)
+    # Enforcement locks (3)
     enforcement_lock_created = "enforcement_lock.created"
     enforcement_lock_resolved = "enforcement_lock.resolved"
+    # The effective network treatment of an active lock was re-evaluated
+    # (captive <-> hard reject) by access.captive_access_policy_change.
+    enforcement_lock_access_mode_changed = "enforcement_lock.access_mode_changed"
+
+    # Captive access policy rules or customer sets changed.
+    captive_access_policy_changed = "captive_access_policy.changed"
 
     # Network alert (legacy, kept for compatibility)
     network_alert = "network.alert"

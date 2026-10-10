@@ -171,7 +171,6 @@ class SubscriberBase(BaseModel):
     # Billing fields
     tax_rate_id: UUID | None = None
     billing_enabled: bool = True
-    captive_redirect_enabled: bool = False
     billing_name: str | None = Field(default=None, max_length=160)
     billing_address_line1: str | None = Field(default=None, max_length=160)
     billing_address_line2: str | None = Field(default=None, max_length=120)
@@ -293,7 +292,6 @@ class SubscriberUpdate(BaseModel):
     # Billing fields
     tax_rate_id: UUID | None = None
     billing_enabled: bool | None = None
-    captive_redirect_enabled: bool | None = None
     billing_name: str | None = Field(default=None, max_length=160)
     billing_address_line1: str | None = Field(default=None, max_length=160)
     billing_address_line2: str | None = Field(default=None, max_length=120)
@@ -397,6 +395,9 @@ class SubscriberRead(SubscriberBase):
     email: str
 
     id: UUID
+    # Retired decision input, readable during the captive-policy transition:
+    # access.captive_access_policy rules decide captive access. Not writable.
+    captive_redirect_enabled: bool = False
     lifecycle_override_status: SubscriberStatus | None = None
     lifecycle_override_reason: str | None = None
     lifecycle_override_source: str | None = None

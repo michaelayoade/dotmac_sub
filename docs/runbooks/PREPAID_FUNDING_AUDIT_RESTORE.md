@@ -144,6 +144,12 @@ python -m scripts.one_off.review_carried_source_identity \
   --idempotency-key UNIQUE_BUSINESS_KEY
 ```
 
+While the governed, time-boxed sole-approver exception is in force, Michael may
+pass his own UUID as both `--reviewed-by-id` and `--approved-by-id`, with
+`--actor user:<that UUID>` and `--sole-approver-justification`; see
+[`SOLE_APPROVER_EXCEPTION.md`](SOLE_APPROVER_EXCEPTION.md). Without it the two
+reviewers must differ.
+
 This writes only the immutable adjudication, audit evidence, and owner output.
 Take a new database dump after confirmation, destroy and reprovision the audit
 restore from that dump, and rerun the complete export. The resolver rechecks

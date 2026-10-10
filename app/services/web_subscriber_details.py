@@ -28,6 +28,7 @@ from app.models.support import Ticket
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
+from app.services import customer_portal_contacts
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_user_access as web_customer_user_access_service
@@ -901,9 +902,11 @@ def _build_subscriber_enrichment(db: Session, subscriber) -> dict:
         "last_online"
     )
 
-    # Billing email
-    enrichment["billing_email"] = metadata.get("billing_email") or metadata.get(
-        "splynx_billing_email"
+    # Billing email: typed sources only (designated billing contact, else the
+    # account email). The Splynx import copy was moved onto billing contacts by
+    # migration 665_backfill_splynx_billing_email_contacts.
+    enrichment["billing_email"] = customer_portal_contacts.account_billing_email(
+        db, subscriber
     )
 
     # GPS coordinates
