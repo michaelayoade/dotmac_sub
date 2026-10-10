@@ -40,11 +40,7 @@ def _vendor_client(db_session, *, native_link: bool, stale_profile: bool = False
         FieldVendorUser(vendor_id=vendor.id, system_user_id=user.id, role="crew")
     )
     if stale_profile:
-        db_session.add(
-            TechnicianProfile(
-                system_user_id=user.id, person_id=user.id
-            )
-        )
+        db_session.add(TechnicianProfile(system_user_id=user.id, person_id=user.id))
     db_session.commit()
     auth = {"principal_type": "system_user", "principal_id": str(user.id)}
     app = FastAPI()

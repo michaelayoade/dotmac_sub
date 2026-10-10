@@ -976,6 +976,20 @@ A malformed paid-invoice period is corrected only by the four-eyes
 (`scripts/billing/repair_prepaid_paid_invoice_period.py`): Finance supplies the
 subscription and period, a second staff member approves the fingerprint-bound
 request, and the owner restores the period and its entitlement atomically.
+A `malformed_renewal_origin` debit that Finance has decided is legitimate (the
+customer received the service; only the reference is wrong) is corrected by
+`financial.prepaid_renewal_origin_correction`
+(`scripts/billing/correct_prepaid_renewal_origin.py`): a read-only preview, then
+a confirmation bound to its fingerprint. The canonical
+`<subscription>:<start>:<end>` reference is derived from structured coverage
+evidence (the one entitlement already linked to the debit, the one Finance
+names, or an entitlement created through the existing wallet-debit writer), and
+only `origin_ref` changes; no money, ledger debit, or balance moves.
+A PAID invoice that carries a legacy (Splynx-era) allocation exceeding its total
+is corrected by `financial.legacy_over_allocation_correction`
+(`scripts/billing/return_legacy_over_allocation.py`,
+`docs/runbooks/LEGACY_OVER_ALLOCATION_RETURN.md`), which the reviewed
+payment-allocation reversal cannot do.
 
 Preview prepaid-lock cleanup from active lock evidence, not subscriber status,
 invoice status, or paid-through date:

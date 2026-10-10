@@ -121,7 +121,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: actor lock-order concurrency; no production construction allowance is added.
 #: +1 from test_prepaid_paid_invoice_period_repair_concurrency.py: independent
 #: worker sessions prove concurrent four-eyes period-repair approvals serialize.
-TEST_FIXTURE_BASELINE_TOTAL = 186
+#: +2 from test_prepaid_renewal_origin_correction_concurrency.py and
+#: test_legacy_over_allocation_correction_concurrency.py: independent worker
+#: sessions prove concurrent reviewed corrections serialize and converge.
+TEST_FIXTURE_BASELINE_TOTAL = 188
 
 
 def _baseline() -> dict[str, int]:

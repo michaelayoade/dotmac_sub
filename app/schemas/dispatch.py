@@ -268,11 +268,6 @@ class WorkOrderHeaderBase(BaseModel):
             and self.scheduled_end <= self.scheduled_start
         ):
             raise ValueError("scheduled_end must be after scheduled_start")
-        if (
-            self.assigned_technician_id is not None
-            and self.assigned_vendor_id is not None
-        ):
-            raise ValueError("choose either a technician or a vendor for assignment")
         return self
 
 

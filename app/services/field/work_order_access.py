@@ -42,6 +42,7 @@ class FieldActor:
     vendor_user_id: UUID | None = None
     native_vendor_id: UUID | None = None
     person_id: UUID | None = None
+    crm_person_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +141,7 @@ def resolve_field_actor(db: Session, query: ResolveFieldActor) -> FieldActor:
         system_user_id=user.id,
         technician_id=profile.id,
         person_id=profile.person_id,
+        crm_person_id=profile.crm_person_id,
     )
 
 
@@ -161,6 +163,10 @@ def scoped_work_orders(db: Session, actor: FieldActor) -> Query[WorkOrder]:
             WorkOrderAssignmentQueue.assigned_technician_id == actor.technician_id
         )
         predicate = WorkOrder.id.in_(assignment)
+        if actor.crm_person_id:
+            predicate = or_(
+                predicate, WorkOrder.assigned_to_crm_person_id == actor.crm_person_id
+            )
     return db.query(WorkOrder).filter(WorkOrder.is_active.is_(True), predicate)
 
 

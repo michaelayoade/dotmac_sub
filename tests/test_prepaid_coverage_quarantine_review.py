@@ -338,7 +338,7 @@ def test_unparseable_renewal_origin_without_entitlement_routes_to_reviewed_rever
     assert finding.linked_entitlements == ()
     assert _routes(finding.options) == {
         ResolutionRoute.reviewed_account_adjustment_reversal: True,
-        ResolutionRoute.engineering_renewal_origin_correction: False,
+        ResolutionRoute.reviewed_renewal_origin_correction: True,
     }
     reversal = next(
         option
@@ -404,7 +404,7 @@ def test_non_positive_origin_with_linked_entitlement_routes_to_unused_correction
     ]
     assert _routes(finding.options) == {
         ResolutionRoute.unused_prepaid_renewal_correction: True,
-        ResolutionRoute.engineering_renewal_origin_correction: False,
+        ResolutionRoute.reviewed_renewal_origin_correction: True,
     }
     unused = next(option for option in finding.options if option.sanctioned)
     assert unused.owner == "financial.prepaid_service_renewals"

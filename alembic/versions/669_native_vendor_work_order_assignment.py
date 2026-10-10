@@ -1,7 +1,7 @@
 """Expand native vendor assignment and explicit vendor field actors.
 
-Revision ID: 668_native_vendor_work_order_assignment
-Revises: 667_captive_access_policy_backfill
+Revision ID: 669_native_vendor_work_order_assignment
+Revises: 668_sole_approver_adjudication_evidence
 """
 
 import sqlalchemy as sa
@@ -9,8 +9,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "668_native_vendor_work_order_assignment"
-down_revision = "667_captive_access_policy_backfill"
+revision = "669_native_vendor_work_order_assignment"
+down_revision = "668_sole_approver_adjudication_evidence"
 branch_labels = None
 depends_on = None
 
@@ -79,12 +79,14 @@ def upgrade() -> None:
     op.create_unique_constraint(
         "uq_field_vendors_native_vendor_id", "field_vendors", ["native_vendor_id"]
     )
-    bind.execute(sa.text("""
+    bind.execute(
+        sa.text("""
         UPDATE field_vendors AS field_vendor
         SET native_vendor_id = vendor.id
         FROM vendors AS vendor
         WHERE field_vendor.crm_vendor_id = vendor.id::text
-    """))
+    """)
+    )
     op.add_column(
         "work_order_assignment_queue",
         sa.Column("assigned_vendor_id", postgresql.UUID(as_uuid=True), nullable=True),

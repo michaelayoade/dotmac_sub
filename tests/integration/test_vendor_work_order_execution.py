@@ -335,7 +335,7 @@ def test_predecessor_upgrade_preserves_staff_assignment_and_enforces_vendor_xor(
             ),
             {"id": queue_id, "job": job_id, "tech": tech_id},
         )
-    command.upgrade(Config("alembic.ini"), "668_native_vendor_work_order_assignment")
+    command.upgrade(Config("alembic.ini"), "669_native_vendor_work_order_assignment")
     with engine.connect() as conn:
         assert conn.execute(
             text(

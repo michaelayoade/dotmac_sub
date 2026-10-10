@@ -426,6 +426,43 @@ def _direct_renewal_documentary_invoice_ids():
     )
 
 
+def invoices_entering_direct_renewal_documentary_set(
+    db: Session,
+    *,
+    account_id: UUID,
+    subscription_id: UUID,
+    starts_at: datetime,
+    ends_at: datetime,
+    amount: Decimal,
+    currency: str,
+) -> tuple[UUID, ...]:
+    """Paid prepaid invoices a renewal debit linked to this period would absorb.
+
+    Applies the predicate of ``_direct_renewal_documentary_invoice_ids`` to a
+    hypothetical entitlement and adjustment, restricted to invoices that
+    currently own a customer-position consumption debit. Read-only.
+    """
+    rows = db.scalars(
+        select(Invoice.id)
+        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .where(
+            Invoice.account_id == account_id,
+            Invoice.is_active.is_(True),
+            Invoice.is_proforma.is_(False),
+            InvoiceLine.is_active.is_(True),
+            InvoiceLine.subscription_id == subscription_id,
+            Invoice.total == amount,
+            Invoice.currency == currency,
+            Invoice.billing_period_start == starts_at,
+            Invoice.billing_period_end == ends_at,
+            _paid_prepaid_consumption_filter(),
+        )
+        .distinct()
+        .order_by(Invoice.id)
+    ).all()
+    return tuple(rows)
+
+
 def _exactly_settled_invoice_ids():
     """Invoice ids backed by exact active payment or credit applications.
 

@@ -1101,6 +1101,76 @@ def stage_account_adjustment_reversal_for_renewal_owner(
     return _stage_reversal(db, command)
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewedRenewalOriginRefCorrection:
+    """Reviewed rewrite of one renewal adjustment's machine-readable reference."""
+
+    adjustment_id: UUID
+    expected_origin_ref: str | None
+    canonical_origin_ref: str
+    evidence_ref: str
+
+
+_ORIGIN_REF_MAX_LENGTH = 160
+
+
+def stage_reviewed_renewal_origin_ref_correction_for_owner(
+    db: Session,
+    correction: ReviewedRenewalOriginRefCorrection,
+) -> AccountAdjustment:
+    """Rewrite one prepaid-renewal adjustment's ``origin_ref`` (flush-only).
+
+    Participant for ``financial.prepaid_renewal_origin_correction``. It changes
+    only the reference; the amount, currency, category, ledger link, and
+    reversal evidence are the monetary record and are never touched. The
+    coordinating owner proves the canonical value from structured entitlement
+    evidence; this participant re-verifies, under the row lock, that the
+    adjustment is still the unreversed renewal debit carrying exactly the
+    reference the owner reviewed.
+    """
+
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(
+        db, owner="financial.prepaid_renewal_origin_correction"
+    ):
+        raise _error(
+            "participant_owner_required",
+            "Origin reference correction requires the renewal origin owner.",
+        )
+    canonical = correction.canonical_origin_ref.strip()
+    adjustment = db.scalar(
+        select(AccountAdjustment)
+        .where(AccountAdjustment.id == correction.adjustment_id)
+        .with_for_update()
+    )
+    if adjustment is None:
+        raise _error(
+            "adjustment_not_found",
+            "Account adjustment was not found.",
+            adjustment_id=str(correction.adjustment_id),
+        )
+    if (
+        adjustment.origin != AccountAdjustmentOrigin.prepaid_service_renewal.value
+        or adjustment.reversed_at is not None
+        or adjustment.reversal_ledger_entry_id is not None
+        or adjustment.origin_ref != correction.expected_origin_ref
+        or not canonical
+        or len(canonical) > _ORIGIN_REF_MAX_LENGTH
+        or canonical == adjustment.origin_ref
+        or not correction.evidence_ref.strip()
+    ):
+        raise _error(
+            "incomplete_evidence",
+            "Reviewed renewal adjustment reference no longer matches.",
+            adjustment_id=str(correction.adjustment_id),
+        )
+    _require_original_evidence(adjustment)
+    adjustment.origin_ref = canonical
+    db.flush()
+    return adjustment
+
+
 def _stage_adjustment_reversal_posting(db: Session, adjustment, reversal) -> None:
     """Link the shadow reversal to the original adjustment posting group.
 

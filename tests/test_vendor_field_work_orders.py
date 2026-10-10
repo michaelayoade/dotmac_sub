@@ -423,11 +423,7 @@ def test_vendor_principal_without_membership_cannot_use_stale_legacy_profile(
     user, membership, _ = _vendor(db_session)
     user.user_type = UserType.vendor
     user_id = user.id
-    db_session.add(
-        TechnicianProfile(
-            person_id=user_id, system_user_id=None
-        )
-    )
+    db_session.add(TechnicianProfile(person_id=user_id, system_user_id=None))
     db_session.delete(membership)
     db_session.commit()
     with pytest.raises(FieldAccessError, match="membership"):
