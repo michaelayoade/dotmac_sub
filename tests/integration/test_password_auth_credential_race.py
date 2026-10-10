@@ -711,7 +711,7 @@ def test_t15_staff_login_session_presence_and_rollback(engine, factory, monkeypa
         presence = session.scalar(
             select(func.count())
             .select_from(InboxAgentPresence)
-            .where(InboxAgentPresence.system_user_id == system_user_id)
+            .where(InboxAgentPresence.person_id == system_user_id)
         )
         assert presence >= 1
         before = session.execute(
