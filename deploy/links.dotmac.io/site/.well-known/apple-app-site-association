@@ -2,7 +2,7 @@
   "applinks": {
     "details": [
       {
-        "appIDs": ["__APPLE_TEAM_ID__.io.dotmac.field"],
+        "appIDs": ["CK3XNPU8H5.io.dotmac.field"],
         "components": [
           {
             "/": "/oidc/field/callback"
