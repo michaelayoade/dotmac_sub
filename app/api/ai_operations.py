@@ -9,8 +9,10 @@ from app.db import get_db
 from app.schemas.ai_operations import (
     AIInsightCreate,
     AIInsightRead,
+    AiIntakeConfigMetadata,
     AiIntakeConfigRead,
     AiIntakeConfigUpsert,
+    AiIntakeDepartmentMapping,
 )
 from app.schemas.common import ListResponse
 from app.services import ai_intake, ai_operations
@@ -57,7 +59,7 @@ def _insight_read(insight) -> AIInsightRead:
     )
 
 
-def _config_read(config) -> AiIntakeConfigRead:
+def _config_read(config: ai_intake.AiIntakeConfigOutcome) -> AiIntakeConfigRead:
     return AiIntakeConfigRead(
         id=config.id,
         scope_key=config.scope_key,
@@ -71,8 +73,13 @@ def _config_read(config) -> AiIntakeConfigRead:
         exclude_campaign_attribution=config.exclude_campaign_attribution,
         fallback_team_id=config.fallback_team_id,
         instructions=config.instructions,
-        department_mappings=config.department_mappings,
-        metadata=config.metadata,
+        department_mappings=tuple(
+            AiIntakeDepartmentMapping.model_validate(mapping, from_attributes=True)
+            for mapping in config.department_mappings
+        ),
+        metadata=AiIntakeConfigMetadata.model_validate(
+            config.metadata, from_attributes=True
+        ),
         created_at=config.created_at,
         updated_at=config.updated_at,
     )
