@@ -164,11 +164,20 @@ def upgrade() -> None:
             "captive policy backfill verification failed: "
             f"{captive_without_request} captive locks lack a captive request"
         )
-    op.execute(
-        f"ALTER TABLE enforcement_locks ADD CONSTRAINT {_CONSTRAINT} "
-        "CHECK (access_mode <> 'captive' OR requested_access_mode = 'captive') "
-        "NOT VALID"
+    # A fresh baseline (001_squashed builds from current model metadata)
+    # already carries the constraint; an upgraded deployment does not.
+    constraint_present = _scalar(
+        bind,
+        "SELECT count(*) FROM pg_constraint "
+        "WHERE conrelid = 'enforcement_locks'::regclass "
+        f"AND conname = '{_CONSTRAINT}'",
     )
+    if not constraint_present:
+        op.execute(
+            f"ALTER TABLE enforcement_locks ADD CONSTRAINT {_CONSTRAINT} "
+            "CHECK (access_mode <> 'captive' OR requested_access_mode = 'captive') "
+            "NOT VALID"
+        )
     op.execute(f"ALTER TABLE enforcement_locks VALIDATE CONSTRAINT {_CONSTRAINT}")
 
     unevidenced_active = _scalar(
