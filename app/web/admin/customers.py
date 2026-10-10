@@ -3455,9 +3455,7 @@ def bulk_send_customer_message(
 
         actor_id = _get_bulk_message_actor_id(request)
         if actor_id is None:
-            raise HTTPException(
-                status_code=401, detail="Sign in to send this message."
-            )
+            raise HTTPException(status_code=401, detail="Sign in to send this message.")
         request_id = UUID(str(data.get("request_id") or ""))
         spec = BulkMessageSpec.model_validate(
             {key: value for key, value in data.items() if key != "request_id"}
