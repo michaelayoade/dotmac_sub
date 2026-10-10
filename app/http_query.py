@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Query
 from pydantic import BeforeValidator
@@ -17,6 +18,13 @@ def _empty_string_as_none(value: object) -> object:
 
 OptionalDateQuery = Annotated[
     date | None,
+    Query(),
+    BeforeValidator(_empty_string_as_none),
+]
+
+
+OptionalUUIDQuery = Annotated[
+    UUID | None,
     Query(),
     BeforeValidator(_empty_string_as_none),
 ]

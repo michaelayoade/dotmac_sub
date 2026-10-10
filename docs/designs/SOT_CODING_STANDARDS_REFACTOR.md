@@ -93,6 +93,12 @@ retryable session-projection handler for auth-cache invalidation and customer or
 reseller portal-session revocation; a cache outage remains visible as a failed
 event-handler attempt instead of silently losing the security consequence.
 
+Email-only subscriber recovery requires one distinct eligible subscriber.
+Multiple local credentials for that one subscriber remain eligible; multiple
+subscribers sharing the contact email produce the same enumeration-safe
+accepted response as an unknown address, with no recovery event or bearer.
+Authorized exact-principal administrative recovery remains available.
+
 The completed referral credential-enrollment slice is
 `auth.customer_credential_enrollment`. Referral delivery requests and
 capability redemption now enter typed owner commands on transaction-free

@@ -868,3 +868,16 @@ implementation.
 - Freshness: staff pages read committed rows on every request. Device-local
   queued or failed notes do not appear until delivery succeeds; no UI may imply
   otherwise.
+
+## ONT Assignment Subscription Picker Contract
+
+- Authority: `web_network_ont_assignments.assignment_subscription_options`
+  supplies subscriptions for one exact selected subscriber. The web route
+  normalizes transport input without deciding assignment eligibility.
+- An omitted or empty subscriber selection renders **Select a subscriber first**
+  with a disabled subscription selector. Clearing the typeahead removes stale
+  subscription options; it never performs an unscoped subscription query.
+- A selected UUID keeps the existing subscriber-scoped options and status labels.
+  Malformed non-empty UUIDs remain validation failures, and the route retains
+  its `network:ont:read` permission requirement. Assignment commands still
+  recheck ownership and eligibility through their canonical owner.

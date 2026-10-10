@@ -8,11 +8,12 @@ credential; shared email must never select an account.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider, UserCredential
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
-from app.services import auth_flow as auth_flow_service
+from app.services import credential_recovery
 from app.services.auth_flow import (
     _resolve_login_credential,
     hash_password,
@@ -115,24 +116,25 @@ def test_admin_system_user_still_logs_in_by_email(db_session):
     assert resolved.system_user_id == admin.id
 
 
-# --- Layer 2 risk surface: lookups tolerate shared emails ------------------
+# --- Layer 2: email-only recovery keeps the same identity boundary ---------
 
 
-def test_password_reset_for_shared_email_is_deterministic(db_session, monkeypatch):
-    monkeypatch.setattr(
-        auth_flow_service, "_issue_password_reset_token", lambda *a, **k: "tok"
-    )
+def test_password_reset_for_shared_email_refuses_ambiguous_identity(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_signing(*args: object, **kwargs: object) -> str:
+        raise AssertionError("ambiguous subscriber email must not mint a reset bearer")
+
+    monkeypatch.setattr(credential_recovery, "sign_context_token", unexpected_signing)
     shared = "shared@example.com"
     a = _sub(db_session, shared)
     b = _sub(db_session, shared)
     _local_cred(db_session, subscriber=a, username="alice")
-    cred_b = _local_cred(db_session, subscriber=b, username="bob")
+    _local_cred(db_session, subscriber=b, username="bob")
 
     result = request_password_reset(db_session, shared, ttl_minutes=30)
-    assert result is not None
-    # Most recent credential wins; b's credential was created last.
-    assert result["principal_id"] == str(b.id)
-    assert cred_b.subscriber_id == b.id
+
+    assert result is None
 
 
 def test_set_subscriber_email_allows_sharing(db_session):

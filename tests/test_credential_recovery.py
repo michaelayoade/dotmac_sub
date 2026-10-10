@@ -8,12 +8,14 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
 from app.models.event_store import EventStore
 from app.models.notification import CommunicationIntentRecord, Notification
+from app.models.subscriber import Subscriber
 from app.services import credential_recovery
 from app.services.auth_flow import hash_password, verify_password
 from app.services.domain_errors import DomainError
@@ -376,3 +378,127 @@ def test_system_user_reset_accepts_password_at_shared_minimum(
     assert outcome.principal_type == "system_user"
     db_session.refresh(credential)
     assert verify_password("Abcdef1!", credential.password_hash)
+
+
+def _second_recovery_subscriber(
+    db: Session, original: Subscriber, *, email: str, credential_active: bool = True
+) -> uuid.UUID:
+    second = Subscriber(
+        first_name="Recovery",
+        last_name="Second",
+        email=email,
+        reseller_id=original.reseller_id,
+        is_active=True,
+    )
+    db.add(second)
+    db.flush()
+    second_id = second.id
+    db.add(
+        UserCredential(
+            subscriber_id=second_id,
+            provider=AuthProvider.local,
+            username=f"recovery-second-{uuid.uuid4().hex}",
+            password_hash=hash_password("old-password"),
+            is_active=credential_active,
+        )
+    )
+    db.commit()
+    return second_id
+
+
+def test_shared_email_across_subscribers_requests_no_recovery_delivery(
+    db_session: Session,
+    subscriber: Subscriber,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    email = "shared.recovery@example.com"
+    _credential(db_session, subscriber, email=email)
+    _second_recovery_subscriber(db_session, subscriber, email=email)
+
+    outcome = credential_recovery.request_password_recovery(
+        db_session,
+        credential_recovery.RequestPasswordRecoveryCommand(
+            context=_context(), email=email.upper()
+        ),
+    )
+
+    assert outcome.accepted is True
+    assert outcome.delivery_requested is False
+    assert db_session.query(EventStore).count() == 0
+    assert db_session.query(CommunicationIntentRecord).count() == 0
+    assert (
+        credential_recovery.issue_reset_capability_for_email(db_session, email) is None
+    )
+    assert "password_recovery_identity_ambiguous" in caplog.text
+    assert email not in caplog.text
+
+
+def test_multiple_credentials_for_one_subscriber_still_request_recovery(
+    db_session: Session, subscriber: Subscriber
+) -> None:
+    email = "single.principal.recovery@example.com"
+    first = _credential(db_session, subscriber, email=email)
+    subscriber_id = first.subscriber_id
+    db_session.add(
+        UserCredential(
+            subscriber_id=subscriber_id,
+            provider=AuthProvider.local,
+            username=f"recovery-alias-{uuid.uuid4().hex}",
+            password_hash=hash_password("old-password"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    outcome = credential_recovery.request_password_recovery(
+        db_session,
+        credential_recovery.RequestPasswordRecoveryCommand(
+            context=_context(), email=email
+        ),
+    )
+
+    assert outcome.accepted is True
+    assert outcome.delivery_requested is True
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "password_recovery.requested")
+        .count()
+        == 1
+    )
+
+
+def test_inactive_shared_email_credential_does_not_block_unique_recovery(
+    db_session: Session, subscriber: Subscriber
+) -> None:
+    email = "eligible.recovery@example.com"
+    _credential(db_session, subscriber, email=email)
+    _second_recovery_subscriber(
+        db_session, subscriber, email=email, credential_active=False
+    )
+
+    outcome = credential_recovery.request_password_recovery(
+        db_session,
+        credential_recovery.RequestPasswordRecoveryCommand(
+            context=_context(), email=email
+        ),
+    )
+
+    assert outcome.delivery_requested is True
+
+
+def test_exact_principal_recovery_remains_available_with_shared_email(
+    db_session: Session, subscriber: Subscriber
+) -> None:
+    email = "exact.recovery@example.com"
+    _credential(db_session, subscriber, email=email)
+    second_id = _second_recovery_subscriber(db_session, subscriber, email=email)
+
+    outcome = credential_recovery.request_exact_password_recovery(
+        db_session,
+        credential_recovery.RequestExactPasswordRecoveryCommand(
+            context=_context(), principal_type="subscriber", principal_id=second_id
+        ),
+    )
+
+    assert outcome.accepted is True
+    assert outcome.delivery_requested is True

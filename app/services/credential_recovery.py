@@ -374,12 +374,16 @@ def _principal_for_email(db: Session, email: str) -> _PrincipalContext | None:
         .order_by(UserCredential.created_at.desc())
     ).all()
     if subscriber_rows:
-        if len(subscriber_rows) > 1:
+        subscriber_ids: set[UUID] = {
+            subscriber.id for subscriber, _credential in subscriber_rows
+        }
+        if len(subscriber_ids) > 1:
             logger.warning(
-                "Password recovery matched %d credentialed subscribers; "
-                "selecting the most recent credential.",
-                len(subscriber_rows),
+                "password_recovery_identity_ambiguous "
+                "principal_type=subscriber matches=%d",
+                len(subscriber_ids),
             )
+            return None
         subscriber, _credential = subscriber_rows[0]
         return _PrincipalContext(
             principal_type="subscriber",

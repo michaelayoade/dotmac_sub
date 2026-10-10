@@ -1674,6 +1674,13 @@ detailed security and delivery boundary is
 
 ## Financial and Access
 
+The lifecycle owner expires subscriptions under `FOR NO KEY UPDATE`, preserving
+exclusive status-writer serialization while allowing immutable bandwidth
+foreign-key observations. Its SELECT bypasses compiled caching because the
+pinned SQLAlchemy omits the lock's `key_share` flag from the cache key.
+Eligibility, audit, IP release, account/access
+projection, and events retain the existing lifecycle transaction boundary.
+
 1. `financial.ledger` owns the append-only record lifecycle and reversal
    invariant. Domain owners decide why money moves.
 2. `financial.payments`, `financial.consolidated_payments`,
@@ -5515,7 +5522,10 @@ Authorization:
    representation, not a parallel transaction or delivery path.
 9. `auth.credential_recovery`: owns public and exact-principal password recovery
    request policy, purpose-bound reset claims and lifetime, durable delivery
-   intent, and the credential transition. Request events and notifications
+   intent, and the credential transition. Email-only subscriber recovery refuses
+   ambiguous distinct subscriber identities without revealing them publicly;
+   multiple credentials for one subscriber remain valid, and authorized exact
+   principal recovery keeps its explicit identity boundary. Request events and notifications
    persist identifiers, an email digest, and safe redirect context but never an
    email body or bearer. Delivery revalidates the exact active local principal
    and mints the bearer only in memory at transport time. Redemption locks the

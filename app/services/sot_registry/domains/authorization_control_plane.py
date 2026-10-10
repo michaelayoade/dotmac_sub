@@ -1180,6 +1180,7 @@ DOMAIN = DomainSOT(
                     fail_closed_on=(
                         "invalid, expired, or spent capability",
                         "principal or recipient drift",
+                        "ambiguous subscriber identity in email-only recovery",
                         "principal outside an adapter-declared reseller membership",
                         "inactive or missing local credential",
                         "active caller transaction or manifest mismatch",
