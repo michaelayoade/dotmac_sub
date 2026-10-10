@@ -2126,8 +2126,14 @@ def _billing_override_payload(
         "min_balance": _optional_decimal(min_balance),
         "tax_rate_id": _normalize_optional(tax_rate_id),
         "payment_method": normalize_customer_invoice_payment_method(payment_method),
-        "captive_redirect_enabled": captive_redirect_enabled == "true",
     }
+    # The captive opt-in follows the same ABSENT-vs-explicit rule as
+    # billing_day below: an unchecked checkbox submits nothing, so absence
+    # cannot mean "off". The form pairs the checkbox with a hidden "false"
+    # input (the repo's checkbox pattern), so an explicit uncheck still arrives
+    # as "false"; any edit that omits the field leaves the opt-in unchanged.
+    if captive_redirect_enabled is not None:
+        payload["captive_redirect_enabled"] = captive_redirect_enabled == "true"
     # ABSENT and EMPTY are different instructions, and conflating them is how a
     # legacy billing day gets destroyed by an edit that never mentioned it.
     # `Form(None)` means the field was not in the request body at all -- leave

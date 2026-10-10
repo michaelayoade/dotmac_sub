@@ -586,11 +586,21 @@ the derived entry). Keys are unique and hostnames must be FQDNs; every
 settings write path validates the value against
 `app.schemas.walled_garden.WalledGardenAllowedResources`. A disabled Paystack
 preset (`checkout.paystack.com`, `api.paystack.co`, `js.paystack.co`,
-`standard.paystack.co`) is seeded; an operator enables it explicitly. Until
-the admin UI exists, operators change entries through the settings owner
-(`apply_admin_settings_form_updates`, scope `control:settings:write`, audited
-as `control.settings_form_updated`). Toggling one entry changes only that
-entry's tagged elements.
+`standard.paystack.co`) is seeded; an operator enables it explicitly.
+Operators manage entries at Admin → Settings → Network → **Walled Garden**
+(`/admin/system/config/walled-garden`; read `system:settings:read`, change
+`system:settings:write`). The page lists the read-only derived portal entry
+and every configured entry, adds or edits one entry (label, kind, hosts; keys
+are immutable because routers carry them in tags), enables or disables it,
+and removes it. Each change is turned into the complete validated value and
+submitted to the settings owner (`apply_admin_settings_form_updates`, scope
+`control:settings:write`, audited as `control.settings_form_updated` with the
+command reason naming the action and entry key). The page sends the stored
+value's fingerprint with every change; the owner locks the setting rows and
+refuses a stale submission, so two operators cannot silently overwrite each
+other. Saving changes desired state only; routers keep their rows until the
+module is re-applied, and the page's readiness panel shows the drift until
+then. Toggling one entry changes only that entry's tagged elements.
 
 `access.walled_garden_router_readiness` compares the module rendered from
 current settings with each router's latest `router_config_snapshots` export
@@ -601,7 +611,9 @@ entry still present on the router is `disabled_entry_present` drift. It also
 reports how many legacy quarantine rules remain and how many static
 `suspended` entries are enabled or disabled. Captive must fail closed: only a
 `ready` serving router may carry captive subscribers. Inspect with
-`python -m scripts.network.walled_garden_router_module render|readiness`.
+`python -m scripts.network.walled_garden_router_module render|readiness`, or
+read the same fleet query on the Walled Garden admin page (attention-first,
+with missing enabled entries and disabled entries still present per router).
 
 Legacy retirement is a separate, explicitly approved operator step: the
 module returns `legacy_elements_to_retire` (the six legacy comments) and never

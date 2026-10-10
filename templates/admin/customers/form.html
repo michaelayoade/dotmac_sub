@@ -539,6 +539,8 @@
                             </div>
                         </div>
                         <div x-show="customerType === 'person'" class="mt-4 flex items-start gap-3">
+                            {# Hidden "false" makes an explicit uncheck reach the server; an omitted field leaves the opt-in unchanged. #}
+                            <input type="hidden" name="captive_redirect_enabled" value="false" :disabled="customerType !== 'person'" />
                             <input type="checkbox" name="captive_redirect_enabled" id="captive_redirect_enabled" value="true"
                                    :disabled="customerType !== 'person'"
                                    {% if customer and customer.captive_redirect_enabled %}checked{% endif %}

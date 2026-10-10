@@ -869,6 +869,46 @@ implementation.
   queued or failed notes do not appear until delivery succeeds; no UI may imply
   otherwise.
 
+## Walled-Garden Allowed Resources Page Contract
+
+- Screen and type: `/admin/system/config/walled-garden`, control-plane editor.
+  Audience: network and settings administrators deciding which named
+  resources suspended subscribers may reach while captive, and whether routers
+  carry that desired state.
+- Authority: `control.settings_spec` resolves
+  `radius.walled_garden_allowed_resources`, validated by
+  `app.schemas.walled_garden`; `access.walled_garden_router_module` derives the
+  portal entry; `access.walled_garden_router_readiness` owns per-router status
+  and findings; `control.settings_form_updates` owns every write, its stale
+  lock, and its audit record. `app.services.web_walled_garden_settings`
+  composes the page and turns one entry edit into the complete value; the
+  route and template are adapters.
+- First viewport: enabled versus configured entries, routers ready of active,
+  routers missing an enabled entry, routers still carrying a disabled entry,
+  and the single primary **Add resource** action (write permission only).
+- Entries table: resource (label and copyable key), kind, hosts, state
+  (Enabled/Disabled, text plus tone), and source. The derived portal row is
+  always first, read-only, and links to RADIUS Configuration; an unrenderable
+  portal shows the owner's configuration error rather than invented hosts.
+  Row actions: one visible Enable/Disable, with Edit and Remove in a **More**
+  menu. Remove asks for confirmation and states that routers drop the hosts
+  only after the module is re-applied.
+- Editor: label, key (add only; immutable afterwards), kind (portal excluded),
+  hosts (one FQDN per line), and **Enable now** on add. Validation failures
+  return status 400 with the submitted values and messages beside the affected
+  control; a stale fingerprint or a vanished entry returns 409 with a reload
+  instruction and writes nothing.
+- Readiness: attention-first router table (status, snapshot time, missing
+  enabled entry keys, disabled entry keys still present, finding count) with
+  evaluation time, module version, and the 48-hour stale threshold.
+  `unavailable` (the query failed), `No active routers`, `not_configured`,
+  `no_snapshot`, and `stale` remain distinct; the page never contacts a router.
+- Permissions: viewing requires `system:settings:read`; every mutation route
+  requires `system:settings:write` and the owner rechecks scope
+  `control:settings:write`. Read-only viewers see no edit controls.
+- Responsive behavior: summary tiles stack; both tables scroll horizontally
+  with identity first; the editor collapses to one column.
+
 ## ONT Assignment Subscription Picker Contract
 
 - Authority: `web_network_ont_assignments.assignment_subscription_options`
