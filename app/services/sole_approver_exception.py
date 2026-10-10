@@ -11,7 +11,10 @@ style of Governance decision 53, not a standing rule.
 The exception is allowed only when ALL of these hold:
 
 * ``billing.sole_approver_exception_enabled`` is true (default false);
-* today (UTC) is strictly before ``billing.sole_approver_exception_review_due``;
+* today (business timezone, ``app.timezone.APP_TIMEZONE``, Africa/Lagos) is
+  strictly before ``billing.sole_approver_exception_review_due`` and that date
+  is at most ``MAX_REVIEW_WINDOW_DAYS`` (90) days away, so the exception can
+  never be set open-ended;
 * the approver is the system user named by
   ``billing.sole_approver_exception_principal``, an active human staff
   ``SystemUser`` acting as ``user:<that id>`` (never an API key, a service or
@@ -23,16 +26,23 @@ idempotency) is unchanged. This module decides nothing but the self-approval
 question; the calling owner records the evidence in its own approval record and
 stages the distinct ``approval.sole_approver_exception_used`` audit action.
 
-The settings change only through the settings owner (``control:settings:write``)
-which audits every write. Setting ``enabled`` to false, clearing the principal,
+The four settings are declared ``owner_command_only`` in ``settings_spec``:
+every generic writer (REST ``PUT /settings/billing/{key}``, ``DomainSettings``
+create/update/upsert/delete) refuses them with 403, so they change only through
+``apply_admin_settings_form_updates`` (``control:settings:write``), which audits
+every write as ``control.settings_form_updated``. They are read uncached, in
+one query in the caller's session, so a disable applies at the next command.
+Setting ``enabled`` to false, clearing the principal,
 or letting the review date pass each switch the exception off.
 """
 
 from __future__ import annotations
 
+import getpass
 import logging
+import socket
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from enum import StrEnum
 from uuid import UUID
 
@@ -44,7 +54,9 @@ from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 from app.schemas.audit import AuditEventCreate
 from app.services.audit import AuditEvents
-from app.services.settings_spec import resolve_value
+from app.services.domain_settings import read_active_setting_rows
+from app.services.settings_spec import coerce_value, extract_db_value, get_spec
+from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +67,11 @@ ENABLED_KEY = "sole_approver_exception_enabled"
 PRINCIPAL_KEY = "sole_approver_exception_principal"
 REVIEW_DUE_KEY = "sole_approver_exception_review_due"
 DECISION_REF_KEY = "sole_approver_exception_decision_ref"
+_ALL_KEYS = (ENABLED_KEY, PRINCIPAL_KEY, REVIEW_DUE_KEY, DECISION_REF_KEY)
 RUNBOOK = "docs/runbooks/SOLE_APPROVER_EXCEPTION.md"
 MAX_JUSTIFICATION_LENGTH = 1000
+#: Longest allowed distance from today to the review date.
+MAX_REVIEW_WINDOW_DAYS = 90
 
 
 class SoleApproverRefusal(StrEnum):
@@ -65,6 +80,7 @@ class SoleApproverRefusal(StrEnum):
     disabled = "disabled"
     review_date_unset = "review_date_unset"
     expired = "expired"
+    review_window_too_long = "review_window_too_long"
     principal_unset = "principal_unset"
     wrong_principal = "wrong_principal"
     not_human_staff = "not_human_staff"
@@ -134,11 +150,27 @@ def _parse_date(value: object) -> date | None:
 def load_sole_approver_exception_policy(db: Session) -> SoleApproverExceptionPolicy:
     """Read the governance settings; anything unreadable fails closed."""
 
-    decision_ref = resolve_value(db, SETTING_DOMAIN, DECISION_REF_KEY)
+    # One uncached query in the caller's session: all four values are one
+    # snapshot, and a disable takes effect at the next command (the cached
+    # resolver could serve a stale "enabled").
+    values = read_active_setting_rows(db, SETTING_DOMAIN, _ALL_KEYS)
+
+    def text(key: str) -> object:
+        row = values.get(key)
+        return row.value_text if row is not None else None
+
+    enabled_spec = get_spec(SETTING_DOMAIN, ENABLED_KEY)
+    enabled_row = values.get(ENABLED_KEY)
+    enabled_value = (
+        coerce_value(enabled_spec, extract_db_value(enabled_row))[0]
+        if enabled_spec is not None and enabled_row is not None
+        else None
+    )
+    decision_ref = text(DECISION_REF_KEY)
     return SoleApproverExceptionPolicy(
-        enabled=resolve_value(db, SETTING_DOMAIN, ENABLED_KEY) is True,
-        principal=_parse_uuid(resolve_value(db, SETTING_DOMAIN, PRINCIPAL_KEY)),
-        review_due=_parse_date(resolve_value(db, SETTING_DOMAIN, REVIEW_DUE_KEY)),
+        enabled=enabled_value is True,
+        principal=_parse_uuid(text(PRINCIPAL_KEY)),
+        review_due=_parse_date(text(REVIEW_DUE_KEY)),
         decision_ref=decision_ref.strip() if isinstance(decision_ref, str) else "",
     )
 
@@ -164,6 +196,8 @@ def evaluate_sole_approver_exception(
         return refuse(SoleApproverRefusal.review_date_unset)
     if today >= policy.review_due:
         return refuse(SoleApproverRefusal.expired)
+    if (policy.review_due - today).days > MAX_REVIEW_WINDOW_DAYS:
+        return refuse(SoleApproverRefusal.review_window_too_long)
     if policy.principal is None:
         return refuse(SoleApproverRefusal.principal_unset)
     if approver_id != policy.principal:
@@ -209,7 +243,7 @@ def authorize_sole_approver(
         actor=actor,
         approver_is_human_staff=human_staff,
         justification=justification,
-        today=today or datetime.now(UTC).date(),
+        today=today or datetime.now(APP_TIMEZONE).date(),
     )
     if not decision.allowed:
         logger.info(
@@ -218,6 +252,13 @@ def authorize_sole_approver(
             decision.refusal.value if decision.refusal else None,
         )
     return decision
+
+
+def _safe(read) -> str:
+    try:
+        return str(read())
+    except Exception:  # pragma: no cover - unusual hosts (no passwd entry)
+        return "unknown"
 
 
 def stage_sole_approver_exception_audit(
@@ -241,6 +282,10 @@ def stage_sole_approver_exception_audit(
             metadata_={
                 "flow": grant.flow,
                 "evidence_ref": evidence_ref,
+                # Operator-process context, not an authenticated identity: the
+                # actor is the CLI argument (see the runbook trust boundary).
+                "os_user": _safe(getpass.getuser),
+                "hostname": _safe(socket.gethostname),
                 **grant.evidence(),
             },
         ),
@@ -249,6 +294,7 @@ def stage_sole_approver_exception_audit(
 
 __all__ = [
     "AUDIT_ACTION",
+    "MAX_REVIEW_WINDOW_DAYS",
     "OWNER",
     "SoleApproverExceptionDecision",
     "SoleApproverExceptionGrant",

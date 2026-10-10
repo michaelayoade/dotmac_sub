@@ -25,8 +25,10 @@ to a control, not a replacement for it, and it expires on its own.
   idempotency and every other guard are unchanged. The two-person rule stays
   the default for everyone and for every other flow.
 - **Review date.** The exception is inert on or after
-  `sole_approver_exception_review_due` (compared against the UTC date). Choose
-  a short interval; aligning it with the decision 53 review (2026-10-27) keeps
+  `sole_approver_exception_review_due`, a calendar date in the business
+  timezone (`app.timezone.APP_TIMEZONE`, Africa/Lagos), not UTC. It must be at
+  most 90 days away: a later date is refused as `review_window_too_long`, so
+  the exception cannot be set open-ended. Choose a short interval; aligning it with the decision 53 review (2026-10-27) keeps
   both exceptions reviewed together. Extending it is a new, deliberate
   settings write.
 - **Rollback.** Any one of these turns it off, effective at the next command:
@@ -38,14 +40,20 @@ to a control, not a replacement for it, and it expires on its own.
 ## Settings
 
 All four are `billing` domain settings, typed, seeded off, with no environment
-bootstrap. They change only through the settings owner (Admin settings, which
-requires `control:settings:write`), which audits every write.
+bootstrap. They are declared `owner_command_only` in `settings_spec`: every
+generic writer (REST `PUT /settings/billing/{key}`, `DomainSettings`
+create/update/upsert/delete) refuses them with HTTP 403, even for the admin
+role. The only write path is the settings owner command
+`apply_admin_settings_form_updates` (Admin settings, scope
+`control:settings:write`), which audits every write as
+`control.settings_form_updated`. The policy reads the four rows uncached in one
+query, so a disable applies at the next command.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `sole_approver_exception_enabled` | boolean | `false` | Master switch. |
 | `sole_approver_exception_principal` | string (UUID) | empty | The `system_users.id` allowed to self-approve. |
-| `sole_approver_exception_review_due` | string (`YYYY-MM-DD`) | empty | First UTC date on which the exception is inert. |
+| `sole_approver_exception_review_due` | string (`YYYY-MM-DD`) | empty | First Africa/Lagos date on which the exception is inert; at most 90 days from today. |
 | `sole_approver_exception_decision_ref` | string | empty | Governance decision reference recorded as evidence. |
 
 A malformed UUID or date is read as unset, which refuses the exception.
@@ -57,7 +65,8 @@ other case keeps the existing refusal (`self_approval_forbidden` or
 `reviewer_conflict`) unchanged:
 
 1. `sole_approver_exception_enabled` is `true`.
-2. Today (UTC) is strictly before `sole_approver_exception_review_due`.
+2. Today (Africa/Lagos) is strictly before `sole_approver_exception_review_due`,
+   and that date is at most 90 days away (`review_window_too_long` otherwise).
 3. The approver is the system user named by
    `sole_approver_exception_principal`, is active, is a staff user
    (`user_type = system_user`), and the command actor is exactly
@@ -75,9 +84,22 @@ When the exception is used:
   its audit event for the carried-source review);
 - a distinct audit event `approval.sole_approver_exception_used` is staged in
   the same transaction, with the flow, entity, approver and the same evidence;
+- that audit event also records `os_user` (`getpass.getuser()`) and `hostname`
+  (`socket.gethostname()`) of the process that ran the command;
 - every approval that did not use it records `sole_approver_exception=false`.
 
 Find uses with: audit action `approval.sole_approver_exception_used`.
+
+## Trust boundary
+
+The actor identity in the three CLI flows comes from the operator's
+`--approver` / `--actor` argument; it is not authenticated against a login.
+Anyone with production shell and database access could therefore claim to be the
+principal. This exception does not widen that boundary: the two-person rule had
+the same one, because the same arguments named the requester and the approver.
+The `os_user` and `hostname` in the audit event are context for review, not
+proof of identity. What the exception adds is a bounded, audited, expiring
+switch, not stronger authentication.
 
 ## Enable it
 
