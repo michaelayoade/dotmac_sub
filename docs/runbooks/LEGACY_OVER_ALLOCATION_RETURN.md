@@ -23,6 +23,16 @@ confirmation. Any failure is a named blocker and the command refuses.
 - The allocation is legacy and active: no `ledger_entry_id`, no
   `consumption_ledger_entry_id`, no preview or idempotency evidence, and no
   reversal evidence.
+- The allocation has real legacy provenance: its payment carries a
+  `splynx_payment_id` or an `import_run_id`. Absence of ledger fields alone also
+  describes Sub-native allocations (for example an allocation created in Sub by
+  an admin edit after cutover), so it is not proof. A native allocation is
+  refused (`allocation_not_legacy_provenance`) and Finance must handle it
+  through a separate route; do not edit provenance fields to get past this.
+- No other active payment on the account repeats the payment's receipt number,
+  external id or a long reference / bank session id found in its memo. A match is
+  refused (`possible_duplicate_payment_reference`): the transfer may be recorded
+  twice and Finance must resolve which payment is real first.
 - Its payment is an active, succeeded customer payment on the invoice's account
   and currency, with no refund, reversal, purchase reservation, or settlement
   row, and this is its only active allocation.
@@ -47,7 +57,7 @@ confirmation. Any failure is a named blocker and the command refuses.
   would count the same 18,812.50 twice. The preview shows
   `ledger.postings: []` and equal `account_credit_before`/`account_credit_after`.
 - The payment's unallocated amount rises by the returned amount
-  (`payment_unallocated.before`/`after`).
+  (`payment_allocation_unallocated.before`/`after`, an allocation-table view only that does not change account credit).
 - Prepaid funding is document-based and does not change: same-account
   allocations never moved it. A payment without a settlement row is not
   allocatable account credit through the payment-allocation owner; it counts as

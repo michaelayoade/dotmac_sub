@@ -10,8 +10,13 @@ invoices, so the excess stays stuck on the invoice.
 This owner is the sanctioned way to move that excess to account credit. It is
 deliberately narrow:
 
-* the allocation must be legacy (no ledger links, no preview or idempotency
-  evidence) and active;
+* the allocation must be legacy and active: no ledger links, no preview or
+  idempotency evidence, **and** real Splynx/import provenance on its payment
+  (``splynx_payment_id`` or ``import_run_id``). Missing ledger fields alone also
+  describe Sub-native allocations, so they are not proof; a native allocation
+  is refused and needs a separate Finance decision;
+* no other active payment on the account may repeat the payment's receipt,
+  reference or bank session id (possible duplicate-recorded transfer);
 * its payment must be an active, succeeded, unrefunded, unreversed customer
   payment with no settlement row, whose only active allocation is this one;
 * the payment's whole amount must already be carried by exactly one active,
@@ -36,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -102,6 +108,55 @@ _HEX = frozenset("0123456789abcdef")
 _ZERO = Decimal("0.00")
 #: Memo prefix the payment owner gives a native allocation's consumption debit.
 _CONSUMPTION_MEMO_MARKER = "account-credit consumption"
+#: Receipt / session identifiers hidden in free text: long alphanumeric runs
+#: that contain a digit (NIP session ids are 30 digits).
+_REFERENCE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_\-]{7,}")
+
+
+def _reference_tokens(payment: Payment) -> set[str]:
+    tokens = {
+        value.strip().lower()
+        for value in (payment.receipt_number, payment.external_id)
+        if value and len(value.strip()) >= 6
+    }
+    for match in _REFERENCE_TOKEN.findall(payment.memo or ""):
+        if any(char.isdigit() for char in match):
+            tokens.add(match.lower())
+    return tokens
+
+
+def _possible_duplicate_payment_ids(db: Session, payment: Payment) -> tuple[UUID, ...]:
+    """Other active payments on the account that repeat this payment's reference.
+
+    A transfer recorded twice (for example once from the bank statement and once
+    from the customer's receipt) shows the same receipt or session id in a
+    reference or memo. Returning one of the two allocations would then move
+    money that another payment may already account for.
+    """
+    if payment.account_id is None:
+        return ()
+    tokens = _reference_tokens(payment)
+    if not tokens:
+        return ()
+    duplicates: list[UUID] = []
+    others = db.scalars(
+        select(Payment).where(
+            Payment.account_id == payment.account_id,
+            Payment.id != payment.id,
+            Payment.is_active.is_(True),
+        )
+    ).all()
+    for other in others:
+        haystack = " ".join(
+            value.lower()
+            for value in (other.memo, other.receipt_number, other.external_id)
+            if value
+        )
+        if any(token in haystack for token in tokens) or any(
+            token in (payment.memo or "").lower() for token in _reference_tokens(other)
+        ):
+            duplicates.append(other.id)
+    return tuple(sorted(duplicates, key=str))
 
 
 class LegacyOverAllocationError(DomainError):
@@ -135,6 +190,12 @@ class LegacyOverAllocationBlocker(StrEnum):
     payment_credit_ledger_missing = "payment_credit_ledger_missing"
     payment_ledger_evidence_not_exact = "payment_ledger_evidence_not_exact"
     consumption_debit_present = "consumption_debit_present"
+    #: Neither the payment nor the allocation shows Splynx/import provenance,
+    #: so the missing ledger evidence does not prove a legacy allocation.
+    allocation_not_legacy_provenance = "allocation_not_legacy_provenance"
+    #: Another active payment on the account carries the same receipt,
+    #: reference or bank session id: the transfer may be recorded twice.
+    possible_duplicate_payment_reference = "possible_duplicate_payment_reference"
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,8 +247,11 @@ class LegacyOverAllocationPreview:
     settled_after: Decimal
     applied_credit_notes: Decimal
     remaining_allocations: tuple[RemainingAllocation, ...]
-    payment_unallocated_before: Decimal
-    payment_unallocated_after: Decimal
+    #: Allocation-table view only (payment amount minus active allocations,
+    #: before and if the allocation is deactivated). It does not change account
+    #: credit: the ledger already carries the whole payment as credit.
+    payment_allocation_unallocated_before: Decimal
+    payment_allocation_unallocated_after: Decimal
     ledger: LedgerCreditEvidence
     account_credit_before: Decimal
     account_credit_after: Decimal
@@ -306,6 +370,14 @@ def preview_legacy_over_allocation_return(
         or allocation.reversal_idempotency_key is not None
     ):
         blockers.add(LegacyOverAllocationBlocker.allocation_has_native_evidence)
+    if payment.splynx_payment_id is None and payment.import_run_id is None:
+        # Absence of ledger fields alone also matches Sub-native allocations
+        # whose posting was never made; only Splynx/import provenance proves a
+        # legacy allocation. A native allocation needs its own Finance route.
+        blockers.add(LegacyOverAllocationBlocker.allocation_not_legacy_provenance)
+    duplicate_payment_ids = _possible_duplicate_payment_ids(db, payment)
+    if duplicate_payment_ids:
+        blockers.add(LegacyOverAllocationBlocker.possible_duplicate_payment_reference)
     if (
         payment.account_id is None
         or payment.status is not PaymentStatus.succeeded
@@ -482,6 +554,11 @@ def preview_legacy_over_allocation_return(
                 "consumption_debits": ledger.consumption_debit_count,
             },
             "account_credit": account_credit,
+            "provenance": {
+                "splynx_payment_id": payment.splynx_payment_id,
+                "import_run_id": payment.import_run_id,
+            },
+            "possible_duplicate_payment_ids": duplicate_payment_ids,
             "blockers": list(ordered_blockers),
         }
     )
@@ -502,8 +579,8 @@ def preview_legacy_over_allocation_return(
         settled_after=settled_after,
         applied_credit_notes=credited,
         remaining_allocations=remaining_allocations,
-        payment_unallocated_before=unallocated_before,
-        payment_unallocated_after=unallocated_after,
+        payment_allocation_unallocated_before=unallocated_before,
+        payment_allocation_unallocated_after=unallocated_after,
         ledger=ledger,
         account_credit_before=account_credit,
         account_credit_after=account_credit,

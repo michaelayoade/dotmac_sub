@@ -76,8 +76,9 @@ def _staff(db, name: str = "Finance") -> SystemUser:
     return user
 
 
-def _payment(db, account, amount: Decimal) -> Payment:
+def _payment(db, account, amount: Decimal, *, native: bool = False) -> Payment:
     payment = Payment(
+        splynx_payment_id=None if native else 7_000_000 + int(uuid4().int % 1_000_000),
         account_id=account.id,
         amount=amount,
         currency="NGN",
@@ -110,7 +111,7 @@ def _credit(db, account, payment: Payment, *, invoice=None) -> LedgerEntry:
     return entry
 
 
-def _case_c(db, account) -> _Fixture:
+def _case_c(db, account, *, native: bool = False) -> _Fixture:
     """INV-108193 (17,500, paid) with a 17,500 and a legacy 18,812.50 allocation."""
     invoice = Invoice(
         account_id=account.id,
@@ -134,8 +135,8 @@ def _case_c(db, account) -> _Fixture:
             amount=TOTAL,
         )
     )
-    keeper_payment = _payment(db, account, TOTAL)
-    excess_payment = _payment(db, account, EXCESS)
+    keeper_payment = _payment(db, account, TOTAL, native=native)
+    excess_payment = _payment(db, account, EXCESS, native=native)
     keeper = PaymentAllocation(
         payment_id=keeper_payment.id, invoice_id=invoice.id, amount=TOTAL
     )
@@ -236,7 +237,10 @@ def test_preview_proves_the_exact_excess_and_the_empty_ledger_posting(
     assert [row.allocation_id for row in preview.remaining_allocations] == [
         fixture.keeper.id
     ]
-    assert (preview.payment_unallocated_before, preview.payment_unallocated_after) == (
+    assert (
+        preview.payment_allocation_unallocated_before,
+        preview.payment_allocation_unallocated_after,
+    ) == (
         Decimal("0.00"),
         EXCESS,
     )
@@ -507,3 +511,64 @@ def test_the_participant_is_unusable_outside_the_owner_command(
     )
     db_session.refresh(fixture.excess)
     assert fixture.excess.is_active is True
+
+
+def test_sub_native_allocation_without_legacy_provenance_is_refused(
+    db_session, subscriber_account
+):
+    """Missing ledger fields alone also describe Sub-native allocations."""
+    fixture = _case_c(db_session, subscriber_account, native=True)
+
+    preview = preview_legacy_over_allocation_return(db_session, _query(fixture))
+
+    assert LegacyOverAllocationBlocker.allocation_not_legacy_provenance in (
+        preview.blockers
+    )
+    assert preview.actionable is False
+
+
+def test_splynx_provenance_on_the_payment_is_accepted(db_session, subscriber_account):
+    fixture = _case_c(db_session, subscriber_account, native=True)
+    fixture.excess_payment.splynx_payment_id = 42
+    db_session.commit()
+
+    preview = preview_legacy_over_allocation_return(db_session, _query(fixture))
+
+    assert LegacyOverAllocationBlocker.allocation_not_legacy_provenance not in (
+        preview.blockers
+    )
+
+
+@pytest.mark.parametrize("where", ["memo", "receipt_number", "external_id"])
+def test_possible_duplicate_payment_reference_blocks(
+    db_session, subscriber_account, where
+):
+    fixture = _case_c(db_session, subscriber_account)
+    session_id = "100004260616165300123456789012"
+    fixture.excess_payment.memo = f"NIP transfer session {session_id}"
+    other = _payment(db_session, subscriber_account, Decimal("500.00"))
+    if where == "memo":
+        other.memo = f"duplicate entry {session_id}"
+    elif where == "receipt_number":
+        other.receipt_number = session_id
+    else:
+        other.external_id = session_id
+    db_session.commit()
+
+    preview = preview_legacy_over_allocation_return(db_session, _query(fixture))
+
+    assert LegacyOverAllocationBlocker.possible_duplicate_payment_reference in (
+        preview.blockers
+    )
+    assert preview.actionable is False
+
+
+def test_distinct_references_do_not_block(db_session, subscriber_account):
+    fixture = _case_c(db_session, subscriber_account)
+    fixture.excess_payment.memo = "NIP transfer session 100004260616165300123456789012"
+    fixture.keeper_payment.memo = "NIP transfer session 100004260616170000987654321098"
+    db_session.commit()
+
+    preview = preview_legacy_over_allocation_return(db_session, _query(fixture))
+
+    assert preview.actionable, preview.blockers

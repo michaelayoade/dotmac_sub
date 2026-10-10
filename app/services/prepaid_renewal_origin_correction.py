@@ -60,6 +60,9 @@ from app.models.admin_alert import AdminAlert, AlertStatus
 from app.models.audit import AuditActorType
 from app.models.billing import (
     AccountAdjustment,
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
     LedgerCategory,
     LedgerEntry,
     LedgerEntryType,
@@ -72,7 +75,10 @@ from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services.audit import AuditEvents
-from app.services.billing._common import lock_account
+from app.services.billing._common import (
+    lock_account,
+    resolve_invoice_settlement_amounts,
+)
 from app.services.billing.adjustments import (
     AccountAdjustmentError,
     AccountAdjustmentOrigin,
@@ -81,6 +87,9 @@ from app.services.billing.adjustments import (
 )
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.common import round_money, to_decimal
+from app.services.customer_financial_ledger import (
+    invoices_entering_direct_renewal_documentary_set,
+)
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.owner_commands import (
@@ -99,6 +108,7 @@ from app.services.prepaid_coverage_reconciliation import (
 from app.services.service_entitlements import (
     EntitlementLinkError,
     ReviewedFundingDebitLink,
+    current_prepaid_entitlement_end,
     ensure_prepaid_entitlement_for_wallet_debit,
     link_prepaid_entitlement_to_funding_debit_for_owner,
 )
@@ -186,6 +196,17 @@ class RenewalOriginBlocker(StrEnum):
     canonical_origin_used_by_other_adjustment = (
         "canonical_origin_used_by_other_adjustment"
     )
+    #: The entitlement's source invoice is already fully settled by active
+    #: payment allocations, credit notes or opening consumption, so linking the
+    #: wallet debit would fund an already-paid period twice.
+    entitlement_invoice_already_settled = "entitlement_invoice_already_settled"
+    #: The change would add a paid prepaid invoice to the direct-renewal
+    #: documentary set, silently removing its customer-position consumption.
+    would_make_invoice_documentary = "would_make_invoice_documentary"
+    period_not_one_billing_cycle = "period_not_one_billing_cycle"
+    period_start_outside_debit_cycle = "period_start_outside_debit_cycle"
+    period_exceeds_one_billing_cycle = "period_exceeds_one_billing_cycle"
+    cycle_already_covered_by_invoice = "cycle_already_covered_by_invoice"
     unacknowledged_warning = "unacknowledged_warning"
     acknowledged_warning_not_present = "acknowledged_warning_not_present"
 
@@ -200,7 +221,6 @@ class RenewalOriginWarning(StrEnum):
     #: The entitlement is also sourced from an invoice; the debit is recorded
     #: as a second funding source for the same single coverage interval.
     entitlement_invoice_backed = "entitlement_invoice_backed"
-    period_not_one_billing_cycle = "period_not_one_billing_cycle"
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +301,24 @@ class OriginQuarantineEffect:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomerPositionImpact:
+    """Effect on the customer-position projection and prepaid coverage.
+
+    The invoice ids are deterministic evidence and part of the fingerprint. The
+    balances and coverage ends depend on ``as_of``, so they are informational.
+    """
+
+    #: Paid prepaid invoices that would enter the direct-renewal documentary
+    #: set (dropping their customer-position consumption) after the change.
+    invoices_made_documentary: tuple[UUID, ...]
+    prepaid_available_balance_before: Decimal | None
+    #: Projected: before plus the totals of the invoices made documentary.
+    prepaid_available_balance_after: Decimal | None
+    coverage_end_before: datetime | None
+    coverage_end_after: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class RenewalOriginCorrectionPreview:
     query: RenewalOriginCorrectionQuery
     account_id: UUID
@@ -294,6 +332,7 @@ class RenewalOriginCorrectionPreview:
     warnings: tuple[RenewalOriginWarning, ...]
     blockers: tuple[RenewalOriginBlocker, ...]
     quarantine_effect: OriginQuarantineEffect
+    position_impact: CustomerPositionImpact
     fingerprint: str
 
     @property
@@ -572,6 +611,92 @@ def _quarantine_effect(
     )
 
 
+def _position_impact(
+    db: Session,
+    *,
+    query: RenewalOriginCorrectionQuery,
+    adjustment: AccountAdjustment,
+    subscription: Subscription | None,
+    planned: PlannedEntitlementAction,
+    as_of: datetime,
+) -> CustomerPositionImpact:
+    """Compare the customer-position projection and coverage before and after.
+
+    Only the link and create dispositions change which entitlement is linked to
+    the debit, so only they can move an invoice into the documentary set.
+    """
+    from app.services.customer_financial_position import prepaid_available_balance
+
+    changes_linkage = planned.action is not EntitlementAction.none
+    made_documentary: tuple[UUID, ...] = ()
+    if (
+        changes_linkage
+        and subscription is not None
+        and planned.starts_at is not None
+        and planned.ends_at is not None
+    ):
+        made_documentary = invoices_entering_direct_renewal_documentary_set(
+            db,
+            account_id=adjustment.account_id,
+            subscription_id=subscription.id,
+            starts_at=planned.starts_at,
+            ends_at=planned.ends_at,
+            amount=adjustment.amount,
+            currency=adjustment.currency,
+        )
+    balance_before: Decimal | None = None
+    balance_after: Decimal | None = None
+    try:
+        balance_before = _money(
+            prepaid_available_balance(
+                db, adjustment.account_id, currency=adjustment.currency
+            )
+        )
+        removed = _money(
+            sum(
+                (
+                    _money(total)
+                    for total in db.scalars(
+                        select(Invoice.total).where(Invoice.id.in_(made_documentary))
+                    ).all()
+                ),
+                _ZERO,
+            )
+            if made_documentary
+            else _ZERO
+        )
+        balance_after = _money(balance_before + removed)
+    except (ValueError, DomainError):
+        balance_before = balance_after = None
+    coverage_before: datetime | None = None
+    coverage_after: datetime | None = None
+    if subscription is not None:
+        current = current_prepaid_entitlement_end(
+            db,
+            subscription_id=subscription.id,
+            account_id=adjustment.account_id,
+            now=as_of,
+        )
+        coverage_before = _utc(current) if current is not None else None
+        coverage_after = coverage_before
+        if (
+            planned.action is EntitlementAction.create_from_debit
+            and planned.starts_at is not None
+            and planned.ends_at is not None
+            and planned.starts_at <= as_of < planned.ends_at
+        ):
+            coverage_after = max(
+                value for value in (coverage_before, planned.ends_at) if value
+            )
+    return CustomerPositionImpact(
+        invoices_made_documentary=made_documentary,
+        prepaid_available_balance_before=balance_before,
+        prepaid_available_balance_after=balance_after,
+        coverage_end_before=coverage_before,
+        coverage_end_after=coverage_after,
+    )
+
+
 def preview_renewal_origin_correction(
     db: Session,
     query: RenewalOriginCorrectionQuery,
@@ -707,6 +832,22 @@ def preview_renewal_origin_correction(
                 warnings.add(RenewalOriginWarning.entitlement_amount_differs_from_debit)
             if entitlement_row.source_invoice_id is not None:
                 warnings.add(RenewalOriginWarning.entitlement_invoice_backed)
+                if (
+                    query.disposition
+                    is RenewalOriginDisposition.link_existing_entitlement
+                ):
+                    source_invoice = db.get(Invoice, entitlement_row.source_invoice_id)
+                    if (
+                        source_invoice is not None
+                        and _money(source_invoice.total) > _ZERO
+                        and resolve_invoice_settlement_amounts(
+                            db, source_invoice.id
+                        ).total_applied
+                        >= _money(source_invoice.total)
+                    ):
+                        blockers.add(
+                            RenewalOriginBlocker.entitlement_invoice_already_settled
+                        )
             period = (_utc(entitlement_row.starts_at), _utc(entitlement_row.ends_at))
     else:
         assert query.subscription_id is not None
@@ -747,7 +888,33 @@ def preview_renewal_origin_correction(
                 override=subscription.billing_cycle,
             )
             if _utc(billing_cycle_end(start, cycle)) != end:
-                warnings.add(RenewalOriginWarning.period_not_one_billing_cycle)
+                blockers.add(RenewalOriginBlocker.period_not_one_billing_cycle)
+            if end > _utc(billing_cycle_end(start, cycle)):
+                blockers.add(RenewalOriginBlocker.period_exceeds_one_billing_cycle)
+            debit_at = _utc(entry.effective_date or entry.created_at)
+            if (
+                start > _utc(billing_cycle_end(debit_at, cycle))
+                or _utc(billing_cycle_end(start, cycle)) < debit_at
+            ):
+                blockers.add(RenewalOriginBlocker.period_start_outside_debit_cycle)
+            if any(row.source_invoice_id is not None for row in overlap_rows) or (
+                db.scalar(
+                    select(Invoice.id)
+                    .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+                    .where(
+                        Invoice.account_id == adjustment.account_id,
+                        Invoice.is_active.is_(True),
+                        Invoice.status == InvoiceStatus.paid,
+                        InvoiceLine.is_active.is_(True),
+                        InvoiceLine.subscription_id == subscription.id,
+                        Invoice.billing_period_start < end,
+                        Invoice.billing_period_end > start,
+                    )
+                    .limit(1)
+                )
+                is not None
+            ):
+                blockers.add(RenewalOriginBlocker.cycle_already_covered_by_invoice)
         planned = PlannedEntitlementAction(
             action=EntitlementAction.create_from_debit,
             entitlement_id=None,
@@ -783,6 +950,17 @@ def preview_renewal_origin_correction(
             blockers.add(RenewalOriginBlocker.canonical_origin_used_by_other_adjustment)
         if parse_prepaid_renewal_origin_ref(origin_after) is None:
             blockers.add(RenewalOriginBlocker.entitlement_period_invalid)
+
+    position_impact = _position_impact(
+        db,
+        query=query,
+        adjustment=adjustment,
+        subscription=subscription,
+        planned=planned,
+        as_of=observed_at,
+    )
+    if position_impact.invoices_made_documentary:
+        blockers.add(RenewalOriginBlocker.would_make_invoice_documentary)
 
     acknowledged_warnings = set(query.acknowledged_warnings)
     if warnings - acknowledged_warnings:
@@ -842,6 +1020,9 @@ def preview_renewal_origin_correction(
                 "amount_funded": planned.amount_funded,
                 "currency": planned.currency,
             },
+            "invoices_made_documentary": [
+                str(value) for value in position_impact.invoices_made_documentary
+            ],
             "malformed_before": [
                 str(value) for value in effect.malformed_adjustment_ids_before
             ],
@@ -862,6 +1043,7 @@ def preview_renewal_origin_correction(
         warnings=ordered_warnings,
         blockers=ordered_blockers,
         quarantine_effect=effect,
+        position_impact=position_impact,
         fingerprint=fingerprint,
     )
 
@@ -1246,6 +1428,7 @@ __all__ = [
     "RUNBOOK",
     "AdjustmentState",
     "CorrectRenewalOriginCommand",
+    "CustomerPositionImpact",
     "EntitlementAction",
     "EntitlementState",
     "OriginQuarantineEffect",

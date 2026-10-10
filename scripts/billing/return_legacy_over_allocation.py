@@ -111,9 +111,9 @@ def _preview_payload(preview: LegacyOverAllocationPreview) -> dict[str, object]:
             }
             for row in preview.remaining_allocations
         ],
-        "payment_unallocated": {
-            "before": str(preview.payment_unallocated_before),
-            "after": str(preview.payment_unallocated_after),
+        "payment_allocation_unallocated": {
+            "before": str(preview.payment_allocation_unallocated_before),
+            "after": str(preview.payment_allocation_unallocated_after),
         },
         "ledger": {
             "account_credit_ledger_entry_id": (

@@ -6269,6 +6269,9 @@ class PaymentAllocations(ListResponseMixin):
     ) -> PaymentAllocation:
         """Deactivate one legacy allocation that carries no ledger evidence.
 
+        Legacy means Splynx/import provenance on the payment as well as absent
+        ledger fields; a Sub-native allocation without ledger fields is refused.
+
         Flush-only participant for ``financial.legacy_over_allocation_correction``.
         A legacy (Splynx-era) allocation never posted a paired invoice credit or
         account-credit consumption, so the ledger already holds the payment as
@@ -6308,6 +6311,7 @@ class PaymentAllocations(ListResponseMixin):
             or allocation.reversal_ledger_entry_id is not None
             or allocation.reversal_consumption_ledger_entry_id is not None
             or allocation.reversal_idempotency_key is not None
+            or (payment.splynx_payment_id is None and payment.import_run_id is None)
             or round_money(to_decimal(allocation.amount))
             != round_money(reviewed.expected_amount)
             or invoice.status is not InvoiceStatus.paid

@@ -321,7 +321,21 @@ from source documents), `blockers`, and `quarantine_effect`
 `work_item_resolves_on_next_sweep`). Blockers include a reversed, non-renewal, or
 ledger-inconsistent adjustment; an already canonical reference; an inactive,
 foreign, or other-debit-linked entitlement; and a canonical reference already
-carried by another adjustment. Re-running the same confirmation returns the
+carried by another adjustment. Three further blockers cannot be acknowledged:
+`entitlement_invoice_already_settled` (link mode: the entitlement's source
+invoice is already fully settled by payments, credit notes or opening
+consumption, so the wallet debit would fund the period twice);
+`would_make_invoice_documentary` (the change would add a paid prepaid invoice
+with the same subscription, period, amount and currency to the direct-renewal
+documentary set, silently removing its customer-position consumption; the
+preview lists `position_impact.invoices_made_documentary` and the
+`prepaid_available_balance` before/after, and Finance must decide the invoice
+first); and, in create mode, `period_not_one_billing_cycle`,
+`period_exceeds_one_billing_cycle`, `period_start_outside_debit_cycle` (start
+more than one cycle from the debit's effective date) and
+`cycle_already_covered_by_invoice` (an invoice-backed entitlement or paid
+invoice already covers the period). `position_impact` also shows the current
+coverage end before/after. Re-running the same confirmation returns the
 stored outcome (`replayed: true`); a stale fingerprint returns `stale_preview`.
 Exit code `3` means the owner refused; the JSON `error` names why.
 

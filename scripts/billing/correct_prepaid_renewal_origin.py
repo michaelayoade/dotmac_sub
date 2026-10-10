@@ -139,6 +139,7 @@ def _entitlement_payload(state: object) -> dict[str, object] | None:
 def _preview_payload(preview: RenewalOriginCorrectionPreview) -> dict[str, object]:
     effect = preview.quarantine_effect
     planned = preview.planned
+    impact = preview.position_impact
     return {
         "financial_state_changed": False,
         "actionable": preview.actionable,
@@ -176,6 +177,23 @@ def _preview_payload(preview: RenewalOriginCorrectionPreview) -> dict[str, objec
         ],
         "warnings": [value.value for value in preview.warnings],
         "blockers": [value.value for value in preview.blockers],
+        "position_impact": {
+            "invoices_made_documentary": [
+                str(value) for value in impact.invoices_made_documentary
+            ],
+            "prepaid_available_balance_before": (
+                str(impact.prepaid_available_balance_before)
+                if impact.prepaid_available_balance_before is not None
+                else None
+            ),
+            "prepaid_available_balance_after": (
+                str(impact.prepaid_available_balance_after)
+                if impact.prepaid_available_balance_after is not None
+                else None
+            ),
+            "coverage_end_before": _iso(impact.coverage_end_before),
+            "coverage_end_after": _iso(impact.coverage_end_after),
+        },
         "quarantine_effect": {
             "as_of": effect.as_of.isoformat(),
             "work_item_open": effect.work_item_open,

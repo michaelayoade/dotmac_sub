@@ -26,6 +26,9 @@ from app.models.billing import (
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
+    Payment,
+    PaymentAllocation,
+    PaymentStatus,
     ServiceEntitlement,
     ServiceEntitlementStatus,
 )
@@ -208,6 +211,13 @@ def _entitlement(
     return row
 
 
+def _one_cycle_end() -> datetime:
+    from app.models.catalog import BillingCycle
+    from app.services.catalog.subscriptions import billing_cycle_end
+
+    return billing_cycle_end(START, BillingCycle.monthly)
+
+
 def _linked(query_adjustment, entitlement, **overrides) -> RenewalOriginCorrectionQuery:
     values = {
         "adjustment_id": query_adjustment.id,
@@ -354,17 +364,12 @@ def test_unacknowledged_and_surplus_warnings_are_blockers(
         _linked(adjustment, entitlement, acknowledged_warnings=()),
         as_of=NOW,
     )
+    # Once the funded amount equals the debit that warning is no longer present,
+    # so acknowledging it is surplus.
+    entitlement.amount_funded = DEBIT
+    db_session.commit()
     surplus = preview_renewal_origin_correction(
-        db_session,
-        _linked(
-            adjustment,
-            entitlement,
-            acknowledged_warnings=(
-                *BOTH_WARNINGS,
-                RenewalOriginWarning.period_not_one_billing_cycle,
-            ),
-        ),
-        as_of=NOW,
+        db_session, _linked(adjustment, entitlement), as_of=NOW
     )
 
     assert RenewalOriginBlocker.unacknowledged_warning in none_ack.blockers
@@ -627,33 +632,18 @@ def test_create_entitlement_uses_the_existing_wallet_debit_writer(
         db_session, subscriber_account, origin_ref="renewal for July"
     )
     staff = _staff(db_session)
-    end = START + timedelta(days=30)
+    end = _one_cycle_end()
     query = RenewalOriginCorrectionQuery(
         adjustment_id=adjustment.id,
         disposition=RenewalOriginDisposition.create_entitlement_from_debit,
         subscription_id=subscription.id,
         period_start=START,
         period_end=end,
-        acknowledged_warnings=(),
-    )
-
-    preview = preview_renewal_origin_correction(db_session, query, as_of=NOW)
-    # A 30-day window is one monthly cycle only if the cycle really is 30 days;
-    # the preview names any warning that must be acknowledged.
-    assert RenewalOriginBlocker.unacknowledged_warning in preview.blockers or (
-        preview.actionable
-    )
-    warnings = preview.warnings
-    query = RenewalOriginCorrectionQuery(
-        adjustment_id=adjustment.id,
-        disposition=RenewalOriginDisposition.create_entitlement_from_debit,
-        subscription_id=subscription.id,
-        period_start=START,
-        period_end=end,
-        acknowledged_warnings=warnings,
     )
     preview = preview_renewal_origin_correction(db_session, query, as_of=NOW)
     assert preview.actionable, preview.blockers
+    assert preview.position_impact.invoices_made_documentary == ()
+    assert preview.position_impact.coverage_end_before is None
     assert preview.planned.action is EntitlementAction.create_from_debit
     assert preview.planned.amount_funded == DEBIT
     ledger_id = ledger.id
@@ -907,3 +897,217 @@ def test_review_routes_a_legitimate_debit_to_the_reviewed_correction(
         as_of=NOW,
     )
     assert preview.actionable, preview.blockers
+
+
+def _settle(db, account, invoice: Invoice) -> None:
+    payment = Payment(
+        account_id=account.id,
+        amount=invoice.total,
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=START,
+        is_active=True,
+    )
+    db.add(payment)
+    db.flush()
+    db.add(
+        PaymentAllocation(
+            payment_id=payment.id, invoice_id=invoice.id, amount=invoice.total
+        )
+    )
+    db.commit()
+
+
+def _link_query(adjustment, entitlement, **overrides):
+    values = {
+        "adjustment_id": adjustment.id,
+        "disposition": RenewalOriginDisposition.link_existing_entitlement,
+        "entitlement_id": entitlement.id,
+        "acknowledged_warnings": (),
+    }
+    values.update(overrides)
+    return RenewalOriginCorrectionQuery(**values)
+
+
+def test_link_blocks_when_the_entitlement_invoice_is_already_settled(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    invoice, line = _paid_invoice(db_session, subscriber_account, subscription)
+    adjustment, _ledger = _debit(
+        db_session, subscriber_account, origin_ref="renewal", amount=Decimal("18812.00")
+    )
+    entitlement = _entitlement(
+        db_session, subscriber_account, subscription, invoice=invoice, line=line
+    )
+    query = _link_query(adjustment, entitlement, acknowledged_warnings=BOTH_WARNINGS)
+
+    unsettled = preview_renewal_origin_correction(db_session, query, as_of=NOW)
+    _settle(db_session, subscriber_account, invoice)
+    settled = preview_renewal_origin_correction(db_session, query, as_of=NOW)
+
+    assert unsettled.actionable, unsettled.blockers
+    assert RenewalOriginBlocker.entitlement_invoice_already_settled in settled.blockers
+    assert settled.actionable is False
+    assert settled.fingerprint != unsettled.fingerprint
+
+
+def test_link_blocks_when_it_would_make_a_paid_invoice_documentary(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    invoice, _line = _paid_invoice(db_session, subscriber_account, subscription)
+    _settle(db_session, subscriber_account, invoice)
+    # Debit equals the invoice total and the entitlement has the invoice's
+    # exact period, but is not invoice-backed: linking would drop the invoice's
+    # customer-position consumption.
+    adjustment, _ledger = _debit(
+        db_session, subscriber_account, origin_ref="renewal", amount=PRICE
+    )
+    entitlement = _entitlement(db_session, subscriber_account, subscription)
+    query = _link_query(adjustment, entitlement)
+
+    before = preview_renewal_origin_correction(db_session, query, as_of=NOW)
+
+    assert RenewalOriginBlocker.would_make_invoice_documentary in before.blockers
+    assert before.position_impact.invoices_made_documentary == (invoice.id,)
+    assert before.actionable is False
+    if before.position_impact.prepaid_available_balance_before is not None:
+        assert (
+            before.position_impact.prepaid_available_balance_after
+            == before.position_impact.prepaid_available_balance_before + PRICE
+        )
+    # A different amount does not touch the documentary set.
+    other, _ = _debit(
+        db_session, subscriber_account, origin_ref="renewal two", amount=DEBIT
+    )
+    other_entitlement = _entitlement(
+        db_session,
+        subscriber_account,
+        subscription,
+        start=START + timedelta(days=60),
+        end=END + timedelta(days=60),
+    )
+    clear = preview_renewal_origin_correction(
+        db_session, _link_query(other, other_entitlement), as_of=NOW
+    )
+    assert clear.position_impact.invoices_made_documentary == ()
+    assert RenewalOriginBlocker.would_make_invoice_documentary not in clear.blockers
+
+
+def _create_query(adjustment, subscription, **overrides):
+    values = {
+        "adjustment_id": adjustment.id,
+        "disposition": RenewalOriginDisposition.create_entitlement_from_debit,
+        "subscription_id": subscription.id,
+        "period_start": START,
+        "period_end": _one_cycle_end(),
+    }
+    values.update(overrides)
+    return RenewalOriginCorrectionQuery(**values)
+
+
+def test_create_blocks_a_period_that_is_not_exactly_one_cycle(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    adjustment, _ledger = _debit(db_session, subscriber_account, origin_ref="renewal")
+
+    short = preview_renewal_origin_correction(
+        db_session,
+        _create_query(adjustment, subscription, period_end=START + timedelta(days=20)),
+        as_of=NOW,
+    )
+    long = preview_renewal_origin_correction(
+        db_session,
+        _create_query(adjustment, subscription, period_end=START + timedelta(days=45)),
+        as_of=NOW,
+    )
+
+    assert RenewalOriginBlocker.period_not_one_billing_cycle in short.blockers
+    assert RenewalOriginBlocker.period_not_one_billing_cycle in long.blockers
+    assert RenewalOriginBlocker.period_exceeds_one_billing_cycle in long.blockers
+    assert RenewalOriginBlocker.period_exceeds_one_billing_cycle not in short.blockers
+    assert short.actionable is False
+    assert long.actionable is False
+
+
+def test_create_blocks_a_period_far_from_the_debit_date(
+    db_session, subscriber_account, subscription
+):
+
+    _prepare(db_session, subscriber_account, subscription)
+    adjustment, _ledger = _debit(db_session, subscriber_account, origin_ref="renewal")
+    far_start = START + timedelta(days=120)
+
+    preview = preview_renewal_origin_correction(
+        db_session,
+        _create_query(
+            adjustment,
+            subscription,
+            period_start=far_start,
+            period_end=_monthly_end(far_start),
+        ),
+        as_of=NOW,
+    )
+
+    assert RenewalOriginBlocker.period_start_outside_debit_cycle in preview.blockers
+    assert preview.actionable is False
+
+
+def _monthly_end(start: datetime) -> datetime:
+    from app.models.catalog import BillingCycle
+    from app.services.catalog.subscriptions import billing_cycle_end
+
+    return billing_cycle_end(start, BillingCycle.monthly)
+
+
+def test_create_blocks_when_an_invoice_already_covers_the_cycle(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    invoice, line = _paid_invoice(db_session, subscriber_account, subscription)
+    adjustment, _ledger = _debit(
+        db_session, subscriber_account, origin_ref="renewal", amount=DEBIT
+    )
+
+    paid_invoice_only = preview_renewal_origin_correction(
+        db_session, _create_query(adjustment, subscription), as_of=NOW
+    )
+    backed = _entitlement(
+        db_session, subscriber_account, subscription, invoice=invoice, line=line
+    )
+    acknowledged = preview_renewal_origin_correction(
+        db_session,
+        _create_query(
+            adjustment,
+            subscription,
+            acknowledged_overlapping_entitlement_ids=(backed.id,),
+        ),
+        as_of=NOW,
+    )
+
+    assert (
+        RenewalOriginBlocker.cycle_already_covered_by_invoice
+        in paid_invoice_only.blockers
+    )
+    assert (
+        RenewalOriginBlocker.cycle_already_covered_by_invoice in acknowledged.blockers
+    )
+    assert acknowledged.actionable is False
+
+
+def test_create_preview_shows_coverage_end_before_and_after(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    adjustment, _ledger = _debit(db_session, subscriber_account, origin_ref="renewal")
+    inside = START + timedelta(days=3)
+
+    preview = preview_renewal_origin_correction(
+        db_session, _create_query(adjustment, subscription), as_of=inside
+    )
+
+    assert preview.actionable, preview.blockers
+    assert preview.position_impact.coverage_end_before is None
+    assert preview.position_impact.coverage_end_after == _one_cycle_end()
