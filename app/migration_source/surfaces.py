@@ -1180,6 +1180,23 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
             "`organizations`; applied, so it cannot run again."
         ),
     ),
+    SourceSurface(
+        path="alembic/versions/664_purge_retired_splynx_metadata_keys.py",
+        family=EntryPointFamily.MIGRATION,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="alembic migration lineage",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "A contract-step purge: removes undeclared, unread Splynx import keys "
+            "from `subscribers.metadata` without copying their values. It adds no "
+            "fact and is idempotent; once applied it matches no row again."
+        ),
+    ),
 )
 
 

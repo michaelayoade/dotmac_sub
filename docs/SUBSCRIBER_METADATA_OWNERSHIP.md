@@ -163,6 +163,30 @@ only. They are the one class where remaining in a JSON blob is the correct
 answer — but they belong in a clearly named provenance column, not mixed with
 live state.
 
+`web_subscriber_details` also still reads four undeclared import keys as
+display fallbacks — `splynx_last_online`, `splynx_gps`, `splynx_location_id`
+and `splynx_billing_email` — so they remain on the rows that carry them until
+that reader is retired.
+
+### Retired — purged from every row
+
+Migration `664_purge_retired_splynx_metadata_keys` removed these undeclared,
+unread Splynx import keys from `subscribers.metadata` without copying their
+values anywhere (irreversible by design; one `audit_events` row,
+`subscriber.metadata_keys_purged`, records the key list and per-key row
+counts):
+
+`splynx_login`, `splynx_category`, `splynx_partner_percent`,
+`splynx_billing_type`, `splynx_added_by`, `splynx_added_by_id`,
+`splynx_customer_labels`, `splynx_daily_prepaid_cost`, `splynx_gdpr_agreed`,
+`splynx_email`, `splynx_email_conflict`, `splynx_conversion_date`,
+`splynx_password_cleartext`.
+
+`RETIRED_SPLYNX_KEYS` in `scripts/architecture/subscriber_metadata_census.py`
+holds the same list, and `test_subscriber_metadata_ownership.py` fails if any of
+them is declared again or referenced by product code under `app`, `scripts`,
+`templates` or `static`.
+
 ### Obsolete — delete, do not migrate
 
 | Key | Why |

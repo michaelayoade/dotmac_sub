@@ -149,6 +149,40 @@ _DELETE_METHODS: Final = frozenset({"pop"})
 
 DYNAMIC: Final = "<dynamic>"
 
+#: Splynx import keys that were neither declared nor read, and were purged from
+#: every row by migration ``664_purge_retired_splynx_metadata_keys``. They must
+#: not come back: not declared, not read, not written. The migration holds the
+#: same tuple and the guard keeps the two equal.
+#:
+#: ``splynx_billing_email`` is NOT here: ``web_subscriber_details`` still reads
+#: it as the billing-email fallback, so it stays on the rows that carry it.
+RETIRED_SPLYNX_KEYS: Final[tuple[str, ...]] = (
+    "splynx_login",
+    "splynx_category",
+    "splynx_partner_percent",
+    "splynx_billing_type",
+    "splynx_added_by",
+    "splynx_added_by_id",
+    "splynx_customer_labels",
+    "splynx_daily_prepaid_cost",
+    "splynx_gdpr_agreed",
+    "splynx_email",
+    "splynx_email_conflict",
+    "splynx_conversion_date",
+    "splynx_password_cleartext",
+)
+
+#: Where a reintroduced reference would live. Textual, not AST: these names are
+#: distinctive enough that any quoted occurrence is a reference, and the AST
+#: census cannot see every reader (``web_subscriber_details`` reaches metadata
+#: through an unannotated parameter in a module that never imports the model).
+_RETIRED_KEY_SCAN: Final[tuple[tuple[str, str], ...]] = (
+    ("app", "*.py"),
+    ("scripts", "*.py"),
+    ("templates", "*.html"),
+    ("static", "*.js"),
+)
+
 
 @dataclass(frozen=True, order=True)
 class Access:
@@ -665,6 +699,38 @@ def keys_by_module() -> dict[str, dict[str, set[str]]]:
     for access in metadata_accesses():
         table[access.module][access.operation].add(access.key)
     return {module: dict(operations) for module, operations in table.items()}
+
+
+def retired_key_references(
+    keys: tuple[str, ...] = RETIRED_SPLYNX_KEYS,
+) -> list[tuple[str, str]]:
+    """``(path, key)`` for every quoted mention of a retired key in product code.
+
+    The census file itself is excluded because it is the list. Tests are not
+    scanned: a fixture may legitimately carry a historical key to prove that an
+    unrelated save preserves whatever a row already holds.
+    """
+
+    own = Path(__file__).resolve()
+    quoted = [(key, (f'"{key}"', f"'{key}'")) for key in keys]
+    found: set[tuple[str, str]] = set()
+    for root, pattern in _RETIRED_KEY_SCAN:
+        base = REPOSITORY_ROOT / root
+        if not base.is_dir():
+            continue
+        for path in base.rglob(pattern):
+            if path.resolve() == own or "vendor" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if "splynx_" not in text:
+                continue
+            for key, forms in quoted:
+                if any(form in text for form in forms):
+                    found.add((_module_name(path), key))
+    return sorted(found)
 
 
 def render_writer_baseline() -> str:
