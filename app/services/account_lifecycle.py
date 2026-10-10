@@ -67,6 +67,7 @@ from app.models.subscription_pause import (
     SubscriptionPauseResumePolicy,
     SubscriptionPauseSource,
 )
+from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.owner_commands import CommandContext
@@ -540,6 +541,7 @@ def suspend_subscription(
     emit: bool = True,
     evidence_context: CommandContext | None = None,
     evidence_effective_at: datetime | None = None,
+    requested_access_mode: AccessRestrictionMode | None = None,
 ) -> EnforcementLock:
     """Create an enforcement lock and suspend the subscription.
 
@@ -560,6 +562,10 @@ def suspend_subscription(
         source: Who/what initiated this (e.g. ``"dunning_case:{id}"``).
         notes: Optional human-readable notes.
         emit: Whether to emit events.
+        access_mode: Effective treatment granted by the walled-garden policy.
+        requested_access_mode: Treatment the originator requested (defaults to
+            ``access_mode``). Persisted so a later captive-policy change can
+            re-evaluate the lock; the effective mode never exceeds it.
 
     Returns:
         The enforcement lock (new or existing duplicate).
@@ -567,6 +573,12 @@ def suspend_subscription(
     Raises:
         ValueError: If the subscription cannot be suspended.
     """
+    requested = requested_access_mode or access_mode
+    if (
+        access_mode == AccessRestrictionMode.captive
+        and requested != AccessRestrictionMode.captive
+    ):
+        raise ValueError("Effective captive access requires a captive request")
     # Lock the subscription row to prevent concurrent mutations
     subscription = db.execute(
         select(Subscription).where(Subscription.id == subscription_id).with_for_update()
@@ -599,6 +611,9 @@ def suspend_subscription(
             and existing.access_mode != AccessRestrictionMode.hard_reject
         ):
             existing.access_mode = AccessRestrictionMode.hard_reject
+        # A reused lock keeps the most restrictive request it has seen.
+        if requested == AccessRestrictionMode.hard_reject:
+            existing.requested_access_mode = AccessRestrictionMode.hard_reject
         status_changed = False
         if not was_already_suspended:
             subscription.status = SubscriptionStatus.suspended
@@ -654,6 +669,7 @@ def suspend_subscription(
         subscriber_id=subscription.subscriber_id,
         reason=reason,
         access_mode=access_mode,
+        requested_access_mode=requested,
         source=source,
         is_active=True,
         notes=notes,
@@ -725,6 +741,147 @@ def suspend_subscription(
         status_changed,
     )
     return lock
+
+
+class LockAccessModeReevaluationError(DomainError):
+    """A lock access-mode re-evaluation no longer matches current state."""
+
+
+LOCK_ACCESS_MODE_STALE = "access.subscription_lifecycle.lock_access_mode_stale"
+LOCK_ACCESS_MODE_EXCEEDS_REQUEST = (
+    "access.subscription_lifecycle.lock_access_mode_exceeds_request"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ReevaluateLockAccessModeCommand:
+    """Compare-and-set of one active lock's effective network treatment.
+
+    Issued only by the captive access policy-change coordinator inside its
+    owner command. ``expected_access_mode`` is the value the coordinator's
+    preview observed; a different current value fails closed.
+    """
+
+    lock_id: UUID
+    expected_access_mode: AccessRestrictionMode
+    target_access_mode: AccessRestrictionMode
+    decision_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class LockAccessModeChange:
+    lock_id: UUID
+    subscription_id: UUID
+    subscriber_id: UUID
+    from_mode: AccessRestrictionMode
+    to_mode: AccessRestrictionMode
+
+
+def reevaluate_enforcement_lock_access_modes(
+    db: Session,
+    commands: tuple[ReevaluateLockAccessModeCommand, ...],
+    *,
+    source: str,
+) -> tuple[LockAccessModeChange, ...]:
+    """Apply re-evaluated effective modes to active locks (participant, flush-only).
+
+    Locks subscriptions then enforcement locks in id order (the same order as
+    suspend/restore), verifies each expected mode, never raises a lock above
+    its requested treatment, stages one ``enforcement_lock.access_mode_changed``
+    event per changed lock, and re-derives the account/access-state
+    projection for every affected account in the same transaction.
+    """
+
+    if not commands:
+        return ()
+    by_lock = {command.lock_id: command for command in commands}
+    if len(by_lock) != len(commands):
+        raise LockAccessModeReevaluationError(
+            code=LOCK_ACCESS_MODE_STALE,
+            message="A lock appears more than once in one re-evaluation.",
+            retryable=False,
+        )
+    subscription_ids = sorted(
+        set(
+            db.scalars(
+                select(EnforcementLock.subscription_id).where(
+                    EnforcementLock.id.in_(sorted(by_lock))
+                )
+            ).all()
+        )
+    )
+    if subscription_ids:
+        db.execute(
+            select(Subscription.id)
+            .where(Subscription.id.in_(subscription_ids))
+            .order_by(Subscription.id)
+            .with_for_update()
+        ).all()
+    locks = list(
+        db.scalars(
+            select(EnforcementLock)
+            .where(EnforcementLock.id.in_(sorted(by_lock)))
+            .order_by(EnforcementLock.id)
+            .with_for_update()
+        ).all()
+    )
+    if len(locks) != len(by_lock):
+        raise LockAccessModeReevaluationError(
+            code=LOCK_ACCESS_MODE_STALE,
+            message="A lock named by the re-evaluation no longer exists.",
+            retryable=False,
+        )
+    changes: list[LockAccessModeChange] = []
+    for lock in locks:
+        command = by_lock[lock.id]
+        if not lock.is_active or lock.access_mode != command.expected_access_mode:
+            raise LockAccessModeReevaluationError(
+                code=LOCK_ACCESS_MODE_STALE,
+                message="An enforcement lock changed after the preview; preview again.",
+                details={"lock_id": str(lock.id)},
+                retryable=False,
+            )
+        if (
+            command.target_access_mode == AccessRestrictionMode.captive
+            and lock.requested_access_mode != AccessRestrictionMode.captive
+        ):
+            raise LockAccessModeReevaluationError(
+                code=LOCK_ACCESS_MODE_EXCEEDS_REQUEST,
+                message="Captive access cannot exceed a lock's requested treatment.",
+                details={"lock_id": str(lock.id)},
+                retryable=False,
+            )
+        if lock.access_mode == command.target_access_mode:
+            continue
+        changes.append(
+            LockAccessModeChange(
+                lock_id=lock.id,
+                subscription_id=lock.subscription_id,
+                subscriber_id=lock.subscriber_id,
+                from_mode=lock.access_mode,
+                to_mode=command.target_access_mode,
+            )
+        )
+        lock.access_mode = command.target_access_mode
+    db.flush()
+    for change in changes:
+        emit_event(
+            db,
+            EventType.enforcement_lock_access_mode_changed,
+            {
+                "lock_id": str(change.lock_id),
+                "subscription_id": str(change.subscription_id),
+                "from_access_mode": change.from_mode.value,
+                "to_access_mode": change.to_mode.value,
+                "decision_reason": by_lock[change.lock_id].decision_reason,
+                "source": source,
+            },
+            subscription_id=change.subscription_id,
+            account_id=change.subscriber_id,
+        )
+    for subscriber_id in sorted({change.subscriber_id for change in changes}):
+        compute_account_status(db, str(subscriber_id))
+    return tuple(changes)
 
 
 class RestorationOutcome(StrEnum):
@@ -2728,7 +2885,6 @@ def derive_subscription_access_projection(
         billing_mode=subscriber.billing_mode,
         is_active=projected_is_active,
         billing_enabled=subscriber.billing_enabled,
-        captive_redirect_enabled=subscriber.captive_redirect_enabled,
         user_type=subscriber.user_type,
         metadata_=subscriber.metadata_,
         reseller=subscriber.reseller,

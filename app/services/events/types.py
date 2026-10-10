@@ -415,9 +415,15 @@ class EventType(enum.Enum):
     dunning_resolved = "dunning.resolved"
     dunning_paused = "dunning.paused"
 
-    # Enforcement locks (2)
+    # Enforcement locks (3)
     enforcement_lock_created = "enforcement_lock.created"
     enforcement_lock_resolved = "enforcement_lock.resolved"
+    # The effective network treatment of an active lock was re-evaluated
+    # (captive <-> hard reject) by access.captive_access_policy_change.
+    enforcement_lock_access_mode_changed = "enforcement_lock.access_mode_changed"
+
+    # Captive access policy rules or customer sets changed.
+    captive_access_policy_changed = "captive_access_policy.changed"
 
     # Network alert (legacy, kept for compatibility)
     network_alert = "network.alert"

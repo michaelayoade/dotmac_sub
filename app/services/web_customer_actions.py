@@ -338,7 +338,6 @@ def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
         "billing_day_max": str(domain.maximum),
         "billing_day_is_legacy": "false",
         "billing_enabled_override": "",
-        "captive_redirect_enabled": "",
         "billing_day": "",
         "payment_due_days": "",
         "grace_period_days": "",
@@ -357,9 +356,6 @@ def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
             )
             if subscriber.billing_enabled is not None
             else "",
-            "captive_redirect_enabled": "true"
-            if subscriber.captive_redirect_enabled
-            else "false",
             "billing_day": (
                 str(subscriber.billing_day)
                 if subscriber.billing_day is not None
@@ -2116,7 +2112,6 @@ def _billing_override_payload(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
-    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     payment_method: str | None,
 ) -> dict[str, Any]:
@@ -2126,7 +2121,6 @@ def _billing_override_payload(
         "min_balance": _optional_decimal(min_balance),
         "tax_rate_id": _normalize_optional(tax_rate_id),
         "payment_method": normalize_customer_invoice_payment_method(payment_method),
-        "captive_redirect_enabled": captive_redirect_enabled == "true",
     }
     # ABSENT and EMPTY are different instructions, and conflating them is how a
     # legacy billing day gets destroyed by an edit that never mentioned it.
@@ -2624,8 +2618,6 @@ def create_customer_from_form(
                 "marketing_opt_in": form_data.get("marketing_opt_in") == "true",
                 "category": SubscriberCategory.residential.value,
                 "reseller_id": reseller_id,
-                "captive_redirect_enabled": form_data.get("captive_redirect_enabled")
-                == "true",
                 "account_start_date": _parse_date(form_data.get("account_start_date")),
                 "notes": _normalize_optional(form_data.get("notes")),
             },
@@ -2797,7 +2789,6 @@ def update_person_customer(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
-    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     withholding_tax_enabled: str | None,
     payment_method: str | None,
@@ -2828,7 +2819,6 @@ def update_person_customer(
         payment_due_days=payment_due_days,
         grace_period_days=grace_period_days,
         min_balance=min_balance,
-        captive_redirect_enabled=captive_redirect_enabled,
         tax_rate_id=tax_rate_id,
         payment_method=payment_method,
     )
@@ -2951,7 +2941,6 @@ def update_business_customer(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
-    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     withholding_tax_enabled: str | None,
     payment_method: str | None,
@@ -2980,7 +2969,6 @@ def update_business_customer(
         payment_due_days=payment_due_days,
         grace_period_days=grace_period_days,
         min_balance=min_balance,
-        captive_redirect_enabled=captive_redirect_enabled,
         tax_rate_id=tax_rate_id,
         payment_method=payment_method,
     )

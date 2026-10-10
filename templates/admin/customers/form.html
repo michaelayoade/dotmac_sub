@@ -538,17 +538,9 @@
                                 </select>
                             </div>
                         </div>
-                        <div x-show="customerType === 'person'" class="mt-4 flex items-start gap-3">
-                            <input type="checkbox" name="captive_redirect_enabled" id="captive_redirect_enabled" value="true"
-                                   :disabled="customerType !== 'person'"
-                                   {% if customer and customer.captive_redirect_enabled %}checked{% endif %}
-                                   class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700" />
-                            <div>
-                                <label for="captive_redirect_enabled" class="text-sm text-slate-700 dark:text-slate-300">
-                                    Allow payment portal access during a billing suspension
-                                </label>
-                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Explicit opt-in for direct-house residential customers only. All other restrictions use hard reject.</p>
-                            </div>
+                        <div x-show="customerType === 'person'" class="mt-4">
+                            <p class="text-sm text-slate-700 dark:text-slate-300">Payment portal access during a suspension</p>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Decided per service by the captive access policy (account, customer set, plan family, and global rules) and by the serving router's walled-garden readiness. Every other restriction uses hard reject.</p>
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                             <div>
