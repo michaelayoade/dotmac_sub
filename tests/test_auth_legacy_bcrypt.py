@@ -119,3 +119,61 @@ def test_login_with_legacy_bcrypt_hash_does_not_raise(db_session, person):
         db_session, "legacy@example.com", "secret", _request(), None
     )
     assert tokens["access_token"]
+
+
+def test_passlib_context_does_not_include_bcrypt():
+    from app.services.auth_flow import PASSWORD_CONTEXT
+
+    assert "bcrypt" not in PASSWORD_CONTEXT.schemes()
+
+
+def test_login_wrong_password_with_legacy_bcrypt_is_401(db_session, person):
+    from fastapi import HTTPException
+
+    db_session.add(
+        UserCredential(
+            person_id=person.id,
+            provider=AuthProvider.local,
+            username="legacy2@example.com",
+            password_hash=_bcrypt_hash("secret"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        AuthFlow.login(db_session, "legacy2@example.com", "nope", _request(), None)
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.parametrize("prefix", ["2a", "2b", "2y"])
+def test_access_credential_login_refuses_bcrypt_secret_hash(
+    db_session, person, monkeypatch, caplog, prefix
+):
+    from fastapi import HTTPException
+
+    from app.models.catalog import AccessCredential
+
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    credential = AccessCredential(
+        subscriber_id=person.id,
+        username=f"pppoe-bcrypt-{prefix}",
+        secret_hash=_bcrypt_hash("pppoe-secret", prefix),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    with caplog.at_level(logging.INFO, logger="app.services.auth_flow"):
+        with pytest.raises(HTTPException) as exc:
+            AuthFlow.login(
+                db_session,
+                credential.username,
+                "pppoe-secret",
+                _request(),
+                None,
+            )
+    assert exc.value.status_code == 401
+    assert any(
+        "stored PPPoE secret unavailable" in r.getMessage() for r in caplog.records
+    )

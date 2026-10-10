@@ -910,6 +910,12 @@ def _resolve_access_credential_login(
         return None
 
     try:
+        # Portal login via PPPoE secrets is being retired: bcrypt-format
+        # secret hashes were always refused here (passlib raised ValueError
+        # under bcrypt 5). Keep refusing them rather than newly enabling them
+        # now that verify_password can verify bcrypt.
+        if _is_bcrypt_hash(credential.secret_hash):
+            raise ValueError("bcrypt-format PPPoE secret not accepted")
         password_matches = verify_password(password, credential.secret_hash)
     except ValueError:
         logger.info(
