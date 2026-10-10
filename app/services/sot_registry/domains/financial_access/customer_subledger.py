@@ -192,7 +192,10 @@ SERVICES: tuple[SOTService, ...] = (
             "customer.accounts",
             "observability.audit_log",
             "events.dispatcher",
+            "financial.access_resolution",
+            "financial.billing_profile",
             "financial.customer_subledger",
+            "financial.prepaid_currency",
             "financial.prepaid_funding_reconstruction",
         ),
         notes=(
@@ -213,7 +216,15 @@ SERVICES: tuple[SOTService, ...] = (
             "cutoff position, retained migrated identity, and current shadow lanes "
             "into the same two-approval capture protocol. An incorrect immutable "
             "opening is repaired only by an append-only, fingerprint-bound "
-            "correction and matching position effect."
+            "correction and matching position effect. Read-only queries list "
+            "captured openings with their correction history and preview one "
+            "correction's resulting prepaid funding and enforcement consequence "
+            "from the financial.access_resolution funding decision; the "
+            "consequence is disclosure only and is never bound into the "
+            "correction fingerprint. The admin account billing page is an "
+            "adapter over these queries and the correction command. The "
+            "command requires one permissioned staff principal; it defines no "
+            "two-person approval and the adapter adds no approval state."
             " A separate dry-run-first native omission repair binds the original "
             "prepaid authority batch, content-addressed canonical Sub facts, zero "
             "Splynx evidence, active Finance approval, and a permissioned operator "
@@ -250,6 +261,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "reviewed opening correction command",
                         "recorded customer postings",
                         "canonical customer account",
+                        "prepaid funding enforcement decision",
                     ),
                     canonical_writer=("financial.customer_subledger_opening_positions"),
                 ),
@@ -285,6 +297,17 @@ SERVICES: tuple[SOTService, ...] = (
                         "checked against a named active staff principal, exact "
                         "preview fingerprint, corrected amount, reason, review "
                         "reference, command, correlation, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="prepaid funding enforcement decision",
+                    owner="financial.access_resolution",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source=(
+                        "currency-bound prepaid funding decision (available "
+                        "balance, requirement, funded and adverse-action "
+                        "eligibility) used read-only to disclose a correction's "
+                        "resulting balance and suspension/restoration consequence"
                     ),
                 ),
                 AuthorityInput(
@@ -579,9 +602,11 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/runbooks/REVIEWED_MIGRATED_PREPAID_OPENING_REPAIR.md",
                 "docs/runbooks/NATIVE_PREPAID_OPENING_REPAIR.md",
+                "docs/runbooks/CUSTOMER_SUBLEDGER_OPENING_CORRECTION.md",
             ),
             test_refs=(
                 "tests/test_subledger_opening_positions.py",
+                "tests/test_web_subledger_opening_corrections.py",
                 "tests/test_native_prepaid_opening_repair.py",
                 "tests/architecture/test_customer_subledger_ownership.py",
                 "tests/architecture/test_billing_target_architecture.py",

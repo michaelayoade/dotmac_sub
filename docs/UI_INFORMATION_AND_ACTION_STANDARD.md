@@ -921,3 +921,46 @@ implementation.
   Malformed non-empty UUIDs remain validation failures, and the route retains
   its `network:ont:read` permission requirement. Assignment commands still
   recheck ownership and eligibility through their canonical owner.
+
+## Customer-Subledger Opening Correction Page Contract
+
+- Screen and type: `admin.customer_subledger_opening_correction`, an editor
+  reached from the admin account billing detail page
+  (`/admin/billing/accounts/{account_id}`), plus its read-only panel there.
+- Audience and job: finance-authorised staff correcting a captured opening
+  position after Finance confirms a variance (the 2026-10-08/09 capture policy
+  recorded zero where no opening existed). Decision: should this exact
+  before/after/delta be appended as a correction?
+- Authority: `financial.customer_subledger_opening_positions` owns the opening
+  facts, correction history, correctability (`correction_available` and its
+  reason), the correction preview, the read-only impact preview, and the
+  append-only correction command. `financial.access_resolution` supplies the
+  funding decision behind the resulting available balance and enforcement
+  consequence. `web_subledger_opening_corrections` only parses input, signs the
+  actor-bound confirmation, and projects action forms; templates derive nothing.
+- Panel (glance and investigation): current opening per currency, captured
+  amount when corrected, position time, capture time and actor, evidence
+  reference and fingerprint, and the correction history table (applied, before,
+  after, delta, reason with review reference, applied by; newest first). It is
+  absent when no opening was captured. The single action, **Correct opening**,
+  renders only for `billing:customer_subledger_opening:correct`; when the owner
+  says correction is unavailable, its reason replaces the action.
+- Editor: first viewport repeats the captured opening and prior corrections,
+  then one entry form (signed amount, reason ≤ 500, review reference ≤ 200).
+  The preview step shows the owner's before, after, delta, current and
+  resulting available balance, requirement, enforcement consequence with its
+  explanation, preview fingerprint, and confirmation expiry, followed by one
+  confirm form; revising is secondary and collapsed. Unknown or not-applicable
+  balances render as "Not applicable", never zero.
+- Mutation: every route requires the dedicated permission and a staff
+  principal. Confirmation carries a ten-minute signed token bound to actor,
+  account, currency, and fingerprint; the owner re-previews under an account
+  lock and refuses stale fingerprints. The token identifier is the idempotency
+  key, so a repeated submission records one correction. The owner defines no
+  two-person approval, so the screen has no pending state.
+- States: validation errors render beside their field (400); stale, changed, or
+  expired confirmations re-render a fresh preview with the reason (409); a
+  missing opening returns to the account with the reason; unauthorised users
+  never see the action and are refused by the route (403).
+- Responsive: panel facts stack; the history table scrolls horizontally inside
+  its card; the editor is a single column at every width.
