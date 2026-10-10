@@ -47,7 +47,12 @@ def test_materialization_participant_cannot_commit_or_run_without_owner() -> Non
 
 def test_receipt_drain_is_permanent_and_both_screens_recover_status() -> None:
     scheduler = (ROOT / "app/services/scheduler.py").read_text(encoding="utf-8")
+    helper = (ROOT / "static/js/customer-bulk-send.js").read_text(encoding="utf-8")
     assert '"app.tasks.notifications.dispatch_customer_bulk_messages"' in scheduler
+    assert "Accept: 'application/json'" in helper
+    assert "body?.message || body?.detail" in helper
+    assert "response.status === 401" in helper
+    assert "response.status === 403" in helper
     for page in ("index.html", "detail.html"):
         source = (ROOT / "templates/admin/customers" / page).read_text(encoding="utf-8")
         assert 'include "admin/customers/_bulk_send_status.html"' in source

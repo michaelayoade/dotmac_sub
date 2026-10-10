@@ -158,6 +158,14 @@ remain distinct. The responsive panel uses an ARIA live status and a keyboard
 accessible Check status button; receipt payloads/customer lists are not stored
 in browser storage. Audit investigation is through the request UUID.
 
+Browser receipt requests explicitly ask for JSON and read the shared API error
+envelope (`code`, `message`, `details`, and `request_id`). Authentication and
+permission failures keep the saved send reference and explain the required
+operator action; they must not look like an ordinary login-page response.
+An unavailable receipt keeps the original reference unresolved; a temporary
+gap must not invite a second send. Conflicts and transport failures also keep
+the original reference until its receipt can be checked.
+
 ### Rollout and existing work
 
 Drain pre-change `materialize_customer_bulk_message` tasks before deploying this
