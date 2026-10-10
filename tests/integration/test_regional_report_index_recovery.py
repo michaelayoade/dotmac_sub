@@ -45,7 +45,12 @@ def fresh_migration_database(template_base_url: URL, monkeypatch) -> Iterator[UR
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_database_url(target)),
+        replace(
+            app_config.settings,
+            # Alembic/SQLAlchemy must retain the installed psycopg v3 driver;
+            # only direct psycopg.connect calls use the plain PostgreSQL URL.
+            database_url=target.render_as_string(hide_password=False),
+        ),
     )
     try:
         template_database.bootstrap_database_local_prerequisites(target)
