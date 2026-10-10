@@ -121,7 +121,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +2 from test_prepaid_renewal_origin_correction_concurrency.py and
 #: test_legacy_over_allocation_correction_concurrency.py: independent worker
 #: sessions prove concurrent reviewed corrections serialize and converge.
-TEST_FIXTURE_BASELINE_TOTAL = 176
+#: +1 from test_password_auth_credential_race.py: independent worker sessions
+#: prove the credential-version gate, MFA completion and recovery-code spend
+#: serialize against a concurrent reset (each racer needs its own connection).
+TEST_FIXTURE_BASELINE_TOTAL = 177
 
 
 def _baseline() -> dict[str, int]:

@@ -163,6 +163,7 @@ PARTY_KEYED = (
     (Path("app/services/auth_flow.py"), "validate_active_session"),
     (Path("app/services/auth_session_refresh.py"), "renew_authentication_session"),
     (Path("app/services/auth_flow.py"), "_issue_tokens"),
+    (Path("app/services/auth_flow.py"), "stage_session_issue"),
     (Path("app/services/auth_flow.py"), "mfa_verify"),
     (Path("app/services/auth_flow.py"), "_principal_for_credential"),
 )
