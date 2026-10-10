@@ -1,7 +1,7 @@
 """Backfill and verify the captive access policy (backfill + verify steps).
 
-Revision ID: 666_captive_access_policy_backfill
-Revises: 665_captive_access_policy_schema
+Revision ID: 667_captive_access_policy_backfill
+Revises: 666_captive_access_policy_schema
 Create Date: 2026-10-10
 
 ## Why
@@ -15,7 +15,7 @@ and every existing lock would carry no request evidence.
 
 1. **Opt-ins -> account rules.** Every subscriber with
    ``captive_redirect_enabled = true`` gets exactly one ``account`` ``allow``
-   rule, created by ``migration:666_captive_access_policy_backfill``. The rule
+   rule, created by ``migration:667_captive_access_policy_backfill``. The rule
    carries the conditions the old eligibility check hard-coded
    (``subscriber_categories = ["residential"]``, ``reseller_condition =
    "house"``), so the backfill changes NO decision: an opted-in business or
@@ -70,12 +70,12 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "666_captive_access_policy_backfill"
-down_revision: str | None = "665_captive_access_policy_schema"
+revision: str = "667_captive_access_policy_backfill"
+down_revision: str | None = "666_captive_access_policy_schema"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-BACKFILL_ACTOR = "migration:666_captive_access_policy_backfill"
+BACKFILL_ACTOR = "migration:667_captive_access_policy_backfill"
 BACKFILL_REASON = (
     "Converted from Subscriber.captive_redirect_enabled opt-in; conditions "
     "preserve the former direct-house residential eligibility."
@@ -101,13 +101,13 @@ def upgrade() -> None:
             ") "
             "SELECT gen_random_uuid(), 'account', 'allow', s.id, NULL, NULL, "
             "NULL, CAST('[\"residential\"]' AS JSON), 'house', NULL, "
-            "true, :actor, :reason, now(), now() "
+            "true, CAST(:actor AS VARCHAR(255)), CAST(:reason AS TEXT), now(), now() "
             "FROM subscribers s "
             "WHERE s.captive_redirect_enabled IS TRUE "
             "AND NOT EXISTS ("
             "  SELECT 1 FROM captive_access_rules r "
             "  WHERE r.scope = 'account' AND r.subscriber_id = s.id "
-            "  AND r.created_by = :actor"
+            "  AND r.created_by = CAST(:actor AS VARCHAR(255))"
             ")"
         ),
         {"actor": BACKFILL_ACTOR, "reason": BACKFILL_REASON},
@@ -183,14 +183,15 @@ def upgrade() -> None:
             "entity_type, entity_id, status_code, is_success, is_active, "
             "metadata, created_at"
             ") VALUES ("
-            ":id, now(), 'system', :actor, :actor, "
+            "CAST(:id AS UUID), now(), 'system', :actor_id, :actor_label, "
             "'access.captive_access_policy_backfilled', "
             "'captive_access_policy', NULL, 200, true, true, "
             "CAST(:metadata AS JSON), now())"
         ),
         {
             "id": str(uuid.uuid4()),
-            "actor": BACKFILL_ACTOR,
+            "actor_id": BACKFILL_ACTOR,
+            "actor_label": BACKFILL_ACTOR,
             "metadata": json.dumps(
                 {
                     "account_rules_inserted": int(inserted or 0),

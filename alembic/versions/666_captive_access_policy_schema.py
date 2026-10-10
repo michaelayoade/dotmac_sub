@@ -1,7 +1,7 @@
 """Captive access policy schema (expand step).
 
-Revision ID: 665_captive_access_policy_schema
-Revises: 664_purge_retired_splynx_metadata_keys
+Revision ID: 666_captive_access_policy_schema
+Revises: 665_backfill_splynx_billing_email_contacts
 Create Date: 2026-10-10
 
 ## Why
@@ -28,7 +28,7 @@ can re-evaluate a lock without ever exceeding its request.
 4. nullable ``enforcement_locks.requested_access_mode`` using the existing
    ``accessrestrictionmode`` type (never re-created here).
 
-No row is read or written. Backfill and verification are revision 666; the
+No row is read or written. Backfill and verification are revision 667; the
 ``subscribers.captive_redirect_enabled`` column is untouched (contract step is
 a later, separately approved revision).
 
@@ -49,8 +49,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "665_captive_access_policy_schema"
-down_revision: str | None = "664_purge_retired_splynx_metadata_keys"
+revision: str = "666_captive_access_policy_schema"
+down_revision: str | None = "665_backfill_splynx_billing_email_contacts"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

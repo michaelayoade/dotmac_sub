@@ -434,15 +434,15 @@ def _load(name: str):
 
 
 def test_migrations_chain_expand_then_backfill() -> None:
-    expand = _load("665_captive_access_policy_schema")
-    backfill = _load("666_captive_access_policy_backfill")
+    expand = _load("666_captive_access_policy_schema")
+    backfill = _load("667_captive_access_policy_backfill")
 
-    assert expand.down_revision == "664_purge_retired_splynx_metadata_keys"
+    assert expand.down_revision == "665_backfill_splynx_billing_email_contacts"
     assert backfill.down_revision == expand.revision
 
 
 def test_backfill_preserves_former_eligibility_and_verifies() -> None:
-    source = (_VERSIONS / "666_captive_access_policy_backfill.py").read_text()
+    source = (_VERSIONS / "667_captive_access_policy_backfill.py").read_text()
 
     assert "WHERE s.captive_redirect_enabled IS TRUE" in source
     assert "'account', 'allow'" in source

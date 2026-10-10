@@ -263,7 +263,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Enter verified identity, contact, address, and service-location information.",
         "Review the profile, then create the billing account or continue to subscription setup when needed.",
         route_templates=("/admin/customers/new", "/admin/customers/wizard"),
-        notes=("Do not use placeholder identity data for a production customer.",),
+        notes=(
+            "Do not use placeholder identity data for a production customer.",
+            "Payment-portal access during a suspension is not set on this form. "
+            "Network operations grant it per service through the captive access "
+            "policy, and only on routers whose walled garden is ready.",
+        ),
     ),
     _guide(
         "customer-detail",

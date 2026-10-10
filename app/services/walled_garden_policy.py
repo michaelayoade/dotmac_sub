@@ -15,7 +15,7 @@ SUBSCRIPTION only when every gate below passes, evaluated in this order:
 
 Persisted intent is revalidated at read time so stale rules, routers, or
 broken network configuration fail closed. ``Subscriber.captive_redirect_enabled``
-is no longer a decision input; migration 666 converted every opt-in into an
+is no longer a decision input; migration 667 converted every opt-in into an
 ``account`` allow rule.
 """
 

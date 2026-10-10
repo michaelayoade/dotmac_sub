@@ -168,7 +168,7 @@ POLICY_SERVICE = SOTService(
             old_owner="per-account Subscriber.captive_redirect_enabled flag",
             new_owner=POLICY,
             verification=(
-                "Revision 666 converts every opt-in into one account allow rule "
+                "Revision 667 converts every opt-in into one account allow rule "
                 "with the former residential/house conditions and verifies the "
                 "count; precedence, rail, gate and migration tests."
             ),

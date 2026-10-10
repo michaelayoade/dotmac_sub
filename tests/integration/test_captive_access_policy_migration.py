@@ -1,7 +1,7 @@
-"""PostgreSQL evidence for migrations 665/666 and the captive policy owner.
+"""PostgreSQL evidence for migrations 666/667 and the captive policy owner.
 
 The schema comes from the real Alembic chain (``make test-integration``).
-Revision 666 is re-run through the test's own connection after its own
+Revision 667 is re-run through the test's own connection after its own
 downgrade, so every row it touches rolls back with the test.
 """
 
@@ -39,12 +39,12 @@ from app.services.captive_access_policy import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKFILL = ROOT / "alembic/versions/666_captive_access_policy_backfill.py"
-ACTOR = "migration:666_captive_access_policy_backfill"
+BACKFILL = ROOT / "alembic/versions/667_captive_access_policy_backfill.py"
+ACTOR = "migration:667_captive_access_policy_backfill"
 
 
 def _load() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("m666", BACKFILL)
+    spec = importlib.util.spec_from_file_location("m667", BACKFILL)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

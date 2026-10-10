@@ -552,7 +552,7 @@ rule whose conditions do not hold does not match, so resolution falls through
 to the next scope.
 
 `Subscriber.captive_redirect_enabled` is retired as a decision input.
-Migration 666 converted every opt-in into one `account` `allow` rule with the
+Migration 667 converted every opt-in into one `account` `allow` rule with the
 conditions the old check hard-coded (`residential`, `house`), so the backfill
 changed no decision. The admin customer form no longer writes the flag and
 `SubscriberUpdate` refuses it. Retirement plan: the column stays readable
@@ -604,7 +604,7 @@ the explicit policy-change coordinator, `access.captive_access_policy_change`:
   session cleanup (CoA/disconnect). Re-running a `reevaluate` change drains the
   remaining batches. The idempotency key replays the stored outcome.
 
-Migration 666 derived `requested_access_mode` from structured evidence only:
+Migration 667 derived `requested_access_mode` from structured evidence only:
 captive locks requested captive, and locks linked to a financial consequence
 requested captive (`suspend`) or hard reject (`reject`). Other locks keep
 `NULL`, which is treated as a hard-reject request and never upgraded.
