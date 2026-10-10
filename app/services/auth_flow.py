@@ -5,6 +5,7 @@ import secrets
 import string
 import warnings
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any, cast
@@ -58,6 +59,7 @@ from app.services import (
     auth_session_refresh,
     auth_token_signing,
     customer_login_identity,
+    password_authentication,
     staff_party_authentication,
     team_inbox_assignment,
 )
@@ -105,6 +107,36 @@ def is_admin_portal_principal(principal_type: str, principal: object | None) -> 
         and isinstance(principal, SystemUser)
         and principal.user_type is UserType.system_user
     )
+
+
+def principal_refusal(
+    principal_type: str,
+    principal: object | None,
+    audience: LoginAudience,
+) -> str | None:
+    """Why a verified principal may not receive a session, or ``None``.
+
+    Pure, so phase A (login) and the in-transaction re-check (phase B) apply
+    the identical rule: ``account_disabled`` | ``admin_required``.
+    """
+
+    if not principal or not getattr(principal, "is_active", False):
+        return "account_disabled"
+    if (
+        principal_type == "subscriber"
+        and isinstance(principal, Subscriber)
+        and principal.status
+        in {
+            SubscriberStatus.disabled,
+            SubscriberStatus.canceled,
+        }
+    ):
+        return "account_disabled"
+    if audience is LoginAudience.admin and not is_admin_portal_principal(
+        principal_type, principal
+    ):
+        return "admin_required"
+    return None
 
 
 def _env_value(name: str) -> str | None:
@@ -895,6 +927,15 @@ def _principal_for_credential(
 def _resolve_access_credential_login(
     db: Session, *, identifier: str, password: str
 ) -> tuple[str, str, Subscriber] | None:
+    match = _resolve_access_credential_match(
+        db, identifier=identifier, password=password
+    )
+    return None if match is None else match[1]
+
+
+def _resolve_access_credential_match(
+    db: Session, *, identifier: str, password: str
+) -> tuple[AccessCredential, tuple[str, str, Subscriber]] | None:
     normalized_identifier = identifier.strip()
     if not normalized_identifier:
         return None
@@ -929,7 +970,7 @@ def _resolve_access_credential_login(
     subscriber = db.get(Subscriber, credential.subscriber_id)
     if not subscriber:
         return None
-    return "subscriber", str(subscriber.id), subscriber
+    return credential, ("subscriber", str(subscriber.id), subscriber)
 
 
 def _primary_totp_method(
@@ -1043,13 +1084,11 @@ def _admin_login_lockout_minutes(db: Session | None) -> int:
     )
 
 
-def _record_login_failure(db: Session, credential: UserCredential, now) -> None:
-    credential.failed_login_attempts += 1
-    if credential.failed_login_attempts >= _admin_login_max_failed_attempts(db):
-        credential.locked_until = now + timedelta(
-            minutes=_admin_login_lockout_minutes(db)
-        )
-    db.commit()
+def _login_failure_policy(db: Session | None) -> password_authentication.FailurePolicy:
+    return password_authentication.FailurePolicy(
+        max_attempts=_admin_login_max_failed_attempts(db),
+        lock_minutes=_admin_login_lockout_minutes(db),
+    )
 
 
 MFA_MAX_FAILED_ATTEMPTS = 5
@@ -1130,11 +1169,28 @@ def ensure_mfa_not_locked(method: MFAMethod) -> None:
         )
 
 
+def _mfa_failure_policy(db: Session | None) -> password_authentication.FailurePolicy:
+    return password_authentication.FailurePolicy(
+        max_attempts=_mfa_max_failed_attempts(db),
+        lock_minutes=_mfa_lockout_minutes(db),
+    )
+
+
 def record_mfa_failure(db: Session, method: MFAMethod) -> None:
-    method.failed_attempts = (method.failed_attempts or 0) + 1
-    if method.failed_attempts >= _mfa_max_failed_attempts(db):
-        method.locked_until = _now() + timedelta(minutes=_mfa_lockout_minutes(db))
-        method.failed_attempts = 0
+    """Atomically count one wrong code (legacy caller-session variant).
+
+    One UPDATE reading the old row, so parallel wrong guesses cannot lose
+    increments. ``AuthFlow.mfa_verify`` uses the owner-managed variant in
+    ``password_authentication``; this one remains for enrollment confirmation
+    and the customer portal, which commit on the caller's session.
+    """
+
+    method_id = method.id
+    db.execute(
+        password_authentication.mfa_failure_statement(
+            method_id, now=_now(), policy=_mfa_failure_policy(db)
+        )
+    )
     db.commit()
 
 
@@ -1198,23 +1254,75 @@ def generate_mfa_recovery_codes(
     return codes
 
 
-def _consume_mfa_recovery_code(db: Session, method: MFAMethod, code: str) -> bool:
+def _candidate_recovery_code_hash(code: str) -> str | None:
+    """Hash of a well-formed recovery-code candidate, else ``None``.
+
+    The code is SPENT only inside the MFA completion transaction by a
+    conditional UPDATE (``password_authentication.complete_mfa``), so two
+    concurrent submissions cannot both consume one code.
+    """
+
     normalized = _normalize_recovery_code(code)
     if len(normalized) < 8:
-        return False
-    recovery_code = (
-        db.query(MFARecoveryCode)
-        .filter(MFARecoveryCode.mfa_method_id == method.id)
-        .filter(MFARecoveryCode.code_hash == _recovery_code_hash(normalized))
-        .filter(MFARecoveryCode.is_active.is_(True))
-        .filter(MFARecoveryCode.used_at.is_(None))
-        .first()
-    )
-    if not recovery_code:
-        return False
-    recovery_code.used_at = _now()
-    recovery_code.is_active = False
-    return True
+        return None
+    return _recovery_code_hash(normalized)
+
+
+def _http_from_refusal(
+    exc: password_authentication.PasswordAuthenticationError,
+) -> HTTPException:
+    """Adapter mapping for the credential-standing owner's refusals."""
+
+    kind = exc.kind
+    if kind == "locked":
+        return HTTPException(
+            status_code=403,
+            detail=lockout_detail(
+                "Account locked", locked_until=exc.details.get("locked_until")
+            ),
+        )
+    if kind == "must_change_password":
+        return HTTPException(
+            status_code=428,
+            detail={
+                "code": "PASSWORD_RESET_REQUIRED",
+                "message": "Password reset required",
+            },
+        )
+    if kind == "account_disabled":
+        return HTTPException(status_code=403, detail="Account disabled")
+    if kind == "admin_required":
+        return HTTPException(
+            status_code=403,
+            detail="Administrator access is required for this area.",
+        )
+    if kind == "invalid_mfa_token":
+        return HTTPException(status_code=401, detail="Invalid MFA token")
+    if kind == "invalid_mfa_code":
+        return HTTPException(status_code=401, detail="Invalid MFA code")
+    if kind == "mfa_locked":
+        return HTTPException(
+            status_code=429,
+            detail=lockout_detail(
+                "Too many incorrect codes",
+                locked_until=exc.details.get("locked_until"),
+            ),
+        )
+    if kind == "credential_changed":
+        return HTTPException(
+            status_code=409, detail="Credential changed; sign in again"
+        )
+    if kind == "lock_timeout":
+        return HTTPException(
+            status_code=503,
+            detail="Service busy; retry shortly",
+            headers={
+                "Retry-After": str(
+                    password_authentication.LOCK_TIMEOUT_RETRY_AFTER_SECONDS
+                )
+            },
+        )
+    return HTTPException(status_code=401, detail="Invalid credentials")
 
 
 class AuthFlow(ListResponseMixin):
@@ -1320,14 +1428,27 @@ class AuthFlow(ListResponseMixin):
                 raise HTTPException(status_code=409, detail=exc.message) from exc
             raise HTTPException(status_code=401, detail="Invalid credentials") from exc
 
-        # Check the lock before verifying the password: a locked account must
-        # answer identically to right and wrong passwords (no correctness
-        # oracle), and attempts made while locked must not extend the lock.
+        # Phase A (read-only). Check the lock before verifying the password: a
+        # locked account must answer identically to right and wrong passwords
+        # (no correctness oracle), and attempts made while locked must not
+        # extend the lock. An EXPIRED lock is not reset here: the dirty ORM
+        # write this used to make was committed by whatever ran next. The
+        # atomic statements in `password_authentication` handle expiry.
         now = _now()
         authenticated_access_credential = False
+        access_credential: AccessCredential | None = None
         principal_type: str
         principal_id: str
         principal: object | None
+        failure_policy = _login_failure_policy(db)
+        # Snapshot the standing this verification is about, from the SAME row
+        # read as the hash we verify. Nothing between here and the commit gate
+        # may re-read it: a refreshed ORM attribute would silently adopt a
+        # newer version and turn the gate into a no-op.
+        credential_id = credential.id if credential else None
+        snapshot_version = int(credential.credential_version) if credential else None
+        snapshot_hash = credential.password_hash if credential else None
+        snapshot_provider = credential.provider if credential else None
 
         if credential:
             locked_until = _as_utc(credential.locked_until)
@@ -1336,11 +1457,6 @@ class AuthFlow(ListResponseMixin):
                     status_code=403,
                     detail=lockout_detail("Account locked", locked_until=locked_until),
                 )
-            if locked_until:
-                # Lock expired: start a fresh window so a single wrong attempt
-                # doesn't immediately re-lock for another full period.
-                credential.failed_login_attempts = 0
-                credential.locked_until = None
 
         if credential and resolved_provider == AuthProvider.radius:
             try:
@@ -1354,37 +1470,37 @@ class AuthFlow(ListResponseMixin):
                 )
             except HTTPException as exc:
                 if exc.status_code in (401, 403):
-                    _record_login_failure(db, credential, now)
+                    password_authentication.record_password_failure(
+                        db, credential_id, failure_policy
+                    )
                 raise
-        elif credential and verify_password(password, credential.password_hash):
+        elif credential and verify_password(password, snapshot_hash):
             pass
         else:
-            access_result = None
+            access_match = None
             if (
                 resolved_provider == AuthProvider.local
                 and not customer_email_alias
                 and (credential is None or credential.subscriber_id is not None)
             ):
-                access_result = _resolve_access_credential_login(
+                access_match = _resolve_access_credential_match(
                     db, identifier=username, password=password
                 )
-            if access_result is None:
+            if access_match is None:
                 if credential:
-                    _record_login_failure(db, credential, now)
+                    password_authentication.record_password_failure(
+                        db, credential_id, failure_policy
+                    )
                 raise HTTPException(status_code=401, detail="Invalid credentials")
-            principal_type, principal_id, principal = access_result
+            access_credential, (principal_type, principal_id, principal) = access_match
+            access_secret_hash = access_credential.secret_hash
+            access_updated_at = access_credential.updated_at
             authenticated_access_credential = True
 
-        # Eligibility is decided BEFORE any successful-login mutation. It used to
-        # run after `db.commit()` below, so a correct password against a disabled
-        # principal still cleared the lockout window and stamped `last_login_at`:
-        # no token was issued, but the write happened, which both corrupted
-        # last-login evidence and left a credential-validity oracle in the data.
-        #
-        # It stays AFTER password verification deliberately. Checking eligibility
-        # first would answer an unauthenticated caller differently for a disabled
-        # account than for a wrong password, which is the account-state oracle the
-        # lock check above is careful to avoid.
+        # Eligibility is decided BEFORE any successful-login mutation, and
+        # AFTER password verification deliberately: checking it first would
+        # answer an unauthenticated caller differently for a disabled account
+        # than for a wrong password (an account-state oracle).
         if not authenticated_access_credential:
             assert credential is not None
             try:
@@ -1403,21 +1519,10 @@ class AuthFlow(ListResponseMixin):
                     exc.credential_id,
                 )
                 raise HTTPException(status_code=403, detail="Account disabled") from exc
-        if not principal or not getattr(principal, "is_active", False):
+        refusal = principal_refusal(principal_type, principal, audience)
+        if refusal == "account_disabled":
             raise HTTPException(status_code=403, detail="Account disabled")
-        if (
-            principal_type == "subscriber"
-            and isinstance(principal, Subscriber)
-            and principal.status
-            in {
-                SubscriberStatus.disabled,
-                SubscriberStatus.canceled,
-            }
-        ):
-            raise HTTPException(status_code=403, detail="Account disabled")
-        if audience is LoginAudience.admin and not is_admin_portal_principal(
-            principal_type, principal
-        ):
+        if refusal == "admin_required":
             # Verify credentials before this refusal to avoid turning the admin
             # login into an account-type oracle. The rejection still happens
             # before any successful-login mutation or session issuance.
@@ -1444,39 +1549,62 @@ class AuthFlow(ListResponseMixin):
                 },
             )
 
-        if credential:
-            credential.failed_login_attempts = 0
-            credential.locked_until = None
-            credential.last_login_at = now
-            db.commit()
-        if _primary_totp_method(db, principal_type, principal_id):
-            return {
-                "mfa_required": True,
-                "mfa_token": _issue_mfa_token(
-                    db,
-                    principal_id,
-                    principal_type,
-                    staff_binding=staff_binding,
-                ),
-            }
-        if principal_type == "system_user" and _force_admin_mfa(db):
+        mfa_required = (
+            _primary_totp_method(db, principal_type, principal_id) is not None
+        )
+        enrollment_required = (
+            not mfa_required
+            and principal_type == "system_user"
+            and _force_admin_mfa(db)
+        )
+        if authenticated_access_credential:
+            # R8: a PPPoE-secret login never reads or writes the local
+            # UserCredential counters, last_login_at or version.
+            assert access_credential is not None
+            verified = password_authentication.VerifiedCredential(
+                src=password_authentication.SRC_ACCESS_CREDENTIAL,
+                principal_type=principal_type,
+                principal_id=principal_id,
+                audience=audience.value,
+                staff_binding=staff_binding,
+                mfa_required=mfa_required,
+                enrollment_required=enrollment_required,
+                verified_hash=access_secret_hash,
+                access_credential_id=access_credential.id,
+                access_credential_updated_at=access_updated_at,
+            )
+        else:
+            assert credential is not None
+            verified = password_authentication.VerifiedCredential(
+                src=password_authentication.SRC_USER_CREDENTIAL,
+                principal_type=principal_type,
+                principal_id=principal_id,
+                audience=audience.value,
+                staff_binding=staff_binding,
+                mfa_required=mfa_required,
+                enrollment_required=enrollment_required,
+                credential_id=credential_id,
+                credential_version=snapshot_version,
+                provider=snapshot_provider,
+                verified_hash=snapshot_hash,
+            )
+
+        # Phase B: one owner transaction (credential-standing gate, then the
+        # session or challenge, plus audit). Tokens leave only after commit.
+        try:
+            outcome = password_authentication.complete_password_step(
+                db, verified, request=request
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            raise _http_from_refusal(exc) from exc
+        if outcome.kind == "mfa_challenge":
+            return {"mfa_required": True, "mfa_token": outcome.challenge_token}
+        if outcome.kind == "enrollment_challenge":
             return {
                 "mfa_enrollment_required": True,
-                "mfa_enrollment_token": _issue_mfa_enrollment_token(
-                    db,
-                    principal_id,
-                    principal_type,
-                    staff_binding=staff_binding,
-                ),
+                "mfa_enrollment_token": outcome.challenge_token,
             }
-
-        return AuthFlow._issue_tokens(
-            db,
-            principal_type,
-            principal_id,
-            request,
-            staff_binding=staff_binding,
-        )
+        return tokens_for_staged_session(outcome.staged_session)
 
     @staticmethod
     def admin_mfa_setup(db: Session, system_user_id: str, label: str | None):
@@ -1753,16 +1881,25 @@ class AuthFlow(ListResponseMixin):
         *,
         audience: LoginAudience = LoginAudience.general,
     ):
-        payload = _decode_jwt(db, mfa_token, "mfa")
-        principal_id = payload.get("principal_id") or payload.get("sub")
-        principal_type = payload.get("principal_type") or "subscriber"
-        if not principal_id:
+        # Phase A (read-only): validate the v2 challenge (no legacy fallback:
+        # a token without the credential binding is refused), resolve the
+        # principal and method, and check the second factor. Nothing is
+        # consumed or counted here.
+        try:
+            challenge = password_authentication.decode_challenge(
+                db, mfa_token, expected_typ="mfa"
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            raise _http_from_refusal(exc) from exc
+        if challenge.audience != audience.value:
             raise HTTPException(status_code=401, detail="Invalid MFA token")
+        principal_id = challenge.principal_id
+        principal_type = challenge.principal_type
         principal: object | None = None
         staff_binding: staff_party_authentication.StaffSessionBinding | None = None
         if principal_type == "system_user":
             staff_binding = staff_binding_from_token_payload(
-                payload,
+                {"principal_id": principal_id, "party_id": challenge.party_id},
                 invalid_detail="Invalid MFA token",
             )
             try:
@@ -1797,25 +1934,50 @@ class AuthFlow(ListResponseMixin):
             raise HTTPException(status_code=404, detail="MFA method not found")
 
         ensure_mfa_not_locked(method)
+        method_id = method.id
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
-        if totp.verify(code, valid_window=0):
-            record_mfa_success(method)
-        elif _consume_mfa_recovery_code(db, method, code):
-            record_mfa_success(method)
-        else:
-            record_mfa_failure(db, method)
-            raise HTTPException(status_code=401, detail="Invalid MFA code")
+        totp_ok = bool(totp.verify(code, valid_window=0))
+        recovery_hash = None if totp_ok else _candidate_recovery_code_hash(code)
+        failure_policy = _mfa_failure_policy(db)
 
-        method.last_used_at = _now()
-        db.commit()
-        return AuthFlow._issue_tokens(
-            db,
-            principal_type,
-            str(principal_id),
-            request,
-            staff_binding=staff_binding,
-        )
+        # Phase B: one owner transaction (credential gate, eligibility,
+        # atomic recovery-code spend, method update, session, audit).
+        try:
+            staged = password_authentication.complete_mfa(
+                db,
+                challenge,
+                request=request,
+                method_id=method_id,
+                totp_ok=totp_ok,
+                recovery_code_hash=recovery_hash,
+                failure_policy=failure_policy,
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            raise _http_from_refusal(exc) from exc
+        return tokens_for_staged_session(staged)
+
+    @staticmethod
+    def establish_enrolled_session(
+        db: Session, enrollment_token: str, request: Request
+    ) -> dict[str, str]:
+        """Session for a staff user who just completed forced MFA enrollment.
+
+        The enrollment challenge is bound to the credential like an MFA
+        challenge: a reset or disable between the password step and here
+        refuses the session instead of minting one.
+        """
+
+        try:
+            challenge = password_authentication.decode_challenge(
+                db, enrollment_token, expected_typ="mfa_enrollment"
+            )
+            staged = password_authentication.establish_enrolled_session(
+                db, challenge, request=request
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            raise _http_from_refusal(exc) from exc
+        return tokens_for_staged_session(staged)
 
     @staticmethod
     def mfa_verify_response(db: Session, mfa_token: str, code: str, request: Request):
@@ -1950,9 +2112,17 @@ class AuthFlow(ListResponseMixin):
     ) -> dict[str, str]:
         """Issue one session, retrying a transaction-level deadlock once.
 
-        Credential and MFA success evidence is committed before this boundary.
-        A deadlock rollback therefore discards only the incomplete session and
-        presence projection; the complete attempt can safely be replayed.
+        Legacy seam for callers that have already authenticated a principal by
+        other means (``issue_session_tokens``, e.g. OIDC mobile federation):
+        it stages and commits the session in its own transaction.
+
+        The password and MFA paths no longer use it. Their credential-standing
+        gate, session and audit are one owner transaction
+        (``password_authentication``) built on ``stage_session_issue``, so the
+        old assumption that credential evidence is committed before this
+        boundary does not hold for them. For this seam, a deadlock rollback
+        discards only the incomplete session and presence projection and the
+        attempt can safely be replayed.
         """
 
         for attempt in range(2):
@@ -2016,107 +2186,167 @@ class AuthFlow(ListResponseMixin):
             principal_id = cast(str, principal_id_or_request)
             active_request = request
 
-        principal_uuid = coerce_uuid(principal_id)
-        if principal_type == "system_user":
-            if staff_binding is None:
-                raise staff_party_authentication.StaffProjectionError(
-                    staff_party_authentication.StaffProjectionRefusal.projection_missing,
-                    principal_uuid,
-                )
-            # Validate the Party-keyed identity/context pair before revoking a
-            # prior device session or performing any other write.
-            staff_principal = (
-                staff_party_authentication.resolve_staff_principal_by_party(
-                    db,
-                    staff_binding.party_id,
-                    staff_binding.system_user_id,
-                    reference=principal_uuid,
-                )
-            )
-            if staff_principal.id != principal_uuid:
-                raise staff_party_authentication.StaffProjectionError(
-                    staff_party_authentication.StaffProjectionRefusal.projection_conflict,
-                    principal_uuid,
-                )
-        refresh_token = secrets.token_urlsafe(48)
-        now = _now()
-        expires_at = now + timedelta(days=_refresh_ttl_days(db))
-        # Resolve every signing input while this issuance transaction owns the
-        # session. Reading settings after commit would start an implicit caller
-        # transaction and make the next owner command fail its entry guard.
-        access_ttl_minutes = _access_ttl_minutes(db)
-        access_secret = _jwt_secret(db)
-        access_algorithm = _jwt_algorithm(db)
-        device_id = _clean_device_id(active_request.headers.get("x-device-id"))
-        session_kwargs = dict(
-            status=SessionStatus.active,
-            token_hash=_hash_token(refresh_token),
-            ip_address=client_ip(active_request),
-            user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
-            device_id=device_id,
-            created_at=now,
-            last_seen_at=now,
-            expires_at=expires_at,
-        )
-        principal_column = {
-            "system_user": AuthSession.system_user_id,
-            "reseller_user": AuthSession.reseller_user_id,
-        }.get(principal_type, AuthSession.subscriber_id)
-        # Per-device replace: a re-login from a known device supersedes that
-        # device's prior active session instead of stacking a new row. Revoked in
-        # the same transaction as the insert, so the principal always has at most
-        # one active session per device.
-        if device_id:
-            db.query(AuthSession).filter(
-                principal_column == principal_uuid,
-                AuthSession.device_id == device_id,
-                AuthSession.status == SessionStatus.active,
-                AuthSession.revoked_at.is_(None),
-            ).update(
-                {
-                    AuthSession.status: SessionStatus.revoked,
-                    AuthSession.revoked_at: now,
-                },
-                synchronize_session=False,
-            )
-        if principal_type == "system_user":
-            # Write BOTH halves of the bound pair. `party_id` is the identity
-            # the later ratchet will validate from; `system_user_id` stays as
-            # the Sub-owned staff context and is not being retired. The typed
-            # binding was resolved from Party before any mutation above.
-            assert staff_binding is not None
-            session = AuthSession(
-                system_user_id=principal_uuid,
-                party_id=staff_binding.party_id,
-                **session_kwargs,
-            )
-        elif principal_type == "reseller_user":
-            session = AuthSession(reseller_user_id=principal_uuid, **session_kwargs)
-        else:
-            session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
-        db.add(session)
-        db.flush()
-        if principal_type == "system_user":
-            team_inbox_assignment.record_agent_signed_in_presence(
-                db,
-                command=team_inbox_assignment.AgentSignedInPresenceCommand(
-                    system_user_id=principal_uuid,
-                    auth_session_id=session.id,
-                    signed_in_at=now,
-                ),
-            )
-        session_id = str(session.id)
-        db.commit()
-        access_token = _encode_access_token(
-            principal_id=str(principal_uuid),
+        staged = stage_session_issue(
+            db,
             principal_type=principal_type,
-            session_id=session_id,
-            issued_at=now,
-            ttl_minutes=access_ttl_minutes,
-            secret=access_secret,
-            algorithm=access_algorithm,
+            principal_id=principal_id,
+            request=active_request,
+            staff_binding=staff_binding,
         )
-        return {"access_token": access_token, "refresh_token": refresh_token}
+        db.commit()
+        return tokens_for_staged_session(staged)
+
+
+@dataclass(frozen=True)
+class StagedSession:
+    """A flushed, NOT committed session plus every input the tokens need.
+
+    Everything a token needs is resolved while the staging transaction owns
+    the session: reading settings after commit would start an implicit caller
+    transaction and make the next owner command fail its entry guard. Tokens
+    are encoded from this value only AFTER the owning transaction commits.
+    """
+
+    session_id: str
+    principal_type: str
+    principal_id: str
+    refresh_token: str
+    access_ttl_minutes: int
+    secret: str
+    algorithm: str
+    issued_at: datetime
+
+
+def stage_session_issue(
+    db: Session,
+    *,
+    principal_type: str,
+    principal_id: str,
+    request: Request,
+    staff_binding: staff_party_authentication.StaffSessionBinding | None = None,
+    expires_at: datetime | None = None,
+) -> StagedSession:
+    """Stage one auth session (staff Party re-check, device supersession,
+    INSERT, staff presence) in the caller's transaction. Flush-only: it never
+    commits, so the caller can make the session atomic with the credential
+    evidence that justified it. Returns the values needed to encode tokens
+    after the caller commits.
+    """
+
+    principal_uuid = coerce_uuid(principal_id)
+    if principal_type == "system_user":
+        if staff_binding is None:
+            raise staff_party_authentication.StaffProjectionError(
+                staff_party_authentication.StaffProjectionRefusal.projection_missing,
+                principal_uuid,
+            )
+        # Validate the Party-keyed identity/context pair before revoking a
+        # prior device session or performing any other write.
+        staff_principal = staff_party_authentication.resolve_staff_principal_by_party(
+            db,
+            staff_binding.party_id,
+            staff_binding.system_user_id,
+            reference=principal_uuid,
+        )
+        if staff_principal.id != principal_uuid:
+            raise staff_party_authentication.StaffProjectionError(
+                staff_party_authentication.StaffProjectionRefusal.projection_conflict,
+                principal_uuid,
+            )
+    refresh_token = secrets.token_urlsafe(48)
+    now = _now()
+    if expires_at is None:
+        expires_at = now + timedelta(days=_refresh_ttl_days(db))
+    # Resolve every signing input while this issuance transaction owns the
+    # session. Reading settings after commit would start an implicit caller
+    # transaction and make the next owner command fail its entry guard.
+    access_ttl_minutes = _access_ttl_minutes(db)
+    access_secret = _jwt_secret(db)
+    access_algorithm = _jwt_algorithm(db)
+    device_id = _clean_device_id(request.headers.get("x-device-id"))
+    session_kwargs = dict(
+        status=SessionStatus.active,
+        token_hash=_hash_token(refresh_token),
+        ip_address=client_ip(request),
+        user_agent=_truncate_user_agent(request.headers.get("user-agent")),
+        device_id=device_id,
+        created_at=now,
+        last_seen_at=now,
+        expires_at=expires_at,
+    )
+    principal_column = {
+        "system_user": AuthSession.system_user_id,
+        "reseller_user": AuthSession.reseller_user_id,
+    }.get(principal_type, AuthSession.subscriber_id)
+    # Per-device replace: a re-login from a known device supersedes that
+    # device's prior active session instead of stacking a new row. Revoked in
+    # the same transaction as the insert, so the principal always has at most
+    # one active session per device.
+    if device_id:
+        db.query(AuthSession).filter(
+            principal_column == principal_uuid,
+            AuthSession.device_id == device_id,
+            AuthSession.status == SessionStatus.active,
+            AuthSession.revoked_at.is_(None),
+        ).update(
+            {
+                AuthSession.status: SessionStatus.revoked,
+                AuthSession.revoked_at: now,
+            },
+            synchronize_session=False,
+        )
+    if principal_type == "system_user":
+        # Write BOTH halves of the bound pair. `party_id` is the identity
+        # the later ratchet will validate from; `system_user_id` stays as
+        # the Sub-owned staff context and is not being retired. The typed
+        # binding was resolved from Party before any mutation above.
+        assert staff_binding is not None
+        session = AuthSession(
+            system_user_id=principal_uuid,
+            party_id=staff_binding.party_id,
+            **session_kwargs,
+        )
+    elif principal_type == "reseller_user":
+        session = AuthSession(reseller_user_id=principal_uuid, **session_kwargs)
+    else:
+        session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
+    db.add(session)
+    db.flush()
+    if principal_type == "system_user":
+        team_inbox_assignment.record_agent_signed_in_presence(
+            db,
+            command=team_inbox_assignment.AgentSignedInPresenceCommand(
+                system_user_id=principal_uuid,
+                auth_session_id=session.id,
+                signed_in_at=now,
+            ),
+        )
+    session_id = str(session.id)
+    return StagedSession(
+        session_id=session_id,
+        principal_type=principal_type,
+        principal_id=str(principal_uuid),
+        refresh_token=refresh_token,
+        access_ttl_minutes=access_ttl_minutes,
+        secret=access_secret,
+        algorithm=access_algorithm,
+        issued_at=now,
+    )
+
+
+def tokens_for_staged_session(staged: StagedSession) -> dict[str, str]:
+    """Encode the token pair for a session whose transaction has committed."""
+
+    access_token = _encode_access_token(
+        principal_id=staged.principal_id,
+        principal_type=staged.principal_type,
+        session_id=staged.session_id,
+        issued_at=staged.issued_at,
+        ttl_minutes=staged.access_ttl_minutes,
+        secret=staged.secret,
+        algorithm=staged.algorithm,
+    )
+    return {"access_token": access_token, "refresh_token": staged.refresh_token}
 
 
 auth_flow = AuthFlow()
@@ -2188,6 +2418,10 @@ def change_password(
     if not credential:
         raise HTTPException(status_code=404, detail="No credentials found")
 
+    # Snapshot the version with the hash being verified (same row read); the
+    # write below is gated on it.
+    expected_version = int(credential.credential_version)
+    credential_id = credential.id
     if not verify_password(current_password, credential.password_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
@@ -2206,11 +2440,6 @@ def change_password(
     if violations:
         raise HTTPException(status_code=400, detail=violations[0])
 
-    now = _now()
-    credential.password_hash = hash_password(new_password)
-    credential.password_updated_at = now
-    credential.must_change_password = False
-
     if credential.system_user_id is not None:
         principal_type = "system_user"
         session_principal_filter = (
@@ -2224,29 +2453,39 @@ def change_password(
     else:
         principal_type = "subscriber"
         session_principal_filter = AuthSession.subscriber_id == credential.subscriber_id
-    revoke_query = (
-        db.query(AuthSession)
-        .filter(session_principal_filter)
-        .filter(AuthSession.status == SessionStatus.active)
-        .filter(AuthSession.revoked_at.is_(None))
+    portal_subscriber_id = (
+        str(credential.subscriber_id) if credential.subscriber_id else None
     )
-    if current_session_id:
-        revoke_query = revoke_query.filter(AuthSession.id != current_session_id)
-    revoked = revoke_query.all()
-    for session in revoked:
-        session.status = SessionStatus.revoked
-        session.revoked_at = now
-    db.commit()
-    for session in revoked:
+    new_hash = hash_password(new_password)
+
+    # Phase B: gate on the credential version the current password was
+    # verified against. A reset that committed since returns zero rows and the
+    # change is refused (409) instead of silently overwriting the reset.
+    try:
+        outcome = password_authentication.apply_password_change(
+            db,
+            credential_id=credential_id,
+            expected_version=expected_version,
+            new_hash=new_hash,
+            principal_type=principal_type,
+            principal_id=str(principal_uuid),
+            session_filter=session_principal_filter,
+            current_session_id=(
+                coerce_uuid(current_session_id) if current_session_id else None
+            ),
+        )
+    except password_authentication.PasswordAuthenticationError as exc:
+        raise _http_from_refusal(exc) from exc
+    for revoked_session_id in outcome.revoked_session_ids:
         auth_cache.invalidate_session_context(
-            str(session.id),
+            revoked_session_id,
             principal_type=principal_type,
             principal_id=str(principal_uuid),
         )
-    if principal_type == "subscriber":
-        _revoke_portal_sessions_for_subscriber(db, str(credential.subscriber_id))
+    if principal_type == "subscriber" and portal_subscriber_id:
+        _revoke_portal_sessions_for_subscriber(db, portal_subscriber_id)
 
-    return now
+    return outcome.changed_at
 
 
 def _revoke_portal_sessions_for_subscriber(db: Session, subscriber_id: str) -> None:
