@@ -28,6 +28,11 @@
 # ADDED deliberately. It is the registered owner for portal profile writes;
 # its two direct Subscriber writes reset email verification and persist the
 # seven declared notification preference keys atomically with the profile.
+#
+# 2026-10-10 — `migration|alembic/versions/664_purge_retired_splynx_metadata_keys.py`
+# ADDED deliberately. It is a contract-step purge that only REMOVES
+# undeclared, unread Splynx import keys from `subscribers.metadata`; it adds no
+# fact, copies no value, and is idempotent (matches no row once applied).
 
 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 cli_script|scripts/migration/backfill_party_status.py
@@ -40,6 +45,7 @@ migration|alembic/versions/208_map_karu_customers_to_bts.py
 migration|alembic/versions/267_brand_profiles.py
 migration|alembic/versions/277_lifecycle_communications_sot.py
 migration|alembic/versions/383_replaceable_backoffice_boundary.py
+migration|alembic/versions/664_purge_retired_splynx_metadata_keys.py
 service|app/services/account_deletion.py
 service|app/services/account_lifecycle.py
 service|app/services/billing_cleanup_remediation.py
