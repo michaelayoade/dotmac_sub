@@ -195,6 +195,10 @@ class EventType(enum.Enum):
     prepaid_proforma_adopted = "prepaid_proforma.adopted"
     prepaid_paid_invoice_repaired = "prepaid_paid_invoice.repaired"
     prepaid_paid_invoice_coverage_corrected = "prepaid_paid_invoice.coverage_corrected"
+    prepaid_paid_invoice_period_repair_requested = (
+        "prepaid_paid_invoice_period_repair.requested"
+    )
+    prepaid_paid_invoice_period_repaired = "prepaid_paid_invoice_period.repaired"
     prepaid_draft_reconciled = "prepaid_draft.reconciled"
     prepaid_reviewed_draft_settled = "prepaid_reviewed_draft.settled"
     prepaid_invoice_sequence_reconstructed = "prepaid_invoice_sequence.reconstructed"

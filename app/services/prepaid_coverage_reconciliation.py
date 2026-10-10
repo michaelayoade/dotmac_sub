@@ -442,6 +442,64 @@ def _current_extensions(
     return grouped
 
 
+def _paid_invoice_line_rows(
+    db: Session,
+    subscription_ids: Sequence[UUID],
+) -> Sequence[tuple[InvoiceLine, Invoice]]:
+    """The exact paid-invoice evidence selection this owner classifies."""
+    rows = db.execute(
+        select(InvoiceLine, Invoice)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+        .where(
+            InvoiceLine.subscription_id.in_(tuple(subscription_ids)),
+            InvoiceLine.is_active.is_(True),
+            InvoiceLine.amount > Decimal("0.00"),
+            Invoice.is_active.is_(True),
+            Invoice.status == InvoiceStatus.paid,
+            Invoice.balance_due <= Decimal("0.00"),
+        )
+        .order_by(InvoiceLine.subscription_id, Invoice.created_at, InvoiceLine.id)
+    ).all()
+    return [(line, invoice) for line, invoice in rows]
+
+
+def malformed_paid_invoice_ids_by_subscription(
+    db: Session,
+    subscription_ids: Sequence[UUID],
+) -> dict[UUID, tuple[UUID, ...]]:
+    """Read-only: paid invoices that make each subscription period-malformed.
+
+    Uses the same selection and predicate as the preview and the enforcement
+    blocker query, so a reviewed repair can state exactly which invoices keep
+    ``malformed_paid_invoice_period`` alive without re-implementing them.
+    """
+    found: dict[UUID, set[UUID]] = defaultdict(set)
+    if not subscription_ids:
+        return {}
+    for line, invoice in _paid_invoice_line_rows(db, subscription_ids):
+        if line.subscription_id is None:
+            continue
+        if is_malformed_paid_invoice_period(
+            invoice.billing_period_start, invoice.billing_period_end
+        ):
+            found[line.subscription_id].add(invoice.id)
+    return {
+        subscription_id: tuple(sorted(values, key=str))
+        for subscription_id, values in found.items()
+    }
+
+
+def malformed_prepaid_renewal_origin_account_ids(
+    db: Session,
+    subscriptions: Sequence[Subscription],
+    *,
+    as_of: datetime,
+) -> frozenset[UUID]:
+    """Read-only: accounts this owner quarantines for ``malformed_renewal_origin``."""
+    _grouped, malformed = _adjustment_evidence(db, list(subscriptions), _utc(as_of))
+    return frozenset(malformed)
+
+
 def _paid_invoice_evidence(
     db: Session,
     subscription_ids: tuple[UUID, ...],
@@ -451,19 +509,7 @@ def _paid_invoice_evidence(
     malformed: set[UUID] = set()
     if not subscription_ids:
         return grouped, malformed
-    rows = db.execute(
-        select(InvoiceLine, Invoice)
-        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
-        .where(
-            InvoiceLine.subscription_id.in_(subscription_ids),
-            InvoiceLine.is_active.is_(True),
-            InvoiceLine.amount > Decimal("0.00"),
-            Invoice.is_active.is_(True),
-            Invoice.status == InvoiceStatus.paid,
-            Invoice.balance_due <= Decimal("0.00"),
-        )
-        .order_by(InvoiceLine.subscription_id, Invoice.created_at, InvoiceLine.id)
-    ).all()
+    rows = _paid_invoice_line_rows(db, subscription_ids)
     for line, invoice in rows:
         subscription_id = line.subscription_id
         if subscription_id is None:
@@ -1322,6 +1368,8 @@ __all__ = [
     "PrepaidCoverageReconciliationResult",
     "ReconcilePrepaidCoverageCommand",
     "is_malformed_paid_invoice_period",
+    "malformed_paid_invoice_ids_by_subscription",
+    "malformed_prepaid_renewal_origin_account_ids",
     "parse_prepaid_renewal_origin_ref",
     "split_prepaid_renewal_origin_ref",
     "preview_prepaid_coverage_reconciliation",
