@@ -93,12 +93,29 @@ def upgrade() -> None:
             server_default=sa.text("1"),
         ),
     )
-    op.execute(
-        f"ALTER TABLE user_credentials ADD CONSTRAINT {_CHECK} "
-        "CHECK (credential_version >= 1) NOT VALID"
+    # A fresh baseline (001_squashed builds from current model metadata)
+    # already carries the column and constraint; an upgraded deployment does
+    # not. ``add_column`` is guarded centrally; the raw ALTER is guarded here.
+    constraint_present = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT count(*) FROM pg_constraint "
+                "WHERE conrelid = 'user_credentials'::regclass AND conname = :name"
+            ),
+            {"name": _CHECK},
+        )
+        .scalar()
     )
+    if not constraint_present:
+        op.execute(
+            f"ALTER TABLE user_credentials ADD CONSTRAINT {_CHECK} "
+            "CHECK (credential_version >= 1) NOT VALID"
+        )
     op.execute(f"ALTER TABLE user_credentials VALIDATE CONSTRAINT {_CHECK}")
     op.execute(_FUNCTION_SQL)
+    # create_all never emits triggers, but re-running must still be safe.
+    op.execute(f"DROP TRIGGER IF EXISTS {_TRIGGER} ON user_credentials")
     op.execute(
         f"CREATE TRIGGER {_TRIGGER} BEFORE UPDATE ON user_credentials "
         f"FOR EACH ROW EXECUTE FUNCTION {_FUNCTION}()"

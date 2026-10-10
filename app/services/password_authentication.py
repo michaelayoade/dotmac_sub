@@ -64,6 +64,7 @@ from app.services.owner_commands import (
 
 if TYPE_CHECKING:
     from fastapi import Request
+    from sqlalchemy.orm import InstrumentedAttribute
 
 logger = logging.getLogger(__name__)
 
@@ -481,12 +482,16 @@ def _lock_principal_key_share(
     from app.models.system_user import SystemUser
     from app.services.common import coerce_uuid
 
-    model = {"system_user": SystemUser, "reseller_user": ResellerUser}.get(
-        principal_type, Subscriber
-    )
+    principal_pk: InstrumentedAttribute[uuid.UUID]
+    if principal_type == "system_user":
+        principal_pk = SystemUser.id
+    elif principal_type == "reseller_user":
+        principal_pk = ResellerUser.id
+    else:
+        principal_pk = Subscriber.id
     db.execute(
-        select(model.id)
-        .where(model.id == coerce_uuid(principal_id))
+        select(principal_pk)
+        .where(principal_pk == coerce_uuid(principal_id))
         .with_for_update(read=True, key_share=True)
     ).first()
 
@@ -627,14 +632,14 @@ def _gate_password_step(
     if verified.src == SRC_ACCESS_CREDENTIAL:
         # R8: PPPoE secret authentication never touches user_credentials. Only
         # confirm the secret that was verified is still the live one.
-        row = db.execute(
+        access_row = db.execute(
             select(AccessCredential.id).where(
                 AccessCredential.id == verified.access_credential_id,
                 AccessCredential.is_active.is_(True),
                 AccessCredential.secret_hash == verified.verified_hash,
             )
         ).first()
-        if row is None:
+        if access_row is None:
             raise PasswordAuthenticationError(
                 "invalid_credentials", "Invalid credentials."
             )
