@@ -60,6 +60,35 @@ Vendor mode uses the same sub-native work-order execution tabs as technicians,
 with backend scoping by vendor assignment. Do not re-add CRM project/quote
 routes; vendor work must come back as sub-native work orders.
 
+### Vendor login and read failures
+
+Vendor authentication resolves an active vendor membership and its native Vendor
+link. It does not require a technician profile. Dispatch assigns a work order to
+exactly one technician or native vendor through a preview and revision-checked
+confirmation. The current assignment queue row is authoritative; imported vendor
+metadata never grants job access.
+
+Vendors can read their assigned jobs and schedule, record travel and work
+transitions, add notes, upload photos/signatures, submit work time and complete a
+job subject to the same server completion requirements. Actor records retain the
+actual vendor member and SystemUser; person and technician IDs stay absent.
+Membership revocation and reassignment are checked again on mutations, retries
+and evidence downloads.
+
+The `/api/v1/field/me` capability response controls ancillary screens and
+background services. Vendor attendance, background location tracking, fiber
+evidence, chat, materials, expenses and equipment remain unavailable until their
+owners support the vendor workflow. Missing, loading or failed capability
+responses fail closed. Manager expense permission remains owned by the manager
+profile rather than a technician execution profile.
+
+Failed reads render a retry state; an empty offline cache does not prove that
+there is no work. Vendor account identity uses `/api/v1/auth/me`; profile failures
+remain visible and retryable. Installation projects remain a separate workflow.
+
+This change requires backend migration 665 and a new mobile build; earlier
+TestFlight builds do not include native vendor work-order execution.
+
 ## Useful Commands
 
 ```sh

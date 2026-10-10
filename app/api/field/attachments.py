@@ -5,14 +5,25 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.field.execution import (
+    field_command_context,
+    field_domain_errors,
+    field_system_user_id,
+)
 from app.api.field.work_order_compat import resolve_work_order_id
 from app.schemas.common import ListResponse
 from app.schemas.field import FieldAttachmentRead
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field.attachments import (
     field_attachments,
     parse_captured_at,
-    serialize_attachment,
+)
+from app.services.field.execution_contracts import (
+    CreateFieldAttachment,
+    DeleteFieldAttachment,
+    FieldAttachmentIdentity,
+    FieldAttachmentQuery,
 )
 from app.services.file_storage import build_content_disposition
 
@@ -43,23 +54,29 @@ def upload_field_attachment(
     resolved_work_order_id = resolve_work_order_id(
         work_order_id=work_order_id, crm_work_order_id=crm_work_order_id
     )
-    return field_attachments.create(
-        db,
-        auth,
-        kind=kind,
-        file_name=file.filename or "upload",
-        mime_type=file.content_type,
-        content=file.file.read(),
-        client_ref=client_ref,
-        crm_work_order_id=resolved_work_order_id,
-        note_id=note_id,
-        latitude=latitude,
-        longitude=longitude,
-        captured_at=parse_captured_at(captured_at),
-        signer_name=signer_name,
-        asset_type=asset_type,
-        asset_id=asset_id,
-    )
+    principal_id = field_system_user_id(auth)
+    with field_domain_errors():
+        command = CreateFieldAttachment(
+            context=field_command_context(
+                principal_id, reason="field_attachment_creation", request_id=client_ref
+            ),
+            requester_system_user_id=principal_id,
+            kind=kind,
+            file_name=file.filename or "upload",
+            mime_type=file.content_type,
+            content=file.file.read(),
+            client_ref=client_ref,
+            public_id=resolved_work_order_id,
+            note_id=note_id,
+            latitude=latitude,
+            longitude=longitude,
+            captured_at=parse_captured_at(captured_at),
+            signer_name=signer_name,
+            asset_type=asset_type,
+            asset_id=asset_id,
+        )
+        db_session_adapter.release_read_transaction(db)
+        return field_attachments.create(db=db, command=command)
 
 
 @router.get("/attachments", response_model=ListResponse[FieldAttachmentRead])
@@ -76,34 +93,51 @@ def list_field_attachments(
     resolved_work_order_id = resolve_work_order_id(
         work_order_id=work_order_id, crm_work_order_id=crm_work_order_id
     )
-    items = field_attachments.list(
-        db,
-        auth,
-        crm_work_order_id=resolved_work_order_id,
-        note_id=note_id,
-        kind=kind,
-        limit=limit,
-        offset=offset,
-    )
+    with field_domain_errors():
+        items = field_attachments.list(
+            db=db,
+            query=FieldAttachmentQuery(
+                requester_system_user_id=field_system_user_id(auth),
+                public_id=resolved_work_order_id,
+                note_id=note_id,
+                kind=kind,
+                limit=limit,
+                offset=offset,
+            ),
+        )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 
 
 @router.get("/attachments/{attachment_id}", response_model=FieldAttachmentRead)
 def get_field_attachment(
-    attachment_id: str,
+    attachment_id: UUID,
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return serialize_attachment(field_attachments.get(db, auth, attachment_id))
+    with field_domain_errors():
+        return field_attachments.get(
+            db=db,
+            query=FieldAttachmentIdentity(
+                requester_system_user_id=field_system_user_id(auth),
+                attachment_id=attachment_id,
+            ),
+        )
 
 
 @router.get("/attachments/{attachment_id}/content")
 def download_field_attachment(
-    attachment_id: str,
+    attachment_id: UUID,
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    attachment, stream = field_attachments.get_content(db, auth, attachment_id)
+    with field_domain_errors():
+        attachment, stream = field_attachments.get_content(
+            db=db,
+            query=FieldAttachmentIdentity(
+                requester_system_user_id=field_system_user_id(auth),
+                attachment_id=attachment_id,
+            ),
+        )
     return StreamingResponse(
         stream.chunks,
         media_type=stream.content_type or attachment.mime_type,
@@ -115,8 +149,20 @@ def download_field_attachment(
 
 @router.delete("/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_field_attachment(
-    attachment_id: str,
+    attachment_id: UUID,
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    field_attachments.delete(db, auth, attachment_id)
+    principal_id = field_system_user_id(auth)
+    with field_domain_errors():
+        db_session_adapter.release_read_transaction(db)
+        field_attachments.delete(
+            db=db,
+            command=DeleteFieldAttachment(
+                context=field_command_context(
+                    principal_id, reason="field_attachment_deletion"
+                ),
+                requester_system_user_id=principal_id,
+                attachment_id=attachment_id,
+            ),
+        )

@@ -40,7 +40,7 @@
 #
 #
 #
-# --- app: 242 files ---
+# --- app: 239 files ---
 app/api/campaigns.py
 app/api/crm.py
 app/api/crm_referrals.py
@@ -156,7 +156,6 @@ app/services/field/equipment.py
 app/services/field/equipment_custody.py
 app/services/field/expense_requests.py
 app/services/field/fiber.py
-app/services/field/geofence.py
 app/services/field/inventory.py
 app/services/field/jobs.py
 app/services/field/location_tracking.py
@@ -164,12 +163,10 @@ app/services/field/manager.py
 app/services/field/material_requests.py
 app/services/field/materials.py
 app/services/field/movements.py
-app/services/field/notes.py
 app/services/field/transitions.py
 app/services/field/vendor_auth.py
 app/services/field/voice.py
 app/services/field/work_order_status.py
-app/services/field/worklogs.py
 app/services/field_maps.py
 app/services/infrastructure_health.py
 app/services/integration_sync.py
@@ -492,7 +489,7 @@ scripts/one_off/restore_crm_placeholder_identity.py
 scripts/one_off/review_carried_source_identity.py
 scripts/seed/seed_rbac.py
 #
-# --- tests: 246 files ---
+# --- tests: 245 files ---
 tests/architecture/adapter_keyword_service_call_baseline.txt
 tests/architecture/adapter_transaction_baseline.txt
 tests/architecture/connector_manifest_pins.json
@@ -729,7 +726,6 @@ tests/test_vendor_web_plane_capabilities.py
 tests/test_web_admin_projects_routes.py
 tests/test_web_customer_crm_routes.py
 tests/test_web_customer_details.py
-tests/test_web_dispatch_work_orders.py
 tests/test_web_live_chat_widget.py
 tests/test_web_meta_connection.py
 tests/test_web_sales_quotes_list.py
@@ -740,4 +736,4 @@ tests/test_work_order_views.py
 tests/test_workqueue_parity.py
 tests/test_workqueue_web.py
 #
-# TOTAL: 690 files
+# TOTAL: 686 files

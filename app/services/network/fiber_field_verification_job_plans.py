@@ -32,6 +32,11 @@ from app.services.network.fiber_topology_field_worklist import (
     FiberTopologyFieldWorklistReport,
     reconcile_fiber_field_worklist,
 )
+from app.services.owner_commands import CommandContext
+from app.services.work_order_assignment_contracts import (
+    TechnicianAssignmentTarget,
+    WorkOrderAssignmentCommand,
+)
 from app.services.work_order_commands import work_order_commands
 
 MAX_SELECTED_FEATURES = 100
@@ -338,21 +343,34 @@ def execute_fiber_field_verification_job_plan(
         )
         assignment: WorkOrderAssignmentQueue | None = None
         if command.get("assigned_technician_id") is not None:
-            assignment = work_order_commands.assign(
-                db,
-                work_order.public_id,
-                technician_id=command["assigned_technician_id"],
-                scheduled_start=work_order.scheduled_start,
-                scheduled_end=work_order.scheduled_end,
-                reason=(
-                    str(command["assignment_reason"])
-                    if command.get("assignment_reason") is not None
-                    else "fiber_field_verification_plan"
-                ),
-                auth=auth,
-                request_id=request_id,
-                commit=False,
+            assignment_command_id = uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"fiber-verification-assignment:{command['idempotency_key']}",
             )
+            assignment_outcome = work_order_commands._stage_assignment(
+                db,
+                command=WorkOrderAssignmentCommand(
+                    work_order_public_id=work_order.public_id,
+                    target=TechnicianAssignmentTarget(
+                        _uuid(
+                            command["assigned_technician_id"], "assigned_technician_id"
+                        )
+                    ),
+                    scheduled_start=work_order.scheduled_start,
+                    scheduled_end=work_order.scheduled_end,
+                    reason=str(command["assignment_reason"])
+                    if command.get("assignment_reason") is not None
+                    else "fiber_field_verification_plan",
+                ),
+                context=CommandContext.system(
+                    actor=_actor(auth)[1] or "fiber_field_verification",
+                    scope="operations:dispatch:assign",
+                    reason="Fiber verification plan assignment",
+                    command_id=assignment_command_id,
+                    idempotency_key=str(assignment_command_id),
+                ),
+            )
+            assignment = db.get(WorkOrderAssignmentQueue, assignment_outcome.queue_id)
         replayed = existing_before is not None
         if not replayed:
             actor_type, actor_id = _actor(auth)

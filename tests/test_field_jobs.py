@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.field_vendor import FieldVendor, FieldVendorUser
@@ -13,9 +13,21 @@ from app.models.project import Project, ProjectTask
 from app.models.subscriber import Subscriber, UserType
 from app.models.support import Ticket
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
+from app.schemas.field import FieldJobLocation, FieldTransitionResponse
+from app.services.db_session_adapter import db_session_adapter
+from app.services.field.execution_contracts import (
+    ApplyFieldTransition,
+    FieldEvent,
+    FieldJobQuery,
+    FieldJobsQuery,
+    UpdateFieldJobLocation,
+)
 from app.services.field.jobs import field_jobs
 from app.services.field.transitions import field_transitions
+from app.services.field.work_order_access import FieldAccessError, ResolveFieldActor
+from app.services.owner_commands import CommandContext
 
 
 def _auth(user: SystemUser) -> dict:
@@ -57,10 +69,14 @@ def _profile(db_session, user: SystemUser, **overrides) -> TechnicianProfile:
 
 
 def _vendor_membership(db_session, user: SystemUser, **overrides) -> FieldVendorUser:
+    native = Vendor(name="Native vendor", code=f"NV-{uuid4().hex[:8]}")
+    db_session.add(native)
+    db_session.flush()
+    overrides.pop("crm_vendor_id", None)
     vendor = FieldVendor(
         name=overrides.pop("vendor_name", "Install Co"),
         code=overrides.pop("vendor_code", f"VC-{uuid4().hex[:6]}"),
-        crm_vendor_id=overrides.pop("crm_vendor_id", None),
+        crm_vendor_id=str(native.id),
         is_active=overrides.pop("vendor_active", True),
     )
     db_session.add(vendor)
@@ -91,6 +107,7 @@ def _subscriber(db_session) -> Subscriber:
 
 
 def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
+    assigned_vendor_id = overrides.pop("assigned_vendor_id", None)
     row = WorkOrder(
         crm_work_order_id=overrides.pop("crm_work_order_id", f"wo-{uuid4().hex[:8]}"),
         subscriber_id=subscriber.id,
@@ -108,6 +125,15 @@ def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
     )
     db_session.add(row)
     db_session.flush()
+    if assigned_vendor_id is not None:
+        db_session.add(
+            WorkOrderAssignmentQueue(
+                work_order_mirror_id=row.id,
+                assigned_vendor_id=assigned_vendor_id,
+                status="assigned",
+            )
+        )
+        db_session.flush()
     return row
 
 
@@ -144,7 +170,9 @@ def test_field_jobs_scope_by_crm_person_and_assignment_queue(db_session):
     )
     db_session.commit()
 
-    jobs = field_jobs.list(db_session, _auth(user))
+    jobs = field_jobs.list(
+        db=db_session, query=FieldJobsQuery(requester_system_user_id=user.id)
+    )
 
     assert [job.id for job in jobs] == [
         assigned_by_crm.crm_work_order_id,
@@ -156,13 +184,20 @@ def test_field_jobs_scope_by_crm_person_and_assignment_queue(db_session):
         "tone": "info",
         "icon": "info",
     }
-    assert {job.id for job in field_jobs.list(db_session, _auth(other_user))} == {
+    assert {
+        job.id
+        for job in field_jobs.list(
+            db=db_session, query=FieldJobsQuery(requester_system_user_id=other_user.id)
+        )
+    } == {
         "wo-queue-assigned",
         "wo-hidden",
     }
 
 
-def test_field_vendor_profile_scopes_jobs_by_vendor_metadata(db_session):
+def test_field_vendor_profile_scopes_jobs_by_native_assignment_ignoring_metadata(
+    db_session,
+):
     user = _user(db_session, "Vendor")
     _profile(db_session, user, crm_person_id="crm-vendor-tech")
     membership = _vendor_membership(db_session, user, crm_vendor_id="crm-vendor-1")
@@ -175,16 +210,17 @@ def test_field_vendor_profile_scopes_jobs_by_vendor_metadata(db_session):
         subscriber,
         crm_work_order_id="wo-vendor-assigned",
         assigned_to_crm_person_id=None,
+        assigned_vendor_id=UUID(membership.vendor.crm_vendor_id),
         metadata_={"assigned_vendor_id": str(membership.vendor_id)},
     )
-    assigned_by_vendor_user = _work_order(
+    _work_order(
         db_session,
         subscriber,
         crm_work_order_id="wo-vendor-user-assigned",
         assigned_to_crm_person_id=None,
         metadata_={"vendor_user_id": str(membership.id)},
     )
-    assigned_by_crm_vendor = _work_order(
+    _work_order(
         db_session,
         subscriber,
         crm_work_order_id="wo-crm-vendor-assigned",
@@ -196,20 +232,24 @@ def test_field_vendor_profile_scopes_jobs_by_vendor_metadata(db_session):
         subscriber,
         crm_work_order_id="wo-rival-vendor",
         assigned_to_crm_person_id=None,
+        assigned_vendor_id=UUID(rival_membership.vendor.crm_vendor_id),
         metadata_={"assigned_vendor_id": str(rival_membership.vendor_id)},
     )
     db_session.commit()
 
-    jobs = field_jobs.list(db_session, _auth(user))
+    jobs = field_jobs.list(
+        db=db_session, query=FieldJobsQuery(requester_system_user_id=user.id)
+    )
 
     assert [job.id for job in jobs] == [
         assigned_by_vendor.crm_work_order_id,
-        assigned_by_vendor_user.crm_work_order_id,
-        assigned_by_crm_vendor.crm_work_order_id,
     ]
-    assert {job.id for job in field_jobs.list(db_session, _auth(rival_user))} == {
-        "wo-rival-vendor"
-    }
+    assert {
+        job.id
+        for job in field_jobs.list(
+            db=db_session, query=FieldJobsQuery(requester_system_user_id=rival_user.id)
+        )
+    } == {"wo-rival-vendor"}
 
 
 def test_field_vendor_profile_can_open_and_transition_vendor_job(db_session):
@@ -223,22 +263,37 @@ def test_field_vendor_profile_can_open_and_transition_vendor_job(db_session):
         crm_work_order_id="wo-vendor-transition",
         status="dispatched",
         assigned_to_crm_person_id=None,
+        assigned_vendor_id=UUID(membership.vendor.crm_vendor_id),
         metadata_={"assigned_vendor": {"id": str(membership.vendor_id)}},
     )
     db_session.commit()
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-vendor-transition")
-    result = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-vendor-transition",
-        event="start",
-        client_event_id=uuid4(),
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-vendor-transition"
+        ),
+    )
+    result = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-vendor-transition",
+            event=FieldEvent("start"),
+            client_event_id=uuid4(),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
     assert detail.job.id == "wo-vendor-transition"
-    assert result["job"].status == "in_progress"
-    assert result["event"]["person_id"] == user.id
+    assert result.job.status == "in_progress"
+    assert result.event.person_id is None
+    assert result.event.system_user_id == user.id
 
 
 def test_field_job_detail_404_does_not_leak_unassigned_jobs(db_session):
@@ -255,11 +310,16 @@ def test_field_job_detail_404_does_not_leak_unassigned_jobs(db_session):
     )
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        field_jobs.get_detail(db_session, _auth(user), "wo-hidden")
+    with pytest.raises(FieldAccessError) as exc:
+        field_jobs.get_detail(
+            db=db_session,
+            query=FieldJobQuery(
+                requester_system_user_id=user.id, public_id="wo-hidden"
+            ),
+        )
 
-    assert exc.value.status_code == 404
-    assert exc.value.detail == "Job not found"
+    assert exc.value.code.endswith("not_found")
+    assert exc.value.message == "Job not found"
 
 
 def test_field_job_detail_returns_customer_and_location(db_session):
@@ -299,7 +359,10 @@ def test_field_job_detail_returns_customer_and_location(db_session):
     )
     db_session.commit()
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-detail")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(requester_system_user_id=user.id, public_id="wo-detail"),
+    )
 
     assert detail.job.id == "wo-detail"
     assert detail.job.status_presentation.value == detail.job.status
@@ -335,12 +398,20 @@ def test_field_job_update_location_is_sub_authoritative(db_session):
     )
     db_session.commit()
 
-    location = field_jobs.update_location(
-        db_session,
-        _auth(user),
-        "wo-location",
-        latitude=9.081,
-        longitude=7.462,
+    location = _jobs_update_location(
+        db=db_session,
+        command=UpdateFieldJobLocation(
+            requester_system_user_id=user.id,
+            public_id="wo-location",
+            latitude=9.081,
+            longitude=7.462,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
     assert location.latitude == 9.081
@@ -366,17 +437,25 @@ def test_field_job_update_location_404_does_not_leak_unassigned_jobs(db_session)
     )
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        field_jobs.update_location(
-            db_session,
-            _auth(user),
-            "wo-hidden-location",
-            latitude=9.081,
-            longitude=7.462,
+    with pytest.raises(FieldAccessError) as exc:
+        _jobs_update_location(
+            db=db_session,
+            command=UpdateFieldJobLocation(
+                requester_system_user_id=user.id,
+                public_id="wo-hidden-location",
+                latitude=9.081,
+                longitude=7.462,
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
 
-    assert exc.value.status_code == 404
-    assert exc.value.detail == "Job not found"
+    assert exc.value.code.endswith("not_found")
+    assert exc.value.message == "Job not found"
 
 
 def test_field_job_destinations_include_customer_nearby_assets_and_other(db_session):
@@ -419,10 +498,13 @@ def test_field_job_destinations_include_customer_nearby_assets_and_other(db_sess
     db_session.commit()
 
     destinations = field_jobs.list_destinations(
-        db_session, _auth(user), "wo-destinations"
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-destinations"
+        ),
     )
 
-    assert destinations[0] == {
+    assert destinations[0].model_dump() == {
         "destination_type": "customer",
         "destination_id": str(subscriber.id),
         "label": "Customer site",
@@ -430,13 +512,13 @@ def test_field_job_destinations_include_customer_nearby_assets_and_other(db_sess
         "longitude": 7.451,
         "address_text": "Plot 14, Jabi District",
     }
-    assert [item["destination_type"] for item in destinations[1:-1]] == [
+    assert [item.destination_type for item in destinations[1:-1]] == [
         "cabinet",
         "closure",
         "fiber_access_point",
     ]
-    assert destinations[-1]["destination_type"] == "other"
-    assert "Far FDH" not in {item["label"] for item in destinations}
+    assert destinations[-1].destination_type == "other"
+    assert "Far FDH" not in {item.label for item in destinations}
 
 
 def test_field_job_destinations_work_without_coordinates(db_session):
@@ -453,12 +535,15 @@ def test_field_job_destinations_work_without_coordinates(db_session):
     db_session.commit()
 
     destinations = field_jobs.list_destinations(
-        db_session, _auth(user), "wo-address-only"
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-address-only"
+        ),
     )
 
-    assert [item["destination_type"] for item in destinations] == ["customer", "other"]
-    assert destinations[0]["latitude"] is None
-    assert destinations[0]["address_text"] == "Plot 14, Jabi District"
+    assert [item.destination_type for item in destinations] == ["customer", "other"]
+    assert destinations[0].latitude is None
+    assert destinations[0].address_text == "Plot 14, Jabi District"
 
 
 def test_field_me_counts_open_jobs_and_completed_today(db_session):
@@ -482,8 +567,22 @@ def test_field_me_counts_open_jobs_and_completed_today(db_session):
     )
     db_session.commit()
 
-    me = field_jobs.me(db_session, _auth(user))
+    me = field_jobs.me(db=db_session, query=ResolveFieldActor(system_user_id=user.id))
 
     assert me.name == "Ade Tech"
     assert me.open_jobs == 1
     assert me.completed_today == 1
+
+
+def _transitions_apply(
+    db: Session, command: ApplyFieldTransition
+) -> FieldTransitionResponse:
+    db_session_adapter.release_read_transaction(db)
+    return field_transitions.apply(db=db, command=command)
+
+
+def _jobs_update_location(
+    db: Session, command: UpdateFieldJobLocation
+) -> FieldJobLocation:
+    db_session_adapter.release_read_transaction(db)
+    return field_jobs.update_location(db=db, command=command)

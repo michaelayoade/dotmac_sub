@@ -12,6 +12,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.models.catalog import (
     AccessType,
@@ -29,6 +30,11 @@ from app.models.subscriber_field_verification import SubscriberFieldVerification
 from app.services import control_registry
 from app.services import geocode_reconciler as gr
 from app.services import location_capture as lc
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
 
 
 def _offer(db) -> CatalogOffer:
@@ -182,19 +188,42 @@ def test_prompt_capture_requires_the_prompt_subcontrol(
 # ── field arrival ────────────────────────────────────────────────────────────
 
 
+def _arrival(
+    db: Session, command: lc.CaptureFieldArrival
+) -> lc.FieldArrivalCaptureOutcome:
+    db.commit()
+    return execute_owner_command(
+        db,
+        definition=OwnerCommandDefinition(
+            owner="operations.field_completion",
+            concern="field job completion transitions",
+            name="test_field_arrival_capture",
+        ),
+        context=CommandContext.system(
+            actor=str(command.actor_system_user_id),
+            scope="field:test",
+            reason="Test optional arrival capture",
+            idempotency_key=str(uuid.uuid4()),
+        ),
+        operation=lambda: lc.capture_from_field_arrival(db, command),
+    )
+
+
 def test_field_arrival_captures_when_enabled(db_session, monkeypatch, _lagos_geo):
     monkeypatch.setattr(control_registry, "is_enabled", lambda db, key: True)
     sub = _subscriber(db_session)
-    result = lc.capture_from_field_arrival(
+    result = _arrival(
         db_session,
-        subscriber_id=str(sub.id),
-        lat=6.43,
-        lng=3.42,
-        accuracy_m=15.0,
-        technician_actor_id="tech-1",
-        technician_name="Tech One",
+        lc.CaptureFieldArrival(
+            subscriber_id=sub.id,
+            actor_system_user_id=uuid.uuid4(),
+            latitude=6.43,
+            longitude=3.42,
+            accuracy_m=15.0,
+            actor_name="Tech One",
+        ),
     )
-    assert result is not None
+    assert result.status == lc.FieldArrivalCaptureStatus.captured
     rows = _ledger_rows(db_session, sub.id, "state")
     assert rows and rows[0].source == gr.SOURCE_FIELD_GPS
 
@@ -202,16 +231,18 @@ def test_field_arrival_captures_when_enabled(db_session, monkeypatch, _lagos_geo
 def test_field_arrival_is_inert_when_gate_off(db_session, monkeypatch, _lagos_geo):
     monkeypatch.setattr(control_registry, "is_enabled", lambda db, key: False)
     sub = _subscriber(db_session)
-    result = lc.capture_from_field_arrival(
+    result = _arrival(
         db_session,
-        subscriber_id=str(sub.id),
-        lat=6.43,
-        lng=3.42,
-        accuracy_m=15.0,
-        technician_actor_id="tech-1",
-        technician_name="Tech One",
+        lc.CaptureFieldArrival(
+            subscriber_id=sub.id,
+            actor_system_user_id=uuid.uuid4(),
+            latitude=6.43,
+            longitude=3.42,
+            accuracy_m=15.0,
+            actor_name="Tech One",
+        ),
     )
-    assert result is None
+    assert result.status == lc.FieldArrivalCaptureStatus.disabled
     assert not _ledger_rows(db_session, sub.id, "state")
 
 
@@ -219,16 +250,18 @@ def test_field_arrival_needs_a_fix(db_session, monkeypatch):
     monkeypatch.setattr(control_registry, "is_enabled", lambda db, key: True)
     sub = _subscriber(db_session)
     assert (
-        lc.capture_from_field_arrival(
+        _arrival(
             db_session,
-            subscriber_id=str(sub.id),
-            lat=None,
-            lng=None,
-            accuracy_m=None,
-            technician_actor_id="tech-1",
-            technician_name="Tech One",
-        )
-        is None
+            lc.CaptureFieldArrival(
+                subscriber_id=sub.id,
+                actor_system_user_id=uuid.uuid4(),
+                latitude=None,
+                longitude=None,
+                accuracy_m=None,
+                actor_name="Tech One",
+            ),
+        ).status
+        == lc.FieldArrivalCaptureStatus.unavailable
     )
 
 
@@ -249,16 +282,18 @@ def test_field_arrival_rolls_back_only_the_failed_capture(db_session, monkeypatc
         raise RuntimeError("capture failed after ledger flush")
 
     monkeypatch.setattr(lc, "capture", fail_after_write)
-    result = lc.capture_from_field_arrival(
+    result = _arrival(
         db_session,
-        subscriber_id=str(sub.id),
-        lat=6.43,
-        lng=3.42,
-        accuracy_m=15.0,
-        technician_actor_id="tech-1",
-        technician_name="Tech One",
+        lc.CaptureFieldArrival(
+            subscriber_id=sub.id,
+            actor_system_user_id=uuid.uuid4(),
+            latitude=6.43,
+            longitude=3.42,
+            accuracy_m=15.0,
+            actor_name="Tech One",
+        ),
     )
-    assert result is None
+    assert result.status == lc.FieldArrivalCaptureStatus.failed
     assert not _ledger_rows(db_session, sub.id, "state")
     sub.display_name = "Outer transaction still usable"
     db_session.commit()

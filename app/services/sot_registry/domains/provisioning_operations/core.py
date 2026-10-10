@@ -18,6 +18,10 @@ from app.services.sot_manifest import (
     TransactionMode,
     owner_command_boundary_error_codes,
 )
+from app.services.sot_registry.domains.provisioning_operations.field_execution import (
+    FIELD_COMPLETION_CONTRACT,
+    WORK_ORDER_COMMAND_CONTRACT,
+)
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
@@ -515,6 +519,7 @@ SERVICES: tuple[SOTService, ...] = (
             "communications.staff_notifications; ordinary descriptive tags "
             "remain local work-order metadata."
         ),
+        contract=WORK_ORDER_COMMAND_CONTRACT,
     ),
     SOTService(
         name="operations.work_orders",
@@ -544,7 +549,7 @@ SERVICES: tuple[SOTService, ...] = (
             "operations.work_orders",
         ),
         notes=(
-            "The typed owner creates technician-scoped native notes and stages "
+            "The typed owner creates assignment-scoped native notes and stages "
             "their durable output. A stable mobile client reference is the "
             "idempotency key; the field API and offline outbox are adapters. "
             "Authorized staff pages compose the same canonical rows through "
@@ -556,7 +561,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="native field work-order note creation",
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
-                        "authenticated technician identity",
+                        "authenticated field execution actor",
                         "assigned work-order state",
                         "field-note client request identity",
                     ),
@@ -574,17 +579,17 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             authoritative_inputs=(
                 AuthorityInput(
-                    name="authenticated technician identity",
-                    owner="auth.permission_gate",
-                    kind=AuthorityKind.CONTROL_INPUT,
+                    name="authenticated field execution actor",
+                    owner="operations.field_work_order_access",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "Authenticated SystemUser resolved to one active "
-                        "TechnicianProfile"
+                        "Authenticated SystemUser resolved by operations.field_work_order_access "
+                        "to an active technician or vendor member"
                     ),
                 ),
                 AuthorityInput(
                     name="assigned work-order state",
-                    owner="operations.work_orders",
+                    owner="operations.work_order_commands",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "Active WorkOrder and current technician or vendor "
@@ -729,6 +734,7 @@ SERVICES: tuple[SOTService, ...] = (
             "requirements consumed by transition validation. Field clients "
             "do not reconstruct this policy."
         ),
+        contract=FIELD_COMPLETION_CONTRACT,
     ),
     SOTService(
         name="operations.material_catalog",

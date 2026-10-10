@@ -81,6 +81,7 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
 
   @override
   Widget build(BuildContext context) {
+    final capabilities = ref.watch(fieldCapabilitiesProvider);
     final detail = widget.detail;
     final job = detail.job;
     final recordedEvents = detail.history
@@ -119,24 +120,26 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
       appBar: AppBar(
         title: Text(job.workType.toUpperCase()),
         actions: [
-          IconButton(
-            tooltip: 'Request materials',
-            onPressed: () => context.push(
-              '/materials/new?workOrderId=${Uri.encodeComponent(job.id)}'
-              '&workOrderLabel=${Uri.encodeComponent(job.title)}'
-              '$linkedContext',
+          if (capabilities.materials.available)
+            IconButton(
+              tooltip: 'Request materials',
+              onPressed: () => context.push(
+                '/materials/new?workOrderId=${Uri.encodeComponent(job.id)}'
+                '&workOrderLabel=${Uri.encodeComponent(job.title)}'
+                '$linkedContext',
+              ),
+              icon: const Icon(Icons.inventory_2_outlined),
             ),
-            icon: const Icon(Icons.inventory_2_outlined),
-          ),
-          IconButton(
-            tooltip: 'Request expense',
-            onPressed: () => context.push(
-              '/expenses/new?workOrderId=${Uri.encodeComponent(job.id)}'
-              '&workOrderLabel=${Uri.encodeComponent(job.title)}'
-              '$linkedContext',
+          if (capabilities.expenses.available)
+            IconButton(
+              tooltip: 'Request expense',
+              onPressed: () => context.push(
+                '/expenses/new?workOrderId=${Uri.encodeComponent(job.id)}'
+                '&workOrderLabel=${Uri.encodeComponent(job.title)}'
+                '$linkedContext',
+              ),
+              icon: const Icon(Icons.receipt_long_outlined),
             ),
-            icon: const Icon(Icons.receipt_long_outlined),
-          ),
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: Center(
@@ -180,34 +183,35 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
               _CustomerCard(jobId: job.id, customer: detail.customer!),
             ],
             const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Fiber evidence',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'View only the exact fiber features backed by immutable '
-                      'observations for this job.',
-                    ),
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      key: const Key('open-fiber-evidence-map'),
-                      onPressed: () => context.push(
-                        '/jobs/${Uri.encodeComponent(job.id)}/fiber-evidence',
+            if (capabilities.fiberEvidence.available)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Fiber evidence',
+                        style: Theme.of(context).textTheme.titleSmall,
                       ),
-                      icon: const Icon(Icons.layers_outlined),
-                      label: const Text('Open evidence map'),
-                    ),
-                  ],
+                      const SizedBox(height: 6),
+                      const Text(
+                        'View only the exact fiber features backed by immutable '
+                        'observations for this job.',
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        key: const Key('open-fiber-evidence-map'),
+                        onPressed: () => context.push(
+                          '/jobs/${Uri.encodeComponent(job.id)}/fiber-evidence',
+                        ),
+                        icon: const Icon(Icons.layers_outlined),
+                        label: const Text('Open evidence map'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
             if (_hasJobContext(detail)) ...[
               const SizedBox(height: 12),
               _JobContextCard(detail: detail),
@@ -256,7 +260,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
                 ),
               ),
             ],
-            if (detail.materialRequests.isNotEmpty) ...[
+            if (capabilities.materials.available &&
+                detail.materialRequests.isNotEmpty) ...[
               const SizedBox(height: 12),
               Card(
                 child: Padding(
@@ -378,7 +383,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
                 ),
               ),
             ],
-            if (detail.materials.isNotEmpty) ...[
+            if (capabilities.materials.available &&
+                detail.materials.isNotEmpty) ...[
               const SizedBox(height: 12),
               Card(
                 child: Padding(
@@ -1403,12 +1409,13 @@ class _CustomerCard extends ConsumerWidget {
                       icon: const Icon(Icons.call_outlined),
                       label: const Text('Call'),
                     ),
-                  OutlinedButton.icon(
-                    key: const Key('field-chat-button'),
-                    onPressed: () => context.push('/jobs/$jobId/chat'),
-                    icon: const Icon(Icons.forum_outlined),
-                    label: const Text('Chat'),
-                  ),
+                  if (ref.watch(fieldCapabilitiesProvider).chat.available)
+                    OutlinedButton.icon(
+                      key: const Key('field-chat-button'),
+                      onPressed: () => context.push('/jobs/$jobId/chat'),
+                      icon: const Icon(Icons.forum_outlined),
+                      label: const Text('Chat'),
+                    ),
                   if (emailUri != null)
                     OutlinedButton.icon(
                       key: const Key('email-customer-button'),

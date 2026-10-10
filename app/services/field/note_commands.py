@@ -24,7 +24,13 @@ from app.services.events.owner_outputs import (
     stage_owner_output,
 )
 from app.services.events.types import EventType
-from app.services.field.jobs import _annotate_vendor_membership, _scoped_query
+from app.services.field.work_order_access import (
+    FieldActor,
+    FieldWorkOrderScope,
+    ResolveFieldActor,
+    require_work_order,
+    resolve_field_actor,
+)
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -54,7 +60,7 @@ class FieldNoteAttachmentOutcome:
     file_name: str
     mime_type: str
     size_bytes: int
-    uploaded_by_person_id: UUID
+    uploaded_by_person_id: UUID | None
     created_at: datetime
     download_path: str
     latitude: float | None = None
@@ -73,7 +79,7 @@ class FieldNoteCreationOutcome:
     client_ref: UUID
     body: str
     is_internal: bool
-    author_person_id: UUID
+    author_person_id: UUID | None
     author_name: str
     created_at: datetime
     attachments: tuple[FieldNoteAttachmentOutcome, ...]
@@ -136,7 +142,7 @@ class StaffFieldWorkOrderNoteView:
     origin_ticket_id: UUID | None
     body: str
     is_internal: bool
-    author_person_id: UUID
+    author_person_id: UUID | None
     author_system_user_id: UUID | None
     author_name: str
     created_at: datetime
@@ -274,7 +280,7 @@ def _outcome(
 def _attachments(
     db: Session,
     *,
-    profile: TechnicianProfile,
+    profile: FieldActor,
     work_order: WorkOrder,
     attachment_ids: tuple[UUID, ...],
 ) -> tuple[FieldAttachment, ...]:
@@ -287,7 +293,10 @@ def _attachments(
             raise _error("attachment_not_found", "Attachment not found.")
         if attachment.work_order_mirror_id != work_order.id:
             raise _error("invalid_request", "Attachment belongs to a different job.")
-        if attachment.uploaded_by_technician_id != profile.id:
+        if (
+            attachment.uploaded_by_system_user_id != profile.system_user_id
+            or attachment.uploaded_by_vendor_user_id != profile.vendor_user_id
+        ):
             raise _error(
                 "attachment_forbidden", "Attachment was uploaded by someone else."
             )
@@ -322,6 +331,11 @@ def create_field_work_order_note(
         if user is None:
             raise _error("requester_not_found", "Technician profile not found.")
 
+        profile = resolve_field_actor(db, ResolveFieldActor(user.id))
+        work_order = require_work_order(
+            db, FieldWorkOrderScope(profile, command.work_order_public_id, lock=True)
+        )
+
         existing = db.execute(
             select(FieldWorkOrderNote).where(
                 FieldWorkOrderNote.author_system_user_id == user.id,
@@ -346,27 +360,6 @@ def create_field_work_order_note(
                 replayed=True,
             )
 
-        profile = db.execute(
-            select(TechnicianProfile).where(
-                TechnicianProfile.is_active.is_(True),
-                or_(
-                    TechnicianProfile.system_user_id == user.id,
-                    TechnicianProfile.person_id == user.id,
-                ),
-            )
-        ).scalar_one_or_none()
-        if profile is None:
-            raise _error("requester_not_found", "Technician profile not found.")
-        profile = _annotate_vendor_membership(db, profile)
-        work_order = (
-            _scoped_query(db, profile)
-            .filter(WorkOrder.public_id == command.work_order_public_id)
-            .with_for_update()
-            .one_or_none()
-        )
-        if work_order is None:
-            raise _error("work_order_not_found", "Job not found.")
-
         attachments = _attachments(
             db,
             profile=profile,
@@ -375,10 +368,13 @@ def create_field_work_order_note(
         )
         note = FieldWorkOrderNote(
             work_order_mirror_id=work_order.id,
-            author_technician_id=profile.id,
+            author_technician_id=profile.technician_id,
+            author_vendor_user_id=profile.vendor_user_id,
             author_person_id=profile.person_id,
             author_system_user_id=user.id,
-            author_name=_author_name(profile, user),
+            author_name=user.display_name
+            or f"{user.first_name} {user.last_name}".strip()
+            or user.email,
             client_ref=command.request_id,
             body=body,
             is_internal=command.is_internal,

@@ -344,7 +344,17 @@ def update(
     notes: str | None = None,
     is_active: bool | None = None,
 ) -> Vendor:
-    vendor = get(db, vendor_id)
+    # Match field execution/import: native vendor precedes its portal bridge.
+    # Explicit locks avoid relying on ORM flush ordering across these tables.
+    vendor = (
+        db.query(Vendor)
+        .populate_existing()
+        .filter(Vendor.id == coerce_uuid(vendor_id))
+        .with_for_update()
+        .one_or_none()
+    )
+    if vendor is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
 
     clean_name = _clean(name)
     if name is not None and not clean_name:
@@ -355,6 +365,8 @@ def update(
         _assert_code_free(db, clean_code, exclude_id=vendor.id)
 
     twin = get_field_vendor(db, vendor)
+    if twin is not None:
+        db.refresh(twin, with_for_update=True)
     if is_active is False and twin is None:
         # Revocation with no resolvable twin: fail closed, and do it *before*
         # touching the row. A missing bridge is not evidence that no login

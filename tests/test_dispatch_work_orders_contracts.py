@@ -61,8 +61,15 @@ def test_each_tile_drills_into_exactly_the_cohort_it_counts():
     assert kpis["active"].cohort_url == "/admin/dispatch/work-orders?active=1"
 
 
-def test_queue_action_is_allowed_for_open_work_orders():
-    action = service._queue_action(SimpleNamespace(is_active=True, status="scheduled"))
+def test_queue_action_is_allowed_for_open_work_orders(db_session):
+    from app.models.work_order import WorkOrder
+
+    row = WorkOrder(
+        public_id="qa-action-open", title="QA", is_active=True, status="scheduled"
+    )
+    db_session.add(row)
+    db_session.flush()
+    action = service._queue_action(db_session, row)
 
     assert isinstance(action, Action)
     assert action.key == "queue"
@@ -71,18 +78,30 @@ def test_queue_action_is_allowed_for_open_work_orders():
     assert action.permission == "operations:dispatch:assign"
 
 
-def test_queue_action_is_blocked_with_a_reason_for_terminal_or_inactive():
-    terminal = service._queue_action(
-        SimpleNamespace(is_active=True, status="completed")
-    )
-    canceled = service._queue_action(SimpleNamespace(is_active=True, status="canceled"))
-    inactive = service._queue_action(
-        SimpleNamespace(is_active=False, status="scheduled")
-    )
+def test_queue_action_is_blocked_with_a_reason_for_terminal_or_inactive(db_session):
+    from app.models.work_order import WorkOrder
 
+    rows = [
+        WorkOrder(
+            public_id=f"qa-action-{status}-{active}",
+            title="QA",
+            is_active=active,
+            status=status,
+        )
+        for status, active in (
+            ("completed", True),
+            ("canceled", True),
+            ("scheduled", False),
+        )
+    ]
+    db_session.add_all(rows)
+    db_session.flush()
+    terminal, canceled, inactive = [
+        service._queue_action(db_session, row) for row in rows
+    ]
     for action in (terminal, canceled, inactive):
         assert action.allowed is False
-        assert action.reason  # blocked actions must carry a non-empty reason
+        assert action.reason
     assert "completed" in terminal.reason
     assert inactive.reason == "Work order is inactive"
 
@@ -213,7 +232,9 @@ def test_detail_template_owns_the_visible_assignment_next_action():
     ).read_text(encoding="utf-8")
 
     assert "Linked context" in source
-    assert 'name="assigned_technician_id"' in source
+    assert 'name="target_selection"' in source
+    assert '<optgroup label="Vendors">' in source
+    assert "Review assignment" in source
     assert "action_permitted(request, queue_action)" in source
     assert "/admin/support/tickets/{{ origin_ticket.id }}" in source
 
