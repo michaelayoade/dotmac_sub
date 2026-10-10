@@ -314,9 +314,12 @@ def test_purge_removes_only_retired_keys_and_audits_counts(
     )
     db_session.add(array_row)
     db_session.flush()
+    # Keep the id: after expire_all, touching array_row reloads the ORM row,
+    # whose json value (a list) the object-only attribute refuses.
+    array_row_id = array_row.id
     db_session.execute(
         text("UPDATE subscribers SET metadata = CAST(:value AS json) WHERE id = :id"),
-        {"value": '["splynx_login"]', "id": array_row.id},
+        {"value": '["splynx_login"]', "id": array_row_id},
     )
     db_session.flush()
     prior_audits = len(_audit_rows(db_session, PURGE_ACTOR))
@@ -329,7 +332,7 @@ def test_purge_removes_only_retired_keys_and_audits_counts(
     # Read the non-object row through SQL: the ORM attribute only accepts objects.
     array_metadata = db_session.execute(
         text("SELECT metadata::jsonb FROM subscribers WHERE id = :id"),
-        {"id": array_row.id},
+        {"id": array_row_id},
     ).scalar_one()
     assert array_metadata == ["splynx_login"]
 
