@@ -107,6 +107,7 @@ def _setup(engine) -> _Fixture:
             paid_at=PAID_AT,
         )
         keeper_payment = Payment(
+            splynx_payment_id=int(uuid4().int % 10**9),
             account_id=account.id,
             amount=TOTAL,
             currency="NGN",
@@ -114,6 +115,7 @@ def _setup(engine) -> _Fixture:
             paid_at=PAID_AT,
         )
         excess_payment = Payment(
+            splynx_payment_id=int(uuid4().int % 10**9),
             account_id=account.id,
             amount=EXCESS,
             currency="NGN",
