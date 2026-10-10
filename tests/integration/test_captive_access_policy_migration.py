@@ -324,8 +324,8 @@ def test_opt_in_after_suspension_applies_on_postgres(
     ready_network(db_session)
     nas, _ = nas_with_router(db_session)
     serve_from(db_session, subscription, nas)
-    subscription.status = SubscriptionStatus.active
-    db_session.flush()
+    # The fixture subscription is pending; the lifecycle may suspend it
+    # directly (forcing ``active`` would need a billing anchor on PostgreSQL).
     lock = suspend_subscription(
         db_session,
         str(subscription.id),
