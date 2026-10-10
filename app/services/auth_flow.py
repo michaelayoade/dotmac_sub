@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Any, cast
 from uuid import UUID
 
+import bcrypt
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -73,10 +74,20 @@ from app.services.settings_spec import resolve_value
 logger = logging.getLogger(__name__)
 
 PASSWORD_CONTEXT = CryptContext(
-    schemes=["pbkdf2_sha256", "bcrypt", "sha512_crypt"],
+    # "bcrypt" is deliberately NOT a passlib scheme: with bcrypt>=5 passlib's
+    # backend self-test passes a >72-byte secret and raises ValueError, which
+    # breaks every bcrypt verification. Legacy bcrypt hashes are verified by
+    # `_verify_legacy_bcrypt` via `bcrypt.checkpw` instead (see verify_password).
+    schemes=["pbkdf2_sha256", "sha512_crypt"],
     default="pbkdf2_sha256",
     deprecated="auto",
 )
+
+# bcrypt 5 `checkpw` accepts $2a$, $2b$, $2y$ (and, technically, $2x$). $2x$ is
+# the known-buggy PHP crypt_blowfish variant and is deliberately unsupported.
+_BCRYPT_VERIFY_PREFIXES = ("$2a$", "$2b$", "$2y$")
+_BCRYPT_UNSUPPORTED_PREFIXES = ("$2x$",)
+_BCRYPT_MAX_PASSWORD_BYTES = 72
 
 
 class LoginAudience(str, Enum):
@@ -959,12 +970,50 @@ def hash_service_secret(password: str) -> str:
     return cast(str, encrypt_credential(password))
 
 
+def _is_bcrypt_hash(password_hash: str) -> bool:
+    return password_hash.startswith(
+        _BCRYPT_VERIFY_PREFIXES + _BCRYPT_UNSUPPORTED_PREFIXES
+    )
+
+
+def _verify_legacy_bcrypt(password: str, password_hash: str) -> bool:
+    """Verify a legacy bcrypt hash directly with `bcrypt.checkpw`. Never raises.
+
+    Behaviour:
+    - $2a$/$2b$/$2y$ hash: bcrypt result (True/False).
+    - $2x$ hash: False (unsupported variant).
+    - Malformed/truncated hash or bad salt/cost: False.
+    - Password longer than 72 UTF-8 *bytes*: False (fail closed; the user must
+      reset their password). bcrypt 5 refuses such input and we do not
+      truncate or prehash. A structured warning is logged without the
+      password or hash.
+    """
+    if password_hash.startswith(_BCRYPT_UNSUPPORTED_PREFIXES):
+        return False
+    password_bytes = password.encode("utf-8", errors="surrogatepass")
+    if len(password_bytes) > _BCRYPT_MAX_PASSWORD_BYTES:
+        logger.warning(
+            "bcrypt verification refused: password exceeds 72 bytes",
+            extra={
+                "event": "auth.bcrypt_password_too_long",
+                "hash_scheme": password_hash[:4],
+            },
+        )
+        return False
+    try:
+        return bool(bcrypt.checkpw(password_bytes, password_hash.encode("utf-8")))
+    except (ValueError, TypeError):
+        return False
+
+
 def verify_password(password: str, password_hash: str | None) -> bool:
     if not password_hash:
         return False
     decrypted = decrypt_credential(password_hash)
     if decrypted != password_hash:
         return secrets.compare_digest(password, decrypted or "")
+    if _is_bcrypt_hash(password_hash):
+        return _verify_legacy_bcrypt(password, password_hash)
     return cast(bool, PASSWORD_CONTEXT.verify(password, password_hash))
 
 
