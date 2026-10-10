@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.errors import _validation_error_summary, register_error_handlers
 from app.observability import ObservabilityMiddleware
+from app.web.auth.dependencies import AuthenticationRequired
 
 
 def _build_app() -> FastAPI:
@@ -25,6 +26,10 @@ def _build_app() -> FastAPI:
     @app.get("/web-http-409")
     async def web_http_409():
         raise HTTPException(status_code=409, detail="Record already exists")
+
+    @app.get("/auth-required")
+    async def auth_required():
+        raise AuthenticationRequired("/auth/login")
 
     @app.get("/web-crash")
     async def web_crash():
@@ -103,6 +108,26 @@ def test_api_http_exception_returns_json() -> None:
     assert body["code"] == "http_403"
     assert body["message"] == "Forbidden api"
     assert "request_id" in body
+
+
+def test_authentication_required_returns_json_for_json_client() -> None:
+    resp = _request(
+        _build_app(), "GET", "/auth-required", headers={"accept": "application/json"}
+    )
+    assert resp.status_code == 401
+    assert "application/json" in resp.headers.get("content-type", "")
+    body = resp.json()
+    assert body["code"] == "authentication_required"
+    assert body["message"] == "Sign in again to continue."
+    assert "request_id" in body
+
+
+def test_authentication_required_keeps_browser_redirect() -> None:
+    resp = _request(
+        _build_app(), "GET", "/auth-required", headers={"accept": "text/html"}
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/auth/login"
 
 
 def test_api_validation_error_returns_json() -> None:
