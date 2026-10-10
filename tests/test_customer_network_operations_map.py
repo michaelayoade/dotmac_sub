@@ -131,8 +131,8 @@ def test_customer_network_map_links_and_semantics_are_permission_aware():
     assert "const canReadCustomers" in map_source
     assert "if (canReadCustomers && p.customer_detail_link)" in map_source
     assert "if (canReadCustomers && p.customer_cohort_link)" in map_source
-    assert "p.connectivity.presentation" in map_source
-    assert "p.connectivity.source_owner" in map_source
+    assert "p.connectivity?.presentation" in map_source
+    assert "customerPresentation.source_owner" in map_source
     assert "p.customer_status" in map_source
     assert "customerMarkerIcon(p)" in map_source
     assert "setupHealthDrilldown" in map_source

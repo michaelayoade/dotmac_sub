@@ -831,7 +831,7 @@
             </div>
 
             <section class="network-map-filters rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700"><div><h2 class="font-semibold text-slate-900 dark:text-white">Map Filters</h2><p class="text-xs text-slate-500 dark:text-slate-400">Narrow visible assets within enabled layers</p></div><span id="map-filter-count" class="text-xs font-semibold text-emerald-400">All assets</span></div>
+                <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700"><div><h2 class="font-semibold text-slate-900 dark:text-white">Map Filters</h2><p class="text-xs text-slate-500 dark:text-slate-400">Narrow visible assets within enabled layers</p></div><span id="map-filter-count" class="text-xs font-semibold text-emerald-400">Loading assets…</span></div>
                 <div class="compact-filter-grid p-4">
                     <label class="text-xs text-slate-500 dark:text-slate-400">Customers<select id="filter-customer-status" class="compact-filter-select mt-1"><option value="">All account statuses</option>{% for value in ['new','active','delinquent','blocked','suspended','disabled','canceled'] %}<option value="{{ value }}">{{ value|title }}</option>{% endfor %}</select></label>
                     <div class="grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400"><label>Device status<select id="filter-device-status" class="compact-filter-select mt-1"><option value="">Any status</option><option value="working">Working</option><option value="not_working">Not working</option></select></label><label>Device type<select id="filter-device-type" class="compact-filter-select mt-1"><option value="">Any type</option></select></label></div>
@@ -916,6 +916,13 @@
 
     // Initialize map
     const map = L.map('network-map').setView([0, 0], 2);
+    const initialMapCenter = map.getCenter();
+    const initialMapZoom = map.getZoom();
+    let mapViewInteracted = false;
+    const mapElement = document.getElementById('network-map');
+    ['pointerdown', 'touchstart', 'wheel'].forEach(eventName => {
+        mapElement.addEventListener(eventName, () => { mapViewInteracted = true; }, { passive: true });
+    });
 
     // Add tile layer
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -1221,7 +1228,7 @@
                 editUrl = `/admin/network/core-devices/${p.id}/edit`;
                 break;
             case 'customer':
-                const customerPresentation = p.connectivity.presentation;
+                const customerPresentation = p.connectivity?.presentation || { label: 'Unknown', tone: 'neutral', source_owner: 'unknown' };
                 const visualStatus = customerVisualStatus(p);
                 iconBg = customerStatusColors[visualStatus] || customerStatusColors.offline;
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>';
@@ -1265,14 +1272,14 @@
         if (p.address) html += `<div class="asset-detail-row"><span class="asset-detail-label">Address</span><span class="asset-detail-value">${escapeHtml(p.address)}</span></div>`;
         if (p.city) html += `<div class="asset-detail-row"><span class="asset-detail-label">City</span><span class="asset-detail-value">${escapeHtml(p.city)}</span></div>`;
         if (p.type === 'customer') {
-            const customerPresentation = p.connectivity.presentation;
-            const sessionStatus = p.connectivity.layer === 'connected' ? 'Online' : 'Offline';
+            const customerPresentation = p.connectivity?.presentation || { label: 'Unknown', tone: 'neutral', source_owner: 'unknown' };
+            const sessionStatus = p.connectivity?.layer === 'connected' ? 'Online' : 'Offline';
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Customer status</span><span class="asset-detail-value" style="color:${customerColor}">${escapeHtml(p.customer_status || 'Unknown')}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Session status</span><span class="asset-detail-value status-foreground status-tone-${semanticTone(customerPresentation.tone)}">${sessionStatus}</span></div>`;
             html += `<div class="asset-detail-row"><span class="asset-detail-label">Connectivity</span><span class="asset-detail-value">${escapeHtml(customerPresentation.label)}</span></div>`;
             if (p.region_name) html += `<div class="asset-detail-row"><span class="asset-detail-label">Region</span><span class="asset-detail-value"><span class="customer-status-dot" style="background:${escapeHtml(p.region_color || '#64748b')}"></span>${escapeHtml(p.region_name)}</span></div>`;
-            html += `<div class="asset-detail-row"><span class="asset-detail-label">Source</span><span class="asset-detail-value">${escapeHtml(p.connectivity.source_owner)}</span></div>`;
-            if (p.connectivity.observed_at) {
+            html += `<div class="asset-detail-row"><span class="asset-detail-label">Source</span><span class="asset-detail-value">${escapeHtml(customerPresentation.source_owner)}</span></div>`;
+            if (p.connectivity?.observed_at) {
                 html += `<div class="asset-detail-row"><span class="asset-detail-label">Observed</span><span class="asset-detail-value">${escapeHtml(p.connectivity.observed_at)}</span></div>`;
             }
         }
@@ -1354,120 +1361,65 @@
         return names[properties.type] || null;
     }
 
-    // Process features
-    if (mapFeatures.length > 0) {
-        mapFeatures.forEach(feature => {
-            const p = feature?.properties || {};
-            const geom = feature?.geometry;
-            if (!geom || !geom.type) return;
+    // Layer controls are bound before feature rendering so they remain usable
+    // while the large projection is being turned into Leaflet layers.
+    const layerToggles = {
+        'layer-pop': 'pop',
+        'layer-fdh': 'fdh',
+        'layer-closures': 'closures',
+        'layer-access-points': 'accessPoints',
+        'layer-support-structures': 'supportStructures',
+        'layer-network-devices': 'networkDevices',
+        'layer-onts': 'onts',
+        'layer-customers-connected': 'customersConnected',
+        'layer-customers-not-connected': 'customersNotConnected',
+        'layer-regions': 'regions',
+        'layer-feeder': 'feeder',
+        'layer-distribution': 'distribution',
+        'layer-drop': 'drop'
+    };
+    let layersSuppressed = Object.keys(layerToggles).every(id => !document.getElementById(id).checked);
+    const layersAll = document.getElementById('layers-all');
+    const layersNone = document.getElementById('layers-none');
 
-            if (geom.type === 'Point') {
-                const coords = [geom.coordinates[1], geom.coordinates[0]];
-                bounds.push(coords);
-                if (p.type === 'customer') customerBounds.push(coords);
-
-                let icon;
-                if (p.type === 'customer') {
-                    icon = customerMarkerIcon(p);
-                } else if (p.type === 'ont') {
-                    if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
-                        icon = icons.ont_warning;
-                    } else if (p.status === 'working') {
-                        icon = icons.ont_working;
-                    } else {
-                        icon = icons.ont_not_working;
-                    }
-                } else if (p.type === 'network_device') {
-                    const tone = p.status_presentation?.tone || 'neutral';
-                    if (tone === 'positive') {
-                        icon = icons.network_device_working;
-                    } else if (tone === 'negative') {
-                        icon = icons.network_device_not_working;
-                    } else if (tone === 'warning') {
-                        icon = icons.network_device_degraded;
-                    } else {
-                        icon = icons.network_device_neutral;
-                    }
-                } else {
-                    icon = icons[p.type] || icons.customer_not_connected;
-                }
-                const marker = L.marker(coords, { icon: icon });
-
-                marker.on('click', () => showAssetDetail(feature));
-                marker.featureData = feature;
-
-                // Build searchable text from multiple fields
-                const searchText = [
-                    p.name || '',
-                    p.code || '',
-                    p.address || '',
-                    p.city || '',
-                    p.clli || '',
-                    p.street || ''
-                ].filter(Boolean).join(' ').toLowerCase();
-
-                allFeatures.push({
-                    feature,
-                    marker,
-                    polyline: null,
-                    name: p.name || '',
-                    code: p.code || '',
-                    address: p.address || p.street || '',
-                    city: p.city || '',
-                    type: p.type,
-                    searchText,
-                    layerName: featureLayerName(p),
-                    filteredOut: false
-                });
-
-                switch (p.type) {
-                    case 'pop_site': layers.pop.addLayer(marker); break;
-                    case 'fdh_cabinet': layers.fdh.addLayer(marker); break;
-                    case 'splice_closure': layers.closures.addLayer(marker); break;
-                    case 'access_point': layers.accessPoints.addLayer(marker); break;
-                    case 'support_structure': layers.supportStructures.addLayer(marker); break;
-                    case 'network_device': layers.networkDevices.addLayer(marker); break;
-                    case 'ont': layers.onts.addLayer(marker); break;
-                    case 'customer':
-                        (p.connectivity.layer === 'connected'
-                            ? layers.customersConnected
-                            : layers.customersNotConnected).addLayer(marker);
-                        break;
-                }
-            } else if (geom.type === 'LineString') {
-                const coords = geom.coordinates.map(c => [c[1], c[0]]);
-                bounds.push(...coords);
-
-                const segType = p.segment_type || 'distribution';
-                const style = buildSegmentStyle(segType, p.fiber_count);
-
-                const polyline = L.polyline(coords, style);
-                polyline.on('click', () => showAssetDetail(feature));
-
-                // Add fiber segments to searchable list
-                const searchText = [p.name || '', p.segment_type || ''].filter(Boolean).join(' ').toLowerCase();
-                allFeatures.push({
-                    feature,
-                    marker: null,
-                    polyline,
-                    name: p.name || '',
-                    code: '',
-                    address: '',
-                    city: '',
-                    type: 'fiber_segment',
-                    searchText,
-                    layerName: featureLayerName(p),
-                    filteredOut: false
-                });
-
-                switch (segType) {
-                    case 'feeder': layers.feeder.addLayer(polyline); break;
-                    case 'drop': layers.drop.addLayer(polyline); break;
-                    default: layers.distribution.addLayer(polyline); break;
-                }
-            }
-        });
+    function syncLayerBulkButtons() {
+        const toggles = Object.keys(layerToggles).map(id => document.getElementById(id));
+        const allChecked = toggles.every(toggle => toggle.checked);
+        const noneChecked = toggles.every(toggle => !toggle.checked);
+        layersAll.setAttribute('aria-pressed', String(allChecked));
+        layersNone.setAttribute('aria-pressed', String(noneChecked));
     }
+
+    function setAllLayers(enabled) {
+        layersSuppressed = !enabled;
+        Object.entries(layerToggles).forEach(([checkboxId, layerName]) => {
+            const checkbox = document.getElementById(checkboxId);
+            checkbox.checked = enabled;
+            if (enabled) map.addLayer(layers[layerName]);
+            else map.removeLayer(layers[layerName]);
+        });
+        syncLayerBulkButtons();
+        applyMapFilters();
+        scheduleFitAllBounds();
+    }
+
+    Object.entries(layerToggles).forEach(([checkboxId, layerName]) => {
+        const checkbox = document.getElementById(checkboxId);
+        if (checkbox) {
+            checkbox.addEventListener('change', function() {
+                if (this.checked) map.addLayer(layers[layerName]);
+                else map.removeLayer(layers[layerName]);
+                layersSuppressed = Object.keys(layerToggles)
+                    .every(id => !document.getElementById(id).checked);
+                applyMapFilters();
+                syncLayerBulkButtons();
+                scheduleFitAllBounds();
+            });
+        }
+    });
+    layersAll.addEventListener('click', () => setAllLayers(true));
+    layersNone.addEventListener('click', () => setAllLayers(false));
+    syncLayerBulkButtons();
 
     // Fit bounds
     function fitAllBounds() {
@@ -1500,70 +1452,164 @@
             fitAllBounds();
         });
     }
-    const initialFocus = new URLSearchParams(window.location.search).get('focus');
-    if (initialFocus === 'customers' && customerBounds.length > 0) {
-        map.fitBounds(customerBounds, { padding: [50, 50] });
-    } else {
-        fitAllBounds();
-    }
 
-    // Layer toggles
-    const layerToggles = {
-        'layer-pop': 'pop',
-        'layer-fdh': 'fdh',
-        'layer-closures': 'closures',
-        'layer-access-points': 'accessPoints',
-        'layer-support-structures': 'supportStructures',
-        'layer-network-devices': 'networkDevices',
-        'layer-onts': 'onts',
-        'layer-customers-connected': 'customersConnected',
-        'layer-customers-not-connected': 'customersNotConnected',
-        'layer-regions': 'regions',
-        'layer-feeder': 'feeder',
-        'layer-distribution': 'distribution',
-        'layer-drop': 'drop'
-    };
-    let layersSuppressed = Object.keys(layerToggles).every(id => !document.getElementById(id).checked);
+    function processMapFeature(feature) {
+        const p = feature?.properties || {};
+        const geom = feature?.geometry;
+        if (!geom || !geom.type) return;
 
-    Object.entries(layerToggles).forEach(([checkboxId, layerName]) => {
-        const checkbox = document.getElementById(checkboxId);
-        if (checkbox) {
-            checkbox.addEventListener('change', function() {
-                if (this.checked) map.addLayer(layers[layerName]);
-                else map.removeLayer(layers[layerName]);
-                layersSuppressed = Object.keys(layerToggles)
-                    .every(id => !document.getElementById(id).checked);
-                applyMapFilters();
-                syncLayerBulkButtons();
-                scheduleFitAllBounds();
+        if (geom.type === 'Point') {
+            const coords = [geom.coordinates[1], geom.coordinates[0]];
+            bounds.push(coords);
+            if (p.type === 'customer') customerBounds.push(coords);
+
+            let icon;
+            if (p.type === 'customer') {
+                icon = customerMarkerIcon(p);
+            } else if (p.type === 'ont') {
+                if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
+                    icon = icons.ont_warning;
+                } else if (p.status === 'working') {
+                    icon = icons.ont_working;
+                } else {
+                    icon = icons.ont_not_working;
+                }
+            } else if (p.type === 'network_device') {
+                const tone = p.status_presentation?.tone || 'neutral';
+                if (tone === 'positive') {
+                    icon = icons.network_device_working;
+                } else if (tone === 'negative') {
+                    icon = icons.network_device_not_working;
+                } else if (tone === 'warning') {
+                    icon = icons.network_device_degraded;
+                } else {
+                    icon = icons.network_device_neutral;
+                }
+            } else {
+                icon = icons[p.type] || icons.customer_not_connected;
+            }
+            const marker = L.marker(coords, { icon: icon });
+
+            marker.on('click', () => showAssetDetail(feature));
+            marker.featureData = feature;
+
+            const searchText = [
+                p.name || '',
+                p.code || '',
+                p.address || '',
+                p.city || '',
+                p.clli || '',
+                p.street || ''
+            ].filter(Boolean).join(' ').toLowerCase();
+
+            allFeatures.push({
+                feature,
+                marker,
+                polyline: null,
+                name: p.name || '',
+                code: p.code || '',
+                address: p.address || p.street || '',
+                city: p.city || '',
+                type: p.type,
+                searchText,
+                layerName: featureLayerName(p),
+                filteredOut: false
             });
-        }
-    });
 
-    const layersAll = document.getElementById('layers-all');
-    const layersNone = document.getElementById('layers-none');
-    function syncLayerBulkButtons() {
-        const toggles = Object.keys(layerToggles).map(id => document.getElementById(id));
-        const allChecked = toggles.every(toggle => toggle.checked);
-        const noneChecked = toggles.every(toggle => !toggle.checked);
-        layersAll.setAttribute('aria-pressed', String(allChecked));
-        layersNone.setAttribute('aria-pressed', String(noneChecked));
+            switch (p.type) {
+                case 'pop_site': layers.pop.addLayer(marker); break;
+                case 'fdh_cabinet': layers.fdh.addLayer(marker); break;
+                case 'splice_closure': layers.closures.addLayer(marker); break;
+                case 'access_point': layers.accessPoints.addLayer(marker); break;
+                case 'support_structure': layers.supportStructures.addLayer(marker); break;
+                case 'network_device': layers.networkDevices.addLayer(marker); break;
+                case 'ont': layers.onts.addLayer(marker); break;
+                case 'customer':
+                    (p.connectivity?.layer === 'connected'
+                        ? layers.customersConnected
+                        : layers.customersNotConnected).addLayer(marker);
+                    break;
+            }
+        } else if (geom.type === 'LineString') {
+            const coords = geom.coordinates.map(c => [c[1], c[0]]);
+            bounds.push(...coords);
+
+            const segType = p.segment_type || 'distribution';
+            const style = buildSegmentStyle(segType, p.fiber_count);
+
+            const polyline = L.polyline(coords, style);
+            polyline.on('click', () => showAssetDetail(feature));
+
+            const searchText = [p.name || '', p.segment_type || ''].filter(Boolean).join(' ').toLowerCase();
+            allFeatures.push({
+                feature,
+                marker: null,
+                polyline,
+                name: p.name || '',
+                code: '',
+                address: '',
+                city: '',
+                type: 'fiber_segment',
+                searchText,
+                layerName: featureLayerName(p),
+                filteredOut: false
+            });
+
+            switch (segType) {
+                case 'feeder': layers.feeder.addLayer(polyline); break;
+                case 'drop': layers.drop.addLayer(polyline); break;
+                default: layers.distribution.addLayer(polyline); break;
+            }
+        }
     }
-    function setAllLayers(enabled) {
-        layersSuppressed = !enabled;
-        Object.entries(layerToggles).forEach(([checkboxId, layerName]) => {
-            const checkbox = document.getElementById(checkboxId);
-            checkbox.checked = enabled;
-            if (enabled) map.addLayer(layers[layerName]);
-            else map.removeLayer(layers[layerName]);
-        });
-        syncLayerBulkButtons();
+
+    const mapFeatureBatchSize = 200;
+    let mapFeatureIndex = 0;
+    let mapFeaturesReady = mapFeatures.length === 0;
+    let skippedMapFeatures = 0;
+
+    function finishMapFeatureProcessing() {
+        mapFeaturesReady = true;
         applyMapFilters();
-        scheduleFitAllBounds();
+        if (pendingSearchQuery !== null) {
+            const query = pendingSearchQuery;
+            pendingSearchQuery = null;
+            if (query.length >= 2) refreshSearchResults(query);
+        }
+        if (mapViewInteracted
+            || map.getZoom() !== initialMapZoom
+            || !map.getCenter().equals(initialMapCenter)) {
+            return;
+        }
+        const initialFocus = new URLSearchParams(window.location.search).get('focus');
+        if (initialFocus === 'customers' && customerBounds.length > 0) {
+            map.fitBounds(customerBounds, { padding: [50, 50] });
+        } else {
+            fitAllBounds();
+        }
     }
-    layersAll.addEventListener('click', () => setAllLayers(true));
-    layersNone.addEventListener('click', () => setAllLayers(false));
-    syncLayerBulkButtons();
+
+    function processMapFeatureBatch() {
+        const end = Math.min(mapFeatureIndex + mapFeatureBatchSize, mapFeatures.length);
+        for (; mapFeatureIndex < end; mapFeatureIndex += 1) {
+            try {
+                processMapFeature(mapFeatures[mapFeatureIndex]);
+            } catch (error) {
+                skippedMapFeatures += 1;
+                console.error('Network map feature skipped during rendering', {
+                    index: mapFeatureIndex,
+                    error
+                });
+            }
+        }
+        if (mapFeatureIndex < mapFeatures.length) {
+            requestMapFrame(processMapFeatureBatch);
+        } else {
+            finishMapFeatureProcessing();
+        }
+    }
+
+    requestMapFrame(mapFeatures.length > 0 ? processMapFeatureBatch : finishMapFeatureProcessing);
 
     // Close panel
     function closeAssetPanel() {
@@ -1686,7 +1732,12 @@
             else if (group.hasLayer(asset)) group.removeLayer(asset);
         });
         const count = document.getElementById('map-filter-count');
-        count.textContent = visible === allFeatures.length ? 'All loaded assets' : `${visible} of ${allFeatures.length} loaded`;
+        const summary = mapFeaturesReady && visible === allFeatures.length
+            ? 'All loaded assets'
+            : `${visible} of ${allFeatures.length} loaded`;
+        count.textContent = skippedMapFeatures > 0
+            ? `${summary} · ${skippedMapFeatures} unavailable`
+            : summary;
     }
 
     const deviceTypes = [...new Set(mapFeatures
@@ -1911,11 +1962,18 @@
 
     // Search input handler with debounce
     let searchTimeout;
+    let pendingSearchQuery = null;
+    function refreshSearchResults(query) {
+        const matches = allFeatures.filter(f => !f.filteredOut && f.searchText.includes(query));
+        showSearchResults(matches, query);
+    }
+
     searchInput.addEventListener('input', function() {
         clearTimeout(searchTimeout);
         updateClearButton();
         const rawValue = this.value.trim();
         const query = rawValue.toLowerCase();
+        pendingSearchQuery = null;
         const coords = parseLatLng(rawValue);
 
         if (coords) {
@@ -1929,13 +1987,17 @@
         }
 
         if (query.length < 2) {
+            pendingSearchQuery = null;
             hideSearchResults();
             return;
         }
 
         searchTimeout = setTimeout(() => {
-            const matches = allFeatures.filter(f => !f.filteredOut && f.searchText.includes(query));
-            showSearchResults(matches, query);
+            if (!mapFeaturesReady) {
+                pendingSearchQuery = query;
+                return;
+            }
+            refreshSearchResults(query);
         }, 150);
     });
 

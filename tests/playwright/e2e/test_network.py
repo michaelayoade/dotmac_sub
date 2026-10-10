@@ -7,6 +7,7 @@ from playwright.sync_api import Page, expect
 from tests.playwright.pages.admin.network import (
     FiberMapPage,
     IPManagementPage,
+    NetworkMapPage,
     OLTsPage,
     ONTsPage,
     VLANsPage,
@@ -110,6 +111,34 @@ class TestFiberMap:
         page.goto()
         page.expect_loaded()
         page.expect_map_visible()
+
+
+class TestNetworkMap:
+    """Tests for the comprehensive network map layer controls."""
+
+    def test_layer_bulk_and_individual_controls_work(self, admin_page: Page, settings):
+        """All and individual layer controls should update their states."""
+        page = NetworkMapPage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+
+        page.click_all_layers()
+        page.expect_all_layers_enabled()
+        expect(admin_page.locator("#layers-all")).to_have_attribute(
+            "aria-pressed", "true"
+        )
+
+        page.set_layer("pop", False)
+        expect(admin_page.locator("#layer-pop")).not_to_be_checked()
+        expect(admin_page.locator("#layers-all")).to_have_attribute(
+            "aria-pressed", "false"
+        )
+
+        page.set_layer("pop", True)
+        expect(admin_page.locator("#layer-pop")).to_be_checked()
+        expect(admin_page.locator("#layers-all")).to_have_attribute(
+            "aria-pressed", "true"
+        )
 
 
 class TestNetworkAPI:
