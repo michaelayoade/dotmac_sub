@@ -133,12 +133,14 @@ by the existing delivery outbox consumer.
 Every receipt transition stages `customer_bulk_message.changed` version-1
 record-only audit evidence in the same transaction, containing only the request
 UUID, state and attempt. Dispatch work is represented by the receipt row itself.
-Receipt status is a fresh owner query, scoped to the admitting actor and send
-permission. Delivery counters come from its linked notifications; retryable
-failed attempts remain pending, and provider-submitted messages remain distinct
-from delivered messages. Missing receipts and denied access never imply an
-accepted send. A stale preparation lease is the drift signal; the permanent
-receipt drain is the idempotent repair path and this owner is the repair owner.
+Receipt status is a fresh owner query, scoped to the authenticated principal
+that admitted the send and send permission. This includes staff system users,
+whose principal ID is not a subscriber ID. Delivery counters come from its
+linked notifications; retryable failed attempts remain pending, and
+provider-submitted messages remain distinct from delivered messages. Missing
+receipts and denied access never imply an accepted send. A stale preparation
+lease is the drift signal; the permanent receipt drain is the idempotent repair
+path and this owner is the repair owner.
 
 ### Customer send status page contract
 
@@ -157,6 +159,14 @@ failed preparation, pending provider confirmation and terminal delivery counts
 remain distinct. The responsive panel uses an ARIA live status and a keyboard
 accessible Check status button; receipt payloads/customer lists are not stored
 in browser storage. Audit investigation is through the request UUID.
+
+Browser receipt requests explicitly ask for JSON and read the shared API error
+envelope (`code`, `message`, `details`, and `request_id`). Authentication and
+permission failures keep the saved send reference and explain the required
+operator action; they must not look like an ordinary login-page response.
+An unavailable receipt keeps the original reference unresolved; a temporary
+gap must not invite a second send. Conflicts and transport failures also keep
+the original reference until its receipt can be checked.
 
 ### Rollout and existing work
 

@@ -1113,7 +1113,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Search and open the exact notification record before editing or retrying anything.",
         "Create or edit templates and policies, choose the purpose that matches the customer message, preview the result, then save and verify it.",
         "For manual customer-page sends, suspended or blocked accounts may receive only account, billing, service, or credentials messages; canceled and disabled accounts receive none.",
-        "For customer bulk messages, Accepted and Preparing describe recipient preparation; queued delivery requests, provider submissions, confirmed deliveries, and failures appear separately in the send status panel.",
+        "For customer bulk messages, Accepted and Preparing describe recipient preparation; queued delivery requests, provider submissions, confirmed deliveries, and failures appear separately in the send status panel. A send receipt belongs to the signed-in staff account that confirmed it; use that same account when checking its status.",
         "A broker outage leaves an accepted request for automatic recovery. A failed preparation requires reviewing the reason and a new preview before another confirmed send.",
         "Review delivery failure evidence before retrying or canceling a queued notification.",
         "Before a controlled payment email adoption, review the receipt and invoice-paid comparison report, including both template IDs, purpose, conditions, and active state.",

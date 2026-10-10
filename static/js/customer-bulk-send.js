@@ -37,18 +37,39 @@
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 45000);
         try {
-            const response = await fetch(url, {...options, signal: controller.signal, redirect: 'error', cache: 'no-store'});
+            const response = await fetch(url, {
+                ...options,
+                headers: {...(options.headers || {}), Accept: 'application/json'},
+                signal: controller.signal,
+                redirect: 'error',
+                cache: 'no-store'
+            });
             const body = await response.json();
             return {response, body};
         } finally { clearTimeout(timeout); }
+    };
+    const responseMessage = body => {
+        const message = body?.message || body?.detail;
+        return typeof message === 'string' && message.trim() ? message.trim() : null;
+    };
+    const statusError = (response, body) => {
+        if (response.status === 401) return 'Sign in again, then check this send reference.';
+        if (response.status === 403) return 'You do not have permission to check this send.';
+        if (response.status === 404) return 'No saved send record is available yet. Keep this reference and check again before sending another message.';
+        return responseMessage(body) || 'Could not confirm the send status.';
     };
     /** @returns {Promise<BulkSendStatus>} */
     const check = async () => {
         if (!saved) throw new Error('No send reference is available.');
         const id = saved.requestId;
         const {response, body} = await requestJson(`/admin/customers/bulk/send-message/${encodeURIComponent(id)}`);
-        if (!response.ok || body.request_id !== id || body.accepted !== true) {
-            throw new Error('Could not confirm the send status. Keep this send reference and check again before sending another message.');
+        if (!response.ok) {
+            const error = new Error(statusError(response, body));
+            error.status = response.status;
+            throw error;
+        }
+        if (body.request_id !== id || body.accepted !== true) {
+            throw new Error('The server returned a status that does not match this send reference. Keep the reference and check again before sending another message.');
         }
         if (saved?.requestId === id) {
             saved.state = body.materialization_status;
@@ -103,24 +124,27 @@
                     persist(); render(body); watch();
                     return body;
                 }
-                if ([400, 403, 409, 422].includes(response.status) && typeof body.detail === 'string') {
+                const message = responseMessage(body);
+                if ([400, 403, 404, 422].includes(response.status) && message) {
                     // Only a definite server rejection allows a new request identity.
                     saved = null; persist();
-                    const error = new Error(body.detail);
+                    const error = new Error(message);
                     error.rejected = true;
                     throw error;
                 }
-                throw new Error('Send confirmation unavailable.');
+                throw new Error(message || 'Send confirmation unavailable.');
             } catch (error) {
                 if (error.rejected) throw error;
                 try {
                     const status = await check();
                     watch();
                     return status;
-                } catch (_) {
-                    show('Could not confirm the send status. Keep this reference and use Check status before sending again.', id);
-                    watch();
-                    throw new Error('Could not confirm the send status. Check the send status panel before sending again.');
+                } catch (statusFailure) {
+                    const message = statusFailure.message || error.message || 'Could not confirm the send status.';
+                    const guidance = `${message} Keep this reference and check again before sending another message.`;
+                    show(guidance, id);
+                    if (![401, 403, 404].includes(statusFailure.status)) watch();
+                    throw new Error(guidance);
                 }
             }
         } finally { inFlight = false; }

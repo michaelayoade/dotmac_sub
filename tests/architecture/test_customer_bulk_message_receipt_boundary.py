@@ -23,6 +23,33 @@ def test_bulk_message_adapter_uses_receipt_identity_and_status() -> None:
     assert "request_id=request_id" in body
 
 
+def test_bulk_message_receipt_uses_authenticated_principal_for_staff_users() -> None:
+    source = (ROOT / "app/web/admin/customers.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    helper = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_get_bulk_message_actor_id"
+    )
+    helper_body = ast.get_source_segment(source, helper)
+    assert 'auth.get("principal_id")' in helper_body
+    assert "return UUID(str(principal_id))" in helper_body
+
+    for route_name in (
+        "bulk_send_customer_message",
+        "customer_bulk_message_status",
+    ):
+        route = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.FunctionDef) and node.name == route_name
+        )
+        body = ast.get_source_segment(source, route)
+        assert "_get_bulk_message_actor_id(request)" in body
+        assert "_get_actor_id(request)" not in body
+
+
 def test_materialization_participant_cannot_commit_or_run_without_owner() -> None:
     source = (ROOT / "app/services/web_customer_actions.py").read_text(encoding="utf-8")
     module = ast.parse(source)
@@ -47,7 +74,12 @@ def test_materialization_participant_cannot_commit_or_run_without_owner() -> Non
 
 def test_receipt_drain_is_permanent_and_both_screens_recover_status() -> None:
     scheduler = (ROOT / "app/services/scheduler.py").read_text(encoding="utf-8")
+    helper = (ROOT / "static/js/customer-bulk-send.js").read_text(encoding="utf-8")
     assert '"app.tasks.notifications.dispatch_customer_bulk_messages"' in scheduler
+    assert "Accept: 'application/json'" in helper
+    assert "body?.message || body?.detail" in helper
+    assert "response.status === 401" in helper
+    assert "response.status === 403" in helper
     for page in ("index.html", "detail.html"):
         source = (ROOT / "templates/admin/customers" / page).read_text(encoding="utf-8")
         assert 'include "admin/customers/_bulk_send_status.html"' in source

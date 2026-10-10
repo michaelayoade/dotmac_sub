@@ -200,6 +200,18 @@ def _get_actor_id(request: Request) -> str | None:
     return str(current_user.get("subscriber_id")) if current_user else None
 
 
+def _get_bulk_message_actor_id(request: Request) -> UUID | None:
+    """Return the authenticated principal that owns a bulk-send receipt."""
+    auth = getattr(request.state, "auth", {})
+    principal_id = auth.get("principal_id") if isinstance(auth, Mapping) else None
+    if not principal_id:
+        return None
+    try:
+        return UUID(str(principal_id))
+    except (TypeError, ValueError):
+        return None
+
+
 def _payment_intent_command_context(
     auth: dict, *, intent_id: UUID, reason: str
 ) -> CommandContext:
@@ -3441,7 +3453,9 @@ def bulk_send_customer_message(
         from app.services import customer_bulk_messages
         from app.services.customer_bulk_message_contracts import BulkMessageSpec
 
-        actor_id = UUID(_get_actor_id(request) or "")
+        actor_id = _get_bulk_message_actor_id(request)
+        if actor_id is None:
+            raise HTTPException(status_code=401, detail="Sign in to send this message.")
         request_id = UUID(str(data.get("request_id") or ""))
         spec = BulkMessageSpec.model_validate(
             {key: value for key, value in data.items() if key != "request_id"}
@@ -3530,15 +3544,15 @@ def customer_bulk_message_status(
 ):
     from app.services import customer_bulk_messages
 
-    actor_id = _get_actor_id(request)
-    if not actor_id:
+    actor_id = _get_bulk_message_actor_id(request)
+    if actor_id is None:
         raise HTTPException(status_code=401, detail="Sign in to check this send.")
     try:
         result = customer_bulk_messages.status(
             db=db,
             query=customer_bulk_messages.BulkMessageStatusQuery(
                 request_id=request_id,
-                actor_id=UUID(actor_id),
+                actor_id=actor_id,
             ),
         )
         return JSONResponse(content=result.model_dump(mode="json"))
