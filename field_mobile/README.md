@@ -75,3 +75,14 @@ sign-in):
 ```sh
 ../scripts/mobile_sim.sh field_mobile ios        # or: android, and `run` for hot reload
 ```
+
+## Push startup
+
+Firebase configuration is resolved before the app root is built. Notification
+permission and cold-launch notification retrieval start only when the push
+registrar subscribes, after the UI starts. Neither native call gates login or
+job access. A pending iOS notification response therefore cannot hold the app
+on its native splash screen. Cold-launch taps are captured after a consumer
+exists so their navigation event is not discarded before subscription. Session
+restoration and encrypted-storage reconciliation retain their existing startup
+ordering.
