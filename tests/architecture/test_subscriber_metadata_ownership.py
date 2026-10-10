@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from scripts.architecture.subscriber_metadata_census import (
+    PROVENANCE_ONLY_SPLYNX_KEYS,
     RETIRED_SPLYNX_KEYS,
     Access,
     _Census,
@@ -38,6 +39,10 @@ BASELINE = Path(__file__).with_name("subscriber_metadata_writers_baseline.txt")
 PURGE_MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "alembic/versions/664_purge_retired_splynx_metadata_keys.py"
+)
+BILLING_EMAIL_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "alembic/versions/665_backfill_splynx_billing_email_contacts.py"
 )
 
 REGENERATE = (
@@ -395,13 +400,68 @@ def test_still_read_splynx_keys_are_not_retired() -> None:
         "splynx_last_online",
         "splynx_gps",
         "splynx_location_id",
-        "splynx_billing_email",
     }
     assert not still_read & set(RETIRED_SPLYNX_KEYS)
     # And the scan really sees the readers that keep them alive.
     seen = {key for _, key in retired_key_references(tuple(sorted(still_read)))}
     assert {"splynx_last_online", "splynx_gps", "splynx_location_id"} <= seen
-    assert "splynx_billing_email" in seen
+
+
+# --------------------------------------------------------------------------
+# splynx_billing_email: moved to billing contacts by 665, provenance only
+# --------------------------------------------------------------------------
+
+
+def _billing_email_migration():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "backfill_splynx_billing_email_contacts", BILLING_EMAIL_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_provenance_only_keys_match_the_billing_email_migration() -> None:
+    assert PROVENANCE_ONLY_SPLYNX_KEYS == (_billing_email_migration().KEY,)
+
+
+def test_provenance_only_keys_are_neither_declared_nor_retired() -> None:
+    """Conflict and invalid rows may still carry them, so not purged; and
+    declaring one writable would let the owner accept new values."""
+
+    from app.services.subscriber_metadata_keys import DECLARED_METADATA_KEYS
+
+    assert not set(PROVENANCE_ONLY_SPLYNX_KEYS) & set(DECLARED_METADATA_KEYS)
+    assert not set(PROVENANCE_ONLY_SPLYNX_KEYS) & set(RETIRED_SPLYNX_KEYS)
+
+
+def test_no_product_code_reads_a_provenance_only_splynx_key() -> None:
+    """The reader was cut over to typed billing contacts; it must stay cut."""
+
+    references = retired_key_references(PROVENANCE_ONLY_SPLYNX_KEYS)
+    assert not references, (
+        "these files reference `subscribers.metadata` keys whose values moved "
+        "to a typed home (migration 665). Read the typed owner instead "
+        "(customer_portal_contacts.account_billing_email):\n  "
+        + "\n  ".join(f"{path}: {key}" for path, key in references)
+    )
+
+
+def test_the_provenance_only_scan_detects_a_reference_sensitivity(
+    tmp_path, monkeypatch
+) -> None:
+    from scripts.architecture import subscriber_metadata_census as census
+
+    probe = tmp_path / "app" / "probe.py"
+    probe.parent.mkdir()
+    probe.write_text("value = metadata.get('splynx_billing_email')\n", encoding="utf-8")
+    monkeypatch.setattr(census, "REPOSITORY_ROOT", tmp_path)
+    assert census.retired_key_references(PROVENANCE_ONLY_SPLYNX_KEYS) == [
+        ("app/probe.py", "splynx_billing_email")
+    ]
 
 
 def test_the_retired_key_scan_detects_a_reference_sensitivity(
