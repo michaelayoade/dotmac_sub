@@ -371,6 +371,10 @@ preflight verifies them before backup.
 
 ## Post-migration resume
 
+For interrupted regional-report index builds, see
+[`REGIONAL_REPORT_INDEX_RECOVERY.md`](REGIONAL_REPORT_INDEX_RECOVERY.md).
+A migration version row alone does not prove a concurrent index is usable.
+
 A failed production run may be resumed without another full backup only when
 the failure happened after the backup and after `alembic upgrade heads`
 completed. The workflow input is `resume_after_migration=true` with the prior
