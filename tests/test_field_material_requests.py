@@ -20,6 +20,7 @@ from app.models.support import Ticket
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
+from app.services.field.execution_contracts import FieldJobQuery
 from app.services.field.jobs import field_jobs
 from app.services.field.material_requests import field_material_requests
 
@@ -137,7 +138,12 @@ def test_create_submit_and_surface_material_request_in_job_detail(db_session):
     assert submitted["status"] == "submitted"
     assert submitted["submitted_at"] is not None
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-material-request-flow")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-material-request-flow"
+        ),
+    )
     assert len(detail.material_requests) == 1
     assert detail.material_requests[0].status == "submitted"
 

@@ -45,7 +45,9 @@ class TodayScreen extends ConsumerWidget {
           onRefresh: () async {
             ref.invalidate(meProvider);
             ref.invalidate(todayJobsProvider);
-            ref.invalidate(attendanceControllerProvider);
+            if (ref.read(fieldCapabilitiesProvider).attendance.available) {
+              ref.invalidate(attendanceControllerProvider);
+            }
           },
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -69,8 +71,12 @@ class TodayScreen extends ConsumerWidget {
                       const SizedBox(height: 12),
                       const SyncStatusBar(),
                       const SizedBox(height: 12),
-                      const LocationSharingControls(),
-                      if (jobs.value?.fromCache ?? false)
+                      if (ref
+                          .watch(fieldCapabilitiesProvider)
+                          .attendance
+                          .available)
+                        const LocationSharingControls(),
+                      if (jobs.asData?.value.fromCache ?? false)
                         const _OfflineBanner(),
                       const SizedBox(height: 16),
                       _FilterRail(

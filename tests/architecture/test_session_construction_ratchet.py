@@ -116,12 +116,15 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: migration and serialized subscription activation. Production remains unchanged.
 #: +1 from test_support_ticket_comment_idempotency_concurrency.py: an independent
 #: worker session proves ticket-scoped duplicate submissions serialize correctly.
+#: +12 from tests/integration/test_vendor_work_order_execution.py: disposable
+#: migrated engines and independent sessions prove assignment, revocation and
+#: actor lock-order concurrency; no production construction allowance is added.
 #: +1 from test_prepaid_paid_invoice_period_repair_concurrency.py: independent
 #: worker sessions prove concurrent four-eyes period-repair approvals serialize.
 #: +2 from test_prepaid_renewal_origin_correction_concurrency.py and
 #: test_legacy_over_allocation_correction_concurrency.py: independent worker
 #: sessions prove concurrent reviewed corrections serialize and converge.
-TEST_FIXTURE_BASELINE_TOTAL = 176
+TEST_FIXTURE_BASELINE_TOTAL = 188
 
 
 def _baseline() -> dict[str, int]:

@@ -10,6 +10,7 @@ import 'package:dotmac_field/features/jobs/widgets/job_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/field_capability_fixtures.dart';
 
 JobSummary _job({String status = 'dispatched', String workType = 'install'}) =>
     JobSummary(
@@ -87,6 +88,7 @@ Widget _wrap(
   List<JobDestination> destinations = const [],
 }) => ProviderScope(
   overrides: [
+    fieldCapabilitiesProvider.overrideWithValue(availableFieldCapabilities),
     jobDestinationsProvider('wo-1').overrideWith((ref) async => destinations),
     ...overrides,
   ],

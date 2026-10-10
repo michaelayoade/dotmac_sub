@@ -23,7 +23,6 @@ app/api/domains_provisioning.py 7
 app/api/domains_usage.py 5
 app/api/external.py 1
 app/api/field/materials.py 1
-app/api/field/worklogs.py 1
 app/api/gis.py 10
 app/api/integrations.py 3
 app/api/me.py 14

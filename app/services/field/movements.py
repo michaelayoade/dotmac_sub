@@ -6,14 +6,13 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.dispatch import TechnicianProfile
 from app.models.field_movement import FieldWorkOrderMovement
 from app.models.work_order import WorkOrder
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _location
+from app.services.field.work_order_access import FieldAccessError, FieldActor
 
 _CUSTOMER_DESTINATION = "customer"
 _ALLOWED_DESTINATIONS = {
@@ -75,8 +74,9 @@ def validate_destination_payload(row: WorkOrder, payload: dict | None) -> None:
         try:
             coerce_uuid(str(movement_id))
         except ValueError as exc:
-            raise HTTPException(
-                status_code=422, detail="Invalid movement_session_id"
+            raise FieldAccessError(
+                code="operations.field_work_order_access.invalid_request",
+                message="Invalid movement_session_id",
             ) from exc
     _destination_payload(row, payload)
 
@@ -96,7 +96,7 @@ def is_customer_destination(payload: dict | None) -> bool:
 def start_movement(
     db: Session,
     row: WorkOrder,
-    profile: TechnicianProfile,
+    profile: FieldActor,
     *,
     client_ref: UUID,
     occurred_at: datetime,
@@ -113,7 +113,8 @@ def start_movement(
         return existing
     movement = FieldWorkOrderMovement(
         work_order_mirror_id=row.id,
-        actor_technician_id=profile.id,
+        actor_technician_id=profile.technician_id,
+        actor_vendor_user_id=profile.vendor_user_id,
         actor_person_id=profile.person_id,
         actor_system_user_id=profile.system_user_id,
         started_at=occurred_at,
@@ -130,7 +131,7 @@ def start_movement(
 def arrive_movement(
     db: Session,
     row: WorkOrder,
-    profile: TechnicianProfile,
+    profile: FieldActor,
     *,
     client_ref: UUID,
     occurred_at: datetime,
@@ -150,7 +151,9 @@ def arrive_movement(
         movement = (
             db.query(FieldWorkOrderMovement)
             .filter(FieldWorkOrderMovement.work_order_mirror_id == row.id)
-            .filter(FieldWorkOrderMovement.actor_technician_id == profile.id)
+            .filter(
+                FieldWorkOrderMovement.actor_system_user_id == profile.system_user_id
+            )
             .filter(FieldWorkOrderMovement.status == "en_route")
             .order_by(FieldWorkOrderMovement.started_at.desc())
             .first()
@@ -158,7 +161,8 @@ def arrive_movement(
     if movement is None:
         movement = FieldWorkOrderMovement(
             work_order_mirror_id=row.id,
-            actor_technician_id=profile.id,
+            actor_technician_id=profile.technician_id,
+            actor_vendor_user_id=profile.vendor_user_id,
             actor_person_id=profile.person_id,
             actor_system_user_id=profile.system_user_id,
             started_at=occurred_at,
@@ -168,9 +172,12 @@ def arrive_movement(
         db.add(movement)
     elif (
         movement.work_order_mirror_id != row.id
-        or movement.actor_technician_id != profile.id
+        or movement.actor_system_user_id != profile.system_user_id
     ):
-        raise HTTPException(status_code=404, detail="Movement session not found")
+        raise FieldAccessError(
+            code="operations.field_work_order_access.not_found",
+            message="Movement session not found",
+        )
     movement.arrived_at = occurred_at
     movement.arrival_latitude = latitude
     movement.arrival_longitude = longitude
@@ -187,12 +194,13 @@ def arrive_movement(
 
         location_capture.capture_from_field_arrival(
             db,
-            subscriber_id=str(row.subscriber_id),
-            lat=latitude,
-            lng=longitude,
-            accuracy_m=_as_float((payload or {}).get("accuracy_m")),
-            technician_actor_id=str(profile.id) if profile.id else None,
-            technician_name=getattr(profile, "title", None),
+            location_capture.CaptureFieldArrival(
+                subscriber_id=row.subscriber_id,
+                actor_system_user_id=profile.system_user_id,
+                latitude=latitude,
+                longitude=longitude,
+                accuracy_m=_as_float((payload or {}).get("accuracy_m")),
+            ),
         )
     return movement
 
@@ -206,8 +214,9 @@ def _movement_from_payload(
     try:
         movement_uuid = coerce_uuid(str(movement_id))
     except ValueError as exc:
-        raise HTTPException(
-            status_code=422, detail="Invalid movement_session_id"
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message="Invalid movement_session_id",
         ) from exc
     return db.get(FieldWorkOrderMovement, movement_uuid)
 
@@ -218,8 +227,9 @@ def _destination_payload(row: WorkOrder, payload: dict | None) -> dict[str, Any]
         str(data.get("destination_type") or _CUSTOMER_DESTINATION).strip().lower()
     )
     if destination_type not in _ALLOWED_DESTINATIONS:
-        raise HTTPException(
-            status_code=422, detail=f"Unsupported destination_type: {destination_type}"
+        raise FieldAccessError(
+            code="operations.field_work_order_access.invalid_request",
+            message=f"Unsupported destination_type: {destination_type}",
         )
     destination_type = _ASSET_TO_DESTINATION.get(destination_type, destination_type)
     if destination_type == _CUSTOMER_DESTINATION:

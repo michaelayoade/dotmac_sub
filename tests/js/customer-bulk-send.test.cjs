@@ -12,7 +12,12 @@ const status = id => ({request_id: id, accepted: true, materialization_status: '
     matched_count: 1, planned_queued_count: 1, planned_suppressed_count: 0, skipped_count: 0,
     delivered_count: 0, submitted_count: 0, pending_count: 0, failed_count: 0, canceled_count: 0,
     error: null, status_url: `/admin/customers/bulk/send-message/${id}`});
-const response = (code, body) => ({ok: code < 400, status: code, json: async () => body});
+const response = (code, body) => ({ok: code < 400, status: code,
+    headers: {get: name => name.toLowerCase() === 'content-type' ? 'application/json; charset=utf-8' : null},
+    json: async () => body});
+const htmlResponse = (code, body = '<!doctype html><html></html>') => ({ok: code < 400, status: code,
+    headers: {get: name => name.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null},
+    text: async () => body});
 function runtime(fetch, storage = new Map(), panel = null) {
     const callbacks = {};
     const context = {
@@ -160,6 +165,55 @@ test('a temporarily missing receipt stays unresolved and blocks a second message
     second.startPreview();
     await assert.rejects(second.send({...payload, expected_impact_token: 'changed'}, {}), /No saved send record is available yet/);
     assert.equal(posts, 1);
+});
+
+test('an HTML confirmation failure checks the saved reference without exposing a parse error or retrying', async () => {
+    const storage = new Map();
+    let id, posts = 0, gets = 0;
+    const client = runtime(async (url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            id = JSON.parse(options.body).request_id;
+            return htmlResponse(502);
+        }
+        gets++;
+        assert.equal(url, `/admin/customers/bulk/send-message/${id}`);
+        return response(404, {code: 'http_404', message: 'Not found.'});
+    }, storage);
+    await assert.rejects(client.send(payload, {}), /No saved send record is available yet/);
+    assert.equal(posts, 1);
+    assert.equal(gets, 1);
+    assert.ok([...storage.values()].some(value => value.includes(id)));
+});
+
+test('an HTML status response keeps the reference and displays a safe message', async () => {
+    const storage = new Map();
+    let id;
+    const client = runtime(async (_url, options) => {
+        if (options.method === 'POST') {
+            id = JSON.parse(options.body).request_id;
+            throw new Error('connection lost');
+        }
+        return htmlResponse(502);
+    }, storage);
+    await assert.rejects(client.send(payload, {}), /webpage instead of send status/);
+    assert.ok([...storage.values()].some(value => value.includes(id)));
+});
+
+test('a JSON CSRF rejection keeps the reference and explains how to recover', async () => {
+    const storage = new Map();
+    let id, gets = 0;
+    const client = runtime(async (_url, options) => {
+        id = JSON.parse(options.body).request_id;
+        if (options.method === 'POST') {
+            return response(403, {code: 'csrf_validation_failed', message: 'Refresh the page and try again.'});
+        }
+        gets++;
+        return response(404, {code: 'http_404', message: 'Not found.'});
+    }, storage);
+    await assert.rejects(client.send(payload, {}), /Refresh the page and try again/);
+    assert.equal(gets, 0);
+    assert.ok([...storage.values()].some(value => value.includes(id)));
 });
 
 test('a malformed successful response checks the receipt instead of claiming failure', async () => {

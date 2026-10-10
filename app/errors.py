@@ -12,6 +12,7 @@ from starlette.datastructures import MutableHeaders, UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.schemas.error import ErrorResponse as WebErrorResponse
 from app.services.application_exception_observability import (
     record_unhandled_http_exception,
 )
@@ -379,7 +380,16 @@ def register_error_handlers(app) -> None:
 
     @app.exception_handler(AuthenticationRequired)
     async def auth_required_handler(request: Request, exc: AuthenticationRequired):
-        """Redirect to login page when authentication is required."""
+        """Return an API error or redirect a browser when authentication is required."""
+        if not _is_html_request(request):
+            return JSONResponse(
+                status_code=401,
+                content=WebErrorResponse(
+                    code="authentication_required",
+                    message="Sign in again to continue.",
+                    request_id=_request_id(request),
+                ).model_dump(mode="json"),
+            )
         return RedirectResponse(url=exc.redirect_url, status_code=303)
 
     async def _handle_http_exception(

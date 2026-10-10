@@ -8,6 +8,12 @@ from app.api.field.attachments import router as attachments_router
 from app.api.field.attendance import router as attendance_router
 from app.api.field.devices import router as devices_router
 from app.api.field.equipment import router as equipment_router
+from app.api.field.execution import (
+    field_access_error_boundary,
+    field_command_context,
+    field_domain_errors,
+    field_system_user_id,
+)
 from app.api.field.expense_requests import router as expense_requests_router
 from app.api.field.fiber import router as fiber_router
 from app.api.field.inventory import router as inventory_router
@@ -28,7 +34,6 @@ from app.schemas.field import (
     FieldJobChatMessageCreate,
     FieldJobChatMessageRead,
     FieldJobChatThread,
-    FieldJobDestination,
     FieldJobDestinationsResponse,
     FieldJobDetail,
     FieldJobLocation,
@@ -37,10 +42,19 @@ from app.schemas.field import (
     FieldMeResponse,
 )
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field.chat import field_job_chat
+from app.services.field.execution_contracts import (
+    FieldJobQuery,
+    FieldJobsQuery,
+    UpdateFieldJobLocation,
+)
 from app.services.field.jobs import field_jobs
+from app.services.field.work_order_access import ResolveFieldActor
 
-router = APIRouter(prefix="/field", tags=["field"])
+router = APIRouter(
+    prefix="/field", tags=["field"], dependencies=[Depends(field_access_error_boundary)]
+)
 router.include_router(attendance_router)
 router.include_router(attachments_router)
 router.include_router(devices_router)
@@ -67,7 +81,10 @@ def field_me(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return field_jobs.me(db, auth)
+    with field_domain_errors():
+        return field_jobs.me(
+            db=db, query=ResolveFieldActor(system_user_id=field_system_user_id(auth))
+        )
 
 
 @router.get("/jobs", response_model=ListResponse[FieldJobSummary])
@@ -80,15 +97,18 @@ def list_field_jobs(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    items = field_jobs.list(
-        db,
-        auth,
-        status=status,
-        date_from=date_from,
-        date_to=date_to,
-        limit=limit,
-        offset=offset,
-    )
+    with field_domain_errors():
+        items = field_jobs.list(
+            db=db,
+            query=FieldJobsQuery(
+                requester_system_user_id=field_system_user_id(auth),
+                status=status,
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+                offset=offset,
+            ),
+        )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 
 
@@ -98,7 +118,14 @@ def get_field_job(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return field_jobs.get_detail(db, auth, crm_work_order_id)
+    with field_domain_errors():
+        return field_jobs.get_detail(
+            db=db,
+            query=FieldJobQuery(
+                requester_system_user_id=field_system_user_id(auth),
+                public_id=crm_work_order_id,
+            ),
+        )
 
 
 @router.get(
@@ -110,9 +137,16 @@ def list_field_job_destinations(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    items = field_jobs.list_destinations(db, auth, crm_work_order_id)
+    with field_domain_errors():
+        items = field_jobs.list_destinations(
+            db=db,
+            query=FieldJobQuery(
+                requester_system_user_id=field_system_user_id(auth),
+                public_id=crm_work_order_id,
+            ),
+        )
     return {
-        "items": [FieldJobDestination(**item) for item in items],
+        "items": items,
         "count": len(items),
     }
 
@@ -154,10 +188,18 @@ def update_field_job_location(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return field_jobs.update_location(
-        db,
-        auth,
-        crm_work_order_id,
-        latitude=payload.latitude,
-        longitude=payload.longitude,
-    )
+    principal_id = field_system_user_id(auth)
+    with field_domain_errors():
+        db_session_adapter.release_read_transaction(db)
+        return field_jobs.update_location(
+            db=db,
+            command=UpdateFieldJobLocation(
+                context=field_command_context(
+                    principal_id, reason="field_job_location_update"
+                ),
+                requester_system_user_id=principal_id,
+                public_id=crm_work_order_id,
+                latitude=payload.latitude,
+                longitude=payload.longitude,
+            ),
+        )

@@ -16,12 +16,14 @@ from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
+from app.services.field.execution_contracts import FieldJobQuery
 from app.services.field.jobs import field_jobs
 from app.services.field.note_commands import (
     CreateFieldWorkOrderNote,
     FieldNoteCommandError,
     create_field_work_order_note,
 )
+from app.services.field.work_order_access import FieldAccessError
 from app.services.owner_commands import CommandContext
 
 
@@ -148,7 +150,12 @@ def test_create_field_note_and_surface_in_job_detail(db_session):
     stored = db_session.query(FieldWorkOrderNote).one()
     assert stored.work_order_mirror_id == work_order.id
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-note-detail")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-note-detail"
+        ),
+    )
     assert len(detail.notes) == 1
     assert detail.notes[0].body == "Confirmed access with customer."
 
@@ -167,7 +174,7 @@ def test_field_note_does_not_leak_unassigned_jobs(db_session):
     )
     db_session.commit()
 
-    with pytest.raises(FieldNoteCommandError) as exc:
+    with pytest.raises(FieldAccessError) as exc:
         _create_note(
             db_session,
             user,
@@ -175,7 +182,7 @@ def test_field_note_does_not_leak_unassigned_jobs(db_session):
             body="Should not work",
         )
 
-    assert exc.value.code == "operations.field_notes.work_order_not_found"
+    assert exc.value.code == "operations.field_work_order_access.not_found"
 
 
 def test_note_rejects_unknown_attachment_ids(db_session):

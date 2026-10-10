@@ -7,3 +7,4 @@ class ErrorResponse(BaseModel):
     code: str
     message: str
     details: Any | None = None
+    request_id: str | None = None

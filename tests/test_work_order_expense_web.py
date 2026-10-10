@@ -984,7 +984,7 @@ def test_work_order_template_owns_context_and_supports_responsive_lines():
         'Title <span class="text-rose-600" aria-hidden="true">*</span><input' in source
     )
     assert (
-        'Technician <span class="text-rose-600" aria-hidden="true">*</span><select'
+        'Assign to <span class="text-rose-600" aria-hidden="true">*</span><select'
         in source
     )
     assert "receipt.required" not in expense_form

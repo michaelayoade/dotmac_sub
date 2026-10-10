@@ -21,7 +21,10 @@ customer profile data.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -32,7 +35,9 @@ from app.services import control_registry, settings_spec
 from app.services import geocode_reconciler as reconciler
 from app.services import service_address as service_address_service
 from app.services import subscriber_data_completeness as completeness
+from app.services.audit_adapter import AuditActor, AuditRecord, audit_adapter
 from app.services.common import coerce_uuid
+from app.services.owner_commands import OwnerCommandError, execute_owner_savepoint
 
 logger = logging.getLogger(__name__)
 
@@ -177,48 +182,77 @@ def capture(
     )
 
 
-def capture_from_field_arrival(
-    db: Session,
-    *,
-    subscriber_id: str,
-    lat: float | None,
-    lng: float | None,
-    accuracy_m: float | None,
-    technician_actor_id: str | None,
-    technician_name: str | None,
-) -> reconciler.CaptureResult | None:
-    """Capture when a technician arrives at a customer premises.
+@dataclass(frozen=True, slots=True)
+class CaptureFieldArrival:
+    subscriber_id: UUID
+    actor_system_user_id: UUID
+    latitude: float | None
+    longitude: float | None
+    accuracy_m: float | None = None
+    actor_name: str | None = None
 
-    The tech is physically at the service address, so the pin is the strongest
-    evidence we ever get and nobody is asked anything. Best-effort: a capture
-    failure must never break the field transition that triggered it. Returns
-    None when disabled, ungated, or lacking a fix.
+
+class FieldArrivalCaptureStatus(StrEnum):
+    captured = "captured"
+    disabled = "disabled"
+    unavailable = "unavailable"
+    failed = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class FieldArrivalCaptureOutcome:
+    status: FieldArrivalCaptureStatus
+    result: reconciler.CaptureResult | None = None
+
+
+def capture_from_field_arrival(
+    db: Session, command: CaptureFieldArrival
+) -> FieldArrivalCaptureOutcome:
+    """Optional capture participant of the field transition transaction.
+
+    The owner executor alone completes the isolated savepoint. A failed
+    participant leaves durable safe audit evidence in the outer transaction.
     """
-    if lat is None or lng is None:
-        return None
-    try:
-        # Keep a geocoder/ledger failure from invalidating the work-order
-        # transaction that owns the arrival transition.
-        with db.begin_nested():
-            return capture(
-                db,
-                subscriber_id,
-                lat=lat,
-                lng=lng,
-                accuracy_m=accuracy_m,
-                source=SOURCE_FIELD_GPS,
-                actor_id=technician_actor_id,
-                actor_name=technician_name,
-            )
-    except LocationCaptureDisabled:
-        return None
-    except Exception:  # pragma: no cover - capture must not break the arrival
-        logger.warning(
-            "location capture from field arrival failed for subscriber %s",
-            subscriber_id,
-            exc_info=True,
+    if command.latitude is None or command.longitude is None:
+        return FieldArrivalCaptureOutcome(FieldArrivalCaptureStatus.unavailable)
+
+    def operation() -> reconciler.CaptureResult:
+        assert command.latitude is not None and command.longitude is not None
+        return capture(
+            db,
+            str(command.subscriber_id),
+            lat=command.latitude,
+            lng=command.longitude,
+            accuracy_m=command.accuracy_m,
+            source=SOURCE_FIELD_GPS,
+            actor_id=str(command.actor_system_user_id),
+            actor_name=command.actor_name,
         )
-        return None
+
+    try:
+        result = execute_owner_savepoint(db, operation)
+        return FieldArrivalCaptureOutcome(FieldArrivalCaptureStatus.captured, result)
+    except LocationCaptureDisabled:
+        return FieldArrivalCaptureOutcome(FieldArrivalCaptureStatus.disabled)
+    except OwnerCommandError:
+        raise
+    except Exception:
+        audit_adapter.stage(
+            db,
+            AuditRecord(
+                action="field_arrival_location_capture_failed",
+                entity_type="subscriber",
+                entity_id=str(command.subscriber_id),
+                actor=AuditActor.user(str(command.actor_system_user_id)),
+                is_success=False,
+                details={"failure_code": "location_capture_failed"},
+            ),
+        )
+        logger.warning(
+            "field_arrival_location_capture_failed",
+            extra={"subscriber_id": str(command.subscriber_id)},
+        )
+        return FieldArrivalCaptureOutcome(FieldArrivalCaptureStatus.failed)
 
 
 # ── the portal / agent prompt ────────────────────────────────────────────────
