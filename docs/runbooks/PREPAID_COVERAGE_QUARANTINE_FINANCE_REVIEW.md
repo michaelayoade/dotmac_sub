@@ -208,7 +208,10 @@ poetry run python -m scripts.billing.repair_prepaid_paid_invoice_period approve 
   --approver <different-system-user-uuid> --idempotency-key <unique-key>
 ```
 
-Self-approval is refused. Under lock, the owner recomputes the preview and
+Self-approval is refused, except under the governed, time-boxed sole-approver
+exception ([`SOLE_APPROVER_EXCEPTION.md`](SOLE_APPROVER_EXCEPTION.md)): off by
+default, Michael only, with `--sole-approver-justification` and recorded
+evidence. Under lock, the owner recomputes the preview and
 requires the identical fingerprint; any change since the request returns
 `stale_preview` and needs a new request. It then, in one transaction:
 

@@ -87,6 +87,11 @@ from app.services.prepaid_coverage_reconciliation import (
     malformed_prepaid_renewal_origin_account_ids,
     preview_prepaid_coverage_reconciliation,
 )
+from app.services.sole_approver_exception import (
+    SoleApproverExceptionGrant,
+    authorize_sole_approver,
+    stage_sole_approver_exception_audit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +339,9 @@ class ApprovePaidInvoicePeriodRepairCommand:
     preview_fingerprint: str
     approved_by: UUID
     permission_granted: bool
+    #: Only for ``approved_by == requested_by`` under the governed
+    #: sole-approver exception (``governance.sole_approver_exception``).
+    sole_approver_justification: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1401,11 +1409,20 @@ def _approve(
     request = _load_request(db, command.request_id)
     if request is None:
         _error("request_not_found", "The period repair request was not found.")
+    exception_grant: SoleApproverExceptionGrant | None = None
     if command.approved_by == request.requested_by:
-        _error(
-            "self_approval_forbidden",
-            "The approver must be a different staff member from the requester.",
-        )
+        exception_grant = authorize_sole_approver(
+            db,
+            flow=OWNER,
+            approver_id=command.approved_by,
+            actor=context.actor,
+            justification=command.sole_approver_justification,
+        ).grant
+        if exception_grant is None:
+            _error(
+                "self_approval_forbidden",
+                "The approver must be a different staff member from the requester.",
+            )
     if command.preview_fingerprint != request.preview_fingerprint:
         _error(
             "approval_fingerprint_mismatch",
@@ -1542,6 +1559,11 @@ def _approve(
         "evidence_sha256": request.evidence_sha256,
         "requested_by_system_user_id": str(request.requested_by),
         "approved_by_system_user_id": str(command.approved_by),
+        **(
+            exception_grant.evidence()
+            if exception_grant is not None
+            else {"sole_approver_exception": False}
+        ),
         "projected_blocking_reasons": [
             value.value for value in effect.projected_blocking_reasons
         ],
@@ -1557,6 +1579,14 @@ def _approve(
             metadata_=dict(shared),
         ),
     )
+    if exception_grant is not None:
+        stage_sole_approver_exception_audit(
+            db,
+            exception_grant,
+            entity_type="invoice",
+            entity_id=str(query.invoice_id),
+            evidence_ref=evidence_ref,
+        )
     emit_event(
         db,
         EventType.prepaid_paid_invoice_period_repaired,

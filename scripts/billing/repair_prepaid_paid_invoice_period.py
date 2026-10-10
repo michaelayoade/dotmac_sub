@@ -22,7 +22,8 @@ hold ``billing:prepaid_reconciliation:repair``:
 
     # 3. Approve (a different staff member restates the fingerprint):
     ... approve --request <request-id> --fingerprint <sha256> \\
-        --approver <different-system-user-uuid> --idempotency-key <key>
+        --approver <different-system-user-uuid> --idempotency-key <key> \\
+        [--sole-approver-justification <text>]
 
     # Pending (or all) requests:
     ... list [--invoice-id <id>] [--include-applied]
@@ -309,6 +310,7 @@ def _cmd_approve(args: argparse.Namespace) -> int:
                 preview_fingerprint=args.fingerprint,
                 approved_by=args.approver,
                 permission_granted=granted,
+                sole_approver_justification=args.sole_approver_justification,
             ),
             context=_staff_context(
                 reason=f"four-eyes approval of paid invoice period repair {args.request}",
@@ -412,6 +414,11 @@ def build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--fingerprint", required=True)
     approve.add_argument("--approver", type=_uuid, required=True)
     approve.add_argument("--idempotency-key", required=True)
+    approve.add_argument(
+        "--sole-approver-justification",
+        default=None,
+        help="justification for approving your own request under the governed sole-approver exception (see docs/runbooks/SOLE_APPROVER_EXCEPTION.md); refused unless the exception is enabled, unexpired and names you",
+    )
     approve.set_defaults(func=_cmd_approve)
 
     listing = sub.add_parser("list", help="read-only: pending (or all) requests")

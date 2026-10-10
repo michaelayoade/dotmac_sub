@@ -52,6 +52,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--actor")
     parser.add_argument("--reason")
     parser.add_argument("--idempotency-key")
+    parser.add_argument(
+        "--sole-approver-justification",
+        default=None,
+        help="justification for approving your own request under the governed sole-approver exception (see docs/runbooks/SOLE_APPROVER_EXCEPTION.md); refused unless the exception is enabled, unexpired and names you"
+        + " Requires --actor user:<approved-by-id> and --reviewed-by-id equal to --approved-by-id.",
+    )
     return parser
 
 
@@ -132,6 +138,7 @@ def main() -> int:
                 evidence_sha256=evidence_sha256,
                 reviewed_by_id=args.reviewed_by_id,
                 approved_by_id=args.approved_by_id,
+                sole_approver_justification=args.sole_approver_justification,
             ),
         )
         print(
