@@ -1,8 +1,11 @@
 import builtins
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -57,6 +60,12 @@ class AdminSettingWrite:
     domain: SettingDomain
     key: str
     payload: DomainSettingUpdate
+    #: Optional optimistic-concurrency precondition. When set, the owner locks
+    #: the setting rows and refuses the whole batch unless their stored value
+    #: still has this fingerprint (see ``admin_setting_value_fingerprint``).
+    #: Read-modify-write editors (a list edited one entry at a time) set it so
+    #: a concurrent edit is refused instead of silently overwritten.
+    expected_value_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,6 +517,57 @@ def _audit_actor(context: CommandContext) -> AuditActor:
     return AuditActor.system(actor_id)
 
 
+def _setting_rows_fingerprint(rows: builtins.list[DomainSetting]) -> str:
+    material = [
+        {
+            "id": str(row.id),
+            "is_active": bool(row.is_active),
+            "value_json": row.value_json,
+            "value_text": row.value_text,
+        }
+        for row in sorted(rows, key=lambda item: str(item.id))
+    ]
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _setting_rows_statement(domain: SettingDomain, key: str):
+    return select(DomainSetting).where(
+        DomainSetting.domain == domain, DomainSetting.key == key
+    )
+
+
+def admin_setting_value_fingerprint(
+    db: Session, *, domain: SettingDomain, key: str
+) -> str:
+    """Return the opaque fingerprint of one setting's stored rows (read-only).
+
+    An editor renders this with the value it shows and returns it as
+    ``AdminSettingWrite.expected_value_fingerprint``. "No row" has its own
+    stable fingerprint, so a first write is also guarded.
+    """
+
+    rows = builtins.list(db.scalars(_setting_rows_statement(domain, key)).all())
+    return _setting_rows_fingerprint(rows)
+
+
+def _require_unchanged_setting(db: Session, update: AdminSettingWrite) -> None:
+    if update.expected_value_fingerprint is None:
+        return
+    rows = builtins.list(
+        db.scalars(
+            _setting_rows_statement(update.domain, update.key).with_for_update()
+        ).all()
+    )
+    if _setting_rows_fingerprint(rows) != update.expected_value_fingerprint:
+        raise _admin_settings_error(
+            "stale_update",
+            "This setting changed after the page was loaded. Reload and try again.",
+            domain=str(update.domain),
+            key=update.key,
+        )
+
+
 def _setting_value(payload: DomainSettingUpdate) -> object:
     if payload.value_json is not None:
         return payload.value_json
@@ -550,6 +610,7 @@ def _apply_admin_settings_form_operation(
                     key=update.key,
                 )
             seen.add(identity)
+            _require_unchanged_setting(db, update)
             spec = settings_spec.get_spec(update.domain, update.key)
             if spec is None or update.payload.value_type != spec.value_type:
                 raise _admin_settings_error(
@@ -581,9 +642,10 @@ def _apply_admin_settings_form_operation(
         actor=_audit_actor(command.context),
         request_id=str(command.context.correlation_id),
         metadata={
-            "schema_version": 1,
+            "schema_version": 2,
             "setting_count": len(identities),
             "setting_keys": identities,
+            "reason": command.context.reason,
             "command_id": str(command.context.command_id),
             "correlation_id": str(command.context.correlation_id),
         },

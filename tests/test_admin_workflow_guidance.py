@@ -399,7 +399,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 59
+    assert len(guides) == 60
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -464,3 +464,12 @@ def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None
     assert "fresh successful native olt poll" in content
     assert "linked monitoring record" in content
     assert "active" in content and "current" in content
+
+
+def test_walled_garden_page_has_its_own_guide() -> None:
+    guide = guidance_for_path("/admin/system/config/walled-garden")
+    assert guide is not None
+    assert guide.id == "walled-garden"
+    settings = guidance_for_path("/admin/system/config/radius")
+    assert settings is not None
+    assert settings.id == "settings"
