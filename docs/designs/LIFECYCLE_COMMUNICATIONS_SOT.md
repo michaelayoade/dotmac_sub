@@ -168,6 +168,13 @@ An unavailable receipt keeps the original reference unresolved; a temporary
 gap must not invite a second send. Conflicts and transport failures also keep
 the original reference until its receipt can be checked.
 
+JSON requests rejected by CSRF protection or authentication return the shared
+JSON error envelope; browser form requests continue to receive the existing
+HTML error or login response. The browser checks the response content type
+before parsing it. An HTML or malformed response keeps the saved UUID and
+checks the authoritative receipt; it never displays a JSON parser error or
+retries the confirmation automatically.
+
 ### Rollout and existing work
 
 Drain pre-change `materialize_customer_bulk_message` tasks before deploying this

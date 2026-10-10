@@ -43,6 +43,7 @@ from app.models.subscriber import Subscriber
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.request_meta import client_ip
+from app.schemas.error import ErrorResponse as WebErrorResponse
 from app.services import audit as audit_service
 from app.services.db_session_adapter import db_session_adapter
 from app.telemetry import setup_otel
@@ -1283,9 +1284,9 @@ async def csrf_middleware(request: Request, call_next):
 
     # For state-changing methods, validate CSRF token
     if method in ("POST", "PUT", "DELETE", "PATCH"):
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import HTMLResponse, JSONResponse
 
-        def _csrf_forbidden(reason: str) -> HTMLResponse:
+        def _csrf_forbidden(reason: str) -> Response:
             return_url = _csrf_safe_return_url(request)
             logger.warning(
                 "CSRF validation failed for %s %s: %s",
@@ -1296,14 +1297,26 @@ async def csrf_middleware(request: Request, call_next):
             # Generate a request ID for tracking
             import uuid
 
-            request_id = str(uuid.uuid4())[:8]
+            request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
+            accept = (request.headers.get("accept") or "").lower()
+            if "application/json" in accept and "text/html" not in accept:
+                return JSONResponse(
+                    status_code=403,
+                    content=WebErrorResponse(
+                        code="csrf_validation_failed",
+                        message="The security check failed. Refresh the page and try again.",
+                        request_id=request_id,
+                    ).model_dump(mode="json"),
+                )
+
+            reference_id = request_id[:8]
             try:
                 from jinja2 import Environment, FileSystemLoader
 
                 env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
                 template = env.get_template("errors/csrf.html")
                 content = template.render(
-                    request_id=request_id,
+                    request_id=reference_id,
                     return_url=return_url,
                 )
                 return HTMLResponse(content=content, status_code=403)
@@ -1321,7 +1334,7 @@ async def csrf_middleware(request: Request, call_next):
 <div style="text-align:center;max-width:400px;padding:20px">
 <h1 style="color:#1e293b">Session Expired</h1>
 <p style="color:#64748b">Your session has expired or the security token is invalid. Please refresh the page and try again.</p>
-<p style="color:#94a3b8;font-size:12px">Reference: {request_id}</p>
+<p style="color:#94a3b8;font-size:12px">Reference: {reference_id}</p>
 {refresh_control}
 </div></body></html>""",
                     status_code=403,

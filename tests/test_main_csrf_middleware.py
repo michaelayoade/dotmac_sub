@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -472,6 +473,30 @@ def test_attendance_check_in_requires_csrf_header():
     response = _run_async(csrf_middleware(request, call_next))
 
     assert response.status_code == 403
+
+
+def test_csrf_rejection_returns_json_for_json_clients():
+    request = _build_request(
+        path="/admin/customers/bulk/send-message",
+        method="POST",
+        headers=[(b"accept", b"application/json")],
+    )
+    request.state.request_id = "bulk-send-request-trace"
+
+    async def call_next(_request: Request) -> Response:
+        raise AssertionError("CSRF rejection must not reach the send route")
+
+    response = _run_async(csrf_middleware(request, call_next))
+    body = json.loads(response.body)
+
+    assert response.status_code == 403
+    assert "application/json" in response.headers["content-type"]
+    assert body == {
+        "code": "csrf_validation_failed",
+        "message": "The security check failed. Refresh the page and try again.",
+        "details": None,
+        "request_id": "bulk-send-request-trace",
+    }
 
 
 def test_csrf_error_refresh_links_to_same_site_referer_for_failed_post():
