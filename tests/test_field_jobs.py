@@ -76,6 +76,7 @@ def _vendor_membership(db_session, user: SystemUser, **overrides) -> FieldVendor
     vendor = FieldVendor(
         name=overrides.pop("vendor_name", "Install Co"),
         code=overrides.pop("vendor_code", f"VC-{uuid4().hex[:6]}"),
+        native_vendor_id=native.id,
         crm_vendor_id=str(native.id),
         is_active=overrides.pop("vendor_active", True),
     )
@@ -210,7 +211,7 @@ def test_field_vendor_profile_scopes_jobs_by_native_assignment_ignoring_metadata
         subscriber,
         crm_work_order_id="wo-vendor-assigned",
         assigned_to_crm_person_id=None,
-        assigned_vendor_id=UUID(membership.vendor.crm_vendor_id),
+        assigned_vendor_id=membership.vendor.native_vendor_id,
         metadata_={"assigned_vendor_id": str(membership.vendor_id)},
     )
     _work_order(
@@ -232,7 +233,7 @@ def test_field_vendor_profile_scopes_jobs_by_native_assignment_ignoring_metadata
         subscriber,
         crm_work_order_id="wo-rival-vendor",
         assigned_to_crm_person_id=None,
-        assigned_vendor_id=UUID(rival_membership.vendor.crm_vendor_id),
+        assigned_vendor_id=rival_membership.vendor.native_vendor_id,
         metadata_={"assigned_vendor_id": str(rival_membership.vendor_id)},
     )
     db_session.commit()
@@ -263,7 +264,7 @@ def test_field_vendor_profile_can_open_and_transition_vendor_job(db_session):
         crm_work_order_id="wo-vendor-transition",
         status="dispatched",
         assigned_to_crm_person_id=None,
-        assigned_vendor_id=UUID(membership.vendor.crm_vendor_id),
+        assigned_vendor_id=membership.vendor.native_vendor_id,
         metadata_={"assigned_vendor": {"id": str(membership.vendor_id)}},
     )
     db_session.commit()

@@ -32,7 +32,7 @@ def _vendor_client(db_session, *, native_link: bool, stale_profile: bool = False
     vendor = FieldVendor(
         name="Field crew",
         code=f"FV-{uuid4().hex[:8]}",
-        crm_vendor_id=str(native.id) if native_link else None,
+        native_vendor_id=native.id if native_link else None,
     )
     db_session.add(vendor)
     db_session.flush()
@@ -42,7 +42,7 @@ def _vendor_client(db_session, *, native_link: bool, stale_profile: bool = False
     if stale_profile:
         db_session.add(
             TechnicianProfile(
-                system_user_id=user.id, person_id=user.id, crm_person_id=None
+                system_user_id=user.id, person_id=user.id
             )
         )
     db_session.commit()
@@ -82,7 +82,6 @@ def test_vendor_map_relocation_preserves_vendor_principal_fallback(
         "/jobs/unassigned/materials",
         "/jobs/unassigned/equipment",
         "/equipment-custody/mine",
-        "/fiber/tests?crm_work_order_id=unassigned",
         "/locations/route?start_lat=9.071&start_lng=7.451",
         "/map-assets/search?q=cabinet",
         "/jobs/unassigned/chat",

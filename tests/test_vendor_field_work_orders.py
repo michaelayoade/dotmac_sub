@@ -47,7 +47,7 @@ def _vendor(db: Session) -> tuple[SystemUser, FieldVendorUser, Vendor]:
     native = Vendor(name="Contractor")
     db.add_all([user, native])
     db.flush()
-    field_vendor = FieldVendor(name="Contractor", crm_vendor_id=str(native.id))
+    field_vendor = FieldVendor(name="Contractor", native_vendor_id=native.id)
     db.add(field_vendor)
     db.flush()
     membership = FieldVendorUser(
@@ -124,17 +124,22 @@ def test_vendor_with_stale_technician_never_gets_staff_scope(
     db_session: Session,
 ) -> None:
     user, _, native = _vendor(db_session)
-    technician = TechnicianProfile(
-        person_id=user.id, system_user_id=user.id, crm_person_id=f"old-{uuid4()}"
-    )
+    technician = TechnicianProfile(person_id=user.id, system_user_id=user.id)
     db_session.add(technician)
     db_session.flush()
     hidden = WorkOrder(
         public_id=f"wo-{uuid4()}",
         title="Staff job",
-        assigned_to_crm_person_id=technician.crm_person_id,
     )
     db_session.add(hidden)
+    db_session.flush()
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=hidden.id,
+            assigned_technician_id=technician.id,
+            status="assigned",
+        )
+    )
     assigned = _job(db_session, native)
     db_session.commit()
     assert [
@@ -153,7 +158,7 @@ def test_disabled_and_ambiguous_vendor_memberships_fail_closed(
     with pytest.raises(FieldAccessError):
         resolve_field_actor(db_session, ResolveFieldActor(user.id))
     membership.is_active = True
-    other = FieldVendor(name="Second contractor", crm_vendor_id=str(uuid4()))
+    other = FieldVendor(name="Second contractor")
     db_session.add(other)
     db_session.flush()
     db_session.add(
@@ -375,19 +380,24 @@ def test_staff_geofence_calls_typed_transition_after_read_scope(
     )
     db_session.add(user)
     db_session.flush()
-    profile = TechnicianProfile(
-        system_user_id=user.id, person_id=user.id, crm_person_id=f"staff-{uuid4()}"
-    )
+    profile = TechnicianProfile(system_user_id=user.id, person_id=user.id)
     db_session.add(profile)
     db_session.flush()
     job = WorkOrder(
         public_id=f"wo-{uuid4()}",
         title="Staff geofence",
         status="scheduled",
-        assigned_to_crm_person_id=profile.crm_person_id,
         metadata_={"latitude": 6.43, "longitude": 3.42},
     )
     db_session.add(job)
+    db_session.flush()
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=job.id,
+            assigned_technician_id=profile.id,
+            status="assigned",
+        )
+    )
     db_session.add(
         DomainSetting(
             domain=SettingDomain.field,
@@ -415,7 +425,7 @@ def test_vendor_principal_without_membership_cannot_use_stale_legacy_profile(
     user_id = user.id
     db_session.add(
         TechnicianProfile(
-            person_id=user_id, system_user_id=None, crm_person_id=f"stale-{uuid4()}"
+            person_id=user_id, system_user_id=None
         )
     )
     db_session.delete(membership)

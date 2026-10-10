@@ -181,7 +181,7 @@ def _vendor(db):
     )
     db.add_all([native, user])
     db.flush()
-    profile = FieldVendor(name=native.name, crm_vendor_id=str(native.id))
+    profile = FieldVendor(name=native.name, native_vendor_id=native.id)
     db.add(profile)
     db.flush()
     member = FieldVendorUser(vendor_id=profile.id, system_user_id=user.id, role="field")

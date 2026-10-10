@@ -280,7 +280,7 @@ be restated in durable domain language here or in the owning design document.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
-persistence-like mutation must name a declared owner. The 213 existing
+persistence-like mutation must name a declared owner. The 210 existing
 undeclared writer-like modules are an explicit shrink-only migration baseline,
 not approved parallel writers; resolving an owner or removing its write requires
 deleting the baseline entry. Adding an entry requires an explicit ownership
@@ -1553,8 +1553,11 @@ Migration 352 adds evidence-bound, one-to-one Party links to `Organization`,
 writer. Profile binding requires an active/quarantined Organization Party, is
 idempotent only for the exact existing target, preserves original evidence,
 and refuses repoints. It assigns no role or permission. The native Vendor and
-its string-bridged FieldVendor auth projection must bind together to the same
-Party; missing, partial, conflicting, or duplicate projections fail closed.
+its FieldVendor auth projection must bind together to the same Party; missing,
+partial, conflicting, or duplicate projections fail closed. Migration 668 adds
+the unique `FieldVendor.native_vendor_id` foreign key used by field execution;
+the string identifier remains a compatibility projection for older portal and
+party-audit readers until their cutover gate passes.
 
 `Organization.account_type`, Reseller/Vendor/FieldVendor `is_active`, and the
 FieldVendor string UUID remain compatibility state until their runtime callers

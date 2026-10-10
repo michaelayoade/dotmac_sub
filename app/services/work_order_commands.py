@@ -13,7 +13,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
@@ -121,8 +121,22 @@ def _data(payload: Any, *, exclude_unset: bool = False) -> dict[str, Any]:
 
 
 def _fingerprint(data: dict[str, Any]) -> str:
+    def canonical(value: Any) -> Any:
+        if isinstance(value, datetime):
+            normalized = (
+                value.replace(tzinfo=UTC)
+                if value.tzinfo is None
+                else value.astimezone(UTC)
+            )
+            return normalized.isoformat()
+        if isinstance(value, dict):
+            return {key: canonical(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [canonical(item) for item in value]
+        return value
+
     encoded = json.dumps(
-        data,
+        canonical(data),
         default=str,
         separators=(",", ":"),
         sort_keys=True,

@@ -65,6 +65,27 @@ def upgrade() -> None:
             "Contradictory legacy work-order assignments; reconcile before migration"
         )
     op.add_column(
+        "field_vendors",
+        sa.Column("native_vendor_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
+    op.create_foreign_key(
+        "fk_field_vendors_native_vendor",
+        "field_vendors",
+        "vendors",
+        ["native_vendor_id"],
+        ["id"],
+        ondelete="RESTRICT",
+    )
+    op.create_unique_constraint(
+        "uq_field_vendors_native_vendor_id", "field_vendors", ["native_vendor_id"]
+    )
+    bind.execute(sa.text("""
+        UPDATE field_vendors AS field_vendor
+        SET native_vendor_id = vendor.id
+        FROM vendors AS vendor
+        WHERE field_vendor.crm_vendor_id = vendor.id::text
+    """))
+    op.add_column(
         "work_order_assignment_queue",
         sa.Column("assigned_vendor_id", postgresql.UUID(as_uuid=True), nullable=True),
     )
@@ -131,6 +152,67 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError(
-        "Vendor assignment/actor expansion is forward-only; vendor evidence must be preserved"
+    bind = op.get_bind()
+    vendor_actor_rows = any(
+        bind.execute(
+            sa.text(
+                f"SELECT 1 FROM {table} "
+                f"WHERE {prefix}_vendor_user_id IS NOT NULL LIMIT 1"
+            )
+        ).first()
+        is not None
+        for table, prefix, _person, _technician, _system_user in ACTORS
     )
+    vendor_assignment = bind.execute(
+        sa.text(
+            "SELECT 1 FROM work_order_assignment_queue "
+            "WHERE assigned_vendor_id IS NOT NULL LIMIT 1"
+        )
+    ).first()
+    receipts = bind.execute(
+        sa.text("SELECT 1 FROM work_order_assignment_receipts LIMIT 1")
+    ).first()
+    if vendor_actor_rows or vendor_assignment or receipts:
+        raise RuntimeError(
+            "Vendor assignment/actor expansion is forward-only; vendor evidence must be preserved"
+        )
+
+    op.drop_index(
+        "uq_field_notes_vendor_client_ref", table_name="field_work_order_notes"
+    )
+    for table, prefix, person, technician, _system_user in reversed(ACTORS):
+        op.drop_constraint(f"ck_{table}_actor", table, type_="check")
+        op.drop_constraint(f"fk_{table}_vendor_actor", table, type_="foreignkey")
+        op.drop_column(table, f"{prefix}_vendor_user_id")
+        op.alter_column(
+            table, person, existing_type=postgresql.UUID(as_uuid=True), nullable=False
+        )
+        if table != "field_attachments":
+            op.alter_column(
+                table,
+                technician,
+                existing_type=postgresql.UUID(as_uuid=True),
+                nullable=False,
+            )
+    op.drop_table("work_order_assignment_receipts")
+    op.drop_index(
+        "uq_work_order_current_assignment", table_name="work_order_assignment_queue"
+    )
+    op.drop_constraint(
+        "ck_work_order_assignment_target",
+        "work_order_assignment_queue",
+        type_="check",
+    )
+    op.drop_constraint(
+        "fk_work_order_queue_vendor",
+        "work_order_assignment_queue",
+        type_="foreignkey",
+    )
+    op.drop_column("work_order_assignment_queue", "assigned_vendor_id")
+    op.drop_constraint(
+        "uq_field_vendors_native_vendor_id", "field_vendors", type_="unique"
+    )
+    op.drop_constraint(
+        "fk_field_vendors_native_vendor", "field_vendors", type_="foreignkey"
+    )
+    op.drop_column("field_vendors", "native_vendor_id")

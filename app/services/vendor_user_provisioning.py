@@ -538,7 +538,7 @@ def import_vendor_contact_login(
 
         field_vendor = db.scalar(
             select(FieldVendor)
-            .where(FieldVendor.crm_vendor_id == str(vendor.id))
+            .where(FieldVendor.native_vendor_id == vendor.id)
             .with_for_update()
         )
         if field_vendor is None:
@@ -564,6 +564,7 @@ def import_vendor_contact_login(
                     "staff must review it before importing this contact.",
                 )
             field_vendor = FieldVendor(
+                native_vendor_id=vendor.id,
                 crm_vendor_id=str(vendor.id),
                 name=vendor.name,
                 code=vendor.code,

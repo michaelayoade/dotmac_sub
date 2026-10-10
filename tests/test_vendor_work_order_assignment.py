@@ -95,7 +95,6 @@ def test_vendor_reassignment_preserves_execution_and_revokes_opposing_target(
     row = db_session.query(WorkOrder).filter_by(public_id=public_id).one()
     queue = db_session.get(WorkOrderAssignmentQueue, second.queue_id)
     assert row.status == lifecycle_status
-    assert row.assigned_to_crm_person_id is None
     assert row.technician_name is None
     assert row.technician_phone is None
     assert queue.assigned_technician_id is None

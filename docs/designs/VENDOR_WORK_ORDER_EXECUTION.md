@@ -11,6 +11,12 @@ one active technician or native `Vendor`. `assigned_vendor_id` references
 labels are projections; neither header JSON nor imported metadata grants access.
 Installation-project procurement remains a separate workflow.
 
+`FieldVendor.native_vendor_id` is the explicit unique link from the mobile
+membership projection to its authoritative vendor organization. Migration 668
+backfills only exact existing organization-ID matches; unmatched projection
+rows remain unlinked and cannot authorize field execution. The legacy string
+field is not an input to the field work-order scope resolver.
+
 `operations.field_work_order_access` resolves an immutable execution actor from
 the authenticated SystemUser, active technician identity or active vendor
 membership, native vendor linkage and current queue assignment. Ambiguous or

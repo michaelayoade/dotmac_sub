@@ -42,7 +42,6 @@ class FieldActor:
     vendor_user_id: UUID | None = None
     native_vendor_id: UUID | None = None
     person_id: UUID | None = None
-    crm_person_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,10 +93,9 @@ def resolve_field_actor(db: Session, query: ResolveFieldActor) -> FieldActor:
             raise _denied("Vendor membership is unavailable or ambiguous")
         membership = active[0]
         db.refresh(membership.vendor)
-        try:
-            native_id = UUID(membership.vendor.crm_vendor_id or "")
-        except ValueError as exc:
-            raise _denied("Native vendor link is unavailable") from exc
+        native_id = membership.vendor.native_vendor_id
+        if native_id is None:
+            raise _denied("Native vendor link is unavailable")
         vendors = db.query(Vendor).populate_existing().filter(Vendor.id == native_id)
         native = (vendors.with_for_update() if query.lock else vendors).one_or_none()
         if native is None or not native.is_active:
@@ -113,7 +111,7 @@ def resolve_field_actor(db: Session, query: ResolveFieldActor) -> FieldActor:
         if (
             bridge is None
             or not bridge.is_active
-            or bridge.crm_vendor_id != str(native.id)
+            or bridge.native_vendor_id != native.id
         ):
             raise _denied("Native vendor link is unavailable")
         return FieldActor(
@@ -142,7 +140,6 @@ def resolve_field_actor(db: Session, query: ResolveFieldActor) -> FieldActor:
         system_user_id=user.id,
         technician_id=profile.id,
         person_id=profile.person_id,
-        crm_person_id=profile.crm_person_id,
     )
 
 
@@ -164,10 +161,6 @@ def scoped_work_orders(db: Session, actor: FieldActor) -> Query[WorkOrder]:
             WorkOrderAssignmentQueue.assigned_technician_id == actor.technician_id
         )
         predicate = WorkOrder.id.in_(assignment)
-        if actor.crm_person_id:
-            predicate = or_(
-                predicate, WorkOrder.assigned_to_crm_person_id == actor.crm_person_id
-            )
     return db.query(WorkOrder).filter(WorkOrder.is_active.is_(True), predicate)
 
 

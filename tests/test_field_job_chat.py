@@ -19,6 +19,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.api.field import router
 from app.db import get_db
@@ -168,7 +169,15 @@ def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
 
 def _depart(db_session, work_order, profile):
     team_id = profile._test_service_team_id
-    if team_id is not None:
+    current = (
+        db_session.query(WorkOrderAssignmentQueue)
+        .filter_by(
+            work_order_mirror_id=work_order.id,
+            status=DispatchQueueStatus.assigned,
+        )
+        .one_or_none()
+    )
+    if team_id is not None and current is None:
         rule = DispatchRule(
             name=f"Field chat assignment {uuid4().hex[:6]}",
             service_team_id=team_id,
@@ -244,7 +253,7 @@ def test_departure_uses_explicit_assignment_when_staff_has_multiple_teams(db_ses
     assert outcome == team_inbox_field_job.OPENED
 
 
-def test_departure_fails_closed_on_conflicting_work_assignments(db_session):
+def test_conflicting_current_work_assignments_are_rejected(db_session):
     user = _user(db_session, "Conflicting")
     profile = _profile(db_session, user)
     assert user.person_party_id is not None
@@ -266,16 +275,21 @@ def test_departure_fails_closed_on_conflicting_work_assignments(db_session):
         WorkOrderAssignmentQueue(
             work_order_mirror_id=work_order.id,
             status=DispatchQueueStatus.assigned,
+            assigned_technician_id=profile.id,
+        )
+    )
+    db_session.flush()
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=work_order.id,
+            status=DispatchQueueStatus.assigned,
             dispatch_rule_id=second_rule.id,
             assigned_technician_id=profile.id,
         )
     )
-    db_session.commit()
-
-    conversation, outcome = _depart(db_session, work_order, profile)
-
-    assert conversation is None
-    assert outcome == team_inbox_field_job.NO_TEAM
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
 
 
 def test_departure_falls_back_to_single_membership_without_dispatch_rule(db_session):
