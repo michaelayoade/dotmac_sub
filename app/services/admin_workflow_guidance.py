@@ -396,7 +396,6 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=(
             "/admin/network/fiber-change-requests",
             "/admin/network",
-            "/admin/network/**",
         ),
     ),
     _guide(
