@@ -1,7 +1,7 @@
 """Add user_credentials.credential_version and its standing trigger.
 
-Revision ID: 669_user_credential_version
-Revises: 668_sole_approver_adjudication_evidence
+Revision ID: 670_user_credential_version
+Revises: 669_native_vendor_work_order_assignment
 Create Date: 2026-10-10
 
 ## Why
@@ -46,8 +46,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "669_user_credential_version"
-down_revision: str | None = "668_sole_approver_adjudication_evidence"
+revision: str = "670_user_credential_version"
+down_revision: str | None = "669_native_vendor_work_order_assignment"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

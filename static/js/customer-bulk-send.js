@@ -44,8 +44,14 @@
                 redirect: 'error',
                 cache: 'no-store'
             });
-            const body = await response.json();
-            return {response, body};
+            const contentType = response.headers?.get?.('content-type') || '';
+            const isJson = /(?:application|text)\/(?:[a-z0-9.+-]*\+)?json\b/i.test(contentType);
+            if (!isJson) return {response, body: null, isJson: false};
+            try {
+                return {response, body: await response.json(), isJson: true};
+            } catch (_) {
+                return {response, body: null, isJson: false};
+            }
         } finally { clearTimeout(timeout); }
     };
     const responseMessage = body => {
@@ -54,19 +60,24 @@
     };
     const statusError = (response, body) => {
         if (response.status === 401) return 'Sign in again, then check this send reference.';
+        if (response.status === 403 && body?.code === 'csrf_validation_failed') return body.message || 'Refresh the page, then try again.';
         if (response.status === 403) return 'You do not have permission to check this send.';
         if (response.status === 404) return 'No saved send record is available yet. Keep this reference and check again before sending another message.';
+        if (!body) return `The server returned a webpage instead of send status (HTTP ${response.status}). Keep this reference and check again before sending another message.`;
         return responseMessage(body) || 'Could not confirm the send status.';
     };
     /** @returns {Promise<BulkSendStatus>} */
     const check = async () => {
         if (!saved) throw new Error('No send reference is available.');
         const id = saved.requestId;
-        const {response, body} = await requestJson(`/admin/customers/bulk/send-message/${encodeURIComponent(id)}`);
+        const {response, body, isJson} = await requestJson(`/admin/customers/bulk/send-message/${encodeURIComponent(id)}`);
         if (!response.ok) {
             const error = new Error(statusError(response, body));
             error.status = response.status;
             throw error;
+        }
+        if (!isJson || !body || typeof body !== 'object') {
+            throw new Error('The server returned an unreadable send status. Keep this reference and check again before submitting another message.');
         }
         if (body.request_id !== id || body.accepted !== true) {
             throw new Error('The server returned a status that does not match this send reference. Keep the reference and check again before sending another message.');
@@ -116,16 +127,24 @@
             const id = saved.requestId;
             show('Submitting message; confirming its send status…', id);
             try {
-                const {response, body} = await requestJson('/admin/customers/bulk/send-message', {
+                const {response, body, isJson} = await requestJson('/admin/customers/bulk/send-message', {
                     method: 'POST', headers, body: JSON.stringify({...payload, request_id: id}),
                 });
+                if (response.status === 403 && body?.code === 'csrf_validation_failed') {
+                    const error = new Error(responseMessage(body) || 'Refresh the page, then try again.');
+                    error.rejected = true;
+                    throw error;
+                }
+                if (!isJson || !body || typeof body !== 'object') {
+                    throw new Error('The server did not return a readable send confirmation. Checking the saved reference before any retry.');
+                }
                 if (response.ok && body.accepted === true && body.request_id === id) {
                     saved.state = body.materialization_status;
                     persist(); render(body); watch();
                     return body;
                 }
                 const message = responseMessage(body);
-                if ([400, 403, 404, 422].includes(response.status) && message) {
+                if ([400, 404, 422].includes(response.status) && message) {
                     // Only a definite server rejection allows a new request identity.
                     saved = null; persist();
                     const error = new Error(message);

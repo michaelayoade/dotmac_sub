@@ -13,7 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OWNER = PROJECT_ROOT / "app" / "services" / "password_authentication.py"
 AUTH_FLOW = PROJECT_ROOT / "app" / "services" / "auth_flow.py"
-MIGRATION = PROJECT_ROOT / "alembic" / "versions" / "669_user_credential_version.py"
+MIGRATION = PROJECT_ROOT / "alembic" / "versions" / "670_user_credential_version.py"
 GUC = "app.credential_change_kind"
 
 
@@ -156,10 +156,10 @@ def test_credential_version_never_leaves_the_service_boundary() -> None:
     assert "credential_version" not in schema
 
 
-def test_migration_669_sits_on_668_and_installs_the_trigger() -> None:
+def test_migration_670_follows_vendor_assignment_and_installs_the_trigger() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
     assert (
-        'down_revision: str | None = "668_sole_approver_adjudication_evidence"'
+        'down_revision: str | None = "669_native_vendor_work_order_assignment"'
         in source
     )
     assert "BEFORE UPDATE ON user_credentials" in source

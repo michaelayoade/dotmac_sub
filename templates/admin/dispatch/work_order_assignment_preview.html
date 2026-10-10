@@ -1,0 +1,28 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import card, detail_header %}
+{% block title %}Review assignment - {{ preview.work_order_id }}{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+{{ detail_header(title='Review assignment', subtitle=preview.work_order_id, back_href='/admin/dispatch/work-orders/' ~ preview.work_order_id, color='cyan', color2='emerald') }}
+{% call card('Assignment change', color='cyan') %}
+<div class="grid gap-5 sm:grid-cols-2">
+<div><h2 class="text-xs font-semibold uppercase text-slate-500">Current</h2><p class="mt-2 font-semibold">{{ preview.previous.technician_name or preview.previous.vendor_name or 'Unassigned' }}</p><p class="mt-1 text-sm text-slate-500">{{ preview.previous.status|replace('_', ' ')|title }}</p></div>
+<div><h2 class="text-xs font-semibold uppercase text-slate-500">After confirmation</h2><p class="mt-2 font-semibold">{{ preview.result.technician_name or preview.result.vendor_name }}</p><p class="mt-1 text-sm text-slate-500">{{ preview.result.status|replace('_', ' ')|title }}</p></div>
+</div>
+{% if preview.result.scheduled_start %}<p class="mt-5 text-sm">Scheduled: {{ preview.result.scheduled_start.strftime('%d %b %Y %H:%M %Z') }}{% if preview.result.scheduled_end %} to {{ preview.result.scheduled_end.strftime('%d %b %Y %H:%M %Z') }}{% endif %}</p>{% endif %}
+{% if selection.reason %}<p class="mt-4 text-sm"><span class="font-semibold">Reason:</span> {{ selection.reason }}</p>{% endif %}
+<p class="mt-5 text-sm text-slate-500">Confirming gives the selected assignee access to this work order. A change to the work order requires a fresh review.</p>
+<form method="post" action="/admin/dispatch/work-orders/{{ preview.work_order_id }}/assignment" class="mt-6 flex flex-wrap gap-3">
+{% include "components/forms/csrf_input.html" %}
+<input type="hidden" name="target_selection" value="{{ selection.target_selection }}">
+<input type="hidden" name="reason" value="{{ selection.reason or '' }}">
+<input type="hidden" name="expected_revision" value="{{ preview.revision.isoformat() }}">
+<input type="hidden" name="command_id" value="{{ command_id }}">
+{% if preview.result.scheduled_start %}<input type="hidden" name="scheduled_start" value="{{ preview.result.scheduled_start.isoformat() }}">{% endif %}
+{% if preview.result.scheduled_end %}<input type="hidden" name="scheduled_end" value="{{ preview.result.scheduled_end.isoformat() }}">{% endif %}
+<button class="rounded-xl bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white">Confirm assignment</button>
+<a href="/admin/dispatch/work-orders/{{ preview.work_order_id }}" class="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-semibold">Cancel</a>
+</form>
+{% endcall %}
+</div>
+{% endblock %}

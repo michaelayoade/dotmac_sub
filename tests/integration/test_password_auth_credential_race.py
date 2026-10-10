@@ -64,7 +64,7 @@ pytestmark = pytest.mark.integration
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION_668 = "668_sole_approver_adjudication_evidence"
-REVISION_669 = "669_user_credential_version"
+REVISION_670 = "670_user_credential_version"
 WAIT = 20
 CORRECT = "secret"
 RESET_TO = "Reset-by-owner1!"
@@ -743,7 +743,7 @@ def test_t15_staff_login_session_presence_and_rollback(engine, factory, monkeypa
 
 
 # --------------------------------------------------------------------------
-# T13: migration 669 on a clone of the 668 schema
+# T13: migration 670 on a clone of the 668 schema
 # --------------------------------------------------------------------------
 
 
@@ -757,7 +757,7 @@ def _alembic(direction: str, revision: str) -> None:
     getattr(command, direction)(config, revision)
 
 
-def test_t13_migration_669_upgrade_and_downgrade_on_a_668_clone(
+def test_t13_migration_670_upgrade_and_downgrade_on_a_668_clone(
     engine, cloned_database
 ):
     url = cloned_database(REVISION_668)
@@ -775,7 +775,7 @@ def test_t13_migration_669_upgrade_and_downgrade_on_a_668_clone(
                 (credential_id, uuid.uuid4(), f"migrate-{index}-{uuid.uuid4().hex}"),
             )
 
-    _alembic("upgrade", REVISION_669)
+    _alembic("upgrade", REVISION_670)
 
     with psycopg.connect(_render(url), autocommit=True) as connection:
         versions = connection.execute(

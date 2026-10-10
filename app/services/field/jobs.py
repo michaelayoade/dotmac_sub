@@ -12,26 +12,28 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.dispatch import (
     DispatchQueueStatus,
     TechnicianProfile,
     WorkOrderAssignmentQueue,
 )
-from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.subscriber import Subscriber
 from app.models.support import canonical_ticket_status_value
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.schemas.field import (
     FieldAttachmentRead,
+    FieldCapabilityAvailability,
     FieldCustomer,
     FieldCustomerExperienceContext,
     FieldEquipmentRead,
+    FieldExecutionCapabilities,
     FieldExpenseRequestRead,
+    FieldJobDestination,
     FieldJobDetail,
     FieldJobEventRead,
     FieldJobLocation,
@@ -46,13 +48,31 @@ from app.schemas.field import (
     FieldTicketContext,
     FieldWorkLogRead,
 )
-from app.services.common import apply_pagination, coerce_uuid
+from app.services.common import apply_pagination
+from app.services.events.owner_outputs import OwnerOutputEnvelope, stage_owner_output
+from app.services.events.types import EventType
+from app.services.field.execution_contracts import (
+    FieldAttachmentQuery,
+    FieldJobQuery,
+    FieldJobsQuery,
+    UpdateFieldJobLocation,
+)
 from app.services.field.map_assets import field_map_assets
 from app.services.field.source import mark_sub_authoritative
+from app.services.field.work_order_access import (
+    FieldAccessError,
+    FieldActorKind,
+    FieldWorkOrderScope,
+    ResolveFieldActor,
+    require_work_order,
+    resolve_field_actor,
+    scoped_work_orders,
+)
 from app.services.field.work_order_status import (
     FIELD_OPEN_WORK_ORDER_STATUSES,
     WORK_ORDER_TERMINAL_VALUES,
 )
+from app.services.owner_commands import OwnerCommandDefinition, execute_owner_command
 from app.services.status_presentation import (
     project_status_presentation,
     project_task_status_presentation,
@@ -63,33 +83,7 @@ from app.services.status_presentation import (
 TERMINAL_STATUSES = WORK_ORDER_TERMINAL_VALUES
 OPEN_STATUSES = FIELD_OPEN_WORK_ORDER_STATUSES
 FieldJobSummaries = list[FieldJobSummary]
-FieldJobDestinationPayload = dict[str, Any]
-FieldJobDestinationPayloads = list[FieldJobDestinationPayload]
-
-
-def _annotate_vendor_membership(
-    db: Session, profile: TechnicianProfile
-) -> TechnicianProfile:
-    if profile.system_user_id is None:
-        return profile
-    membership = (
-        db.query(FieldVendorUser)
-        .join(FieldVendor, FieldVendor.id == FieldVendorUser.vendor_id)
-        .filter(FieldVendorUser.system_user_id == profile.system_user_id)
-        .filter(FieldVendorUser.is_active.is_(True))
-        .filter(FieldVendor.is_active.is_(True))
-        .order_by(FieldVendorUser.created_at.desc())
-        .first()
-    )
-    if membership is None:
-        return profile
-    annotated: Any = profile
-    annotated._field_vendor_id = str(membership.vendor_id)
-    annotated._field_vendor_user_id = str(membership.id)
-    annotated._field_crm_vendor_user_id = membership.crm_vendor_user_id
-    if membership.vendor is not None:
-        annotated._field_crm_vendor_id = membership.vendor.crm_vendor_id
-    return profile
+FieldJobDestinationPayloads = list[FieldJobDestination]
 
 
 def _string_list(value: Any) -> list[str]:
@@ -122,92 +116,47 @@ def _system_user(db: Session, profile: TechnicianProfile) -> SystemUser | None:
 def _profile_from_principal(
     db: Session, principal: dict[str, Any]
 ) -> TechnicianProfile:
-    ids = {
-        str(value)
-        for value in (
-            principal.get("principal_id"),
-            principal.get("person_id"),
-            principal.get("subscriber_id"),
+    """Legacy transport adapter for genuinely technician-only collaborators."""
+    value = (
+        principal.get("principal_id")
+        or principal.get("person_id")
+        or principal.get("subscriber_id")
+    )
+    try:
+        user_id = UUID(str(value))
+    except ValueError as exc:
+        raise FieldAccessError(
+            code="operations.field_work_order_access.denied",
+            message="Active field user not found",
+            retryable=False,
+        ) from exc
+    actor = resolve_field_actor(db, ResolveFieldActor(user_id))
+    if actor.kind != FieldActorKind.technician or actor.technician_id is None:
+        raise FieldAccessError(
+            code="operations.field_work_order_access.denied",
+            message="This action requires a technician profile",
+            retryable=False,
         )
-        if value
-    }
-    uuid_ids: list[UUID] = []
-    for value in ids:
-        try:
-            uuid_ids.append(coerce_uuid(value))
-        except ValueError:
-            continue
-
-    query = db.query(TechnicianProfile).filter(TechnicianProfile.is_active.is_(True))
-    if uuid_ids:
-        profile = query.filter(
-            or_(
-                TechnicianProfile.system_user_id.in_(uuid_ids),
-                TechnicianProfile.person_id.in_(uuid_ids),
-            )
-        ).first()
-        if profile is not None:
-            return _annotate_vendor_membership(db, profile)
-
-    crm_person_id = principal.get("crm_person_id")
-    if crm_person_id:
-        profile = query.filter(
-            TechnicianProfile.crm_person_id == str(crm_person_id)
-        ).first()
-        if profile is not None:
-            return _annotate_vendor_membership(db, profile)
-
-    raise HTTPException(status_code=404, detail="Technician profile not found")
-
-
-def _metadata_text_match(key: str, value: str):
-    return WorkOrder.metadata_[key].as_string() == value
+    profile = db.get(TechnicianProfile, actor.technician_id)
+    if profile is None or not profile.is_active:
+        raise FieldAccessError(
+            code="operations.field_work_order_access.denied",
+            message="Technician profile not found",
+            retryable=False,
+        )
+    return profile
 
 
 def _scoped_query(db: Session, profile: TechnicianProfile):
+    """Legacy staff-only scope; vendor membership never expands this query."""
     assignment_ids = select(WorkOrderAssignmentQueue.work_order_mirror_id).filter(
         WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
         WorkOrderAssignmentQueue.assigned_technician_id == profile.id,
     )
-    query = db.query(WorkOrder).filter(WorkOrder.is_active.is_(True))
-    clauses: list[Any] = [WorkOrder.id.in_(assignment_ids)]
+    clauses: list[ColumnElement[bool]] = [WorkOrder.id.in_(assignment_ids)]
     if profile.crm_person_id:
         clauses.append(WorkOrder.assigned_to_crm_person_id == profile.crm_person_id)
-    vendor_id = getattr(profile, "_field_vendor_id", None)
-    if vendor_id:
-        clauses.extend(
-            [
-                _metadata_text_match("assigned_vendor_id", vendor_id),
-                _metadata_text_match("vendor_id", vendor_id),
-                WorkOrder.metadata_["assigned_vendor"]["id"].as_string() == vendor_id,
-                WorkOrder.metadata_["vendor"]["id"].as_string() == vendor_id,
-            ]
-        )
-    vendor_user_id = getattr(profile, "_field_vendor_user_id", None)
-    if vendor_user_id:
-        clauses.extend(
-            [
-                _metadata_text_match("assigned_vendor_user_id", vendor_user_id),
-                _metadata_text_match("vendor_user_id", vendor_user_id),
-            ]
-        )
-    crm_vendor_id = getattr(profile, "_field_crm_vendor_id", None)
-    if crm_vendor_id:
-        clauses.extend(
-            [
-                _metadata_text_match("crm_assigned_vendor_id", crm_vendor_id),
-                _metadata_text_match("crm_vendor_id", crm_vendor_id),
-            ]
-        )
-    crm_vendor_user_id = getattr(profile, "_field_crm_vendor_user_id", None)
-    if crm_vendor_user_id:
-        clauses.extend(
-            [
-                _metadata_text_match("crm_assigned_vendor_user_id", crm_vendor_user_id),
-                _metadata_text_match("crm_vendor_user_id", crm_vendor_user_id),
-            ]
-        )
-    return query.filter(or_(*clauses))
+    return db.query(WorkOrder).filter(WorkOrder.is_active.is_(True), or_(*clauses))
 
 
 def _subscriber_name(subscriber: Subscriber) -> str | None:
@@ -355,11 +304,22 @@ def _customer_experience(row: WorkOrder) -> FieldCustomerExperienceContext:
 
 class FieldJobs:
     @staticmethod
-    def me(db: Session, principal: dict[str, Any]) -> FieldMeResponse:
-        profile = _profile_from_principal(db, principal)
-        user = _system_user(db, profile)
+    def me(db: Session, query: ResolveFieldActor) -> FieldMeResponse:
+        actor = resolve_field_actor(db, query)
+        profile = (
+            db.get(TechnicianProfile, actor.technician_id)
+            if actor.technician_id
+            else None
+        )
+        user = db.get(SystemUser, actor.system_user_id)
+        if user is None:
+            raise FieldAccessError(
+                code="operations.field_work_order_access.denied",
+                message="Active field user not found",
+                retryable=False,
+            )
         today = datetime.now(UTC).date()
-        scoped = _scoped_query(db, profile)
+        scoped = scoped_work_orders(db, actor)
         open_jobs = [
             row
             for row in scoped.filter(WorkOrder.status.in_(OPEN_STATUSES)).all()
@@ -373,64 +333,103 @@ class FieldJobs:
             if row.completed_at and row.completed_at.date() == today
         ]
         return FieldMeResponse(
-            person_id=profile.person_id,
-            name=_technician_name(profile, user),
+            person_id=actor.person_id,
+            name=_technician_name(profile, user)
+            if profile is not None
+            else (user.display_name or f"{user.first_name} {user.last_name}".strip()),
             email=user.email if user else None,
-            technician_title=profile.title,
-            region=profile.region,
+            technician_title=profile.title if profile else "Vendor",
+            region=profile.region if profile else None,
             open_jobs=len(open_jobs),
             completed_today=len(completed_today),
+            capabilities=FieldExecutionCapabilities()
+            if actor.kind == FieldActorKind.technician
+            else FieldExecutionCapabilities(
+                attendance=FieldCapabilityAvailability(
+                    available=False,
+                    reason="Employee attendance is not enabled for vendor accounts.",
+                ),
+                location_tracking=FieldCapabilityAvailability(
+                    available=False,
+                    reason="Employee location tracking is not enabled for vendor accounts.",
+                ),
+                fiber_evidence=FieldCapabilityAvailability(
+                    available=False,
+                    reason="Fiber evidence requires a configured vendor workflow.",
+                ),
+                chat=FieldCapabilityAvailability(
+                    available=False,
+                    reason="Customer chat is not enabled for vendor work orders.",
+                ),
+                materials=FieldCapabilityAvailability(
+                    available=False,
+                    reason="Material requests require a configured vendor workflow.",
+                ),
+                expenses=FieldCapabilityAvailability(
+                    available=False,
+                    reason="Employee expense claims are not enabled for vendor accounts.",
+                ),
+                equipment=FieldCapabilityAvailability(
+                    available=False,
+                    reason="Equipment issue requires a configured vendor workflow.",
+                ),
+            ),
         )
 
     @staticmethod
-    def list(
-        db: Session,
-        principal: dict[str, Any],
-        *,
-        status: str | None = None,
-        date_from: datetime | None = None,
-        date_to: datetime | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> FieldJobSummaries:
-        profile = _profile_from_principal(db, principal)
-        query = _scoped_query(db, profile)
+    def list(db: Session, query: FieldJobsQuery) -> FieldJobSummaries:
+        actor = resolve_field_actor(
+            db, ResolveFieldActor(query.requester_system_user_id)
+        )
+        status, date_from, date_to, limit, offset = (
+            query.status,
+            query.date_from,
+            query.date_to,
+            query.limit,
+            query.offset,
+        )
+        statement = scoped_work_orders(db, actor)
         if status:
-            query = query.filter(WorkOrder.status == status)
+            statement = statement.filter(WorkOrder.status == status)
         if date_from:
-            query = query.filter(
+            statement = statement.filter(
                 or_(
                     WorkOrder.scheduled_start.is_(None),
                     WorkOrder.scheduled_start >= date_from,
                 )
             )
         if date_to:
-            query = query.filter(
+            statement = statement.filter(
                 or_(
                     WorkOrder.scheduled_start.is_(None),
                     WorkOrder.scheduled_start <= date_to,
                 )
             )
-        query = query.order_by(
+        statement = statement.order_by(
             WorkOrder.scheduled_start.asc().nullslast(),
             WorkOrder.created_at.asc(),
         )
-        return [_summary(row) for row in apply_pagination(query, limit, offset).all()]
+        return [
+            _summary(row) for row in apply_pagination(statement, limit, offset).all()
+        ]
 
     @staticmethod
-    def get_detail(
-        db: Session,
-        principal: dict[str, Any],
-        crm_work_order_id: str,
-    ) -> FieldJobDetail:
-        profile = _profile_from_principal(db, principal)
+    def get_detail(db: Session, query: FieldJobQuery) -> FieldJobDetail:
+        crm_work_order_id = query.public_id
+        actor = resolve_field_actor(
+            db, ResolveFieldActor(query.requester_system_user_id)
+        )
+        principal = {"principal_id": str(actor.system_user_id)}
         row = (
-            _scoped_query(db, profile)
+            scoped_work_orders(db, actor)
             .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
-            raise HTTPException(status_code=404, detail="Job not found")
+            raise FieldAccessError(
+                code="operations.field_work_order_access.not_found",
+                message="Job not found",
+            )
         subscriber = db.get(Subscriber, row.subscriber_id)
         from app.services.field.attachments import field_attachments
         from app.services.field.equipment import field_equipment
@@ -442,29 +441,48 @@ class FieldJobs:
         from app.services.field.transitions import field_transitions
         from app.services.field.worklogs import field_worklogs
 
-        materials = field_materials.list_for_job(db, principal, crm_work_order_id)
-        material_requests = field_material_requests.list_mine(
-            db,
-            principal,
-            crm_work_order_id=crm_work_order_id,
-            limit=50,
-            offset=0,
+        materials = (
+            field_materials.list_for_job(db, principal, crm_work_order_id)
+            if actor.kind == FieldActorKind.technician
+            else []
         )
-        expense_requests = field_expense_requests.list_mine(
-            db,
-            principal,
-            crm_work_order_id=crm_work_order_id,
-            limit=50,
-            offset=0,
+        material_requests = (
+            field_material_requests.list_mine(
+                db,
+                principal,
+                crm_work_order_id=crm_work_order_id,
+                limit=50,
+                offset=0,
+            )
+            if actor.kind == FieldActorKind.technician
+            else []
         )
-        notes = field_notes.list_for_job(db, principal, crm_work_order_id)
+        expense_requests = (
+            field_expense_requests.list_mine(
+                db,
+                principal,
+                crm_work_order_id=crm_work_order_id,
+                limit=50,
+                offset=0,
+            )
+            if actor.kind == FieldActorKind.technician
+            else []
+        )
+        notes = field_notes.list_for_job(db, query)
         attachments = field_attachments.list(
-            db, principal, crm_work_order_id=crm_work_order_id
+            db,
+            FieldAttachmentQuery(
+                query.requester_system_user_id, public_id=crm_work_order_id
+            ),
         )
-        worklogs = field_worklogs.list_for_job(db, principal, crm_work_order_id)
-        events = field_transitions.list_for_job(db, principal, crm_work_order_id)
+        worklogs = field_worklogs.list_for_job(db, query)
+        events = field_transitions.list_for_job(db, query)
         movements = list_movements(db, row)
-        equipment = field_equipment.current_for_job(db, principal, crm_work_order_id)
+        equipment = (
+            field_equipment.current_for_job(db, principal, crm_work_order_id)
+            if actor.kind == FieldActorKind.technician
+            else None
+        )
 
         return FieldJobDetail(
             job=_summary(row),
@@ -497,31 +515,36 @@ class FieldJobs:
 
     @staticmethod
     def list_destinations(
-        db: Session,
-        principal: dict[str, Any],
-        crm_work_order_id: str,
+        db: Session, query: FieldJobQuery
     ) -> FieldJobDestinationPayloads:
-        profile = _profile_from_principal(db, principal)
+        crm_work_order_id = query.public_id
+        actor = resolve_field_actor(
+            db, ResolveFieldActor(query.requester_system_user_id)
+        )
+        principal = {"principal_id": str(actor.system_user_id)}
         row = (
-            _scoped_query(db, profile)
+            scoped_work_orders(db, actor)
             .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
-            raise HTTPException(status_code=404, detail="Job not found")
+            raise FieldAccessError(
+                code="operations.field_work_order_access.not_found",
+                message="Job not found",
+            )
 
         location = _location(row)
         items: FieldJobDestinationPayloads = [
-            {
-                "destination_type": "customer",
-                "destination_id": str(row.subscriber_id) if row.subscriber_id else None,
-                "label": "Infrastructure site"
+            FieldJobDestination(
+                destination_type="customer",
+                destination_id=str(row.subscriber_id) if row.subscriber_id else None,
+                label="Infrastructure site"
                 if row.work_order_kind == "infrastructure"
                 else "Customer site",
-                "latitude": location.latitude,
-                "longitude": location.longitude,
-                "address_text": location.address_text,
-            }
+                latitude=location.latitude,
+                longitude=location.longitude,
+                address_text=location.address_text,
+            )
         ]
 
         if location.latitude is not None and location.longitude is not None:
@@ -535,65 +558,86 @@ class FieldJobs:
             )
             for asset in assets:
                 items.append(
-                    {
-                        "destination_type": _ASSET_DESTINATION_TYPES[asset["type"]],
-                        "destination_id": str(asset["id"]),
-                        "label": asset["title"],
-                        "latitude": asset["latitude"],
-                        "longitude": asset["longitude"],
-                        "address_text": asset.get("subtitle"),
-                    }
+                    FieldJobDestination(
+                        destination_type=_ASSET_DESTINATION_TYPES[asset["type"]],
+                        destination_id=str(asset["id"]),
+                        label=asset["title"],
+                        latitude=asset["latitude"],
+                        longitude=asset["longitude"],
+                        address_text=asset.get("subtitle"),
+                    )
                 )
 
         items.append(
-            {
-                "destination_type": "other",
-                "destination_id": None,
-                "label": "Other location",
-                "latitude": None,
-                "longitude": None,
-                "address_text": None,
-            }
+            FieldJobDestination(
+                destination_type="other",
+                destination_id=None,
+                label="Other location",
+                latitude=None,
+                longitude=None,
+                address_text=None,
+            )
         )
         return items
 
     @staticmethod
     def update_location(
-        db: Session,
-        principal: dict[str, Any],
-        crm_work_order_id: str,
-        *,
-        latitude: float,
-        longitude: float,
+        db: Session, command: UpdateFieldJobLocation
     ) -> FieldJobLocation:
-        profile = _profile_from_principal(db, principal)
-        row = (
-            _scoped_query(db, profile)
-            .filter(WorkOrder.public_id == crm_work_order_id)
-            .with_for_update()
-            .one_or_none()
-        )
-        if row is None:
-            raise HTTPException(status_code=404, detail="Job not found")
+        def operation() -> FieldJobLocation:
+            db.query(SystemUser).filter(
+                SystemUser.id == command.requester_system_user_id
+            ).with_for_update().one_or_none()
+            actor = resolve_field_actor(
+                db, ResolveFieldActor(command.requester_system_user_id)
+            )
+            row = require_work_order(
+                db, FieldWorkOrderScope(actor, command.public_id, lock=True)
+            )
+            latitude, longitude = command.latitude, command.longitude
+            metadata = dict(row.metadata_ or {})
+            metadata["location"] = {
+                "lat": float(latitude),
+                "lng": float(longitude),
+                "latitude": float(latitude),
+                "longitude": float(longitude),
+                "address_text": row.address,
+                "source": "manual",
+            }
+            row.metadata_ = metadata
+            mark_sub_authoritative(
+                row,
+                "location",
+                details={"latitude": float(latitude), "longitude": float(longitude)},
+            )
+            db.flush()
+            stage_owner_output(
+                db,
+                OwnerOutputEnvelope(
+                    event_type=EventType.field_job_location_corrected,
+                    producer_owner="operations.field_jobs",
+                    source_kind="work_order",
+                    source_id=row.id,
+                ),
+                {
+                    "work_order_id": str(row.id),
+                    "work_order_public_id": row.public_id,
+                    "system_user_id": str(actor.system_user_id),
+                },
+                context=command.context,
+            )
+            return _location(row)
 
-        metadata = dict(row.metadata_ or {})
-        metadata["location"] = {
-            "lat": float(latitude),
-            "lng": float(longitude),
-            "latitude": float(latitude),
-            "longitude": float(longitude),
-            "address_text": row.address,
-            "source": "manual",
-        }
-        row.metadata_ = metadata
-        mark_sub_authoritative(
-            row,
-            "location",
-            details={"latitude": float(latitude), "longitude": float(longitude)},
+        return execute_owner_command(
+            db,
+            definition=OwnerCommandDefinition(
+                owner="operations.field_jobs",
+                concern="field job location correction",
+                name="update_field_job_location",
+            ),
+            context=command.context,
+            operation=operation,
         )
-        db.commit()
-        db.refresh(row)
-        return _location(row)
 
 
 field_jobs = FieldJobs()

@@ -25,6 +25,8 @@ from app.schemas.dispatch import (
     WorkOrderHeaderUpdate,
 )
 from app.services import dispatch
+from app.services.owner_commands import CommandContext
+from app.services.work_order_errors import WorkOrderCommandError
 
 
 def _system_user(db_session) -> SystemUser:
@@ -184,6 +186,9 @@ def test_assignment_queue_resolves_crm_work_order_and_updates_status(db_session)
             assigned_technician_id=profile.id,
             reason="Initial import",
         ),
+        context=CommandContext.system(
+            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+        ),
     )
     assert queued.work_order_mirror_id == work_order.id
     assert queued.status == DispatchQueueStatus.queued
@@ -192,6 +197,9 @@ def test_assignment_queue_resolves_crm_work_order_and_updates_status(db_session)
         db_session,
         str(queued.id),
         WorkOrderAssignmentQueueUpdate(status="assigned"),
+        context=CommandContext.system(
+            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+        ),
     )
     assert updated.status == "assigned"
     assert (
@@ -247,6 +255,9 @@ def test_native_work_order_header_create_update_and_queue(db_session):
             assigned_technician_id=profile.id,
             status="assigned",
         ),
+        context=CommandContext.system(
+            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+        ),
     )
     assert queued.work_order_mirror_id == work_order.id
     db_session.refresh(work_order)
@@ -266,6 +277,9 @@ def test_native_work_order_header_create_update_and_queue(db_session):
             assigned_technician_id=profile.id,
             status="assigned",
         ),
+        context=CommandContext.system(
+            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+        ),
     )
     assert replayed.id == queued.id
 
@@ -279,13 +293,18 @@ def test_native_work_order_header_create_update_and_queue(db_session):
 
 
 def test_assignment_queue_rejects_unknown_work_order(db_session):
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(WorkOrderCommandError) as exc:
         dispatch.assignment_queue.create(
             db_session,
             WorkOrderAssignmentQueueCreate(crm_work_order_id="missing"),
+            context=CommandContext.system(
+                actor="test",
+                scope="operations:dispatch:assign",
+                reason="test assignment",
+            ),
         )
-    assert exc.value.status_code == 404
-    assert exc.value.detail == "Work order not found"
+    assert exc.value.kind == "not_found"
+    assert exc.value.message == "Work order not found"
 
 
 def test_delete_marks_skill_and_profile_inactive(db_session):

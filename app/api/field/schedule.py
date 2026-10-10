@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.field.execution import field_domain_errors, field_system_user_id
 from app.schemas.field import FieldScheduleEntry
 from app.services.auth_dependencies import require_user_auth
+from app.services.field.execution_contracts import FieldJobsQuery
 from app.services.field.schedule import field_schedule
 
 router = APIRouter(tags=["field-schedule"])
@@ -18,4 +20,12 @@ def get_field_schedule(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return field_schedule.timeline(db, auth, date_from=date_from, date_to=date_to)
+    with field_domain_errors():
+        return field_schedule.timeline(
+            db=db,
+            query=FieldJobsQuery(
+                requester_system_user_id=field_system_user_id(auth),
+                date_from=date_from,
+                date_to=date_to,
+            ),
+        )

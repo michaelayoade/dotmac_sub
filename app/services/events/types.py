@@ -25,6 +25,10 @@ class EventType(enum.Enum):
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"
     field_work_order_note_created = "field_work_order_note.created"
+    field_worklogs_submitted = "field.worklogs_submitted"
+    field_attachment_created = "field.attachment_created"
+    field_attachment_deleted = "field.attachment_deleted"
+    field_job_location_corrected = "field.job_location_corrected"
 
     # Authentication-session security events
     authentication_session_rotated = "authentication_session.rotated"

@@ -13,13 +13,14 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.audit import AuditActorType
 from app.models.dispatch import (
@@ -27,20 +28,23 @@ from app.models.dispatch import (
     DispatchRule,
     TechnicianProfile,
     WorkOrderAssignmentQueue,
+    WorkOrderAssignmentReceipt,
 )
 from app.models.project import Project, ProjectTask
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
     WorkOrderAssignmentQueueCreate,
+    WorkOrderAssignmentQueueRead,
     WorkOrderAssignmentQueueUpdate,
     WorkOrderHeaderCreate,
     WorkOrderHeaderUpdate,
 )
 from app.schemas.network import InfrastructureWorkOrderHeaderCreate
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.events import EventType, emit_event
 from app.services.field.source import mark_sub_authoritative
@@ -50,7 +54,33 @@ from app.services.field.work_order_status import (
     WorkOrderStatus,
 )
 from app.services.operator_tenant import OPERATOR_TENANT_ID
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
+from app.services.work_order_assignment_contracts import (
+    TechnicianAssignmentTarget,
+    VendorAssignmentTarget,
+    WorkOrderAssignmentCommand,
+    WorkOrderAssignmentEligibility,
+    WorkOrderAssignmentEligibilityQuery,
+    WorkOrderAssignmentOutcome,
+    WorkOrderAssignmentPreview,
+    WorkOrderAssignmentQuery,
+    WorkOrderAssignmentState,
+)
 from app.services.work_order_errors import WorkOrderCommandError
+
+
+def technician_header_assignment(
+    profile: TechnicianProfile,
+) -> ColumnElement[bool] | None:
+    """Adapt the retained staff assignment projection without granting vendor scope."""
+    if profile.crm_person_id:
+        return WorkOrder.assigned_to_crm_person_id == profile.crm_person_id
+    return None
+
 
 _CREATE_ID_NAMESPACE = uuid.UUID("cbf90ef0-a977-49fb-a2ac-a636eb3b2342")
 _QUEUE_STATUSES = frozenset(
@@ -102,8 +132,22 @@ def _data(payload: Any, *, exclude_unset: bool = False) -> dict[str, Any]:
 
 
 def _fingerprint(data: dict[str, Any]) -> str:
+    def canonical(value: Any) -> Any:
+        if isinstance(value, datetime):
+            normalized = (
+                value.replace(tzinfo=UTC)
+                if value.tzinfo is None
+                else value.astimezone(UTC)
+            )
+            return normalized.isoformat()
+        if isinstance(value, dict):
+            return {key: canonical(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [canonical(item) for item in value]
+        return value
+
     encoded = json.dumps(
-        data,
+        canonical(data),
         default=str,
         separators=(",", ":"),
         sort_keys=True,
@@ -141,8 +185,7 @@ def _audit(
         action=action,
         entity_type="work_order",
         entity_id=work_order.public_id,
-        actor_type=actor_type,
-        actor_id=actor_id,
+        actor=AuditActor(actor_type=actor_type, actor_id=actor_id),
         request_id=request_id,
         metadata=jsonable_encoder(metadata),
     )
@@ -242,9 +285,10 @@ def _validate_status(value: str) -> str:
 def _validate_queue_status(value: str) -> str:
     normalized = str(value or "").strip().lower()
     if normalized not in _QUEUE_STATUSES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unsupported assignment-queue status: {normalized or value}",
+        raise WorkOrderCommandError(
+            "invalid_assignment_queue_status",
+            f"Unsupported assignment-queue status: {normalized or value}",
+            kind="invalid",
         )
     return normalized
 
@@ -285,7 +329,9 @@ def _resolve_work_order(
         query = query.with_for_update()
     row = query.one_or_none()
     if row is None:
-        raise HTTPException(status_code=404, detail="Work order not found")
+        raise WorkOrderCommandError(
+            "work_order_not_found", "Work order not found", kind="not_found"
+        )
     return row
 
 
@@ -295,7 +341,9 @@ def _get_technician(db: Session, technician_id: object) -> TechnicianProfile:
     except (TypeError, ValueError):
         row = None
     if row is None or not row.is_active:
-        raise HTTPException(status_code=404, detail="Technician not found")
+        raise WorkOrderCommandError(
+            "assignment_target_unavailable", "Technician not found", kind="not_found"
+        )
     return row
 
 
@@ -305,7 +353,9 @@ def _get_rule(db: Session, rule_id: object) -> DispatchRule:
     except (TypeError, ValueError):
         row = None
     if row is None or not row.is_active:
-        raise HTTPException(status_code=404, detail="Dispatch rule not found")
+        raise WorkOrderCommandError(
+            "assignment_rule_unavailable", "Dispatch rule not found", kind="not_found"
+        )
     return row
 
 
@@ -332,6 +382,7 @@ def _latest_queue_entry(
         .order_by(
             WorkOrderAssignmentQueue.updated_at.desc(),
             WorkOrderAssignmentQueue.created_at.desc(),
+            WorkOrderAssignmentQueue.id.desc(),
         )
         .first()
     )
@@ -350,8 +401,370 @@ def _same_queue_command(
             "reason",
             "dispatch_rule_id",
             "assigned_technician_id",
+            "assigned_vendor_id",
         }
     )
+
+
+def _emit_assignment_queue_event(
+    db: Session,
+    row: WorkOrder,
+    entry: WorkOrderAssignmentQueue,
+    context: CommandContext,
+) -> None:
+    emit_event(
+        db,
+        EventType.custom,
+        {
+            "name": "work_order.assignment_queue_transitioned",
+            "tenant_id": str(OPERATOR_TENANT_ID),
+            "work_order_id": str(row.id),
+            "work_order_public_id": row.public_id,
+            "queue_id": str(entry.id),
+            "queue_status": entry.status,
+            "command_id": str(context.command_id),
+        },
+        actor=context.actor,
+        subscriber_id=row.subscriber_id,
+    )
+
+
+def _assignment_actor(context: CommandContext) -> AuditActor:
+    identity = context.actor.removeprefix("user:")
+    try:
+        principal_id = uuid.UUID(identity)
+    except ValueError:
+        return AuditActor.system(context.actor)
+    return AuditActor.user(str(principal_id))
+
+
+def _assignment_audit(
+    db: Session,
+    *,
+    action: str,
+    work_order: WorkOrder,
+    context: CommandContext,
+    metadata: dict[str, object],
+) -> None:
+    stage_audit_event(
+        db,
+        action=action,
+        entity_type="work_order",
+        entity_id=work_order.public_id,
+        actor=_assignment_actor(context),
+        request_id=str(context.correlation_id),
+        metadata=jsonable_encoder(metadata),
+    )
+
+
+def _assignment_work_order(
+    db: Session, public_id: str, *, lock: bool = False
+) -> WorkOrder:
+    query = db.query(WorkOrder).filter(WorkOrder.public_id == public_id)
+    if lock:
+        query = query.with_for_update()
+    row = query.one_or_none()
+    if row is None:
+        raise WorkOrderCommandError(
+            "work_order_not_found", "Work order not found", kind="not_found"
+        )
+    return row
+
+
+def _assignment_preview(
+    db: Session, row: WorkOrder, query: WorkOrderAssignmentQuery
+) -> WorkOrderAssignmentPreview:
+    if not row.is_active or row.status in TERMINAL_WORK_ORDER_STATUSES:
+        raise WorkOrderCommandError(
+            "work_order_not_assignable", "Work order is inactive or terminal"
+        )
+    technician_id = vendor_id = person_id = None
+    technician_name = vendor_name = None
+    if isinstance(query.target, TechnicianAssignmentTarget):
+        profile = db.get(TechnicianProfile, query.target.technician_id)
+        if profile is None or not profile.is_active:
+            raise WorkOrderCommandError(
+                "assignment_target_unavailable",
+                "Technician is inactive or missing",
+                kind="invalid",
+            )
+        technician_id, person_id = profile.id, profile.person_id
+        technician_name = _technician_name(db, profile)
+    elif isinstance(query.target, VendorAssignmentTarget):
+        vendor = db.get(Vendor, query.target.vendor_id)
+        if vendor is None or not vendor.is_active:
+            raise WorkOrderCommandError(
+                "assignment_target_unavailable",
+                "Vendor is inactive or missing",
+                kind="invalid",
+            )
+        vendor_id, vendor_name = vendor.id, vendor.name
+    else:
+        raise WorkOrderCommandError(
+            "invalid_assignment_target", "Unsupported assignment target", kind="invalid"
+        )
+    status = query.status
+    if status not in {"scheduled", "dispatched"} | (
+        {row.status} if row.status in {"in_progress", "paused"} else set()
+    ):
+        raise WorkOrderCommandError(
+            "invalid_assignment_status", "Unsupported assignment status", kind="invalid"
+        )
+    if row.status in {"in_progress", "paused"}:
+        # Assignment changes responsibility, never the execution lifecycle.
+        status = row.status
+    start = (
+        query.scheduled_start
+        if query.scheduled_start is not None
+        else row.scheduled_start
+    )
+    end = query.scheduled_end if query.scheduled_end is not None else row.scheduled_end
+    if start is not None and end is not None and end <= start:
+        raise WorkOrderCommandError(
+            "invalid_assignment_schedule",
+            "Scheduled end must be after start",
+            kind="invalid",
+        )
+    latest = _latest_queue_entry(db, row.id)
+    assigned = latest is not None and latest.status == DispatchQueueStatus.assigned
+    previous_vendor = (
+        db.get(Vendor, latest.assigned_vendor_id)
+        if assigned and latest is not None and latest.assigned_vendor_id
+        else None
+    )
+    return WorkOrderAssignmentPreview(
+        work_order_id=row.public_id,
+        revision=row.updated_at,
+        previous=WorkOrderAssignmentState(
+            row.status,
+            latest.assigned_technician_id if assigned and latest is not None else None,
+            latest.assigned_vendor_id if assigned and latest is not None else None,
+            None,
+            row.technician_name,
+            previous_vendor.name if previous_vendor else None,
+            row.scheduled_start,
+            row.scheduled_end,
+        ),
+        result=WorkOrderAssignmentState(
+            status,
+            technician_id,
+            vendor_id,
+            person_id,
+            technician_name,
+            vendor_name,
+            start,
+            end,
+        ),
+    )
+
+
+def _revoke_assignment(db: Session, row: WorkOrder) -> None:
+    for previous in (
+        db.query(WorkOrderAssignmentQueue)
+        .filter(
+            WorkOrderAssignmentQueue.work_order_mirror_id == row.id,
+            WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
+        )
+        .all()
+    ):
+        previous.status = DispatchQueueStatus.skipped
+        previous.assigned_technician_id = None
+        previous.assigned_vendor_id = None
+    row.assigned_to_crm_person_id = None
+    row.assigned_to_name = None
+    row.technician_name = None
+    row.technician_phone = None
+    if row.status == WorkOrderStatus.dispatched.value:
+        row.status = WorkOrderStatus.scheduled.value
+    db.flush()
+
+
+def _receipt_outcome(receipt: WorkOrderAssignmentReceipt) -> WorkOrderAssignmentOutcome:
+    data = receipt.outcome
+    target = (
+        VendorAssignmentTarget(uuid.UUID(data["vendor_id"]))
+        if data.get("vendor_id")
+        else TechnicianAssignmentTarget(uuid.UUID(data["technician_id"]))
+    )
+    return WorkOrderAssignmentOutcome(
+        uuid.UUID(data["queue_id"]),
+        data["work_order_id"],
+        target,
+        data["status"],
+        datetime.fromisoformat(data["revision"]),
+        replayed=True,
+    )
+
+
+def _assign_work_order(
+    db: Session, *, command: WorkOrderAssignmentCommand, context: CommandContext
+) -> WorkOrderAssignmentOutcome:
+    # Work order is always the first mutable resource locked; re-read eligibility
+    # and current assignment after it, never reuse an unlocked preview.
+    row = _assignment_work_order(db, command.work_order_public_id, lock=True)
+    fingerprint = _fingerprint(
+        {
+            "work_order": command.work_order_public_id,
+            "target_kind": type(command.target).__name__,
+            "target_id": str(
+                command.target.vendor_id
+                if isinstance(command.target, VendorAssignmentTarget)
+                else command.target.technician_id
+            ),
+            "start": command.scheduled_start,
+            "end": command.scheduled_end,
+            "status": command.status,
+            "reason": command.reason,
+            "rule": command.dispatch_rule_id,
+            "expected_revision": command.expected_revision,
+        }
+    )
+    receipt_query = db.query(WorkOrderAssignmentReceipt).filter(
+        WorkOrderAssignmentReceipt.command_id == context.command_id
+    )
+    if context.idempotency_key:
+        from sqlalchemy import or_
+
+        receipt_query = db.query(WorkOrderAssignmentReceipt).filter(
+            or_(
+                WorkOrderAssignmentReceipt.command_id == context.command_id,
+                WorkOrderAssignmentReceipt.idempotency_key == context.idempotency_key,
+            )
+        )
+    receipts = receipt_query.all()
+    if receipts:
+        if len(receipts) != 1 or receipts[0].fingerprint != fingerprint:
+            raise WorkOrderCommandError(
+                "assignment_idempotency_conflict",
+                "Assignment command identity was reused with different content",
+            )
+        return _receipt_outcome(receipts[0])
+    if (
+        command.expected_revision is not None
+        and row.updated_at != command.expected_revision
+    ):
+        raise WorkOrderCommandError(
+            "stale_assignment", "Work order changed since assignment preview"
+        )
+    preview = _assignment_preview(db, row, command)
+    rule = None
+    if command.dispatch_rule_id is not None:
+        rule = db.get(DispatchRule, command.dispatch_rule_id)
+        if rule is None or not rule.is_active:
+            raise WorkOrderCommandError(
+                "assignment_rule_unavailable",
+                "Dispatch rule is inactive or missing",
+                kind="invalid",
+            )
+    latest = _latest_queue_entry(db, row.id)
+    target = preview.result
+    if latest is None:
+        latest = WorkOrderAssignmentQueue(work_order_mirror_id=row.id)
+        db.add(latest)
+    # Revoke historical assignments before setting the one canonical current row.
+    for previous in (
+        db.query(WorkOrderAssignmentQueue)
+        .filter(
+            WorkOrderAssignmentQueue.work_order_mirror_id == row.id,
+            WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
+            WorkOrderAssignmentQueue.id != latest.id,
+        )
+        .all()
+    ):
+        previous.status = DispatchQueueStatus.skipped
+        previous.assigned_technician_id = previous.assigned_vendor_id = None
+    db.flush()
+    latest.status = DispatchQueueStatus.assigned
+    latest.assigned_technician_id = target.technician_id
+    latest.assigned_vendor_id = target.vendor_id
+    latest.reason = command.reason.strip() if command.reason else None
+    latest.dispatch_rule_id = rule.id if rule else None
+    profile = (
+        db.get(TechnicianProfile, target.technician_id)
+        if target.technician_id
+        else None
+    )
+    row.assigned_to_crm_person_id = profile.crm_person_id if profile else None
+    row.assigned_to_name = target.technician_name or target.vendor_name
+    row.technician_name = target.technician_name
+    row.technician_phone = None
+    row.status = target.status
+    row.scheduled_start, row.scheduled_end = (
+        target.scheduled_start,
+        target.scheduled_end,
+    )
+    mark_sub_authoritative(
+        row,
+        "assignment",
+        details={
+            "technician_id": str(target.technician_id)
+            if target.technician_id
+            else None,
+            "vendor_id": str(target.vendor_id) if target.vendor_id else None,
+            "status": row.status,
+        },
+    )
+    db.flush()
+    from dataclasses import asdict
+
+    stage_audit_event(
+        db,
+        action="work_order.assigned",
+        entity_type="work_order",
+        entity_id=row.public_id,
+        actor=_assignment_actor(context),
+        request_id=str(context.correlation_id),
+        metadata=jsonable_encoder(
+            {
+                "owner": "operations.work_order_commands",
+                "command_id": str(context.command_id),
+                "queue_id": str(latest.id),
+                "previous": asdict(preview.previous),
+                "result": asdict(target),
+            }
+        ),
+    )
+    emit_event(
+        db,
+        EventType.custom,
+        {
+            "name": "work_order.assigned",
+            "tenant_id": str(OPERATOR_TENANT_ID),
+            "work_order_id": str(row.id),
+            "work_order_public_id": row.public_id,
+            "queue_id": str(latest.id),
+            "command_id": str(context.command_id),
+            "technician_id": str(target.technician_id)
+            if target.technician_id
+            else None,
+            "vendor_id": str(target.vendor_id) if target.vendor_id else None,
+            "status": row.status,
+        },
+        actor=context.actor,
+        subscriber_id=row.subscriber_id,
+    )
+    outcome = WorkOrderAssignmentOutcome(
+        latest.id, row.public_id, command.target, row.status, row.updated_at
+    )
+    db.add(
+        WorkOrderAssignmentReceipt(
+            command_id=context.command_id,
+            idempotency_key=context.idempotency_key,
+            fingerprint=fingerprint,
+            outcome={
+                "queue_id": str(latest.id),
+                "work_order_id": row.public_id,
+                "technician_id": str(target.technician_id)
+                if target.technician_id
+                else None,
+                "vendor_id": str(target.vendor_id) if target.vendor_id else None,
+                "status": row.status,
+                "revision": row.updated_at.isoformat(),
+            },
+        )
+    )
+    db.flush()
+    return outcome
 
 
 class WorkOrderCommands:
@@ -913,180 +1326,109 @@ class WorkOrderCommands:
         return row
 
     @staticmethod
+    def assignment_eligibility(
+        db: Session,
+        *,
+        query: WorkOrderAssignmentEligibilityQuery,
+    ) -> WorkOrderAssignmentEligibility:
+        row = _assignment_work_order(db, query.work_order_public_id)
+        if not row.is_active:
+            return WorkOrderAssignmentEligibility(False, "Work order is inactive")
+        if row.status in TERMINAL_WORK_ORDER_STATUSES:
+            return WorkOrderAssignmentEligibility(
+                False, f"Cannot assign a work order in status {row.status}"
+            )
+        return WorkOrderAssignmentEligibility(True)
+
+    @staticmethod
     def preview_assignment(
         db: Session,
-        public_id: str,
         *,
-        technician_id: object,
-        scheduled_start: datetime | None = None,
-        scheduled_end: datetime | None = None,
-        status: str = WorkOrderStatus.dispatched.value,
-    ) -> dict[str, object]:
-        row = _get_work_order(db, public_id)
-        if not row.is_active:
-            raise HTTPException(status_code=409, detail="Work order is inactive")
-        if row.status in TERMINAL_WORK_ORDER_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot assign a work order in status {row.status}",
-            )
-        profile = _get_technician(db, technician_id)
-        target_status = _validate_status(status)
-        if (
-            row.status
-            in {WorkOrderStatus.in_progress.value, WorkOrderStatus.paused.value}
-            and target_status == WorkOrderStatus.dispatched.value
-        ):
-            # Reassignment must not rewind a field-execution lifecycle.
-            target_status = row.status
-        allowed_statuses = {
-            WorkOrderStatus.scheduled.value,
-            WorkOrderStatus.dispatched.value,
-        }
-        if row.status in {
-            WorkOrderStatus.in_progress.value,
-            WorkOrderStatus.paused.value,
-        }:
-            allowed_statuses.add(row.status)
-        if target_status not in allowed_statuses:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unsupported assignment status: {target_status}",
-            )
-        start = scheduled_start if scheduled_start is not None else row.scheduled_start
-        end = scheduled_end if scheduled_end is not None else row.scheduled_end
-        _validate_schedule(start, end)
-        latest = _latest_queue_entry(db, row.id)
-        return {
-            "work_order_id": row.public_id,
-            "previous": {
-                "status": row.status,
-                "technician_id": (
-                    str(latest.assigned_technician_id)
-                    if latest is not None
-                    and latest.status == DispatchQueueStatus.assigned
-                    and latest.assigned_technician_id is not None
-                    else None
-                ),
-                "scheduled_start": row.scheduled_start,
-                "scheduled_end": row.scheduled_end,
-            },
-            "result": {
-                "status": target_status,
-                "technician_id": str(profile.id),
-                "person_id": str(profile.person_id),
-                "technician_name": _technician_name(db, profile),
-                "scheduled_start": start,
-                "scheduled_end": end,
-            },
-        }
+        query: WorkOrderAssignmentQuery,
+    ) -> WorkOrderAssignmentPreview:
+        row = _assignment_work_order(db, query.work_order_public_id)
+        return _assignment_preview(db, row, query)
 
     @staticmethod
     def assign(
         db: Session,
-        public_id: str,
         *,
-        technician_id: object,
-        scheduled_start: datetime | None = None,
-        scheduled_end: datetime | None = None,
-        status: str = WorkOrderStatus.dispatched.value,
-        reason: str | None = None,
-        dispatch_rule_id: object | None = None,
-        auth: dict[str, Any] | None = None,
-        request_id: str | None = None,
-        commit: bool = True,
-    ) -> WorkOrderAssignmentQueue:
-        preview = WorkOrderCommands.preview_assignment(
-            db,
-            public_id,
-            technician_id=technician_id,
-            scheduled_start=scheduled_start,
-            scheduled_end=scheduled_end,
-            status=status,
-        )
-        row = _get_work_order(db, public_id, lock=True)
-        profile = _get_technician(db, technician_id)
-        rule = _get_rule(db, dispatch_rule_id) if dispatch_rule_id is not None else None
-        latest = _latest_queue_entry(db, row.id)
-        normalized_reason = str(reason or "").strip() or None
-        queue_data = {
-            "status": DispatchQueueStatus.assigned,
-            "reason": normalized_reason,
-            "assigned_technician_id": profile.id,
-            "dispatch_rule_id": rule.id if rule is not None else None,
-        }
-        target = preview["result"]
-        assert isinstance(target, dict)
-        is_replay = (
-            latest is not None
-            and _same_queue_command(latest, queue_data)
-            and row.status == target["status"]
-            and row.scheduled_start == target["scheduled_start"]
-            and row.scheduled_end == target["scheduled_end"]
-        )
-        if is_replay and latest is not None:
-            return latest
-
-        if latest is None:
-            latest = WorkOrderAssignmentQueue(
-                work_order_mirror_id=row.id,
+        command: WorkOrderAssignmentCommand,
+        context: CommandContext,
+    ) -> WorkOrderAssignmentOutcome:
+        try:
+            return execute_owner_command(
+                db,
+                definition=OwnerCommandDefinition(
+                    owner="operations.work_order_commands",
+                    concern="work-order assignment decisions and projection",
+                    name="assign",
+                ),
+                context=context,
+                operation=lambda: _assign_work_order(
+                    db, command=command, context=context
+                ),
             )
-            db.add(latest)
-        latest.status = DispatchQueueStatus.assigned
-        latest.reason = normalized_reason
-        latest.assigned_technician_id = profile.id
-        latest.dispatch_rule_id = rule.id if rule is not None else None
+        except IntegrityError as exc:
+            raise WorkOrderCommandError(
+                "assignment_idempotency_conflict",
+                "Concurrent assignment identity or target conflict",
+            ) from exc
 
-        name = str(target["technician_name"])
-        row.assigned_to_crm_person_id = profile.crm_person_id
-        row.assigned_to_name = name
-        row.technician_name = name
-        row.scheduled_start = target["scheduled_start"]
-        row.scheduled_end = target["scheduled_end"]
-        row.status = str(target["status"])
-        mark_sub_authoritative(
-            row,
-            "assignment",
-            details={
-                "technician_id": str(profile.id),
-                "person_id": str(profile.person_id),
-                "status": row.status,
-            },
-        )
-        db.flush()
-        _audit(
-            db,
-            action="work_order.assigned",
-            work_order=row,
-            auth=auth,
-            request_id=request_id,
-            metadata={
-                "owner": "operations.work_order_commands",
-                "queue_id": str(latest.id),
-                "dispatch_rule_id": str(rule.id) if rule is not None else None,
-                "previous": preview["previous"],
-                "result": target,
-            },
-        )
-        if commit:
-            db.commit()
-            db.refresh(latest)
-        return latest
+    @staticmethod
+    def _stage_assignment(
+        db: Session,
+        *,
+        command: WorkOrderAssignmentCommand,
+        context: CommandContext,
+    ) -> WorkOrderAssignmentOutcome:
+        """Flush-only participant for the registered fiber verification coordinator."""
+        if not db.in_transaction():
+            raise WorkOrderCommandError(
+                "assignment_transaction_required",
+                "Assignment participant requires coordinator transaction",
+            )
+        return _assign_work_order(db, command=command, context=context)
 
     @staticmethod
     def create_queue_entry(
         db: Session,
         payload: WorkOrderAssignmentQueueCreate,
         *,
-        auth: dict[str, Any] | None = None,
-        request_id: str | None = None,
+        context: CommandContext,
+    ) -> WorkOrderAssignmentQueueRead:
+        return execute_owner_command(
+            db,
+            definition=OwnerCommandDefinition(
+                owner="operations.work_order_commands",
+                concern="work-order assignment-queue transitions",
+                name="create_queue_entry",
+            ),
+            context=context,
+            operation=lambda: WorkOrderAssignmentQueueRead.model_validate(
+                WorkOrderCommands._create_queue_entry(db, payload, context=context)
+            ),
+        )
+
+    @staticmethod
+    def _create_queue_entry(
+        db: Session,
+        payload: WorkOrderAssignmentQueueCreate,
+        *,
+        context: CommandContext,
     ) -> WorkOrderAssignmentQueue:
         row = _resolve_work_order(db, payload, lock=True)
-        data = _data(payload)
+        data = payload.model_dump()
         data.pop("work_order_mirror_id", None)
         data.pop("crm_work_order_id", None)
         data["status"] = _validate_queue_status(data.get("status") or "queued")
         data["reason"] = str(data.get("reason") or "").strip() or None
+        if data.get("assigned_technician_id") and data.get("assigned_vendor_id"):
+            raise WorkOrderCommandError(
+                "invalid_assignment_target",
+                "Exactly one assignment target is required",
+                kind="invalid",
+            )
         if data.get("dispatch_rule_id") is not None:
             data["dispatch_rule_id"] = _get_rule(db, data["dispatch_rule_id"]).id
         if data.get("assigned_technician_id") is not None:
@@ -1096,37 +1438,49 @@ class WorkOrderCommands:
         if (
             data["status"] == DispatchQueueStatus.assigned
             and data.get("assigned_technician_id") is None
+            and data.get("assigned_vendor_id") is None
         ):
-            raise HTTPException(
-                status_code=422,
-                detail="Assigned queue state requires a technician",
+            raise WorkOrderCommandError(
+                "invalid_assignment_target",
+                "Assigned queue state requires exactly one target",
+                kind="invalid",
             )
         if data["status"] == DispatchQueueStatus.assigned:
-            return WorkOrderCommands.assign(
-                db,
-                row.public_id,
-                technician_id=data["assigned_technician_id"],
-                reason=data["reason"],
-                dispatch_rule_id=data.get("dispatch_rule_id"),
-                auth=auth,
-                request_id=request_id,
+            target = (
+                VendorAssignmentTarget(data["assigned_vendor_id"])
+                if data.get("assigned_vendor_id")
+                else TechnicianAssignmentTarget(data["assigned_technician_id"])
             )
+            outcome = _assign_work_order(
+                db,
+                command=WorkOrderAssignmentCommand(
+                    work_order_public_id=row.public_id,
+                    target=target,
+                    reason=data["reason"],
+                    dispatch_rule_id=data.get("dispatch_rule_id"),
+                ),
+                context=context,
+            )
+            db.flush()
+            assigned_entry = db.get(WorkOrderAssignmentQueue, outcome.queue_id)
+            assert assigned_entry is not None
+            return assigned_entry
 
         latest = _latest_queue_entry(db, row.id)
         if latest is not None and _same_queue_command(latest, data):
             return latest
+        _revoke_assignment(db, row)
         entry = WorkOrderAssignmentQueue(
             work_order_mirror_id=row.id,
             **data,
         )
         db.add(entry)
         db.flush()
-        _audit(
+        _assignment_audit(
             db,
             action="work_order.assignment_queued",
             work_order=row,
-            auth=auth,
-            request_id=request_id,
+            context=context,
             metadata={
                 "owner": "operations.work_order_commands",
                 "queue_id": str(entry.id),
@@ -1143,8 +1497,8 @@ class WorkOrderCommands:
                 },
             },
         )
-        db.commit()
-        db.refresh(entry)
+        _emit_assignment_queue_event(db, row, entry, context)
+        db.flush()
         return entry
 
     @staticmethod
@@ -1153,8 +1507,30 @@ class WorkOrderCommands:
         queue_id: str,
         payload: WorkOrderAssignmentQueueUpdate,
         *,
-        auth: dict[str, Any] | None = None,
-        request_id: str | None = None,
+        context: CommandContext,
+    ) -> WorkOrderAssignmentQueueRead:
+        return execute_owner_command(
+            db,
+            definition=OwnerCommandDefinition(
+                owner="operations.work_order_commands",
+                concern="work-order assignment-queue transitions",
+                name="update_queue_entry",
+            ),
+            context=context,
+            operation=lambda: WorkOrderAssignmentQueueRead.model_validate(
+                WorkOrderCommands._update_queue_entry(
+                    db, queue_id, payload, context=context
+                )
+            ),
+        )
+
+    @staticmethod
+    def _update_queue_entry(
+        db: Session,
+        queue_id: str,
+        payload: WorkOrderAssignmentQueueUpdate,
+        *,
+        context: CommandContext,
     ) -> WorkOrderAssignmentQueue:
         try:
             queue_uuid = coerce_uuid(queue_id)
@@ -1163,18 +1539,24 @@ class WorkOrderCommands:
         entry = (
             db.query(WorkOrderAssignmentQueue)
             .filter(WorkOrderAssignmentQueue.id == queue_uuid)
-            .with_for_update()
             .one_or_none()
         )
         if entry is None:
-            raise HTTPException(status_code=404, detail="Queue item not found")
+            raise WorkOrderCommandError(
+                "assignment_queue_not_found", "Queue item not found", kind="not_found"
+            )
         row = (
             db.query(WorkOrder)
             .filter(WorkOrder.id == entry.work_order_mirror_id)
             .with_for_update()
             .one()
         )
+        db.refresh(entry, with_for_update=True)
         latest_before = _latest_queue_entry(db, row.id)
+        if latest_before is None or latest_before.id != entry.id:
+            raise WorkOrderCommandError(
+                "stale_assignment", "Queue item is no longer current"
+            )
         previous_queue_status = entry.status
         previous_projection = {
             "status": row.status,
@@ -1186,7 +1568,13 @@ class WorkOrderCommands:
             "assigned_to_crm_person_id": row.assigned_to_crm_person_id,
             "assigned_to_name": row.assigned_to_name,
         }
-        data = _data(payload, exclude_unset=True)
+        data = payload.model_dump(exclude_unset=True)
+        if data.get("assigned_technician_id") and data.get("assigned_vendor_id"):
+            raise WorkOrderCommandError(
+                "invalid_assignment_target",
+                "Exactly one assignment target is required",
+                kind="invalid",
+            )
         if "status" in data and data["status"] is not None:
             data["status"] = _validate_queue_status(data["status"])
         if "reason" in data:
@@ -1201,26 +1589,48 @@ class WorkOrderCommands:
         resulting_technician = data.get(
             "assigned_technician_id", entry.assigned_technician_id
         )
+        resulting_vendor = data.get("assigned_vendor_id", entry.assigned_vendor_id)
+        if (
+            "assigned_technician_id" in data
+            and data["assigned_technician_id"] is not None
+        ):
+            resulting_vendor = None
+        if "assigned_vendor_id" in data and data["assigned_vendor_id"] is not None:
+            resulting_technician = None
         if (
             resulting_status == DispatchQueueStatus.assigned
             and resulting_technician is None
+            and resulting_vendor is None
         ):
-            raise HTTPException(
-                status_code=422,
-                detail="Assigned queue state requires a technician",
+            raise WorkOrderCommandError(
+                "invalid_assignment_target",
+                "Assigned queue state requires exactly one target",
+                kind="invalid",
             )
         if _same_queue_command(entry, data):
             return entry
         if resulting_status == DispatchQueueStatus.assigned:
-            return WorkOrderCommands.assign(
-                db,
-                row.public_id,
-                technician_id=resulting_technician,
-                reason=data.get("reason", entry.reason),
-                dispatch_rule_id=data.get("dispatch_rule_id", entry.dispatch_rule_id),
-                auth=auth,
-                request_id=request_id,
+            target = (
+                VendorAssignmentTarget(resulting_vendor)
+                if resulting_vendor
+                else TechnicianAssignmentTarget(uuid.UUID(str(resulting_technician)))
             )
+            outcome = _assign_work_order(
+                db,
+                command=WorkOrderAssignmentCommand(
+                    work_order_public_id=row.public_id,
+                    target=target,
+                    reason=data.get("reason", entry.reason),
+                    dispatch_rule_id=data.get(
+                        "dispatch_rule_id", entry.dispatch_rule_id
+                    ),
+                ),
+                context=context,
+            )
+            db.flush()
+            assigned_entry = db.get(WorkOrderAssignmentQueue, outcome.queue_id)
+            assert assigned_entry is not None
+            return assigned_entry
 
         previous = {
             key: str(getattr(entry, key)) if getattr(entry, key) is not None else None
@@ -1228,6 +1638,8 @@ class WorkOrderCommands:
         }
         for key, value in data.items():
             setattr(entry, key, value)
+        entry.assigned_vendor_id = None
+        entry.assigned_technician_id = None
         removed_current_assignment = (
             latest_before is not None
             and latest_before.id == entry.id
@@ -1238,6 +1650,7 @@ class WorkOrderCommands:
             row.assigned_to_crm_person_id = None
             row.assigned_to_name = None
             row.technician_name = None
+            row.technician_phone = None
             if row.status == WorkOrderStatus.dispatched.value:
                 row.status = WorkOrderStatus.scheduled.value
             mark_sub_authoritative(
@@ -1249,12 +1662,11 @@ class WorkOrderCommands:
                 },
             )
         db.flush()
-        _audit(
+        _assignment_audit(
             db,
             action="work_order.assignment_queue_transitioned",
             work_order=row,
-            auth=auth,
-            request_id=request_id,
+            context=context,
             metadata={
                 "owner": "operations.work_order_commands",
                 "queue_id": str(entry.id),
@@ -1281,8 +1693,8 @@ class WorkOrderCommands:
                 },
             },
         )
-        db.commit()
-        db.refresh(entry)
+        _emit_assignment_queue_event(db, row, entry, context)
+        db.flush()
         return entry
 
 

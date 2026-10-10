@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.api.field import router
 from app.api.field.expense_requests import _expense_command_error
@@ -28,11 +30,14 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
+from app.schemas.field import FieldAttachmentRead
 from app.services import backoffice
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field import attachments as attachments_module
 from app.services.field import expense_categories as expense_categories_module
 from app.services.field.attachments import field_attachments
+from app.services.field.execution_contracts import CreateFieldAttachment, FieldJobQuery
 from app.services.field.expense_requests import (
     CancelFieldExpenseRequest,
     ExpenseCategoryRule,
@@ -55,6 +60,7 @@ from app.services.field.expense_requests import (
     submit_field_expense_request_command,
 )
 from app.services.field.jobs import field_jobs
+from app.services.file_storage import UnifiedFileUploadService
 from app.services.owner_commands import CommandContext
 
 
@@ -65,24 +71,25 @@ class _Stream:
     content_length: int
 
 
-class _FakeUploads:
+class _FakeUploads(UnifiedFileUploadService):
     def __init__(self):
         self.contents: dict[str, bytes] = {}
 
-    def upload(self, **kwargs):
+    def stage_upload(self, **kwargs):
         record = StoredFile(
             entity_type=kwargs["entity_type"],
             entity_id=kwargs["entity_id"],
             original_filename=kwargs["original_filename"],
             storage_key_or_relative_path=f"attachments/{uuid4().hex}",
             file_size=len(kwargs["data"]),
+            checksum=hashlib.sha256(kwargs["data"]).hexdigest(),
             content_type=kwargs["content_type"],
             storage_provider="s3",
             uploaded_by=kwargs["uploaded_by"],
             owner_subscriber_id=kwargs["owner_subscriber_id"],
         )
         kwargs["db"].add(record)
-        kwargs["db"].commit()
+        kwargs["db"].flush()
         kwargs["db"].refresh(record)
         self.contents[str(record.id)] = kwargs["data"]
         return record
@@ -91,9 +98,9 @@ class _FakeUploads:
         data = self.contents[str(record.id)]
         return _Stream(iter([data]), record.content_type, len(data))
 
-    def soft_delete(self, *, db, file, hard_delete_object=True):
+    def stage_soft_delete(self, *, db, file, hard_delete_object=True):
         file.is_deleted = True
-        db.commit()
+        db.flush()
         return file
 
 
@@ -451,7 +458,12 @@ def test_create_submit_cancel_and_surface_expense_in_job_detail(db_session):
     assert work_order.metadata_["native_field_source"] == "sub"
     assert "expense_requests" in work_order.metadata_["native_field_activity"]
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-expense-flow")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-expense-flow"
+        ),
+    )
     assert len(detail.expense_requests) == 1
     assert detail.expense_requests[0].status == "submitted"
 
@@ -683,14 +695,22 @@ def test_expense_request_scope_and_receipt_attachment_validation(
         assigned_to_crm_person_id="other-expense-tech",
     )
     db_session.commit()
-    receipt = field_attachments.create(
-        db_session,
-        _auth(user),
-        kind="document",
-        file_name="receipt.pdf",
-        mime_type="application/pdf",
-        content=b"%PDF",
-        crm_work_order_id=visible.crm_work_order_id,
+    receipt = _attachments_create(
+        db=db_session,
+        command=CreateFieldAttachment(
+            requester_system_user_id=user.id,
+            kind="document",
+            file_name="receipt.pdf",
+            mime_type="application/pdf",
+            content=b"%PDF",
+            public_id=visible.crm_work_order_id,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
     with pytest.raises(FieldExpenseRequestError) as hidden_exc:
@@ -702,9 +722,9 @@ def test_expense_request_scope_and_receipt_attachment_validation(
         user,
         visible,
         purpose="Receipt linked",
-        items=_expense_items(receipt_attachment_id=receipt["id"]),
+        items=_expense_items(receipt_attachment_id=receipt.id),
     )
-    assert created["items"][0]["receipt_attachment_id"] == receipt["id"]
+    assert created["items"][0]["receipt_attachment_id"] == receipt.id
 
 
 def test_expense_vendor_picker_lists_active_vendors(db_session):
@@ -962,3 +982,10 @@ def test_atomic_expense_submission_replays_and_rejects_changed_payload(
     assert [item["id"] for item in listed.json()["items"]] == [created.json()["id"]]
     assert changed.status_code == 409
     assert db_session.query(FieldExpenseRequest).count() == 1
+
+
+def _attachments_create(
+    db: Session, command: CreateFieldAttachment
+) -> FieldAttachmentRead:
+    db_session_adapter.release_read_transaction(db)
+    return field_attachments.create(db=db, command=command)

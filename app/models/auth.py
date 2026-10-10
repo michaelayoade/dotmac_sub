@@ -157,7 +157,7 @@ class UserCredential(Base):
             "authentication_binding_id",
             name="uq_user_credentials_tenant_party_auth_binding",
         ),
-        # Migration 669. See ``credential_version`` below.
+        # Migration 670. See ``credential_version`` below.
         CheckConstraint(
             "credential_version >= 1",
             name="ck_user_credentials_credential_version_positive",
@@ -247,7 +247,7 @@ class UserCredential(Base):
     password_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
-    # Migration 669. Names the SECRET and its standing, not the hash
+    # Migration 670. Names the SECRET and its standing, not the hash
     # representation: bumped by password change/reset/admin set, ``is_active``
     # toggles, ``must_change_password`` false->true and provider/username/
     # principal changes; NOT bumped by a representation-only rehash or by
@@ -255,7 +255,7 @@ class UserCredential(Base):
     # gate, MFA challenges) bind to it so a stale verification cannot mint a
     # session after the credential changed. Never exposed in schemas/auth.py.
     # A PostgreSQL trigger bumps it for any legacy writer that changes
-    # credential standing without bumping it (see migration 669).
+    # credential standing without bumping it (see migration 670).
     credential_version: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=1, server_default=text("1")
     )
