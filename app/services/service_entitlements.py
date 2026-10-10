@@ -194,8 +194,13 @@ def ensure_prepaid_entitlement_for_paid_invoice_line(
     invoice: Invoice,
     line: InvoiceLine,
     reconciliation_fingerprint: str | None = None,
+    reconciled_by: str = "financial.prepaid_service_coverage_reconciliation",
 ) -> ServiceEntitlement | None:
-    """Stage one exact paid-line entitlement without completing a transaction."""
+    """Stage one exact paid-line entitlement without completing a transaction.
+
+    ``reconciled_by`` names the reviewed owner that supplied
+    ``reconciliation_fingerprint``; it is recorded only with a fingerprint.
+    """
     if (
         not invoice.is_active
         or invoice.status != InvoiceStatus.paid
@@ -232,7 +237,7 @@ def ensure_prepaid_entitlement_for_paid_invoice_line(
     if reconciliation_fingerprint:
         metadata.update(
             {
-                "reconciled_by": "financial.prepaid_service_coverage_reconciliation",
+                "reconciled_by": reconciled_by,
                 "reconciliation_fingerprint": reconciliation_fingerprint,
             }
         )

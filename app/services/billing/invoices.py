@@ -486,6 +486,29 @@ class PaidPrepaidInvoiceDocumentRepair:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewedPaidPrepaidInvoicePeriodRestoration:
+    """Finance-reviewed service period for one paid invoice whose period is malformed.
+
+    The ``expected_*`` values are the exact before-state the coordinating
+    owner previewed and two staff members approved. The participant refuses
+    to write when any of them changed, so a period is never restored over
+    evidence nobody reviewed. ``expected_line_subscription_id`` is ``None``
+    when the reviewed line was unlinked and is linked by this restoration.
+    """
+
+    invoice_id: UUID
+    line_id: UUID
+    subscription_id: UUID
+    expected_billing_period_start: datetime | None
+    expected_billing_period_end: datetime | None
+    expected_line_subscription_id: UUID | None
+    expected_line_amount: Decimal
+    billing_period_start: datetime
+    billing_period_end: datetime
+    evidence_ref: str
+
+
+@dataclass(frozen=True, slots=True)
 class DraftInvoiceLineReplacement:
     """One line in a complete admin-draft replacement request."""
 
@@ -2709,6 +2732,105 @@ class Invoices(ListResponseMixin):
                 "billing_period_start": repair.billing_period_start.isoformat(),
                 "billing_period_end": repair.billing_period_end.isoformat(),
                 "paid_prepaid_invoice_repair_ref": repair.repair_evidence_ref,
+            }
+        )
+        line.metadata_ = line_metadata
+        db.flush()
+        return invoice
+
+    @staticmethod
+    def restore_reviewed_paid_prepaid_period_for_owner(
+        db: Session,
+        restoration: ReviewedPaidPrepaidInvoicePeriodRestoration,
+    ) -> Invoice:
+        """Write a finance-reviewed period onto one paid, period-malformed invoice.
+
+        Flush-only participant for
+        ``financial.prepaid_paid_invoice_period_repair``. It changes only the
+        invoice's documentary service period, the reviewed line's period
+        projection, and (for an unlinked line) its subscription link. It never
+        changes status, totals, balance, allocations, ledger facts, or the
+        line's ``kind``: a proration or one-off line keeps its classification.
+        The coordinating owner proves settlement, terms, overlap, and approval.
+        """
+
+        invoice = lock_for_update(db, Invoice, str(restoration.invoice_id))
+        start = restoration.billing_period_start
+        end = restoration.billing_period_end
+        current_start = invoice.billing_period_start if invoice is not None else None
+        current_end = invoice.billing_period_end if invoice is not None else None
+        normalized_start = _evidence_utc(current_start)
+        normalized_end = _evidence_utc(current_end)
+        currently_malformed = (
+            normalized_start is None
+            or normalized_end is None
+            or normalized_end <= normalized_start
+        )
+        if (
+            invoice is None
+            or not invoice.is_active
+            or invoice.is_proforma
+            or invoice.status is not InvoiceStatus.paid
+            or round_money(to_decimal(invoice.balance_due)) > Decimal("0.00")
+            or not currently_malformed
+            or normalized_start
+            != _evidence_utc(restoration.expected_billing_period_start)
+            or normalized_end != _evidence_utc(restoration.expected_billing_period_end)
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.paid_prepaid_period_restoration_rejected",
+                message=(
+                    "Invoice is not the reviewed active paid document with a "
+                    "malformed service period."
+                ),
+                details={"invoice_id": str(restoration.invoice_id)},
+            )
+        if (
+            start.tzinfo is None
+            or end.tzinfo is None
+            or end <= start
+            or not restoration.evidence_ref.strip()
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.paid_prepaid_period_restoration_rejected",
+                message="Restored service period must be positive and timezone-aware.",
+                details={"invoice_id": str(restoration.invoice_id)},
+            )
+        line = db.scalar(
+            select(InvoiceLine)
+            .where(
+                InvoiceLine.id == restoration.line_id,
+                InvoiceLine.invoice_id == invoice.id,
+                InvoiceLine.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if (
+            line is None
+            or line.subscription_id != restoration.expected_line_subscription_id
+            or line.subscription_id not in {None, restoration.subscription_id}
+            or round_money(to_decimal(line.amount))
+            != round_money(restoration.expected_line_amount)
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.paid_prepaid_period_restoration_rejected",
+                message="Reviewed paid invoice line identity changed after approval.",
+                details={
+                    "invoice_id": str(restoration.invoice_id),
+                    "line_id": str(restoration.line_id),
+                },
+            )
+
+        invoice.billing_period_start = start
+        invoice.billing_period_end = end
+        line.subscription_id = restoration.subscription_id
+        line_metadata = dict(line.metadata_ or {})
+        line_metadata.update(
+            {
+                "billing_period_start": start.isoformat(),
+                "billing_period_end": end.isoformat(),
+                "billing_period_source": "finance_reviewed_period_repair",
+                "paid_prepaid_period_repair_ref": restoration.evidence_ref,
             }
         )
         line.metadata_ = line_metadata

@@ -854,6 +854,11 @@ and `malformed_renewal_origin` with
 `docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md`, starting from the
 read-only `scripts/billing/diagnose_prepaid_coverage_quarantine.py`, which lists
 the exact records and the reviewed owner (if any) for each.
+A malformed paid-invoice period is corrected only by the four-eyes
+`financial.prepaid_paid_invoice_period_repair` owner
+(`scripts/billing/repair_prepaid_paid_invoice_period.py`): Finance supplies the
+subscription and period, a second staff member approves the fingerprint-bound
+request, and the owner restores the period and its entitlement atomically.
 
 Preview prepaid-lock cleanup from active lock evidence, not subscriber status,
 invoice status, or paid-through date:

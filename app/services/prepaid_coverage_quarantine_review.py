@@ -13,7 +13,8 @@ no automatic repair:
   account/amount/currency disagree with its ledger debit.
 
 This query explains such a quarantine record by record and names the existing
-reviewed owner (if any) that may correct each one. It reuses the owner's own
+reviewed owner (if any) that may correct each one. A malformed paid-invoice
+period is corrected by ``financial.prepaid_paid_invoice_period_repair``. It reuses the owner's own
 predicates so it cannot drift from what enforcement blocks on. It never
 writes, never infers a period from memo or description text, and never
 decides the correction: it states which facts Finance must establish before a
@@ -66,6 +67,8 @@ from app.services.prepaid_coverage_reconciliation import (
 QUARANTINE_FINDING_PREFIX = "prepaid-coverage:quarantine:"
 RUNBOOK = "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
 _UNUSED_RENEWAL_RUNBOOK = "docs/runbooks/UNUSED_PREPAID_RENEWAL_CORRECTION.md"
+_PERIOD_REPAIR_OWNER = "financial.prepaid_paid_invoice_period_repair"
+_PERIOD_REPAIR_CLI = "scripts.billing.repair_prepaid_paid_invoice_period"
 _RENEWAL_ORIGIN = AccountAdjustmentOrigin.prepaid_service_renewal
 _BASE_LINE_KIND = "base_subscription"
 _DERIVED_LINE_PERIOD_SOURCES = frozenset({"paid_at_manual_invoice"})
@@ -100,12 +103,7 @@ class PeriodProof(StrEnum):
 class ResolutionRoute(StrEnum):
     unused_prepaid_renewal_correction = "unused_prepaid_renewal_correction"
     reviewed_account_adjustment_reversal = "reviewed_account_adjustment_reversal"
-    engineering_paid_invoice_period_restoration = (
-        "engineering_paid_invoice_period_restoration"
-    )
-    engineering_documentary_paid_invoice_period = (
-        "engineering_documentary_paid_invoice_period"
-    )
+    reviewed_paid_invoice_period_repair = "reviewed_paid_invoice_period_repair"
     engineering_non_service_line_classification = (
         "engineering_non_service_line_classification"
     )
@@ -435,10 +433,44 @@ def _line_period_proof(
     return PeriodProof.none, None, None
 
 
+def _period_repair_command(
+    *,
+    invoice_id: UUID,
+    lines: list[InvoiceLineEvidence],
+    proven_start: datetime | None,
+    proven_end: datetime | None,
+) -> str:
+    """Prefilled READ-ONLY preview of the reviewed period repair."""
+    scoped = [line for line in lines if line.in_quarantine_scope]
+    line_id = str(scoped[0].line_id) if len(scoped) == 1 else "<line-id>"
+    subscription_id = (
+        str(scoped[0].subscription_id)
+        if len(scoped) == 1 and scoped[0].subscription_id is not None
+        else "<subscription-id>"
+    )
+    start = (
+        proven_start.isoformat()
+        if proven_start is not None
+        else "<finance-documented-start>"
+    )
+    end = (
+        proven_end.isoformat() if proven_end is not None else "<finance-documented-end>"
+    )
+    return (
+        f"poetry run python -m {_PERIOD_REPAIR_CLI} preview "
+        f"--invoice-id {invoice_id} --line-id {line_id} "
+        f"--subscription-id {subscription_id} "
+        f"--period-start {start} --period-end {end}"
+    )
+
+
 def _invoice_options(
     *,
+    invoice_id: UUID,
     lines: list[InvoiceLineEvidence],
     proof: PeriodProof,
+    proven_start: datetime | None,
+    proven_end: datetime | None,
 ) -> tuple[ResolutionOption, ...]:
     options: list[ResolutionOption] = []
     scoped = [line for line in lines if line.in_quarantine_scope]
@@ -464,55 +496,37 @@ def _invoice_options(
                 ),
             )
         )
-    if proof in {PeriodProof.source_entitlement, PeriodProof.line_metadata_period}:
-        options.append(
-            ResolutionOption(
-                route=ResolutionRoute.engineering_paid_invoice_period_restoration,
-                sanctioned=False,
-                when=(
+    proven = proof in {PeriodProof.source_entitlement, PeriodProof.line_metadata_period}
+    options.append(
+        ResolutionOption(
+            route=ResolutionRoute.reviewed_paid_invoice_period_repair,
+            sanctioned=True,
+            when=(
+                (
                     "Finance confirms the structured period shown in "
                     "proven_period_start/proven_period_end is the period this "
                     "invoice paid for."
-                ),
-                owner=None,
-                runbook=RUNBOOK,
-                command=None,
-                missing_capability=(
-                    "No reviewed owner restores billing_period_start/end on a "
-                    "PAID invoice whose positive line is already linked to the "
-                    "subscription. The admin coverage repair and "
-                    "prepaid_coverage_reconcile only create entitlements from an "
-                    "exact period; reconcile_prepaid_drafts --repair-paid-invoice "
-                    "only repairs unlinked lines; sequence reconstruction "
-                    "refuses paid invoices; calendar reconciliation needs a "
-                    "stored period. Needs an engineering-built reviewed period "
-                    "restoration (preview/fingerprint, actor plus distinct "
-                    "approver, evidence reference, idempotency, provenance)."
-                ),
-            )
-        )
-    else:
-        options.append(
-            ResolutionOption(
-                route=ResolutionRoute.engineering_documentary_paid_invoice_period,
-                sanctioned=False,
-                when=(
+                )
+                if proven
+                else (
                     "No single structured period exists (proof="
-                    f"{proof.value}); Finance must determine the paid period "
-                    "from source documents, never from memo or description text."
-                ),
-                owner=None,
-                runbook=RUNBOOK,
-                command=None,
-                missing_capability=(
-                    "No reviewed owner records a Finance-documented period on a "
-                    "paid invoice with a subscription-linked line. Needs an "
-                    "engineering-built documentary period correction with "
-                    "four-eyes approval; until then the account stays "
-                    "quarantined (protected from adverse enforcement)."
-                ),
-            )
+                    f"{proof.value}); Finance determines the paid period and "
+                    "subscription from source documents (original or Splynx "
+                    "invoice, payment receipt, customer order), never from memo "
+                    "or description text."
+                )
+            ),
+            owner=_PERIOD_REPAIR_OWNER,
+            runbook=RUNBOOK,
+            command=_period_repair_command(
+                invoice_id=invoice_id,
+                lines=lines,
+                proven_start=proven_start if proven else None,
+                proven_end=proven_end if proven else None,
+            ),
+            missing_capability=None,
         )
+    )
     return tuple(options)
 
 
@@ -658,7 +672,13 @@ def _invoice_findings(
                 period_proof=proof,
                 proven_period_start=proven_start,
                 proven_period_end=proven_end,
-                options=_invoice_options(lines=lines, proof=proof),
+                options=_invoice_options(
+                    invoice_id=invoice.id,
+                    lines=lines,
+                    proof=proof,
+                    proven_start=proven_start,
+                    proven_end=proven_end,
+                ),
             )
         )
     return tuple(findings)

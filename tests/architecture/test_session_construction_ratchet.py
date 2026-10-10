@@ -116,7 +116,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: migration and serialized subscription activation. Production remains unchanged.
 #: +1 from test_support_ticket_comment_idempotency_concurrency.py: an independent
 #: worker session proves ticket-scoped duplicate submissions serialize correctly.
-TEST_FIXTURE_BASELINE_TOTAL = 173
+#: +1 from test_prepaid_paid_invoice_period_repair_concurrency.py: independent
+#: worker sessions prove concurrent four-eyes period-repair approvals serialize.
+TEST_FIXTURE_BASELINE_TOTAL = 174
 
 
 def _baseline() -> dict[str, int]:
