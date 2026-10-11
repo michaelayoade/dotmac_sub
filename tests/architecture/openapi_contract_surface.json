@@ -109,19 +109,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "DELETE /api/v1/audit-events/{event_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "header:x-session-token",
-    "path:event_id!"
-   ],
-   "request": null,
-   "responses": {
-    "204": "cc5fd302f9c4",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "DELETE /api/v1/auth/me/avatar": {
    "params": [
     "header:authorization",

@@ -46,7 +46,13 @@ DOMAIN = DomainSOT(
                 "r1_parity query owns drift detection during expansion. "
                 "Authentication-denial AuditEvents are staged through this persistence "
                 "owner in the password-authentication failure command; audit availability "
-                "never changes admission and counter-only fallback is forbidden."
+                "never changes admission and counter-only fallback is forbidden. "
+                "The generic audit deletion command is retired; the "
+                "retired DELETE adapter cannot hide rows. Historical is_active "
+                "read filtering remains compatible. Database immutability and "
+                "maintenance retention enforcement are a separate gated slice. "
+                "The unused subscriber comment todo metadata writer is retired; "
+                "historical timeline flags remain readable."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -195,10 +201,13 @@ DOMAIN = DomainSOT(
                 steward="platform operations",
                 design_refs=(
                     "docs/audits/AUDIT_R1_KERNEL_INTEGRATION.md",
+                    "docs/audits/AUDIT_APPEND_ONLY_BOUNDARY.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
                 test_refs=(
                     "tests/architecture/test_audit_writer_surfaces.py",
+                    "tests/architecture/test_audit_append_only_boundary.py",
+                    "tests/test_audit_deletion_retirement.py",
                     "tests/architecture/test_audit_actor_provenance.py",
                     "tests/integration/test_audit_r1_migration.py",
                     "tests/test_audit_r1_parity.py",
