@@ -1303,6 +1303,22 @@ CREDENTIAL_FORMAT_REJECTIONS = Counter(
     "Credential verification refused unavailable, unknown or malformed stored material",
 )
 
+PORTAL_AUTHENTICATION_SUCCESSES = Counter(
+    "portal_authentication_successes_total",
+    "Delivered customer portal logins by verified credential source",
+    ["src"],
+)
+
+
+def record_portal_authentication_success(*, src: str) -> None:
+    """Bound label cardinality; telemetry cannot change authentication results."""
+    if src not in {"user_credential", "access_credential", "radius_user"}:
+        return
+    try:
+        PORTAL_AUTHENTICATION_SUCCESSES.labels(src=src).inc()
+    except Exception:
+        pass
+
 
 AUTHENTICATION_DENIAL_WRITE_FAILURES = Counter(
     "authentication_denial_write_failures_total",

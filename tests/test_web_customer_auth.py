@@ -23,6 +23,17 @@ from tests.authentication_denial_unit import (
 pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
+@pytest.fixture
+def portal_successes(monkeypatch):
+    observed = []
+    monkeypatch.setattr(
+        web_customer_auth_service,
+        "record_portal_authentication_success",
+        lambda *, src: observed.append(src),
+    )
+    return observed
+
+
 def _request_with_cookie(name: str, value: str) -> Request:
     return _request(cookies={name: value})
 
@@ -193,7 +204,7 @@ def test_customer_stop_impersonation_invalidates_session_and_returns_to_admin(
 
 
 def test_customer_login_allows_pppoe_when_local_credential_password_differs(
-    db_session, subscriber, monkeypatch
+    db_session, subscriber, monkeypatch, portal_successes
 ):
     monkeypatch.setattr(
         web_customer_auth_service.radius_auth,
@@ -231,6 +242,7 @@ def test_customer_login_allows_pppoe_when_local_credential_password_differs(
     assert response.headers["location"] == "/portal/dashboard"
     assert customer_portal.SESSION_COOKIE_NAME in _response_cookies(response)
     assert local_credential.failed_login_attempts == 0
+    assert portal_successes == ["access_credential"]
 
 
 def test_customer_login_ignores_staff_local_credential(db_session, monkeypatch):
@@ -500,7 +512,7 @@ def test_customer_login_radius_throttle_shows_remaining_cooldown(
 
 
 def test_customer_login_redirects_to_mfa_when_enabled(
-    db_session, subscriber, monkeypatch
+    db_session, subscriber, monkeypatch, portal_successes
 ):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
@@ -538,10 +550,11 @@ def test_customer_login_redirects_to_mfa_when_enabled(
     assert "customer_mfa_pending" in cookies
     assert "customer_mfa_context" in cookies
     assert customer_portal.SESSION_COOKIE_NAME not in cookies
+    assert portal_successes == []
 
 
 def test_customer_mfa_submit_creates_customer_session(
-    db_session, subscriber, monkeypatch
+    db_session, subscriber, monkeypatch, portal_successes
 ):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
@@ -578,6 +591,7 @@ def test_customer_mfa_submit_creates_customer_session(
         "000000",
     )
     assert invalid_response.status_code == 401
+    assert portal_successes == []
 
     valid_response = web_customer_auth_service.customer_mfa_submit(
         _request(cookies=pending_cookies),
@@ -586,6 +600,7 @@ def test_customer_mfa_submit_creates_customer_session(
     )
 
     assert valid_response.status_code == 303
+    assert portal_successes == ["user_credential"]
     assert valid_response.headers["location"] == "/portal/profile"
     cookies = _response_cookies(valid_response)
     assert customer_portal.SESSION_COOKIE_NAME in cookies
@@ -737,7 +752,7 @@ def test_customer_session_rejects_missing_revoked_expired_wrong_principal_standi
 
 @pytest.mark.parametrize("failure", [RuntimeError, ValueError])
 def test_customer_redis_failure_revokes_committed_auth_session(
-    db_session, subscriber, monkeypatch, failure
+    db_session, subscriber, monkeypatch, failure, portal_successes
 ):
     from sqlalchemy import select
 
@@ -754,6 +769,7 @@ def test_customer_redis_failure_revokes_committed_auth_session(
         _request(), db_session, credential.username, "portal-secret", False, None
     )
     assert response.status_code == 503
+    assert portal_successes == []
     assert customer_portal.SESSION_COOKIE_NAME not in _response_cookies(response)
     row = db_session.scalar(
         select(AuthSession).where(AuthSession.subscriber_id == subscriber.id)
@@ -762,7 +778,7 @@ def test_customer_redis_failure_revokes_committed_auth_session(
 
 
 def test_customer_audit_failure_rolls_back_gate_and_session(
-    db_session, subscriber, monkeypatch
+    db_session, subscriber, monkeypatch, portal_successes
 ):
     from sqlalchemy import func, select
 
@@ -779,6 +795,7 @@ def test_customer_audit_failure_rolls_back_gate_and_session(
         _request(), db_session, credential.username, "portal-secret", False, None
     )
     assert response.status_code == 503
+    assert portal_successes == []
     db_session.refresh(credential)
     assert credential.last_login_at is None
     assert db_session.scalar(select(func.count()).select_from(AuthSession)) == 0
@@ -870,6 +887,7 @@ def test_radius_customer_mfa_preserves_source_and_rejects_marker_change(
     subscriber,
     monkeypatch,
     marker,
+    portal_successes,
 ):
     from app.models.radius import RadiusUser
     from app.services import password_authentication as pa
@@ -922,6 +940,7 @@ def test_radius_customer_mfa_preserves_source_and_rejects_marker_change(
         _request(cookies), db_session, pyotp.TOTP(setup["secret"]).now()
     )
     assert denied.status_code == 401
+    assert portal_successes == []
     # A fresh radius-backed password step and unchanged markers still complete.
     response = web_customer_auth_service.customer_login_submit(
         _request(), db_session, access.username, "radius-secret", False, None
@@ -931,6 +950,7 @@ def test_radius_customer_mfa_preserves_source_and_rejects_marker_change(
         _request(cookies), db_session, pyotp.TOTP(setup["secret"]).now()
     )
     assert allowed.status_code == 303
+    assert portal_successes == ["radius_user"]
     token = _response_cookies(allowed)[customer_portal.SESSION_COOKIE_NAME]
     assert customer_portal.get_current_customer(token, db_session) is not None
 

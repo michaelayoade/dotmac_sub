@@ -3,6 +3,7 @@
 import html
 import logging
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
@@ -14,6 +15,7 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.csrf import renew_csrf_cookie
+from app.metrics import record_portal_authentication_success
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +232,12 @@ def _primary_customer_totp_enabled(db: Session, subscriber_id: object) -> bool:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _PortalMfaCompletion:
+    session: StagedSession
+    src: str
+
+
 def _verify_customer_mfa_token(
     db: Session,
     *,
@@ -237,7 +245,7 @@ def _verify_customer_mfa_token(
     context: dict,
     code: str,
     request: Request,
-) -> StagedSession:
+) -> _PortalMfaCompletion:
     try:
         challenge = pa.decode_challenge(db, mfa_token, expected_typ="mfa")
     except pa.PasswordAuthenticationError:
@@ -289,7 +297,7 @@ def _verify_customer_mfa_token(
     totp_ok = pyotp.TOTP(secret).verify(code.strip(), valid_window=0)
     failure_policy = auth_flow_service._mfa_failure_policy(db)  # noqa: SLF001
     try:
-        return pa.complete_mfa(
+        staged = pa.complete_mfa(
             db,
             challenge,
             request=request,
@@ -300,6 +308,7 @@ def _verify_customer_mfa_token(
             session_sink="customer_portal",
             expires_at=_portal_expiry(db, bool(context.get("remember"))),
         )
+        return _PortalMfaCompletion(session=staged, src=challenge.src)
     except pa.PasswordAuthenticationError as exc:
         effect = (
             pa.MfaFailureEffect(method_id, failure_policy)
@@ -947,6 +956,7 @@ def customer_login_submit(
             max_age=max_age,
         )
 
+        record_portal_authentication_success(src=verified.src)
         return response
 
     except (RuntimeError, pa.PasswordAuthenticationError) as exc:
@@ -1043,7 +1053,7 @@ def customer_mfa_submit(request: Request, db: Session, code: str):
 
     try:
         context = _decode_customer_mfa_context(db, context_token, request=request)
-        staged = _verify_customer_mfa_token(
+        completion = _verify_customer_mfa_token(
             db,
             mfa_token=mfa_token,
             context=context,
@@ -1052,7 +1062,7 @@ def customer_mfa_submit(request: Request, db: Session, code: str):
         )
         session_token = _deliver_customer_session(
             db,
-            staged=staged,
+            staged=completion.session,
             username=str(context.get("username") or ""),
             account_id=UUID(str(context["account_id"])),
             subscriber_id=UUID(str(context["subscriber_id"])),
@@ -1074,6 +1084,7 @@ def customer_mfa_submit(request: Request, db: Session, code: str):
             if context.get("remember")
             else customer_portal.get_session_max_age(db),
         )
+        record_portal_authentication_success(src=completion.src)
         return response
     except RuntimeError:
         return templates.TemplateResponse(
