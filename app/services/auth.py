@@ -8,6 +8,7 @@ from typing import cast
 
 import redis
 from fastapi import HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.auth import (
@@ -15,6 +16,7 @@ from app.models.auth import (
     AuthProvider,
     MFAMethod,
     MFAMethodType,
+    MFARecoveryCode,
     SessionStatus,
     UserCredential,
 )
@@ -30,6 +32,7 @@ from app.schemas.auth import (
     ApiKeyUpdate,
 )
 from app.services import auth_cache
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -263,14 +266,67 @@ class MFAMethods(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def delete(db: Session, method_id: str):
-        method = db.get(MFAMethod, coerce_uuid(method_id))
-        if not method:
-            raise HTTPException(status_code=404, detail="MFA method not found")
-        method.is_active = False
-        method.enabled = False
-        method.is_primary = False
-        db.commit()
+    def delete(db: Session, method_id: str, *, actor_id: str):
+        """Disable one MFA method, its recovery codes and the audit atomically.
+
+        Recovery codes are keyed to a method (``mfa_method_id``), so disabling a
+        method also deactivates that method's unused codes: they cannot be
+        redeemed while the method is off, and must not revive if an enrollment
+        later re-enables the same row. All state changes and the audit event
+        are staged and committed in one transaction; any failure rolls back.
+        """
+
+        if not actor_id or not actor_id.strip():
+            raise HTTPException(status_code=403, detail="Administrator is required")
+        try:
+            method = db.scalar(
+                select(MFAMethod)
+                .where(MFAMethod.id == coerce_uuid(method_id))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if not method:
+                raise HTTPException(status_code=404, detail="MFA method not found")
+            principal_type, principal_id = next(
+                (name, value)
+                for name, value in (
+                    ("subscriber", method.subscriber_id),
+                    ("system_user", method.system_user_id),
+                    ("reseller_user", method.reseller_user_id),
+                )
+                if value is not None
+            )
+            changed = bool(method.is_active or method.enabled or method.is_primary)
+            if changed:
+                codes_deactivated = (
+                    db.query(MFARecoveryCode)
+                    .filter(
+                        MFARecoveryCode.mfa_method_id == method.id,
+                        MFARecoveryCode.is_active.is_(True),
+                    )
+                    .update({"is_active": False}, synchronize_session=False)
+                )
+                method.is_active = False
+                method.enabled = False
+                method.is_primary = False
+                db.flush()
+                stage_audit_event(
+                    db,
+                    action="auth.mfa_method.disabled",
+                    entity_type="mfa_method",
+                    entity_id=str(method.id),
+                    actor=AuditActor.user(actor_id.strip()),
+                    metadata={
+                        "principal_type": principal_type,
+                        "principal_id": str(principal_id),
+                        "method_type": method.method_type.value,
+                        "recovery_codes_deactivated": int(codes_deactivated),
+                    },
+                )
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
 
 
 class Sessions(ListResponseMixin):

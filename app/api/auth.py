@@ -249,9 +249,24 @@ def list_mfa_methods(
     "/mfa-methods/{method_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["mfa-methods"],
+    dependencies=[
+        Depends(require_permission("auth:credential:write")),
+        _credential_admin,
+    ],
 )
-def delete_mfa_method(method_id: str, db: Session = Depends(get_db)):
-    auth_service.mfa_methods.delete(db, method_id)
+def delete_mfa_method(
+    method_id: str,
+    auth: Mapping[str, object] = _credential_admin,
+    db: Session = Depends(get_db),
+) -> None:
+    # Disabling a second factor is credential administration: admin role AND
+    # the credential write permission, with the audit staged by the owner.
+    principal = auth.get("principal_id")
+    if not principal:
+        raise HTTPException(
+            status_code=403, detail="Credential administrator identity is required"
+        )
+    auth_service.mfa_methods.delete(db, method_id, actor_id=str(principal))
 
 
 @router.get(
