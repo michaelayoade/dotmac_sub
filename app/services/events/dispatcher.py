@@ -588,6 +588,11 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(EnforcementHandler())
     dispatcher.register_handler(TestConnectionHandler())
     dispatcher.register_handler(IPAssignmentProjectionHandler())
+    from app.services.events.handlers.session_revocation_projection import (
+        SessionRevocationProjectionHandler,
+    )
+
+    dispatcher.register_handler(SessionRevocationProjectionHandler())
     dispatcher.register_handler(CredentialSessionProjectionHandler())
     dispatcher.register_handler(ArrangementHandler())
     dispatcher.register_handler(AutomationEventHandler())

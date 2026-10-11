@@ -201,6 +201,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
     "EnforcementHandler": HandlerControl(
         "EnforcementHandler", HandlerStage.state, 50, ("service_enforcement",)
     ),
+    "SessionRevocationProjectionHandler": HandlerControl(
+        "SessionRevocationProjectionHandler",
+        HandlerStage.state,
+        61,
+        ("exact_session_revocation_projection",),
+    ),
     "CredentialSessionProjectionHandler": HandlerControl(
         "CredentialSessionProjectionHandler",
         HandlerStage.state,
@@ -327,6 +333,12 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         return frozenset(item.value for item in SUBSCRIPTION_LIFECYCLE_MAP)
     if handler_name == "AutomationEventHandler":
         from app.services.events.handlers.automation import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "SessionRevocationProjectionHandler":
+        from app.services.events.handlers.session_revocation_projection import (
+            HANDLED_EVENT_TYPES,
+        )
 
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "CredentialSessionProjectionHandler":

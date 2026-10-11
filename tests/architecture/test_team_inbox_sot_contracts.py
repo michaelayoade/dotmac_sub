@@ -128,13 +128,15 @@ def test_routing_owner_contracts_signed_in_agent_presence() -> None:
     assert input_owners["successful staff session issuance"] == "app_sessions.auth"
     assert input_owners["active staff principal"] == "auth.staff_provisioning"
 
-    auth_flow = (ROOT / "app/services/auth_flow.py").read_text(encoding="utf-8")
+    session_staging = (ROOT / "app/services/auth_session_staging.py").read_text(
+        encoding="utf-8"
+    )
     projection = (ROOT / "app/services/team_inbox_projection.py").read_text(
         encoding="utf-8"
     )
-    assert "AgentSignedInPresenceCommand(" in auth_flow
-    assert "record_agent_signed_in_presence(" in auth_flow
-    assert "InboxAgentPresence(" not in auth_flow
+    assert "AgentSignedInPresenceCommand(" in session_staging
+    assert "record_agent_signed_in_presence(" in session_staging
+    assert "InboxAgentPresence(" not in session_staging
     assert "agent_availability_snapshots(" in projection
 
 

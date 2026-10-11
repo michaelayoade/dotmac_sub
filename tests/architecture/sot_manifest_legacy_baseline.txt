@@ -8,8 +8,6 @@ access.radius_target_registry
 access.subscription_lifecycle
 ai.generation
 ai.insights
-app_sessions.auth
-app_sessions.customer_portal
 app_sessions.store
 auth.permission_gate
 auth.token_signing

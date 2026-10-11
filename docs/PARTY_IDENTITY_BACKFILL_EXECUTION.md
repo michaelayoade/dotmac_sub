@@ -120,3 +120,7 @@ This checked-in command does not authorize deployment, migration, or execution
 against any environment. Michael must separately name the production target
 and explicitly authorize the production operation after reviewing the fresh
 counts and digests.
+
+Both fresh execution and receipt replay lock Subscriber rows before Party rows,
+with each row set ordered by UUID. Locking ORM reads refresh cached state so
+replay checks observe current receipt, Party provenance and Subscriber bindings.

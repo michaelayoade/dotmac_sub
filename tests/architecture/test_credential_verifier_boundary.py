@@ -49,10 +49,31 @@ def test_real_user_authentication_modules_use_user_verifier() -> None:
             sum(_called_name(node) == "verify_user_password" for node in calls)
             == expected_calls
         ), path
-        if module != "auth_flow":
+        if module not in {"auth_flow", "web_customer_auth"}:
             assert all(
                 _called_name(node) != "verify_service_secret" for node in calls
             ), path
+
+
+def test_portal_verifiers_are_bound_to_their_credential_sources() -> None:
+    path = ROOT / "app" / "services" / "web_customer_auth.py"
+    tree = ast.parse(path.read_text())
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    users = [node for node in calls if _called_name(node) == "verify_user_password"]
+    services = [node for node in calls if _called_name(node) == "verify_service_secret"]
+    assert len(users) == len(services) == 1
+    assert ast.unparse(users[0].args[1]) == "local_credential.password_hash"
+    assert "access_binding" in ast.unparse(services[0].args[1])
+    guards = [
+        node.test
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If) and services[0] in ast.walk(node.test)
+    ]
+    assert any(
+        isinstance(node, ast.Name) and node.id == "radius_authenticated"
+        for guard in guards
+        for node in ast.walk(guard)
+    )
 
 
 def test_access_login_uses_service_verifier_only() -> None:

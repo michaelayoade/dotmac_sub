@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from types import SimpleNamespace
-from typing import TypeVar
+from typing import Literal, TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
@@ -40,6 +40,7 @@ from app.models.subscriber import (
 from app.schemas.status_presentation import StatusTone
 from app.services import catalog as catalog_service
 from app.services import customer_portal
+from app.services import password_authentication as pa
 from app.services.account_lifecycle import (
     apply_requested_account_status,
     clear_account_lifecycle_override,
@@ -576,7 +577,14 @@ def invalidate_session(session_token: str, db: Session | None = None) -> None:
 def login(
     db: Session, username: str, password: str, request: Request, remember: bool
 ) -> dict:
-    result = auth_flow_service.auth_flow.login(db, username, password, request, None)
+    result = auth_flow_service.auth_flow.login(
+        db=db,
+        username=username,
+        password=password,
+        request=request,
+        provider=None,
+        denial_surface=pa.DenialSurface.RESELLER,
+    )
     if result.get("mfa_required"):
         return {"mfa_required": True, "mfa_token": result.get("mfa_token")}
     access_token = result.get("access_token")
@@ -584,19 +592,27 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
-    return _session_from_access_token(db, access_token, username, remember)
+    return _session_from_access_token(
+        db, access_token, username, remember, request=request
+    )
 
 
 def verify_mfa(
     db: Session, mfa_token: str, code: str, request: Request, remember: bool
 ) -> dict:
-    result = auth_flow_service.auth_flow.mfa_verify(db, mfa_token, code, request)
+    result = auth_flow_service.auth_flow.mfa_verify(
+        db=db,
+        mfa_token=mfa_token,
+        code=code,
+        request=request,
+        denial_surface=pa.DenialSurface.RESELLER,
+    )
     access_token = result.get("access_token")
     if not access_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code"
         )
-    return _session_from_access_token(db, access_token, None, remember)
+    return _session_from_access_token(db, access_token, None, remember, request=request)
 
 
 def _session_from_access_token(
@@ -604,6 +620,8 @@ def _session_from_access_token(
     access_token: str,
     username: str | None,
     remember: bool,
+    *,
+    request: Request | None = None,
 ) -> dict:
     payload = auth_flow_service.decode_access_token(db, access_token)
     principal_id = payload.get("sub")
@@ -615,7 +633,35 @@ def _session_from_access_token(
         )
 
     auth_session = db.get(AuthSession, coerce_uuid(session_id))
+    resolved_principal_id = (
+        (
+            auth_session.reseller_user_id
+            or auth_session.subscriber_id
+            or auth_session.system_user_id
+        )
+        if auth_session
+        else None
+    )
+    denial_target = (
+        pa.DenialTarget(pa.DenialTargetKind.PRINCIPAL, resolved_principal_id)
+        if resolved_principal_id
+        else None
+    )
+
+    def record_admission_denial(status_code: Literal[401, 403, 404] = 403) -> None:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.SESSION_ADMISSION,
+                surface=pa.DenialSurface.RESELLER,
+                phase=pa.DenialPhase.SESSION_ADMISSION,
+                target=denial_target,
+                status_code=status_code,
+                request=request,
+            )
+        )
+
     if not auth_session or auth_session.status != SessionStatus.active:
+        record_admission_denial(401)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
         )
@@ -629,6 +675,7 @@ def _session_from_access_token(
         if now.tzinfo is None:
             now = now.replace(tzinfo=UTC)
         if session_expires <= now:
+            record_admission_denial(401)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
             )
@@ -642,6 +689,7 @@ def _session_from_access_token(
             or not reseller_user.is_active
             or not reseller_user.reseller_id
         ):
+            record_admission_denial()
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required"
             )
@@ -669,12 +717,14 @@ def _session_from_access_token(
 
     reseller_user = _get_reseller_user(db, str(principal_id))
     if not reseller_user:
+        record_admission_denial()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required"
         )
 
     subscriber = db.get(Subscriber, reseller_user.subscriber_id)
     if not subscriber:
+        record_admission_denial(404)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found"
         )
@@ -2381,6 +2431,8 @@ def create_customer_impersonation_session(
     reseller_id: str,
     account_id: str,
     return_to: str,
+    *,
+    request: Request | None = None,
 ) -> str:
     account = _get_customer_account(db, reseller_id, account_id)
     if not account:
@@ -2421,6 +2473,8 @@ def create_customer_impersonation_session(
         subscriber_id=account.id,
         subscription_id=selected_subscription_id,
         is_impersonation=True,
+        db=db,
+        request=request,
         # Reseller "view as customer" uses the same customer portal capabilities
         # as the customer. The impersonation marker remains for attribution and
         # the Exit View banner.

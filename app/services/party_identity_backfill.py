@@ -218,6 +218,7 @@ def _lock_subscribers(
     rows = (
         db.query(Subscriber)
         .filter(Subscriber.id.in_(subscriber_ids))
+        .order_by(Subscriber.id)
         .populate_existing()
         .with_for_update()
         .all()
@@ -240,6 +241,8 @@ def _lock_planned_party_collisions(
     collisions = (
         db.query(Party.id)
         .filter(Party.id.in_(planned_party_ids))
+        .order_by(Party.id)
+        .populate_existing()
         .with_for_update()
         .all()
     )
@@ -303,14 +306,16 @@ def _verify_applied_manifest(
         raise PartyIdentityBackfillError(
             "existing execution receipt binding count does not match its manifest"
         )
+    subscribers = _lock_subscribers(db, subscriber_ids)
     parties = {
         row.id: row
         for row in db.query(Party)
         .filter(Party.id.in_(planned_party_ids))
+        .order_by(Party.id)
+        .populate_existing()
         .with_for_update()
         .all()
     }
-    subscribers = _lock_subscribers(db, subscriber_ids)
     errors: list[str] = []
     for group in groups:
         party_id = UUID(group["planned_party_id"])
@@ -379,6 +384,7 @@ def execute_party_backfill_plan(
     receipt = (
         db.query(PartyIdentityBackfillReceipt)
         .filter(PartyIdentityBackfillReceipt.plan_digest == approval.plan_digest)
+        .populate_existing()
         .with_for_update()
         .one_or_none()
     )

@@ -819,6 +819,7 @@ def customer_context(browser, settings: E2ESettings, test_identities: dict):
             account_id=account_id,
             subscriber_id=account_id,
             subscription_id=_latest_subscription_id(db, account_id),
+            is_impersonation=True,
             db=db,
         )
     finally:
@@ -868,6 +869,7 @@ def customer_api_context(
             account_id=account_id,
             subscriber_id=account_id,
             subscription_id=_latest_subscription_id(db, account_id),
+            is_impersonation=True,
             db=db,
         )
     finally:

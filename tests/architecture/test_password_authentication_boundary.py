@@ -44,7 +44,7 @@ def _name_calls(node: ast.AST) -> set[str]:
     }
 
 
-def test_owner_is_registered_with_its_four_concerns() -> None:
+def test_owner_is_registered_with_its_contracted_concerns() -> None:
     from app.services.sot_relationships import service_relationship
 
     service = service_relationship("auth.password_authentication")
@@ -54,6 +54,7 @@ def test_owner_is_registered_with_its_four_concerns() -> None:
         "MFA challenge completion",
         "authentication failure counters",
         "authenticated password change",
+        "portal authentication source snapshots",
     }
 
 
@@ -76,6 +77,13 @@ def test_owner_commits_only_through_the_owner_command_boundary() -> None:
 def test_session_staging_never_commits() -> None:
     staged = _function(_tree(AUTH_FLOW), "stage_session_issue")
     assert not {"commit", "rollback"} & _attr_calls(staged)
+    participant = _function(
+        _tree(PROJECT_ROOT / "app/services/auth_session_staging.py"),
+        "stage_session_issue",
+    )
+    assert not {"commit", "rollback", "execute_owner_command"} & (
+        _attr_calls(participant) | _name_calls(participant)
+    )
 
 
 def test_login_and_mfa_adapters_do_not_commit_or_issue_legacy_sessions() -> None:
@@ -174,3 +182,48 @@ def test_reset_bumps_credential_version_under_its_row_lock() -> None:
         encoding="utf-8"
     )
     assert "credential.credential_version" in source
+
+
+def test_customer_password_and_mfa_adapters_use_owner_without_commits() -> None:
+    tree = _tree(PROJECT_ROOT / "app/services/web_customer_auth.py")
+    for name in (
+        "customer_login_submit",
+        "_verify_customer_mfa_token",
+        "_record_customer_local_login_failure",
+    ):
+        function = _function(tree, name)
+        assert not {
+            "commit",
+            "rollback",
+            "record_mfa_success",
+            "_issue_mfa_token",
+        } & _attr_calls(function)
+    assert "complete_password_step" in _attr_calls(
+        _function(tree, "customer_login_submit")
+    )
+    assert "complete_mfa" in _attr_calls(_function(tree, "_verify_customer_mfa_token"))
+
+
+def test_customer_session_resolution_has_no_impersonation_flag_exception() -> None:
+    path = PROJECT_ROOT / "app/services/customer_portal_session.py"
+    source = path.read_text()
+    function = _function(_tree(path), "resolve_customer_session_standing")
+    text = ast.get_source_segment(source, function) or ""
+    assert "is_impersonation" not in text
+    for standing in (
+        "AuthSession",
+        "SessionStatus.active",
+        "revoked_at",
+        "expires_at",
+        "subscriber_id",
+    ):
+        assert standing in text
+
+
+def test_customer_cache_adapter_converts_to_typed_standing_query() -> None:
+    tree = _tree(PROJECT_ROOT / "app/services/customer_portal_session.py")
+    adapter = _function(tree, "_standing_query_from_cache")
+    assert "CustomerSessionStandingQuery" in _name_calls(adapter)
+    assert "resolve_customer_session_standing" in _name_calls(
+        _function(tree, "_has_auth_session_standing")
+    )

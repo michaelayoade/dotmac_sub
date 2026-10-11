@@ -148,6 +148,12 @@ def exchange_assertion(
         raise _refusal(exc) from exc
     except OidcFederationConfigError as exc:
         raise _misconfigured(exc) from exc
+    except federation.OidcFederationUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "reason": "temporarily_unavailable"},
+            headers={"Retry-After": "5"},
+        ) from None
     return OidcMobileExchangeResponse(
         access_token=issued.access_token,
         refresh_token=issued.refresh_token,

@@ -13569,7 +13569,8 @@
    "responses": {
     "200": "427e95c6b1fb",
     "401": "4e95924cace6",
-    "422": "a11c9d9b2af8"
+    "422": "a11c9d9b2af8",
+    "503": "3da9de9bfdea"
    }
   },
   "POST /api/v1/bank-accounts": {

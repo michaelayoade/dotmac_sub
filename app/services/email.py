@@ -1565,19 +1565,32 @@ def send_email_verification_email(
     person_name: str | None = None,
     expires_minutes: int | None = None,
 ) -> bool:
-    """
-    Send an email-address verification email.
+    """Legacy mobile profile compatibility; retire with its profile coordinator."""
+    rendered = render_email_verification_email(
+        db,
+        to_email=to_email,
+        verification_token=verification_token,
+        person_name=person_name,
+        expires_minutes=expires_minutes,
+    )
+    return send_email(
+        db,
+        to_email,
+        rendered.subject,
+        rendered.body_html,
+        rendered.body_text,
+        activity="auth_email_verification",
+    )
 
-    Args:
-        db: Database session
-        to_email: Recipient email address
-        verification_token: The JWT email-verification token
-        person_name: Optional name to personalize the email
-        expires_minutes: Actual token TTL; falls back to the configured setting
 
-    Returns:
-        True if email was sent successfully, False otherwise
-    """
+def render_email_verification_email(
+    db: Session,
+    to_email: str,
+    verification_token: str,
+    person_name: str | None = None,
+    expires_minutes: int | None = None,
+) -> RenderedEmail:
+    """Render verification content in memory without transport or persistence."""
     app_url = _get_app_url(db)
     verify_url = (
         f"{app_url}/portal/auth/verify-email?{urlencode({'token': verification_token})}"
@@ -1642,14 +1655,7 @@ If you did not create an account or request this, you can safely ignore this ema
 This is an automated message. Please do not reply to this email.
 """
 
-    return send_email(
-        db,
-        to_email,
-        subject,
-        body_html,
-        body_text,
-        activity="auth_email_verification",
-    )
+    return RenderedEmail(subject=subject, body_html=body_html, body_text=body_text)
 
 
 def render_user_invite_email(

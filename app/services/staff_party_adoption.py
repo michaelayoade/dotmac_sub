@@ -107,26 +107,29 @@ def _bind_existing_staff_party(
             field="binding_evidence",
         )
 
-    # Match the credential projection owner's Party-before-principal lock
-    # suffix. Party.registry remains the only native field writer and repeats
-    # its own Person/status validation under these locks.
-    party = db.scalar(
-        select(Party).where(Party.id == command.person_party_id).with_for_update()
-    )
-    if party is None:
-        raise _error(
-            "party_binding_refused",
-            "The reviewed Person Party is unavailable for staff adoption.",
-        )
     user = db.scalar(
         select(SystemUser)
         .where(SystemUser.id == command.system_user_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if user is None:
         raise _error(
             "staff_account_not_found",
             "The reviewed staff principal was not found.",
+        )
+
+    # Principal before Party matches credential projection and session issuance.
+    party = db.scalar(
+        select(Party)
+        .where(Party.id == command.person_party_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if party is None:
+        raise _error(
+            "party_binding_refused",
+            "The reviewed Person Party is unavailable for staff adoption.",
         )
 
     replayed = user.person_party_id is not None

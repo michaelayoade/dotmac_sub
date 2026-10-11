@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
+from app.services.audit_adapter import AuditActor
 from app.services.events.types import EventType
+from tests.customer_profile_owner_support import (
+    profile_command_context,
+    profile_owner_session,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Customer event types
@@ -1298,30 +1303,34 @@ class TestCustomerProfileNotifications:
     def test_update_customer_profile_persists_preferences_and_emits_subscriber_updated(
         self, db_session, subscriber
     ) -> None:
-        from app.services.events.types import EventType
-        from app.services.web_customer_actions import (
+        from app.services.customer_portal_profile_commands import (
             UpdateCustomerProfileCommand,
             update_customer_profile,
         )
+        from app.services.events.types import EventType
 
         with patch(
             "app.services.customer_portal_profile_commands.emit_event"
         ) as emit_event_mock:
-            outcome = update_customer_profile(
-                db_session,
-                command=UpdateCustomerProfileCommand(
-                    subscriber_id=subscriber.id,
-                    first_name="Updated",
-                    last_name="Customer",
-                    email="updated@example.com",
-                    phone="+2348000000012",
-                    billing_notifications=False,
-                    sms_updates=True,
-                ),
-            )
+            with profile_owner_session(db_session) as owner_db:
+                outcome = update_customer_profile(
+                    owner_db,
+                    command=UpdateCustomerProfileCommand(
+                        context=profile_command_context(actor_id=subscriber.id),
+                        actor=AuditActor.user(str(subscriber.id)),
+                        subscriber_id=subscriber.id,
+                        first_name="Updated",
+                        last_name="Customer",
+                        email="updated@example.com",
+                        phone="+2348000000012",
+                        billing_notifications=False,
+                        sms_updates=True,
+                    ),
+                )
+            db_session.refresh(subscriber)
 
         assert outcome is not None
-        updated = outcome.subscriber
+        updated = subscriber
         assert updated.email == "updated@example.com"
         assert updated.phone == "+2348000000012"
         assert (updated.metadata_ or {}).get("billing_notifications") is False

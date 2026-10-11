@@ -226,25 +226,40 @@ shape would not be a weaker match; it would be a ceremony no nonce can ever
 redeem. Deriving the stored value from the class that later validates it
 removes the gap instead of documenting it.
 
-Then, in this order: burn the ceremony and resolve the principal (one owner
-command, which commits), then mint the session through
-`auth_flow.issue_session_tokens` — the one issuance owner, which commits its
-own session row.
+Successful exchange now stages ceremony completion, credential bookkeeping,
+canonical admission AuditEvent, domain outbox event and one session in the same
+owner transaction. `auth.session_staging` owns the existing flush-only issuance
+implementation, including same-device supersession and staff presence. AuthFlow
+retains thin typed observation adapters; its legacy test issuance wrappers are
+outside the caller-audit guarantee and have no product consumers in the pinned
+source inventory. This does not migrate the rest of AuthFlow.
 
-They are two transactions because `_issue_tokens` owns its own commit and an
-owner command refuses a helper commit inside its boundary. The ordering that
-falls out is the safe one: if minting fails after the ceremony committed, the
-ceremony is still burned and the device runs a fresh one. The failure mode is
-"log in again", never "the assertion is still redeemable".
+Discovery returns immutable exact credential/binding evidence. The gate resolves
+staff identity through Party, then locks and refreshes principal, credential,
+Party FK existence and verifier binding in that order. It refuses changed UUID,
+credential version, provider, subject, tenant, projection or binding timestamp;
+it never switches to a replacement identity. Party KEY SHARE protects FK
+existence and ordering, not Party status. Eligibility retains the existing staff
+policy. The identity lock-order dependency must merge before this slice.
 
-That is proven by breaking it, not by reading it: a test injects a real failure
-inside `AuthFlow._issue_tokens` after the admission command has committed, then
-checks that the ceremony is consumed, that no session row exists, that the same
-assertion is refused as `ceremony_already_used`, and that a fresh ceremony
-still succeeds. A static assertion about ordering would pass just as happily if
-the burn were rolled back with the mint.
+Token encoding uses only the staged snapshot after the owner commits. Storage,
+audit, event, presence, insertion and commit failures roll back the entire
+success transition, leaving the ceremony retryable. Encoding failure after
+commit leaves the session and ceremony committed; a fresh ceremony is required.
+Expected authentication refusal remains distinct from an operational failure.
+PostgreSQL each-lock waits are bounded at five seconds; timeout returns 503 with
+Retry-After: 5 after rollback. Active caller transactions are refused before the
+shared executor can discard pending or flushed caller work. A fresh Session
+bound to a Connection with an active external root transaction is also refused:
+releasing a savepoint cannot authorize bearer tokens before that root commits.
 
-A **refused** exchange also burns the ceremony. That is why refusals are
+Focused unit tests exercise real staging and injected rollback boundaries;
+PostgreSQL concurrency claims require hosted execution against the actual
+Alembic chain. Source collection and SQLite tests do not prove deployed locks.
+
+A refusal after admission locks a live ceremony also burns that ceremony.
+Configuration preflight refusals and absent or already consumed ceremonies
+do not burn a live row. Admission refusals are
 returned as values from inside the owner command rather than raised: an
 exception would roll the burn back and leave the row redeemable.
 

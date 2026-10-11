@@ -1527,6 +1527,8 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
         success = "Two-factor authentication enabled successfully."
     elif request.query_params.get("sessions") == "signed-out":
         success = "Other active sessions signed out."
+    elif request.query_params.get("sessions") == "unchanged":
+        success = "There were no other active sessions to sign out."
     elif request.query_params.get("device_login") == "updated":
         success = "Router device login updated."
     state = web_system_profiles_service.build_profile_page_state(
@@ -1777,14 +1779,36 @@ def user_profile_sign_out_other_sessions(
     if not principal_id:
         return RedirectResponse(url="/admin/system/users/profile", status_code=303)
 
-    session_manager_service.revoke_all_other_sessions(
-        db,
-        coerce_uuid(principal_id),
-        str(auth.get("session_id") or ""),
-        principal_type="system_user",
-    )
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+
+    from app.services.db_session_adapter import db_session_adapter
+
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            result = session_manager_service.revoke_all_other_sessions(
+                command_db,
+                subscriber_id=coerce_uuid(principal_id),
+                current_session_id=str(auth.get("session_id") or ""),
+                principal_type="system_user",
+            )
+        except session_manager_service.SessionRevocationError as exc:
+            raise HTTPException(status_code=401, detail=exc.message) from exc
+        except OperationalError as exc:
+            if (
+                getattr(exc.orig, "sqlstate", None) == "55P03"
+                or getattr(exc.orig, "pgcode", None) == "55P03"
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Session revocation busy",
+                    headers={"Retry-After": "5"},
+                ) from exc
+            raise
     return RedirectResponse(
-        url="/admin/system/users/profile?sessions=signed-out", status_code=303
+        url="/admin/system/users/profile?sessions="
+        + ("signed-out" if result.revoked_count else "unchanged"),
+        status_code=303,
     )
 
 
