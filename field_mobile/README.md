@@ -89,6 +89,15 @@ remain visible and retryable. Installation projects remain a separate workflow.
 This change requires backend migration 668 and a new mobile build; earlier
 TestFlight builds do not include native vendor work-order execution.
 
+## Execution evidence
+
+Job detail consumes the API's typed `events` collection (`FieldJobEventRead`)
+for travel progress: a recorded `en_route` exposes Arrived, and recorded
+`en_route` plus `arrived` exposes Start Work for scheduled/dispatched jobs.
+The separate `history` collection is timeline presentation and may be empty;
+it is never execution evidence. Note replacement preserves the fetched events.
+The server transition owner continues to validate every submitted action.
+
 ## Useful Commands
 
 ```sh

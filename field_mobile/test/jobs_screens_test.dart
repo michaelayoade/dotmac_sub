@@ -35,6 +35,7 @@ JobDetail _detail({
   String status = 'dispatched',
   JobLocation? location,
   List<Map<String, dynamic>> materialRequests = const [],
+  List<JobEvent> events = const [],
   List<Map<String, dynamic>> history = const [],
   String? projectId,
   String? accessNotes,
@@ -79,8 +80,23 @@ JobDetail _detail({
   recentVisits: recentVisits,
   openTickets: openTickets,
   materialRequests: materialRequests,
+  events: events,
   history: history,
 );
+
+JobDetail _executionDetailFromJson(List<String> events) => JobDetail.fromJson({
+  'job': {'id': 'wo-1', 'title': 'Assigned work', 'status': 'dispatched'},
+  'location': {'address_text': '12 Admiralty Way'},
+  'events': [
+    for (final (index, event) in events.indexed)
+      {
+        'id': 'event-$index',
+        'event': event,
+        'occurred_at': '2026-06-10T09:00:00Z',
+      },
+  ],
+  'history': [],
+});
 
 Widget _wrap(
   Widget child, {
@@ -96,6 +112,31 @@ Widget _wrap(
 );
 
 void main() {
+  test('job detail retains server events when notes are replaced', () {
+    final detail = _executionDetailFromJson(['en_route', 'arrived']);
+    final replacement = detail.withNotes(const []);
+
+    expect(replacement.events.map((event) => event.event), [
+      'en_route',
+      'arrived',
+    ]);
+    expect(replacement.events.first.id, 'event-0');
+    expect(replacement.events.first.occurredAt, DateTime.utc(2026, 6, 10, 9));
+    expect(replacement.history, isEmpty);
+  });
+
+  test('job detail without execution evidence defaults to no events', () {
+    final detail = JobDetail.fromJson({
+      'job': {'id': 'wo-1', 'title': 'Assigned work', 'status': 'dispatched'},
+      'location': {},
+      'history': [
+        {'event': 'en_route'},
+      ],
+    });
+
+    expect(detail.events, isEmpty);
+  });
+
   test('job summary accepts nullable migrated classification fields', () {
     final job = JobSummary.fromJson({
       'id': 'WO-1',
@@ -213,12 +254,7 @@ void main() {
     }
 
     testWidgets('departure unlocks arrival', (tester) async {
-      final detail = _detail(
-        status: 'dispatched',
-        history: const [
-          {'event': 'en_route'},
-        ],
-      );
+      final detail = _executionDetailFromJson(['en_route']);
       await tester.pumpWidget(
         _wrap(
           const JobDetailScreen(jobId: 'wo-1'),
@@ -229,16 +265,11 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Arrived'), findsOneWidget);
+      expect(find.text('En Route'), findsNothing);
     });
 
     testWidgets('arrival unlocks start work', (tester) async {
-      final detail = _detail(
-        status: 'dispatched',
-        history: const [
-          {'event': 'en_route'},
-          {'event': 'arrived'},
-        ],
-      );
+      final detail = _executionDetailFromJson(['en_route', 'arrived']);
       await tester.pumpWidget(
         _wrap(
           const JobDetailScreen(jobId: 'wo-1'),
@@ -249,6 +280,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Start Work'), findsOneWidget);
+      expect(find.text('En Route'), findsNothing);
+      expect(find.text('Arrived'), findsNothing);
     });
 
     testWidgets('completed jobs have no work action', (tester) async {
