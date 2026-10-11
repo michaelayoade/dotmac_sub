@@ -129,6 +129,31 @@ def test_last_subscription_expiry_clears_prepaid_timers(db_session: Session) -> 
     assert subscriber.prepaid_deactivation_at is None
 
 
+def test_final_expiry_preserves_timers_while_another_service_remains(
+    db_session: Session,
+) -> None:
+    low_balance_at = datetime.now(UTC)
+    deactivation_at = datetime.now(UTC)
+    subscriber = _make_subscriber(
+        db_session,
+        prepaid_low_balance_at=low_balance_at,
+        prepaid_deactivation_at=deactivation_at,
+    )
+    expiring = _make_subscription(db_session, subscriber, _make_offer(db_session))
+    _make_subscription(
+        db_session,
+        subscriber,
+        _make_offer(db_session),
+        status=SubscriptionStatus.suspended,
+    )
+
+    expire_subscription(db_session, str(expiring.id), emit=False)
+
+    assert subscriber.status == SubscriberStatus.suspended
+    assert subscriber.prepaid_low_balance_at == low_balance_at
+    assert subscriber.prepaid_deactivation_at == deactivation_at
+
+
 class TestSuspendSubscription:
     """Tests for suspend_subscription."""
 

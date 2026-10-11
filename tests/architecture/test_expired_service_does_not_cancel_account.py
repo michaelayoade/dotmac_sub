@@ -3,7 +3,6 @@
 import ast
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 LIFECYCLE = ROOT / "app/services/account_lifecycle.py"
 

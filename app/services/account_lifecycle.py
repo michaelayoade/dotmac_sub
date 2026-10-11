@@ -3013,6 +3013,20 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
 
     if new_status in {SubscriberStatus.disabled, SubscriberStatus.canceled}:
         clear_prepaid_enforcement_timers(db, subscriber_id)
+    elif new_status == SubscriberStatus.suspended:
+        # A suspended account derived from terminal-only service history has
+        # no service left for prepaid timers to enforce. Preserve those timers
+        # when any recoverable service or an explicit disabled service remains.
+        has_remaining_service = db.scalar(
+            select(Subscription.id)
+            .where(
+                Subscription.subscriber_id == subscriber_id,
+                Subscription.status.not_in((*_TERMINAL, SubscriptionStatus.disabled)),
+            )
+            .limit(1)
+        )
+        if has_remaining_service is None:
+            clear_prepaid_enforcement_timers(db, subscriber_id)
 
     _stage_subscription_access_projection(db, subscriber)
     db.flush()
