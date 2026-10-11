@@ -30,6 +30,7 @@ from app.models.catalog import AccessCredential
 from app.services import auth_flow as auth_flow_service
 from app.services import password_authentication as pa
 from app.services.auth_flow import AuthFlow, change_password, hash_password
+from tests.support.tx_trace import assert_protected_tx, trace_transactions
 from tests.test_auth_flow import _make_request, _system_user_with_credential
 
 
@@ -271,9 +272,11 @@ def test_mfa_pending_password_step_commits_standing_only(db_session, person):
 def test_full_login_stamps_last_login_and_stages_success_audit(db_session, person):
     credential = _credential(db_session, person)
 
-    result = AuthFlow.login(
-        db_session, "user@example.com", "secret", _make_request(), None
-    )
+    with trace_transactions(db_session.get_bind().engine) as trace:
+        result = AuthFlow.login(
+            db_session, "user@example.com", "secret", _make_request(), None
+        )
+    assert_protected_tx(trace.result)
 
     assert result["access_token"] and result["refresh_token"]
     assert _row(db_session, credential.id).last_login_at is not None
@@ -478,8 +481,12 @@ def test_audit_failure_inside_phase_b_fails_closed(db_session, person, monkeypat
 
     monkeypatch.setattr(pa, "stage_audit_event", boom)
 
-    with pytest.raises(RuntimeError):
-        AuthFlow.login(db_session, "user@example.com", "secret", _make_request(), None)
+    with trace_transactions(db_session.get_bind().engine) as trace:
+        with pytest.raises(RuntimeError):
+            AuthFlow.login(
+                db_session, "user@example.com", "secret", _make_request(), None
+            )
+    assert_protected_tx(trace.result, success=False)
 
     row = _row(db_session, credential.id)
     assert _sessions(db_session) == 0
