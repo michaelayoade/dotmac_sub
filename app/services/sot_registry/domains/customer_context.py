@@ -1084,6 +1084,178 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="customer.reseller_account_list",
+            module="app.services.reseller_portal",
+            owns=("reseller-scoped customer account list projection",),
+            depends_on=(
+                "customer.accounts",
+                "customer.account_visibility",
+                "customer.identity_scope",
+                "access.subscription_lifecycle",
+                "financial.invoices",
+                "financial.payments",
+                "ui.status_presentation",
+            ),
+            notes=(
+                "The default reseller cohort excludes disabled and canceled "
+                "accounts. An exact canceled filter exposes retained, non-legacy-"
+                "deleted accounts as read-only list rows; it does not widen detail, "
+                "impersonation, lifecycle-action, dashboard, revenue, or overdue "
+                "scope."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="reseller-scoped customer account list projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "typed reseller account list query",
+                            "canonical reseller account scope",
+                            "canonical account lifecycle state",
+                            "legacy imported deletion classification",
+                            "canonical account invoice facts",
+                            "canonical account payment facts",
+                            "account status semantic presentation",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed reseller account list query",
+                        owner="customer.reseller_account_list",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "immutable ResellerAccountListQuery constructed by "
+                            "reseller web or API adapters"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical reseller account scope",
+                        owner="customer.identity_scope",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="canonical Subscriber.reseller_id ownership",
+                    ),
+                    AuthorityInput(
+                        name="canonical account lifecycle state",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="canonical Subscriber lifecycle status projection",
+                    ),
+                    AuthorityInput(
+                        name="legacy imported deletion classification",
+                        owner="customer.account_visibility",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "retained Splynx deletion evidence resolved by the "
+                            "canonical visibility policy"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical account invoice facts",
+                        owner="financial.invoices",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="active invoice balances and open-invoice counts",
+                    ),
+                    AuthorityInput(
+                        name="canonical account payment facts",
+                        owner="financial.payments",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="successful payment timestamps",
+                    ),
+                    AuthorityInput(
+                        name="account status semantic presentation",
+                        owner="ui.status_presentation",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="typed account status label, tone, and icon",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Reseller web and API adapters own the session; list and "
+                        "count read committed account, invoice, and payment facts "
+                        "without writes or transaction completion."
+                    ),
+                    locking="No mutation locks are acquired for the list projection.",
+                    idempotency=(
+                        "The same typed filter and committed evidence produce the "
+                        "same ordered page and matching count."
+                    ),
+                    retries="Transient database reads may be retried.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="reseller web and API adapters",
+                    fail_closed_on=(
+                        "missing or foreign reseller ownership",
+                        "legacy imported deletion evidence",
+                        "unknown account-list status filter",
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="reseller-scoped customer account list projection",
+                        input_names=(
+                            "typed reseller account list query",
+                            "canonical reseller account scope",
+                            "canonical account lifecycle state",
+                            "legacy imported deletion classification",
+                            "canonical account invoice facts",
+                            "canonical account payment facts",
+                            "account status semantic presentation",
+                        ),
+                        writer="customer.reseller_account_list",
+                        freshness="rebuilt from committed source evidence on every query",
+                        stale_behavior=(
+                            "database failures remain visible; the query never widens "
+                            "scope or falls back to an unscoped account list"
+                        ),
+                        drift_signal=(
+                            "a default list contains canceled or disabled rows, an "
+                            "exact canceled list contains foreign or legacy-deleted "
+                            "rows, or canceled rows expose an action"
+                        ),
+                        rebuild_operation=(
+                            "query_reseller_account_list recomputes the typed page "
+                            "and matching count"
+                        ),
+                        repair_owner="customer.reseller_account_list",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "shared non-deleted account helper that made the canceled "
+                        "filter permanently empty"
+                    ),
+                    new_owner="customer.reseller_account_list",
+                    verification=(
+                        "focused list, count, pagination, reseller-scope, legacy-"
+                        "deletion, and read-only UI tests"
+                    ),
+                    cutover_gate=(
+                        "Only the exact canceled list filter admits retained canceled "
+                        "accounts, and every admitted row is read-only."
+                    ),
+                    fallback_retirement=(
+                        "No reseller adapter bypasses the typed filter or reuses the "
+                        "canceled cohort for detail, action, billing, or KPI reads."
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/USER_GUIDE.md",
+                ),
+                test_refs=(
+                    "tests/test_reseller_soft_delete.py",
+                    "tests/test_reseller_portal_contracts.py",
+                    "tests/test_api_reseller_self_scoped.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.profile_commands",
             module="app.services.web_customer_actions",
             owns=(

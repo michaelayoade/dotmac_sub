@@ -4,6 +4,7 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from typing import Literal, TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, not_, or_
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -37,7 +38,7 @@ from app.models.subscriber import (
     SubscriberStatus,
     UserType,
 )
-from app.schemas.status_presentation import StatusTone
+from app.schemas.status_presentation import StatusPresentation, StatusTone
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services import password_authentication as pa
@@ -158,6 +159,60 @@ def _subscriber_label(subscriber: Subscriber | None) -> str:
     return display or display_name or "Customer"
 
 
+class ResellerAccountListStatusFilter(StrEnum):
+    overdue = "overdue"
+    new = SubscriberStatus.new.value
+    active = SubscriberStatus.active.value
+    blocked = SubscriberStatus.blocked.value
+    suspended = SubscriberStatus.suspended.value
+    paused = SubscriberStatus.paused.value
+    disabled = SubscriberStatus.disabled.value
+    canceled = SubscriberStatus.canceled.value
+    delinquent = SubscriberStatus.delinquent.value
+
+
+class ResellerAccountListOrder(StrEnum):
+    created_at = "created_at"
+    balance = "balance"
+    overdue = "overdue"
+    name = "name"
+
+
+class ResellerAccountListDirection(StrEnum):
+    ascending = "asc"
+    descending = "desc"
+
+
+@dataclass(frozen=True, slots=True)
+class ResellerAccountListQuery:
+    reseller_id: UUID
+    limit: int
+    offset: int
+    search: str | None = None
+    status_filter: ResellerAccountListStatusFilter | None = None
+    order_by: ResellerAccountListOrder = ResellerAccountListOrder.created_at
+    order_dir: ResellerAccountListDirection = ResellerAccountListDirection.descending
+
+
+@dataclass(frozen=True, slots=True)
+class ResellerAccountListItem:
+    id: UUID
+    account_number: str | None
+    subscriber_name: str
+    status: SubscriberStatus
+    status_presentation: StatusPresentation
+    is_read_only: bool
+    open_balance: Decimal
+    open_invoices: int
+    last_payment_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResellerAccountListResult:
+    items: tuple[ResellerAccountListItem, ...]
+    total: int
+
+
 def _customer_accounts_query(db: Session, reseller_id: str):
     reseller_uuid = coerce_uuid(reseller_id)
     # Lazy import avoids any import cycle with the subscriber service.
@@ -172,11 +227,49 @@ def _customer_accounts_query(db: Session, reseller_id: str):
                 Subscriber.user_type != UserType.reseller,
             )
         )
-        # Exclude soft-deleted (canceled) accounts so they don't leak into the
-        # accounts list, counts, drill-down, and the alert/revenue metrics that
-        # build on this query.
+        # Keep strict consumers on the non-canceled cohort: detail, actions,
+        # impersonation, billing drill-down, and alert/revenue metrics. The
+        # account list has a separate, exact-filter-only canceled projection.
         .filter(not_soft_deleted_subscriber_clause())
     )
+
+
+def _reseller_account_list_scope_query(
+    db: Session,
+    reseller_id: str,
+    status_filter: ResellerAccountListStatusFilter | None,
+):
+    """Return the exact reseller-owned cohort admitted to the accounts list.
+
+    Canceled accounts are retained records and are visible only through the
+    explicit canceled filter. Legacy Splynx rows carrying deletion evidence
+    remain excluded. Other reseller reads continue to use
+    ``_customer_accounts_query`` and therefore cannot drill into, impersonate,
+    bill, or act on canceled accounts.
+    """
+    reseller_uuid = coerce_uuid(reseller_id)
+    query = (
+        db.query(Subscriber)
+        .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(
+            or_(
+                Subscriber.user_type.is_(None),
+                Subscriber.user_type != UserType.reseller,
+            )
+        )
+    )
+    if status_filter == ResellerAccountListStatusFilter.canceled:
+        from app.services.customer_account_visibility import (
+            splynx_deleted_import_clause,
+        )
+
+        return query.filter(Subscriber.status == SubscriberStatus.canceled).filter(
+            not_(splynx_deleted_import_clause())
+        )
+
+    from app.services.subscriber import not_soft_deleted_subscriber_clause
+
+    return query.filter(not_soft_deleted_subscriber_clause())
 
 
 def _get_customer_account(
@@ -1064,10 +1157,14 @@ def get_remember_max_age(db: Session | None = None) -> int:
 
 
 ACCOUNT_ORDER_FIELDS = ("created_at", "balance", "overdue", "name")
-ACCOUNT_STATUS_FILTERS = ("overdue",) + tuple(
-    status.value for status in SubscriberStatus
+ACCOUNT_STATUS_FILTERS = tuple(
+    status.value for status in ResellerAccountListStatusFilter
 )
-ACCOUNT_LIST_STATUS_OPTIONS = tuple(status.value for status in SubscriberStatus)
+ACCOUNT_LIST_STATUS_OPTIONS = tuple(
+    status.value
+    for status in ResellerAccountListStatusFilter
+    if status is not ResellerAccountListStatusFilter.overdue
+)
 _RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX = "reseller_account_status"
 
 
@@ -1412,17 +1509,17 @@ def _filtered_accounts_query(
     db: Session,
     reseller_id: str,
     search: str | None,
-    status_filter: str | None,
+    status_filter: ResellerAccountListStatusFilter | None,
     invoice_sq,
 ):
-    query = _customer_accounts_query(db, reseller_id).outerjoin(
-        invoice_sq, invoice_sq.c.aid == Subscriber.id
-    )
+    query = _reseller_account_list_scope_query(
+        db, reseller_id, status_filter
+    ).outerjoin(invoice_sq, invoice_sq.c.aid == Subscriber.id)
     query = _apply_account_search(query, search)
-    if status_filter == "overdue":
+    if status_filter == ResellerAccountListStatusFilter.overdue:
         query = query.filter(func.coalesce(invoice_sq.c.overdue_invoices, 0) > 0)
-    elif status_filter in ACCOUNT_LIST_STATUS_OPTIONS:
-        query = query.filter(Subscriber.status == SubscriberStatus(status_filter))
+    elif status_filter is not None:
+        query = query.filter(Subscriber.status == SubscriberStatus(status_filter.value))
     else:
         query = query.filter(
             or_(
@@ -1433,29 +1530,29 @@ def _filtered_accounts_query(
     return query
 
 
-def list_accounts(
+def _list_account_items(
     db: Session,
     reseller_id: str,
     limit: int,
     offset: int,
     search: str | None = None,
-    status_filter: str | None = None,
-    order_by: str = "created_at",
-    order_dir: str = "desc",
-) -> list[dict]:
+    status_filter: ResellerAccountListStatusFilter | None = None,
+    order_by: ResellerAccountListOrder = ResellerAccountListOrder.created_at,
+    order_dir: ResellerAccountListDirection = ResellerAccountListDirection.descending,
+) -> tuple[ResellerAccountListItem, ...]:
     invoice_sq = _open_invoice_subquery(db)
     query = _filtered_accounts_query(db, reseller_id, search, status_filter, invoice_sq)
 
-    descending = order_dir != "asc"
-    if order_by == "balance":
+    descending = order_dir is not ResellerAccountListDirection.ascending
+    if order_by is ResellerAccountListOrder.balance:
         sort_col = func.coalesce(invoice_sq.c.open_balance, 0)
-    elif order_by == "overdue":
+    elif order_by is ResellerAccountListOrder.overdue:
         sort_col = func.coalesce(invoice_sq.c.overdue_invoices, 0)
-    elif order_by == "name":
+    elif order_by is ResellerAccountListOrder.name:
         sort_col = func.lower(
             func.coalesce(Subscriber.display_name, Subscriber.first_name)
         )
-        descending = order_dir == "desc"
+        descending = order_dir is ResellerAccountListDirection.descending
     else:
         sort_col = Subscriber.created_at
     query = query.order_by(
@@ -1466,7 +1563,7 @@ def list_accounts(
     accounts = query.limit(limit).offset(offset).all()
     account_ids = [account.id for account in accounts]
     if not account_ids:
-        return []
+        return ()
 
     open_statuses = {
         InvoiceStatus.issued,
@@ -1502,24 +1599,66 @@ def list_accounts(
     )
     last_payments = {str(row.account_id): row.last_paid_at for row in payment_rows}
 
-    results = []
+    results: list[ResellerAccountListItem] = []
     for account in accounts:
         summary = invoice_summary.get(str(account.id), {})
         results.append(
-            {
-                "id": str(account.id),
-                "account_number": account.account_number,
-                "subscriber_name": _subscriber_label(account),
-                "status": account.status.value if account.status else "active",
-                "status_presentation": account_status_presentation(
-                    account.status
-                ).model_dump(mode="json"),
-                "open_balance": summary.get("balance", 0),
-                "open_invoices": summary.get("count", 0),
-                "last_payment_at": last_payments.get(str(account.id)),
-            }
+            ResellerAccountListItem(
+                id=account.id,
+                account_number=account.account_number,
+                subscriber_name=_subscriber_label(account),
+                status=account.status or SubscriberStatus.active,
+                status_presentation=account_status_presentation(account.status),
+                is_read_only=account.status == SubscriberStatus.canceled,
+                open_balance=Decimal(str(summary.get("balance", 0))),
+                open_invoices=int(summary.get("count", 0)),
+                last_payment_at=last_payments.get(str(account.id)),
+            )
         )
-    return results
+    return tuple(results)
+
+
+def _account_list_item_payload(item: ResellerAccountListItem) -> dict[str, object]:
+    """Serialize a typed row for compatibility with legacy internal callers."""
+    return {
+        "id": str(item.id),
+        "account_number": item.account_number,
+        "subscriber_name": item.subscriber_name,
+        "status": item.status.value,
+        "status_presentation": item.status_presentation.model_dump(mode="json"),
+        "is_read_only": item.is_read_only,
+        "open_balance": item.open_balance,
+        "open_invoices": item.open_invoices,
+        "last_payment_at": item.last_payment_at,
+    }
+
+
+def list_accounts(
+    db: Session,
+    reseller_id: str,
+    limit: int,
+    offset: int,
+    search: str | None = None,
+    status_filter: ResellerAccountListStatusFilter | None = None,
+    order_by: str = "created_at",
+    order_dir: str = "desc",
+) -> list[dict[str, object]]:
+    """Compatibility wrapper for unchanged internal reseller projections."""
+    typed_order = ResellerAccountListOrder(order_by)
+    typed_direction = ResellerAccountListDirection(order_dir)
+    return [
+        _account_list_item_payload(item)
+        for item in _list_account_items(
+            db,
+            reseller_id,
+            limit,
+            offset,
+            search,
+            status_filter,
+            typed_order,
+            typed_direction,
+        )
+    ]
 
 
 def _subscription_label(subscription: Subscription | None) -> str:
@@ -1687,11 +1826,36 @@ def count_accounts(
     db: Session,
     reseller_id: str,
     search: str | None = None,
-    status_filter: str | None = None,
+    status_filter: ResellerAccountListStatusFilter | None = None,
 ) -> int:
     invoice_sq = _open_invoice_subquery(db)
     query = _filtered_accounts_query(db, reseller_id, search, status_filter, invoice_sq)
     return query.with_entities(func.count(Subscriber.id)).scalar() or 0
+
+
+def query_reseller_account_list(
+    db: Session,
+    query: ResellerAccountListQuery,
+) -> ResellerAccountListResult:
+    """Resolve one typed reseller-scoped account-list page and matching count."""
+    reseller_id = str(query.reseller_id)
+    items = _list_account_items(
+        db,
+        reseller_id,
+        query.limit,
+        query.offset,
+        query.search,
+        query.status_filter,
+        query.order_by,
+        query.order_dir,
+    )
+    total = count_accounts(
+        db,
+        reseller_id,
+        query.search,
+        query.status_filter,
+    )
+    return ResellerAccountListResult(items=items, total=total)
 
 
 def get_dashboard_summary(

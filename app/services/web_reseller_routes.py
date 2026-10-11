@@ -237,8 +237,20 @@ def reseller_accounts(
 
     definition = RESELLER_ACCOUNT_LIST_DEFINITION
     requested_status_filter = status_filter
-    if status_filter not in reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS:
-        status_filter = None
+    try:
+        resolved_status_filter = (
+            reseller_portal.ResellerAccountListStatusFilter(status_filter)
+            if status_filter
+            else None
+        )
+    except ValueError:
+        resolved_status_filter = None
+    if (
+        resolved_status_filter is not None
+        and resolved_status_filter.value
+        not in reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS
+    ):
+        resolved_status_filter = None
     safe_sort = (
         sort_by if sort_by in definition.sortable_keys else definition.default_sort
     )
@@ -250,31 +262,50 @@ def reseller_accounts(
     )
     requested_query = definition.build_query(
         search=search,
-        filters={"status_filter": status_filter},
+        filters={
+            "status_filter": (
+                resolved_status_filter.value if resolved_status_filter else None
+            )
+        },
         sort_by=safe_sort,
         sort_dir=safe_dir,
         page=max(1, page),
         per_page=safe_per_page,
     )
     reseller_id = str(context["reseller"].id)
-    total = reseller_portal.count_accounts(
+    account_result = reseller_portal.query_reseller_account_list(
         db,
-        reseller_id=reseller_id,
-        search=requested_query.search,
-        status_filter=status_filter,
+        reseller_portal.ResellerAccountListQuery(
+            reseller_id=UUID(reseller_id),
+            limit=requested_query.per_page,
+            offset=(requested_query.page - 1) * requested_query.per_page,
+            search=requested_query.search,
+            status_filter=resolved_status_filter,
+            order_by=reseller_portal.ResellerAccountListOrder(requested_query.sort_by),
+            order_dir=reseller_portal.ResellerAccountListDirection(
+                requested_query.sort_dir
+            ),
+        ),
     )
-    page_meta = PageMeta.from_query(requested_query, total)
+    page_meta = PageMeta.from_query(requested_query, account_result.total)
     list_query = requested_query.with_page(page_meta.page)
-    accounts = reseller_portal.list_accounts(
-        db,
-        reseller_id=reseller_id,
-        limit=list_query.per_page,
-        offset=(page_meta.page - 1) * list_query.per_page,
-        search=list_query.search,
-        status_filter=status_filter,
-        order_by=list_query.sort_by,
-        order_dir=list_query.sort_dir,
-    )
+    if list_query.page != requested_query.page:
+        account_result = reseller_portal.query_reseller_account_list(
+            db,
+            reseller_portal.ResellerAccountListQuery(
+                reseller_id=UUID(reseller_id),
+                limit=list_query.per_page,
+                offset=(list_query.page - 1) * list_query.per_page,
+                search=list_query.search,
+                status_filter=resolved_status_filter,
+                order_by=reseller_portal.ResellerAccountListOrder(list_query.sort_by),
+                order_dir=reseller_portal.ResellerAccountListDirection(
+                    list_query.sort_dir
+                ),
+            ),
+        )
+    accounts = account_result.items
+    total = account_result.total
     if request_needs_canonicalization(
         list_query,
         search=search,
@@ -300,7 +331,9 @@ def reseller_accounts(
             "page": page_meta.page,
             "per_page": page_meta.per_page,
             "search": list_query.search or "",
-            "status_filter": status_filter or "",
+            "status_filter": (
+                resolved_status_filter.value if resolved_status_filter else ""
+            ),
             "status_options": reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS,
             "total": total,
             "total_pages": page_meta.total_pages,

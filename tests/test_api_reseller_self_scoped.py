@@ -51,28 +51,40 @@ def test_reseller_id_returns_for_reseller(monkeypatch):
 def test_accounts_scopes_to_caller_reseller(monkeypatch):
     principal = _subscriber_principal()
     captured = {}
+    reseller_id = uuid.uuid4()
 
     monkeypatch.setattr(
         reseller_api.reseller_portal,
         "reseller_id_for_subscriber",
-        lambda db, sid: "reseller-1",
+        lambda db, sid: str(reseller_id),
     )
 
-    def fake_list(db, reseller_id, limit, offset, search, **kwargs):
-        captured["reseller_id"] = reseller_id
-        return []
+    def fake_query(db, query):
+        captured["query"] = query
+        return reseller_api.reseller_portal.ResellerAccountListResult(items=(), total=0)
 
-    monkeypatch.setattr(reseller_api.reseller_portal, "list_accounts", fake_list)
     monkeypatch.setattr(
         reseller_api.reseller_portal,
-        "count_accounts",
-        lambda db, rid, search, **kwargs: 0,
+        "query_reseller_account_list",
+        fake_query,
     )
 
     out = reseller_api.my_reseller_accounts(
-        search=None, limit=50, offset=0, db=None, principal=principal
+        search=None,
+        status=reseller_api.reseller_portal.ResellerAccountListStatusFilter.canceled,
+        order_by="created_at",
+        order_dir="desc",
+        limit=50,
+        offset=0,
+        db=None,
+        principal=principal,
     )
-    assert captured["reseller_id"] == "reseller-1"
+    query = captured["query"]
+    assert query.reseller_id == reseller_id
+    assert (
+        query.status_filter
+        is reseller_api.reseller_portal.ResellerAccountListStatusFilter.canceled
+    )
     assert out == {"items": [], "count": 0, "limit": 50, "offset": 0}
 
 
