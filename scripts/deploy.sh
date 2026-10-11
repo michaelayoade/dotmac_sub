@@ -149,6 +149,15 @@ CELERY_BEAT_SERVICE="celery-beat"
 DB_CONTAINER="${DB_CONTAINER:-$(env_value DB_CONTAINER)}"
 DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
 
+# Compose prefers a DATABASE_URL exported in the shell over .env, so alembic
+# (and the app) could target a different database than the one every .env-based
+# check and backup in this script reads. Refuse before anything is changed.
+# Neither value is printed.
+if [[ -n "${DATABASE_URL+x}" && "${DATABASE_URL}" != "$(env_value DATABASE_URL)" ]]; then
+  echo "DEPLOY REFUSED: DATABASE_URL is exported in the environment and differs from .env; compose would use it instead of .env. Unset it and retry." >&2
+  exit 1
+fi
+
 # --- One deploy at a time -------------------------------------------------
 #
 # Nothing used to stop two deploys running at once. On 2026-07-12 two did: each
@@ -438,12 +447,15 @@ stop_candidate_gracefully() {
   CANDIDATE_STARTED=0
 }
 
+MIGRATION_RUN_PREFIX=""
 run_migrations() {
   local attempt=1
+  MIGRATION_RUN_PREFIX="dotmac_sub_migrate_${DEPLOY_RUN_ID:-$$}_"
   local output
   local rc
   while ((attempt <= MIGRATION_MAX_ATTEMPTS)); do
-    if output="$("${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads 2>&1)"; then
+    if output="$("${COMPOSE[@]}" run --rm --no-deps \
+      --name "${MIGRATION_RUN_PREFIX}${attempt}" app alembic upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0
     else
@@ -667,14 +679,17 @@ database_heads() {
   backup_db_name="${DB_BACKUP_DB_NAME:-$(env_value DB_BACKUP_DB_NAME)}"
   if [[ -z "${backup_db_name}" ]]; then
     database_url="$(env_value DATABASE_URL)"
-    backup_db_name="${database_url##*/}"
-    backup_db_name="${backup_db_name%%\?*}"
+    backup_db_name="$(database_name_from_url "${database_url}")" || backup_db_name=""
   fi
-  if [[ -z "${backup_db_name}" || "${backup_db_name}" == "$(env_value DATABASE_URL)" ]]; then
+  if [[ -z "${backup_db_name}" ]]; then
     echo "RESUME POLICY REJECTED: cannot resolve database name for alembic head verification." >&2
     return 1
   fi
-  docker exec "${DB_CONTAINER}" psql -X -A -t -U "${backup_db_user}" \
+  # Bounded so a stuck lock or connection cannot hang the deploy: a timeout is
+  # a non-zero exit, i.e. an unreadable read to every caller.
+  docker exec -e PGCONNECT_TIMEOUT=5 \
+    -e PGOPTIONS='-c lock_timeout=5s -c statement_timeout=15s' \
+    "${DB_CONTAINER}" psql -X -A -t -U "${backup_db_user}" \
     -d "${backup_db_name}" \
     -c 'SELECT version_num FROM alembic_version ORDER BY version_num'
 }
@@ -1448,7 +1463,10 @@ trap 'if restore_prev; then echo "Deploy FAILED — previous image restored and 
 # From here on APP_IMAGE may already be pinned, so an interrupt must restore it
 # too -- not just terminate the backup child. Migrations are NOT reverted;
 # installed payment-email floor forbids old-image restoration.
-trap 'cleanup_children; if restore_prev; then echo "Deploy interrupted — previous image restored and healthy" >&2; else report_rollback_outcome; fi; exit 130' INT TERM HUP
+install_deploy_interrupt_trap() {
+  trap 'cleanup_children; if restore_prev; then echo "Deploy interrupted — previous image restored and healthy" >&2; else report_rollback_outcome; fi; exit 130' INT TERM HUP
+}
+install_deploy_interrupt_trap
 
 log "Verifying mandatory OpenBao boot secrets"
 APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
@@ -1465,17 +1483,152 @@ APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
   "${COMPOSE[@]}" run --rm --no-deps app \
   python -m scripts.migration.retire_legacy_service_team_sources --check
 
-log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
-set_env_value APP_IMAGE "${IMAGE}"
-set_env_value GIT_SHA "${FULL_SHA}"
+# --- Pre-swap pin and migration ---------------------------------------------
+# The compose one-off migration container reads APP_IMAGE/GIT_SHA from .env, so
+# the candidate pin must be written first. The OLD app and workers keep serving
+# throughout (PRIMARY_REPLACED=0, no candidate started). If the migration fails
+# here nothing new ever served. That is NOT a rollback: restore_prev (the
+# payment-email floor guard) is deliberately not invoked and not bypassed.
+#
+# Alembic normally runs in one transaction, but migrations that use
+# autocommit_block commit earlier revisions, so "nothing committed" is MEASURED,
+# never assumed: the alembic_version heads are read before and after. The pin is
+# put back ONLY when both reads succeed and are equal; otherwise the schema may
+# have advanced, the pin is left untouched and the operator must repair forward.
+# Print the database name from a postgres URL, or fail. Never echoes anything
+# that is not a plain identifier, so a malformed URL cannot leak credentials.
+database_name_from_url() {
+  local rest="$1" name
+  [[ "${rest}" == *://* ]] || return 1
+  rest="${rest#*://}"
+  rest="${rest%%\?*}"
+  rest="${rest##*@}"
+  [[ "${rest}" == */* ]] || return 1
+  name="${rest#*/}"
+  [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  printf '%s\n' "${name}"
+}
+read_alembic_heads() {
+  local out url url_db target_db
+  # Alembic connects with the DATABASE_URL the app container receives from
+  # .env (settings.database_url). The heads query goes through the DB
+  # container with DB_BACKUP_DB_NAME, so prove both name the same database;
+  # otherwise two equal reads would prove nothing. Mismatch = unreadable.
+  # Only validated database names are printed, never the URL.
+  url="$(env_value DATABASE_URL)"
+  if [[ -n "${DATABASE_URL+x}" && "${DATABASE_URL}" != "${url}" ]]; then
+    echo "ALEMBIC HEADS UNREADABLE: DATABASE_URL in the environment differs from .env." >&2
+    return 1
+  fi
+  if ! url_db="$(database_name_from_url "${url}")"; then
+    echo "ALEMBIC HEADS UNREADABLE: database name unparseable from DATABASE_URL." >&2
+    return 1
+  fi
+  target_db="${DB_BACKUP_DB_NAME:-$(env_value DB_BACKUP_DB_NAME)}"
+  if [[ -n "${target_db}" && ! "${target_db}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "ALEMBIC HEADS UNREADABLE: DB_BACKUP_DB_NAME is not a plain database name." >&2
+    return 1
+  fi
+  if [[ -n "${target_db}" && "${target_db}" != "${url_db}" ]]; then
+    echo "ALEMBIC HEADS UNREADABLE: heads query targets database '${target_db}' but alembic uses '${url_db}'." >&2
+    return 1
+  fi
+  out="$(database_heads 2>/dev/null)" || return 1
+  [[ -n "${out}" ]] || return 1
+  printf '%s\n' "${out}"
+}
+# Shared by a failed migration and an INT/TERM/HUP during it. The pin is put
+# back ONLY when both head reads succeeded and match; never via restore_prev.
+# Always returns 1 (the deploy has failed).
+# Confirm the one-off migration container is gone first (it can outlive a dead
+# compose client). Still running or unknown = unreadable; it is never killed.
+migration_container_gone() {
+  local tries=0 max="${MIGRATION_PS_POLL_ATTEMPTS:-12}" ids
+  [[ -n "${MIGRATION_RUN_PREFIX}" ]] || return 0
+  while :; do
+    if ! ids="$(docker ps -q --filter "name=${MIGRATION_RUN_PREFIX}" 2>/dev/null)"; then
+      return 1
+    fi
+    [[ -z "${ids}" ]] && return 0
+    tries=$((tries + 1))
+    ((tries >= max)) && return 1
+    sleep "${MIGRATION_PS_POLL_SECONDS:-5}"
+  done
+}
+settle_failed_migration() {
+  local heads_after running_image
+  if migration_container_gone; then
+    heads_after="$(read_alembic_heads)" || heads_after=""
+  else
+    echo "Migration container still running or its state is unknown; not trusting a heads read. It was not stopped." >&2
+    heads_after=""
+  fi
+  if [[ -z "${MIGRATION_HEADS_BEFORE}" || -z "${heads_after}" || "${MIGRATION_HEADS_BEFORE}" != "${heads_after}" ]]; then
+    echo "Alembic heads before: ${MIGRATION_HEADS_BEFORE:-<unreadable>}" >&2
+    echo "Alembic heads after:  ${heads_after:-<unreadable>}" >&2
+    echo "Schema may have advanced (or could not be proven unchanged); .env pin left at ${IMAGE}. Do not recreate containers; repair forward." >&2
+    return 1
+  fi
+  running_image="$(docker inspect "${APP_CONTAINER}" --format '{{.Config.Image}}' 2>/dev/null || true)"
+  if repin_prev; then
+    if [[ -z "${PREV_IMAGE}" && -z "${running_image}" ]]; then
+      echo "Restored .env pin to <unset> (GIT_SHA ${PREV_GIT_SHA:-<unset>}): no previous pin and no running ${APP_CONTAINER} container (first deploy)." >&2
+    elif [[ "${running_image}" == "${PREV_IMAGE}" ]]; then
+      echo "Restored .env pin to ${PREV_IMAGE:-<unset>} (GIT_SHA ${PREV_GIT_SHA:-<unset>}), which matches the running ${APP_CONTAINER} image." >&2
+    else
+      echo "WARNING: restored .env pin to ${PREV_IMAGE:-<unset>}, but ${APP_CONTAINER} reports image '${running_image:-unknown}'; verify before recreating containers." >&2
+    fi
+    echo "Alembic heads measured unchanged (${heads_after//$'\n'/ }). No container was restarted or recreated and no rollback path was used. Repair forward and redeploy." >&2
+  else
+    echo "DEPLOY PIN RESTORE FAILED: .env may still pin ${IMAGE}; set APP_IMAGE=${PREV_IMAGE:-<unset>} GIT_SHA=${PREV_GIT_SHA:-<unset>} by hand before any container is recreated." >&2
+  fi
+  return 1
+}
+MIGRATION_HEADS_BEFORE=""
+pin_and_migrate() {
+  MIGRATION_HEADS_BEFORE=""
+  if [[ "${BACKUP_MODE}" != "skip_production_post_migration_resume" ]]; then
+    MIGRATION_HEADS_BEFORE="$(read_alembic_heads)" || MIGRATION_HEADS_BEFORE=""
+  fi
 
-# Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
-# merged heads), so use `heads` (plural), never `head`.
-log "Applying migrations (alembic upgrade heads)"
-if [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
-  log "Skipping migrations under verified post-migration resume evidence"
-else
-  run_migrations
+  # Interrupts during the pin/migration window use the same measured-heads
+  # decision as a failure; the guarded restore_prev (which the payment-email
+  # floor would refuse, leaving drift) is not used. Scoped to this function.
+  trap 'trap - ERR; cleanup_children; settle_failed_migration || true; echo "Deploy interrupted during migration; see pin state above" >&2; exit 130' INT TERM HUP
+
+  log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
+  if ! set_env_value APP_IMAGE "${IMAGE}" || ! set_env_value GIT_SHA "${FULL_SHA}"; then
+    echo "DEPLOY PIN WRITE FAILED: restoring the previous pin; nothing was migrated or recreated." >&2
+    if ! repin_prev; then
+      echo "DEPLOY PIN RESTORE FAILED: .env may be half-updated; set APP_IMAGE=${PREV_IMAGE:-<unset>} GIT_SHA=${PREV_GIT_SHA:-<unset>} by hand before any container is recreated." >&2
+    fi
+    install_deploy_interrupt_trap
+    return 1
+  fi
+
+  # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
+  # merged heads), so use `heads` (plural), never `head`.
+  log "Applying migrations (alembic upgrade heads)"
+  if [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
+    log "Skipping migrations under verified post-migration resume evidence"
+    install_deploy_interrupt_trap
+    return 0
+  fi
+  if run_migrations; then
+    install_deploy_interrupt_trap
+    return 0
+  fi
+  echo "DEPLOY MIGRATION FAILED before any new container served traffic." >&2
+  # Settle BEFORE restoring the original trap: an INT during the settle must
+  # still take the measured-heads path, not restore_prev.
+  settle_failed_migration || true
+  install_deploy_interrupt_trap
+  return 1
+}
+# --- End pre-swap pin and migration -------------------------------------------
+if ! pin_and_migrate; then
+  trap - ERR
+  exit 1
 fi
 
 log "Verifying database schema contracts"
