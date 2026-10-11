@@ -12021,18 +12021,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "PATCH /api/v1/mfa-methods/{method_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:method_id!"
-   ],
-   "request": "5cc659b32a75",
-   "responses": {
-    "200": "20e913b3507d",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "PATCH /api/v1/nas-devices/{device_id}": {
    "params": [
     "header:authorization",
@@ -12881,18 +12869,6 @@
    "request": "8eb07c00fdc6",
    "responses": {
     "200": "bdbdd1f43943",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "PATCH /api/v1/sessions/{session_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:session_id!"
-   ],
-   "request": "9a03d1af1000",
-   "responses": {
-    "200": "eb761daabeca",
     "422": "a11c9d9b2af8"
    }
   },
@@ -16058,17 +16034,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "POST /api/v1/mfa-methods": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": "2f6c98e1102c",
-   "responses": {
-    "201": "20e913b3507d",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "POST /api/v1/nas-devices": {
    "params": [
     "header:authorization",
@@ -18056,17 +18021,6 @@
    "request": "915cc5e11d27",
    "responses": {
     "201": "8b7716f0eddc",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "POST /api/v1/sessions": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": "7d38658fcc38",
-   "responses": {
-    "201": "eb761daabeca",
     "422": "a11c9d9b2af8"
    }
   },
@@ -20250,10 +20204,8 @@
   "LoginResponse": "66d2d92d7c0a",
   "LogoutRequest": "3c96d37b2d06",
   "LogoutResponse": "9155dc4b9b07",
-  "MFAMethodCreate": "8add4a868659",
   "MFAMethodRead": "006b381ab9f1",
   "MFAMethodType": "7eb08d5473d8",
-  "MFAMethodUpdate": "1ce054d49864",
   "ManualPaymentDuplicateRiskRead": "0c3ee512bd05",
   "ManualPaymentRecordingConfirm": "b980a2131614",
   "ManualPaymentRecordingPreviewRead": "ee2a17666794",
@@ -20674,13 +20626,11 @@
   "ServiceStatusAction": "7a92398e0d65",
   "ServiceStatusActionKind": "3a5b0379d84f",
   "ServiceType": "fda443194483",
-  "SessionCreate": "2a36cdfd8a5b",
   "SessionInfoResponse": "bea9f0553443",
   "SessionListResponse": "5bf6eafa1432",
   "SessionRead": "f86168749200",
   "SessionRevokeResponse": "6f65989aa4a7",
   "SessionStatus": "da0d2e5253e5",
-  "SessionUpdate": "67c007064d12",
   "SettlementObservation": "c2bf3c0a85cd",
   "SettlementProductPortDescriptorV2": "28ea93e0d2df",
   "SettlementProductPortDescriptorV3": "ffdb1f5619e4",

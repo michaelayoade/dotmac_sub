@@ -8,12 +8,8 @@ from app.schemas.auth import (
     ApiKeyGenerateResponse,
     ApiKeyRead,
     ApiKeyUpdate,
-    MFAMethodCreate,
     MFAMethodRead,
-    MFAMethodUpdate,
-    SessionCreate,
     SessionRead,
-    SessionUpdate,
     UserCredentialCreate,
     UserCredentialRead,
     UserCredentialUpdate,
@@ -114,16 +110,6 @@ def delete_user_credential(credential_id: str, db: Session = Depends(get_db)):
     auth_service.user_credentials.delete(db, credential_id)
 
 
-@router.post(
-    "/mfa-methods",
-    response_model=MFAMethodRead,
-    status_code=status.HTTP_201_CREATED,
-    tags=["mfa-methods"],
-)
-def create_mfa_method(payload: MFAMethodCreate, db: Session = Depends(get_db)):
-    return auth_service.mfa_methods.create(db, payload)
-
-
 @router.get(
     "/mfa-methods/{method_id}",
     response_model=MFAMethodRead,
@@ -164,17 +150,6 @@ def list_mfa_methods(
     )
 
 
-@router.patch(
-    "/mfa-methods/{method_id}",
-    response_model=MFAMethodRead,
-    tags=["mfa-methods"],
-)
-def update_mfa_method(
-    method_id: str, payload: MFAMethodUpdate, db: Session = Depends(get_db)
-):
-    return auth_service.mfa_methods.update(db, method_id, payload)
-
-
 @router.delete(
     "/mfa-methods/{method_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -182,16 +157,6 @@ def update_mfa_method(
 )
 def delete_mfa_method(method_id: str, db: Session = Depends(get_db)):
     auth_service.mfa_methods.delete(db, method_id)
-
-
-@router.post(
-    "/sessions",
-    response_model=SessionRead,
-    status_code=status.HTTP_201_CREATED,
-    tags=["sessions"],
-)
-def create_session(payload: SessionCreate, db: Session = Depends(get_db)):
-    return auth_service.sessions.create(db, payload)
 
 
 @router.get(
@@ -226,17 +191,6 @@ def list_sessions(
         limit=limit,
         offset=offset,
     )
-
-
-@router.patch(
-    "/sessions/{session_id}",
-    response_model=SessionRead,
-    tags=["sessions"],
-)
-def update_session(
-    session_id: str, payload: SessionUpdate, db: Session = Depends(get_db)
-):
-    return auth_service.sessions.update(db, session_id, payload)
 
 
 @router.delete(

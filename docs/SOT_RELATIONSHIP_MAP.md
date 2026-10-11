@@ -5005,7 +5005,11 @@ Dependency order:
 
 Rule: routes authenticate and authorize, but session lifecycle and revocation
 policy belongs in session services. Do not duplicate cookie/session mutation
-logic in route handlers.
+logic in route handlers. Generic administrative session/MFA POST and PATCH
+writers are retired; authentication owns session issuance and server-generated,
+proof-activated MFA enrollment. GET and DELETE retain read/revoke/reset access.
+See `docs/designs/ADMIN_AUTH_CREDENTIAL_WRITE_RETIREMENT.md` for the consumer
+inventory and retirement guard.
 
 The read-only admin control-plane projection may aggregate database-session
 counts and Redis health, but it does not enumerate Redis keys or become a
