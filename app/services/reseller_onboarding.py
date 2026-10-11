@@ -37,7 +37,7 @@ from app.services import (
 )
 from app.services import auth_flow as auth_flow_service
 from app.services import subscriber as subscriber_service
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -1069,7 +1069,11 @@ def remove_reseller_user_mfa(
             principal_type=ResellerPortalPrincipalType.RESELLER_USER,
             principal_id=command.principal_id,
         )
-        result = mfa_removal.disable_locked_principal_factors(
+        from app.services.credential_administration_mutation import (
+            disable_locked_principal_factors,
+        )
+
+        result = disable_locked_principal_factors(
             db, principal_column=MFAMethod.reseller_user_id, principal_id=link.id
         )
         sessions_revoked = 0
@@ -1103,8 +1107,7 @@ def remove_reseller_user_mfa(
             action="auth.mfa_disabled",
             entity_type="reseller_user",
             entity_id=str(link.id),
-            actor_type=actor_type,
-            actor_id=actor_id,
+            actor=AuditActor.user(actor_id),
             request_id=str(command.context.correlation_id),
             status_code=200,
             metadata=metadata,

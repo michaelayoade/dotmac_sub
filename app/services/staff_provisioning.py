@@ -2197,7 +2197,11 @@ def remove_staff_mfa(
         _require_may_remove_staff_mfa(
             db, actor_type=actor_type, actor_id=actor_id, target_id=user.id
         )
-        result = mfa_removal.disable_locked_principal_factors(
+        from app.services.credential_administration_mutation import (
+            disable_locked_principal_factors,
+        )
+
+        result = disable_locked_principal_factors(
             db, principal_column=MFAMethod.system_user_id, principal_id=user.id
         )
         revoked_sessions = _revoke_active_sessions(db, user.id) if result.changed else 0
