@@ -370,6 +370,10 @@ def apply_prepaid_expiry_lock_repair(
             .where(EnforcementLock.id == command.query.historical_lock_id)
             .with_for_update()
         ).first()
+        # The caller may have previewed these rows in this Session. A row lock
+        # does not replace already-loaded ORM attributes, so force the
+        # fingerprint recheck to read post-lock database state.
+        db.expire_all()
 
         source = _source(
             command.query.historical_lock_id,
