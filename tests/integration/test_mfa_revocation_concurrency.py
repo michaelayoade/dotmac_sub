@@ -26,7 +26,9 @@ def account(factory):
 
 def _disable(factory, method_id):
     with factory() as db:
-        auth_service.mfa_methods.delete(db, str(method_id), actor_id="admin-race")
+        auth_service.mfa_methods.delete(
+            db, str(method_id), actor_id="admin-race", reason="race test reason"
+        )
 
 
 def test_disable_vs_recovery_redemption_has_no_deadlock(engine, factory, account):

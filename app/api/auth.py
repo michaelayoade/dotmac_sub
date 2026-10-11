@@ -256,6 +256,15 @@ def list_mfa_methods(
 )
 def delete_mfa_method(
     method_id: str,
+    reason: str = Query(
+        ...,
+        min_length=3,
+        max_length=500,
+        description=(
+            "Why the factor is removed: verification channel and ticket "
+            "reference. Stored in the audit evidence."
+        ),
+    ),
     auth: Mapping[str, object] = _credential_admin,
     db: Session = Depends(get_db),
 ) -> None:
@@ -266,7 +275,9 @@ def delete_mfa_method(
         raise HTTPException(
             status_code=403, detail="Credential administrator identity is required"
         )
-    auth_service.mfa_methods.delete(db, method_id, actor_id=str(principal))
+    auth_service.mfa_methods.delete(
+        db, method_id, actor_id=str(principal), reason=reason
+    )
 
 
 @router.get(

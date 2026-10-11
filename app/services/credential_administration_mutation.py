@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.auth import AuthProvider, SessionStatus, UserCredential
+from app.models.auth import (
+    AuthProvider,
+    MFAMethod,
+    MFARecoveryCode,
+    SessionStatus,
+    UserCredential,
+)
 from app.models.auth import Session as AuthSession
 from app.models.radius import RadiusServer
 from app.services.audit_adapter import AuditActor, stage_audit_event
@@ -195,3 +203,57 @@ def deactivate(
         row.is_active = False
         row.credential_version = int(row.credential_version or 1) + 1
     return _complete(db, row, command.context, "deactivated", changed, changed)
+
+
+@dataclass(frozen=True)
+class FactorDisableResult:
+    methods_disabled: int
+    recovery_codes_deactivated: int
+
+    @property
+    def changed(self) -> bool:
+        return self.methods_disabled > 0
+
+
+def disable_locked_principal_factors(
+    db: Session, *, principal_column: object, principal_id: object
+) -> FactorDisableResult:
+    """Disable every live factor of a principal the caller has already locked.
+
+    Lock order is principal (caller), then factor rows, then recovery codes.
+    Seeds are wiped so a holder of the old secret cannot re-confirm, and the
+    lockout counters are reset.
+    """
+
+    methods = list(
+        db.scalars(
+            select(MFAMethod)
+            .where(principal_column == principal_id)  # type: ignore[arg-type]
+            .order_by(MFAMethod.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+    live = [m for m in methods if m.is_active or m.enabled or m.is_primary]
+    codes = 0
+    if methods:
+        # Also scrub rows that were disabled earlier (legacy bulk disable left
+        # seeds and unused recovery codes behind).
+        codes = int(
+            db.query(MFARecoveryCode)
+            .filter(
+                MFARecoveryCode.mfa_method_id.in_([m.id for m in methods]),
+                MFARecoveryCode.is_active.is_(True),
+            )
+            .update({"is_active": False}, synchronize_session=False)
+            or 0
+        )
+    for method in methods:
+        method.is_active = False
+        method.enabled = False
+        method.is_primary = False
+        method.secret = None
+        method.failed_attempts = 0
+        method.locked_until = None
+    db.flush()
+    return FactorDisableResult(len(live), codes)
