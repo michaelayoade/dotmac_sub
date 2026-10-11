@@ -72,7 +72,26 @@ for ($i = 0; $i < 6; $i++) {
 }
 foreach ($children as $pid) { pcntl_waitpid($pid, $status); check(pcntl_wexitstatus($status) === 0, 'child failed'); }
 check(file_get_contents($countFile) === '1', 'concurrent double delivery');
-$restarted->run($pending, 400000, 2);
+$restartId = hash('sha256', 'process-died-after-commit');
+$pid = pcntl_fork();
+if ($pid === 0) {
+    (new DotmacFiberOutbox($directory, $key))->deliver($restartId, $fingerprint, $factory,
+        static function (DotmacFiberEnvelope $envelope): DotmacFiberDeliveryResult { exit(0); }, 1000);
+    exit(1);
+}
+pcntl_waitpid($pid, $status);
+check(pcntl_wexitstatus($status) === 0, 'crash fixture failed');
+$afterDeath = (new DotmacFiberOutbox($directory, $key))->deliver($restartId, $fingerprint, $neverRebuild,
+    static function (DotmacFiberEnvelope $envelope) use ($body): DotmacFiberDeliveryResult {
+        check($envelope->body === $body, 'process restart changed bytes');
+        return new DotmacFiberDeliveryResult('received', fixtureReceipt());
+    }, 1061);
+check($afterDeath->state === 'received', 'process restart failed');
+$lastId = str_repeat('f', 64);
+$restarted->deliver($lastId, $fingerprint, $factory, $pending, 1000);
+for ($page = 0; $page < 10; $page++) $restarted->run(
+    static fn(DotmacFiberEnvelope $envelope): DotmacFiberDeliveryResult => new DotmacFiberDeliveryResult('received', fixtureReceipt()), 2000, 2);
+check($restarted->deliver($lastId, $fingerprint, $neverRebuild, $pending, 2000)->state === 'received', 'worker starved later record');
 check(is_file($directory . '/worker.cursor'), 'worker cursor missing');
 foreach (new DirectoryIterator($directory) as $file) if (!$file->isDot()) unlink($file->getPathname());
 rmdir($directory);
