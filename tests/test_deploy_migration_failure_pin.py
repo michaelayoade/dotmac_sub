@@ -289,7 +289,9 @@ def test_database_heads_query_is_time_bounded_and_timeout_is_unreadable(
     tmp_path: Path,
 ) -> None:
     src = DEPLOY_SH.read_text(encoding="utf-8")
-    fn = _slice(src, "database_heads() {", "candidate_heads() {")
+    fn = _slice(src, "database_heads() {", "candidate_heads() {") + _slice(
+        src, "database_name_from_url() {", "read_alembic_heads() {"
+    )
     (tmp_path / ".env").write_text(f"DATABASE_URL={DB_URL}\n", encoding="utf-8")
     script = f"""
 set -uo pipefail
@@ -437,6 +439,7 @@ def test_migration_container_gone_allows_the_measured_repin(tmp_path: Path) -> N
         "postgresql://u:p@s3cr3t@db.example.test",  # '@' in password, no path
         "postgresql://u:p@s3cr3t@db.example.test:5432/dot mac",  # invalid name
         "u:s3cr3t@db.example.test/x",  # no scheme
+        "postgresql://u@h.example.test/db?password=p@ss/word",  # '@' and '/' in query
     ],
 )
 def test_unparseable_database_url_never_leaks_the_password(
@@ -466,7 +469,11 @@ def test_unparseable_database_url_never_leaks_the_password(
     )
     combined = result.stdout + result.stderr
     assert "s3cr3t" not in combined
-    assert "database name unparseable" in result.stderr
+    assert "p@ss" not in combined and "ss/word" not in combined
+    assert (
+        "database name unparseable" in result.stderr
+        or "alembic uses 'db'" in result.stderr
+    )
     assert "RC=1" in result.stdout
     assert f"APP_IMAGE={NEW_IMAGE}" in (tmp_path / ".env").read_text()
 
@@ -493,3 +500,53 @@ def test_exported_database_url_that_differs_from_env_is_unreadable(
     assert env["APP_IMAGE"] == NEW_IMAGE
     assert "differs from .env" in err
     assert "s3cr3t" not in out + err
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_db"),
+    [
+        (
+            "postgresql://u:pw@h.example.test:5432/dotmac_sub?sslmode=disable",
+            "dotmac_sub",
+        ),
+        ("postgresql:///dbname?host=/var/run/pg", "dbname"),
+        ("postgresql://u@h.example.test/db?password=p@ss/word", "db"),
+        ("postgresql://u:s3cr3t@h.example.test", None),
+        ("postgresql://u:s3cr3t@h.example.test?x=a/b", None),
+    ],
+)
+def test_database_heads_uses_the_shared_url_parser(
+    tmp_path: Path, url: str, expected_db: str | None
+) -> None:
+    src = DEPLOY_SH.read_text(encoding="utf-8")
+    fn = _slice(src, "database_heads() {", "candidate_heads() {") + _slice(
+        src, "database_name_from_url() {", "read_alembic_heads() {"
+    )
+    (tmp_path / ".env").write_text(f"DATABASE_URL={url}\n", encoding="utf-8")
+    script = f"""
+set -uo pipefail
+env_value() {{ grep "^$1=" .env | head -1 | cut -d= -f2-; }}
+DB_CONTAINER=pg
+docker() {{ printf '%s\\n' "$*" >docker-args; echo 670_a; }}
+{fn}
+database_heads; echo "RC=$?"
+"""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DB_BACKUP")}
+    result = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={**env, "PWD": str(tmp_path)},
+    )
+    combined = result.stdout + result.stderr
+    assert (
+        "s3cr3t" not in combined and "p@ss" not in combined and "word" not in combined
+    )
+    if expected_db is None:
+        assert "RC=1" in result.stdout
+        assert not (tmp_path / "docker-args").exists()
+    else:
+        assert "RC=0" in result.stdout
+        args = (tmp_path / "docker-args").read_text(encoding="utf-8").split()
+        assert args[args.index("-d") + 1] == expected_db

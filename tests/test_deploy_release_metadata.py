@@ -905,6 +905,24 @@ def test_unparseable_database_url_does_not_leak_in_full_script(
     _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
 
 
+def test_query_string_secret_fragment_is_never_printed_on_db_mismatch(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "dotmac_sub"},
+        migration_hard_failure=True,
+        database_url="postgresql://u@db.example.test/other?password=p@ss/word",
+    )
+
+    out = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "alembic uses 'other'" in result.stderr
+    assert "p@ss" not in out and "ss/word" not in out and "'word'" not in out
+    assert "sha-old0000" not in env_file.read_text()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
 def test_migration_container_is_named_per_attempt_and_kept_removable(
     tmp_path: Path,
 ) -> None:

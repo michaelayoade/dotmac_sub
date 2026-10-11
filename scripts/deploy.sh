@@ -679,10 +679,9 @@ database_heads() {
   backup_db_name="${DB_BACKUP_DB_NAME:-$(env_value DB_BACKUP_DB_NAME)}"
   if [[ -z "${backup_db_name}" ]]; then
     database_url="$(env_value DATABASE_URL)"
-    backup_db_name="${database_url##*/}"
-    backup_db_name="${backup_db_name%%\?*}"
+    backup_db_name="$(database_name_from_url "${database_url}")" || backup_db_name=""
   fi
-  if [[ -z "${backup_db_name}" || "${backup_db_name}" == "$(env_value DATABASE_URL)" ]]; then
+  if [[ -z "${backup_db_name}" ]]; then
     echo "RESUME POLICY REJECTED: cannot resolve database name for alembic head verification." >&2
     return 1
   fi
@@ -1502,8 +1501,8 @@ database_name_from_url() {
   local rest="$1" name
   [[ "${rest}" == *://* ]] || return 1
   rest="${rest#*://}"
-  rest="${rest##*@}"
   rest="${rest%%\?*}"
+  rest="${rest##*@}"
   [[ "${rest}" == */* ]] || return 1
   name="${rest#*/}"
   [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
