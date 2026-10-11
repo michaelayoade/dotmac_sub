@@ -8,10 +8,11 @@ from calendar import monthrange
 from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import TypedDict
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, attributes, selectinload
 
 from app.models.catalog import (
@@ -60,6 +61,16 @@ from app.services.response import ListResponseMixin
 from app.validators import catalog as catalog_validators
 
 logger = logging.getLogger(__name__)
+
+
+class SubscriptionExpiryResult(TypedDict):
+    run_at: datetime
+    subscriptions_matched: int
+    subscriptions_expired: int
+    subscriptions_skipped: int
+    subscriptions_coverage_protected: int
+    subscriptions_coverage_unresolved: int
+    dry_run: bool
 
 
 def _ensure_utc(value: datetime | None) -> datetime | None:
@@ -1717,12 +1728,12 @@ class Subscriptions(ListResponseMixin):
         db: Session,
         run_at: datetime | None = None,
         dry_run: bool = False,
-    ) -> dict:
-        """Expire subscriptions whose authoritative service coverage is due.
+    ) -> SubscriptionExpiryResult:
+        """Expire fixed-term subscriptions at their contractual end.
 
-        This should be run periodically (e.g., daily) to ensure subscriptions
-        without current funded coverage or an applied service extension are
-        properly transitioned to expired status.
+        A prepaid billing anchor is not a contract end. Unfunded prepaid
+        renewals remain nonterminal so financial enforcement can suspend them
+        and payment recovery can renew them.
 
         Args:
             db: Database session
@@ -1739,26 +1750,15 @@ class Subscriptions(ListResponseMixin):
             SubscriptionStatus.suspended,
         ]
 
-        # end_at is the fixed-term contract boundary. For prepaid
-        # subscriptions, next_billing_at is only a candidate boundary;
-        # the coverage owner must confirm that no funded entitlement or
-        # applied service-extension grant still protects the service.
+        # Only end_at is a fixed-term contract boundary. The prepaid
+        # next_billing_at projection belongs to renewal and enforcement, not
+        # terminal expiry. Including it here would also resolve access locks
+        # and make a later payment unable to recover a suspended service.
         subscriptions_to_expire = (
             db.query(Subscription)
             .filter(Subscription.status.in_(collectible_statuses))
-            .filter(
-                or_(
-                    (
-                        Subscription.end_at.is_not(None)
-                        & (Subscription.end_at <= run_at)
-                    ),
-                    (
-                        (Subscription.billing_mode == BillingMode.prepaid)
-                        & Subscription.next_billing_at.is_not(None)
-                        & (Subscription.next_billing_at <= run_at)
-                    ),
-                )
-            )
+            .filter(Subscription.end_at.is_not(None))
+            .filter(Subscription.end_at <= run_at)
             .all()
         )
 
