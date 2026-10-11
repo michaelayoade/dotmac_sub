@@ -27,17 +27,18 @@ Do not put secrets, codes or personal data in the reason.
 
 | Principal | Where | Who may do it |
 |---|---|---|
-| Staff (system user) | Admin, System, Users, user detail, **Disable MFA** (form with Reason). Owner: `staff_provisioning.remove_staff_mfa` | Holders of `rbac:assign` |
-| Reseller user | Admin, Resellers, reseller detail, Portal access, **More**, **Remove MFA** (Reason). Owner: `reseller_onboarding.remove_reseller_user_mfa` | Holders of `reseller:write`; only for users of that reseller |
+| Staff (system user) | Admin, System, Users, user detail, **Disable MFA** (form with Reason). Owner: `staff_provisioning.remove_staff_mfa` | Admin role and `rbac:assign` |
+| Reseller user | Admin, Resellers, reseller detail, Portal access, **More**, **Remove MFA** (Reason). Owner: `reseller_onboarding.remove_reseller_user_mfa` | Admin role and `reseller:write`; only for users of that reseller |
 | Subscriber (customer) | API `DELETE /api/v1/mfa-methods/{id}?reason=...` (one factor at a time) | Administrators with `auth:credential:write` |
 
 Rules enforced by the system (a refusal is deliberate, do not work around it):
 
-- You cannot remove your own MFA.
-- Staff: you cannot remove the MFA of an admin, nor of an account whose
-  permissions include everything you hold. Ask a more privileged administrator.
-  If the only administrator lost their device, escalate to the break-glass
-  procedure owner; do not edit the database.
+- The actor must be a human holding the admin role, plus `rbac:assign` (staff)
+  or `reseller:write` (reseller). API keys are refused.
+- No self-removal.
+- Staff: the target must not hold the admin role. If an administrator lost their
+  device, use the break-glass procedure; do not edit the database.
+- Reseller: the user must belong to the reseller whose page you are on.
 - The generic API refuses staff and reseller factors (HTTP 422).
 
 ## 4. What happens on removal
