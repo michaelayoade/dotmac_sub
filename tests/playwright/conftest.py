@@ -39,6 +39,8 @@ if _e2e_database_url:
 else:
     from app.db import SessionLocal
 from app.csrf import CSRF_COOKIE_NAME, CSRF_HEADER_NAME
+from app.models.auth import Session as AuthSession
+from app.models.auth import SessionStatus
 from app.models.catalog import (
     CatalogOffer,
     OfferStatus,
@@ -949,12 +951,21 @@ def reseller_context(browser, settings: E2ESettings, test_identities: dict):
     reseller = test_identities["reseller"]
     db = SessionLocal()
     try:
+        auth_session = AuthSession(
+            subscriber_id=UUID(reseller["subscriber_id"]),
+            status=SessionStatus.active,
+            token_hash=f"e2e-reseller-{uuid4()}",
+            expires_at=_dt.datetime.now(_dt.UTC) + _dt.timedelta(hours=1),
+        )
+        db.add(auth_session)
+        db.commit()
         reseller_session = reseller_portal._create_session(
             username=RESELLER_PORTAL_USERNAME,
             reseller_id=reseller["reseller_id"],
             subscriber_id=reseller["subscriber_id"],
             remember=False,
             db=db,
+            auth_session_id=str(auth_session.id),
         )
     finally:
         db.close()
