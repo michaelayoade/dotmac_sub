@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import and_, func, or_
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import app.services.auth_flow as auth_flow_service
@@ -57,6 +57,12 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+)
+from app.services.reseller_session_standing import (
+    ResellerSessionRefreshQuery,
+    ResellerSessionStandingQuery,
+    resolve_reseller_session_refresh,
+    resolve_reseller_session_standing,
 )
 from app.services.session_store import (
     delete_session,
@@ -410,8 +416,14 @@ def _get_session(session_token: str) -> dict | None:
     session = load_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
     if not session:
         return None
-    expires_at = datetime.fromisoformat(session["expires_at"])
-    if _now() > expires_at:
+    try:
+        expires_at = datetime.fromisoformat(session["expires_at"])
+        if expires_at.tzinfo is None:
+            raise ValueError("Unbound session clock")
+    except (KeyError, ValueError, TypeError):
+        invalidate_session(session_token)
+        return None
+    if _now() >= expires_at:
         invalidate_session(session_token)
         return None
     if _reseller_session_revoked(session):
@@ -440,7 +452,9 @@ def _reseller_session_revoked(session: dict) -> bool:
     try:
         created = datetime.fromisoformat(str(created_raw))
         epoch_at = datetime.fromisoformat(epoch)
-    except ValueError:
+        if created.tzinfo is None or epoch_at.tzinfo is None:
+            return True
+    except (ValueError, TypeError):
         return True
     return created <= epoch_at
 
@@ -751,11 +765,67 @@ def _session_from_access_token(
     }
 
 
+def _ordinary_standing_query(session: dict) -> ResellerSessionStandingQuery | None:
+    """Convert serialized identifiers; ordinary cookies have no guessed identity."""
+    principal_type = session.get("principal_type")
+    if principal_type not in ("subscriber", "reseller_user"):
+        return None
+    try:
+        return ResellerSessionStandingQuery(
+            auth_session_id=UUID(str(session["auth_session_id"])),
+            principal_type=principal_type,
+            principal_id=UUID(str(session["principal_id"])),
+            reseller_id=UUID(str(session["reseller_id"])),
+            subscriber_id=(
+                UUID(str(session["subscriber_id"]))
+                if session.get("subscriber_id") is not None
+                else None
+            ),
+            reseller_user_id=(
+                UUID(str(session["reseller_user_id"]))
+                if session.get("reseller_user_id") is not None
+                else None
+            ),
+        )
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return None
+
+
 def get_context(db: Session, session_token: str | None) -> dict | None:
+    # The compatibility facade maps storage failures consistently for every
+    # protected reseller HTTP consumer; the read owner remains transport-neutral.
+    try:
+        return _resolve_context(db, session_token)
+    except (SQLAlchemyError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Session service unavailable"
+        ) from exc
+
+
+def _resolve_context(db: Session, session_token: str | None) -> dict | None:
     session = _get_session(session_token or "")
     if not session:
         return None
 
+    # Legacy administrator impersonation has a separate actor/binding residual.
+    # Only the exact explicit flag selects it; ordinary transport values cannot.
+    if session.get("is_impersonation") is not True:
+        query = _ordinary_standing_query(session)
+        if query is None or resolve_reseller_session_standing(db, query=query) is None:
+            invalidate_session(session_token or "")
+            return None
+        with db.no_autoflush:
+            context = _hydrate_reseller_context(db, session, ordinary=True)
+        if context is not None:
+            context["principal_type"] = query.principal_type
+            context["principal_id"] = str(query.principal_id)
+        return context
+    return _hydrate_reseller_context(db, session)
+
+
+def _hydrate_reseller_context(
+    db: Session, session: dict, *, ordinary: bool = False
+) -> dict | None:
     reseller = db.get(Reseller, coerce_uuid(session["reseller_id"]))
     if not reseller:
         return None
@@ -785,7 +855,7 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
             # which is None for a first-class reseller_user principal.
             "principal_type": "reseller_user",
             "principal_id": str(reseller_user.id),
-            "is_impersonation": bool(session.get("is_impersonation")),
+            "is_impersonation": session.get("is_impersonation") is True,
             "return_to": session.get("return_to"),
         }
 
@@ -793,7 +863,15 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
     if not subscriber:
         return None
 
-    reseller_user = _get_reseller_user(db, str(subscriber.id))
+    reseller_user = (
+        db.query(ResellerUser)
+        .filter(ResellerUser.subscriber_id == coerce_uuid(session["principal_id"]))
+        .filter(ResellerUser.is_active.is_(True))
+        .order_by(ResellerUser.created_at.desc())
+        .first()
+        if ordinary
+        else _get_reseller_user(db, str(subscriber.id))
+    )
     if not reseller_user:
         return None
 
@@ -813,7 +891,7 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
         "reseller_user": reseller_user,
         "principal_type": "subscriber",
         "principal_id": str(subscriber.id),
-        "is_impersonation": bool(session.get("is_impersonation")),
+        "is_impersonation": session.get("is_impersonation") is True,
         "return_to": session.get("return_to"),
     }
 
@@ -827,6 +905,47 @@ def refresh_session(
     if not session:
         return None
     now = _now()
+    if session.get("is_impersonation") is not True:
+        standing_query = _ordinary_standing_query(session)
+        try:
+            created = datetime.fromisoformat(str(session["created_at"]))
+            if created.tzinfo is None:
+                raise ValueError("Unbound session clock")
+        except (KeyError, ValueError, TypeError):
+            created = None
+        if db is None or standing_query is None or created is None:
+            invalidate_session(session_token)
+            return None
+        # Settings reads also must not flush unrelated pending caller writes.
+        with db.no_autoflush:
+            outcome = resolve_reseller_session_refresh(
+                db,
+                query=ResellerSessionRefreshQuery(
+                    standing=standing_query,
+                    now=now,
+                    created_at=created,
+                    sliding_ttl_seconds=_session_ttl_seconds(
+                        session.get("remember", False), db
+                    ),
+                    absolute_ttl_seconds=_absolute_ttl_seconds(db),
+                ),
+            )
+        if outcome is None:
+            invalidate_session(session_token)
+            return None
+        session["expires_at"] = outcome.expires_at.isoformat()
+        store_session(
+            _RESELLER_SESSION_PREFIX,
+            session_token,
+            session,
+            outcome.ttl_seconds,
+            _RESELLER_SESSIONS,
+            principal_id=str(standing_query.principal_id),
+            fallback_index=_RESELLER_SESSION_INDEX,
+        )
+        return session
+
+    # Existing explicit legacy impersonation refresh is outside this slice.
     ttl_seconds = _session_ttl_seconds(session.get("remember", False), db)
     new_expires_at = now + timedelta(seconds=ttl_seconds)
     # Sliding refresh is capped at an absolute lifetime from creation so a

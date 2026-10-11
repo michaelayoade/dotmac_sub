@@ -155,7 +155,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: one disposable Engine and one engine-bound Session per test; the external
 #: root refusal regression adds one Connection-bound Session. These fixtures
 #: exercise real root completion without bypassing the production entry guard.
-TEST_FIXTURE_BASELINE_TOTAL = 220
+#: Reseller standing PostgreSQL cases add two isolated Session constructors.
+#: These test fixtures do not expand the production construction allowance.
+TEST_FIXTURE_BASELINE_TOTAL = 222
 
 
 def _baseline() -> dict[str, int]:

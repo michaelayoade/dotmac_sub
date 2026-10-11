@@ -2,11 +2,13 @@
 
 import logging
 import re
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.csrf import renew_csrf_cookie
@@ -70,6 +72,8 @@ def reseller_login_page(request: Request, error: str | None = None):
         )
         if context:
             return RedirectResponse(url="/reseller/dashboard", status_code=303)
+    except (SQLAlchemyError, RuntimeError):
+        return Response(status_code=503)
     finally:
         db.close()
 
@@ -333,6 +337,21 @@ def reseller_refresh(request: Request):
             if session.get("remember")
             else reseller_portal.get_session_max_age(db)
         )
+        if session.get("is_impersonation") is not True:
+            max_age = min(
+                max_age,
+                max(
+                    1,
+                    int(
+                        (
+                            datetime.fromisoformat(session["expires_at"])
+                            - datetime.now(UTC)
+                        ).total_seconds()
+                    ),
+                ),
+            )
+    except (SQLAlchemyError, RuntimeError):
+        return Response(status_code=503)
     finally:
         db.close()
 
