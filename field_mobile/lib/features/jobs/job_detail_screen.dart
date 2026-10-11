@@ -84,10 +84,7 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
     final capabilities = ref.watch(fieldCapabilitiesProvider);
     final detail = widget.detail;
     final job = detail.job;
-    final recordedEvents = detail.history
-        .map((entry) => entry['event']?.toString())
-        .whereType<String>()
-        .toSet();
+    final recordedEvents = detail.events.map((entry) => entry.event).toSet();
     final actions = switch (job.status) {
       'scheduled' ||
       'dispatched' when !recordedEvents.contains('en_route') => ['en_route'],

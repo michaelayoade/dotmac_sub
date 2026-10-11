@@ -460,6 +460,26 @@ String? _noteString(Map<String, dynamic> note, List<String> keys) {
   return null;
 }
 
+/// Execution evidence from the server's FieldJobEventRead contract.
+/// Timeline history is a separate presentation projection.
+class JobEvent {
+  const JobEvent({
+    required this.id,
+    required this.event,
+    required this.occurredAt,
+  });
+
+  final String id;
+  final String event;
+  final DateTime occurredAt;
+
+  factory JobEvent.fromJson(Map<String, dynamic> json) => JobEvent(
+    id: json['id'] as String,
+    event: json['event'] as String,
+    occurredAt: DateTime.parse(json['occurred_at'] as String),
+  );
+}
+
 class JobDetail {
   const JobDetail({
     required this.job,
@@ -476,6 +496,7 @@ class JobDetail {
     this.materials = const [],
     this.materialRequests = const [],
     this.worklogs = const [],
+    this.events = const [],
     this.history = const [],
   });
 
@@ -493,6 +514,7 @@ class JobDetail {
   final List<Map<String, dynamic>> materials;
   final List<Map<String, dynamic>> materialRequests;
   final List<Map<String, dynamic>> worklogs;
+  final List<JobEvent> events;
   final List<Map<String, dynamic>> history;
 
   int get completionPhotoCount =>
@@ -536,6 +558,7 @@ class JobDetail {
     materials: _mapList(json['materials']),
     materialRequests: _mapList(json['material_requests']),
     worklogs: _mapList(json['worklogs']),
+    events: _typedList(json['events'], JobEvent.fromJson),
     history: _mapList(json['history']),
   );
 
@@ -554,6 +577,7 @@ class JobDetail {
     materials: materials,
     materialRequests: materialRequests,
     worklogs: worklogs,
+    events: events,
     history: history,
   );
 }
