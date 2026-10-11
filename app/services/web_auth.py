@@ -499,7 +499,15 @@ def mfa_enroll_confirm(
                 persistent=_wants_persistent_session(request),
             )
         return response
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "mfa_enrollment_confirm_refused",
+            extra={
+                "event": "mfa_enrollment_confirm_refused",
+                "error_type": type(exc).__name__,
+                "status_code": getattr(exc, "status_code", None),
+            },
+        )
         return templates.TemplateResponse(
             request,
             "auth/mfa_enroll.html",

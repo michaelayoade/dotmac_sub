@@ -1032,3 +1032,79 @@ def test_pppoe_gate_takes_a_row_share_lock(db_session, person):
     finally:
         db_session.execute = real  # type: ignore[method-assign]
     assert any("FOR SHARE" in sql for sql in captured)
+
+
+def test_token_replayed_after_victim_enrolled_is_refused_and_factor_intact(
+    db_session, monkeypatch
+):
+    system_user, _credential_row, token, setup = _enrollment_step(
+        db_session, monkeypatch
+    )
+    # Victim enrolls with the genuine token.
+    AuthFlow.confirm_mfa_enrollment(
+        db_session,
+        token,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        _make_request(),
+    )
+    victim_secret = db_session.get(MFAMethod, setup["method_id"]).secret
+    sessions_before = _sessions(db_session)
+
+    # Attacker replays the same-version token with a fresh pending row.
+    attacker = AuthFlow.admin_mfa_setup(db_session, str(system_user.id), "evil")
+    with pytest.raises(HTTPException) as excinfo:
+        AuthFlow.confirm_mfa_enrollment(
+            db_session,
+            token,
+            str(attacker["method_id"]),
+            pyotp.TOTP(attacker["secret"]).now(),
+            _make_request(),
+        )
+    assert excinfo.value.status_code == 401
+    db_session.expire_all()
+    victim = db_session.get(MFAMethod, setup["method_id"])
+    assert victim.is_primary and victim.enabled and victim.secret == victim_secret
+    evil = db_session.get(MFAMethod, attacker["method_id"])
+    assert not evil.enabled and not evil.is_primary
+    assert _sessions(db_session) == sessions_before
+
+
+def test_setup_rekey_between_phase_a_and_activation_is_refused(db_session, monkeypatch):
+    system_user, _credential_row, token, setup = _enrollment_step(
+        db_session, monkeypatch
+    )
+    real = auth_flow_service._decrypt_secret  # noqa: SLF001
+
+    def rekey_after_read(*args, **kwargs):
+        value = real(*args, **kwargs)
+        AuthFlow.admin_mfa_setup(db_session, str(system_user.id), "device")
+        return value
+
+    monkeypatch.setattr(auth_flow_service, "_decrypt_secret", rekey_after_read)
+    with pytest.raises(HTTPException) as excinfo:
+        AuthFlow.confirm_mfa_enrollment(
+            db_session,
+            token,
+            str(setup["method_id"]),
+            pyotp.TOTP(setup["secret"]).now(),
+            _make_request(),
+        )
+    assert excinfo.value.status_code == 401
+    assert _enrollment_state(db_session, system_user) == (0, 0, 0)
+
+
+def test_stale_token_with_wrong_code_leaves_failure_counter_unchanged(
+    db_session, monkeypatch
+):
+    _user, credential, token, setup = _enrollment_step(db_session, monkeypatch)
+    _reset_credential(db_session, credential)
+    good = pyotp.TOTP(setup["secret"]).now()
+    bad = "000000" if good != "000000" else "111111"
+    with pytest.raises(HTTPException) as excinfo:
+        AuthFlow.confirm_mfa_enrollment(
+            db_session, token, str(setup["method_id"]), bad, _make_request()
+        )
+    assert excinfo.value.status_code == 401
+    db_session.expire_all()
+    assert db_session.get(MFAMethod, setup["method_id"]).failed_attempts == 0

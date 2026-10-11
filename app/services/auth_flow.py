@@ -557,37 +557,6 @@ def _issue_mfa_token(
     return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
 
 
-def _issue_mfa_enrollment_token(
-    db: Session | None,
-    principal_id: str,
-    principal_type: str = "system_user",
-    *,
-    staff_binding: staff_party_authentication.StaffSessionBinding | None = None,
-) -> str:
-    now = _now()
-    payload = {
-        "sub": principal_id,
-        "principal_id": principal_id,
-        "principal_type": principal_type,
-        "typ": "mfa_enrollment",
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=5)).timestamp()),
-    }
-    if principal_type == "system_user":
-        if staff_binding is None:
-            raise staff_party_authentication.StaffProjectionError(
-                staff_party_authentication.StaffProjectionRefusal.projection_missing,
-                principal_id,
-            )
-        if str(staff_binding.system_user_id) != str(principal_id):
-            raise staff_party_authentication.StaffProjectionError(
-                staff_party_authentication.StaffProjectionRefusal.projection_conflict,
-                principal_id,
-            )
-        payload["party_id"] = str(staff_binding.party_id)
-    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
-
-
 def staff_binding_from_token_payload(
     payload: Mapping[str, object],
     *,
@@ -1973,28 +1942,6 @@ class AuthFlow(ListResponseMixin):
         return tokens_for_staged_session(staged)
 
     @staticmethod
-    def establish_enrolled_session(
-        db: Session, enrollment_token: str, request: Request
-    ) -> dict[str, str]:
-        """Session for a staff user who just completed forced MFA enrollment.
-
-        The enrollment challenge is bound to the credential like an MFA
-        challenge: a reset or disable between the password step and here
-        refuses the session instead of minting one.
-        """
-
-        try:
-            challenge = password_authentication.decode_challenge(
-                db, enrollment_token, expected_typ="mfa_enrollment"
-            )
-            staged = password_authentication.establish_enrolled_session(
-                db, challenge, request=request
-            )
-        except password_authentication.PasswordAuthenticationError as exc:
-            raise _http_from_refusal(exc) from exc
-        return tokens_for_staged_session(staged)
-
-    @staticmethod
     def confirm_mfa_enrollment(
         db: Session,
         enrollment_token: str,
@@ -2029,6 +1976,7 @@ class AuthFlow(ListResponseMixin):
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
         ensure_mfa_not_locked(method)
         resolved_method_id = method.id
+        phase_a_secret = method.secret or ""
         totp_ok = bool(
             pyotp.TOTP(_decrypt_secret(db, method.secret or "")).verify(
                 code, valid_window=0
@@ -2041,6 +1989,7 @@ class AuthFlow(ListResponseMixin):
                 challenge,
                 request=request,
                 method_id=resolved_method_id,
+                expected_secret=phase_a_secret,
                 totp_ok=totp_ok,
                 failure_policy=failure_policy,
             )

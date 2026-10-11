@@ -1044,3 +1044,31 @@ def test_pppoe_secret_change_cannot_commit_while_the_gate_holds_its_row(
         outcome = login_future.result(timeout=WAIT)
     assert outcome[0] == "ok"
     assert _session_count(factory, account) == 1
+
+
+def test_enrollment_token_replayed_after_victim_enrolled_is_refused(
+    engine, factory, monkeypatch
+):
+    staff, token, setup_data = _staff_enrollment(factory, monkeypatch)
+    assert _confirm(factory, token, setup_data)[0] == "ok"
+    with factory() as session:
+        attacker = AuthFlow.admin_mfa_setup(session, str(staff.id), "evil")
+    outcome = _confirm(factory, token, attacker)
+    assert outcome[:2] == ("http", 401)
+    with factory() as session:
+        primary = session.scalars(
+            select(MFAMethod.id).where(
+                MFAMethod.system_user_id == staff.id, MFAMethod.is_primary.is_(True)
+            )
+        ).all()
+    assert primary == [setup_data["method_id"]]
+    assert _session_count_staff(factory, staff) == 1
+
+
+def _session_count_staff(factory, staff) -> int:
+    with factory() as session:
+        return session.scalar(
+            select(func.count())
+            .select_from(AuthSession)
+            .where(AuthSession.system_user_id == staff.id)
+        )
