@@ -520,6 +520,7 @@ def credential_enrollment_endpoint(
     status_code=status.HTTP_200_OK,
     responses={
         401: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
     },
 )
 def verify_email_endpoint(
@@ -529,7 +530,37 @@ def verify_email_endpoint(
     """
     Verify the caller's email address using the token from the verification email.
     """
-    auth_flow_service.verify_email(db, payload.token)
+    from app.services import email_verification
+
+    try:
+        with db_session_adapter.owner_command_session() as owner_db:
+            email_verification.complete_email_verification(
+                owner_db,
+                command=email_verification.CompleteEmailVerificationCommand(
+                    context=CommandContext.system(
+                        actor="capability:email-verification",
+                        scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                        reason="Public email capability completion",
+                    ),
+                    token=payload.token,
+                ),
+            )
+    except DomainError as exc:
+        if exc.code == "auth.email_verification.invalid_capability":
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired verification link."
+            ) from None
+        raise HTTPException(
+            status_code=503,
+            detail="Email verification is temporarily unavailable. Please try again.",
+            headers={"Retry-After": "5"},
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Email verification is temporarily unavailable. Please try again.",
+            headers={"Retry-After": "5"},
+        ) from None
     return VerifyEmailResponse(email_verified=True)
 
 

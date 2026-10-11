@@ -143,3 +143,75 @@ def test_retired_profile_adapter_and_alias_fallbacks_cannot_return():
                         and isinstance(node.args[1], ast.Constant)
                         and node.args[1].value in retired
                     ), str(path)
+
+
+def test_completion_adapters_use_fresh_sessions_without_caller_release():
+    for path, name in (
+        ("app/api/auth_flow.py", "verify_email_endpoint"),
+        ("app/services/web_customer_auth.py", "customer_verify_email_page"),
+    ):
+        calls = _calls(_function(path, name))
+        assert {"owner_command_session", "complete_email_verification"} <= calls
+        assert (
+            not {"verify_email", "rollback", "commit", "release_read_transaction"}
+            & calls
+        )
+
+
+def test_completion_owner_has_one_atomic_boundary_and_no_http_import():
+    node = _function(
+        "app/services/email_verification.py", "complete_email_verification"
+    )
+    calls = _calls(node)
+    assert {
+        "execute_owner_command",
+        "_subscriber",
+        "stage_audit_event",
+        "flush",
+    } <= calls
+    assert not {"commit", "rollback", "record_audit_event"} & calls
+    assert (
+        sum(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "execute_owner_command"
+            for call in ast.walk(node)
+        )
+        == 1
+    )
+    source = (ROOT / "app/services/email_verification.py").read_text()
+    assert "fastapi" not in source and "defer_until_commit" not in source
+
+
+def test_legacy_completion_writer_and_alias_fallback_are_retired():
+    for family in ("app", "scripts"):
+        for path in (ROOT / family).rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    assert node.name != "verify_email", str(path)
+                if isinstance(node, ast.ImportFrom):
+                    assert not any(
+                        alias.name == "verify_email" for alias in node.names
+                    ), str(path)
+                if isinstance(node, ast.Attribute):
+                    assert node.attr != "verify_email", str(path)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    assert node.func.id != "verify_email", str(path)
+                if isinstance(node, ast.Constant):
+                    assert node.value != "verify_email", str(path)
+
+
+def test_completion_product_consumers_are_exactly_the_two_migrated_adapters():
+    consumers = set()
+    for family in ("app", "scripts"):
+        for path in (ROOT / family).rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if "complete_email_verification" in _calls(node):
+                    consumers.add((str(path.relative_to(ROOT)), node.name))
+    assert consumers == {
+        ("app/api/auth_flow.py", "verify_email_endpoint"),
+        ("app/services/web_customer_auth.py", "customer_verify_email_page"),
+    }

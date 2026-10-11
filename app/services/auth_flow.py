@@ -5,7 +5,7 @@ import secrets
 import string
 import warnings
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any, cast
@@ -710,6 +710,59 @@ def _issue_email_verification_token(
 
 def _decode_email_verification_token(db: Session | None, token: str) -> dict:
     return _decode_jwt(db, token, "email_verification")
+
+
+class InvalidEmailVerificationCapability(ValueError):
+    """Safe boundary for the legacy JWT decoder's transport exception."""
+
+
+class EmailVerificationCapabilityUnavailable(RuntimeError):
+    """Safe operational refusal from the legacy decoder boundary."""
+
+
+@dataclass(frozen=True, slots=True)
+class EmailVerificationCapability:
+    principal_id: str
+    principal_type: str
+    subject: str
+    purpose: str
+    expires_at: int
+    email: str = field(repr=False)
+
+
+def decode_email_verification_capability(
+    db: Session, *, token: str
+) -> EmailVerificationCapability:
+    try:
+        payload = _decode_email_verification_token(db, token)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise EmailVerificationCapabilityUnavailable(
+                "Email verification capability validation is unavailable"
+            ) from None
+        raise InvalidEmailVerificationCapability(
+            "Invalid verification capability"
+        ) from None
+    except (TypeError, ValueError, AttributeError):
+        # python-jose can raise these for malformed registered claim shapes.
+        # Storage/configuration exceptions retain their operational category.
+        raise InvalidEmailVerificationCapability(
+            "Invalid verification capability"
+        ) from None
+    keys = ("principal_id", "principal_type", "sub", "typ", "email")
+    if (
+        any(not isinstance(payload.get(key), str) for key in keys)
+        or type(payload.get("exp")) is not int
+    ):
+        raise InvalidEmailVerificationCapability("Invalid verification capability")
+    return EmailVerificationCapability(
+        principal_id=payload["principal_id"],
+        principal_type=payload["principal_type"],
+        subject=payload["sub"],
+        purpose=payload["typ"],
+        expires_at=payload["exp"],
+        email=payload["email"],
+    )
 
 
 def _decode_jwt(db: Session | None, token: str, expected_type: str) -> dict:
@@ -2721,46 +2774,6 @@ def send_email_verification(db: Session, subscriber_id: str) -> bool:
         person_name=subscriber.display_name or subscriber.first_name,
         expires_minutes=ttl_minutes,
     )
-
-
-def verify_email(db: Session, token: str) -> Subscriber:
-    """
-    Verify a subscriber's email using a valid verification token.
-
-    Idempotent: an already-verified subscriber is a success no-op. Raises
-    HTTPException on an invalid/expired token or mismatched subscriber.
-    Returns the (verified) Subscriber.
-    """
-    from app.models.audit import AuditActorType
-    from app.services.audit_adapter import record_audit_event
-
-    payload = _decode_email_verification_token(db, token)
-    principal_id = payload.get("principal_id") or payload.get("sub")
-    email = payload.get("email")
-    if not principal_id or not email:
-        raise HTTPException(status_code=401, detail="Invalid verification token")
-
-    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(principal_id)))
-    if not subscriber or subscriber.email != email:
-        raise HTTPException(status_code=401, detail="Invalid verification token")
-
-    if subscriber.email_verified:
-        return subscriber
-
-    subscriber.email_verified = True
-    record_audit_event(
-        db,
-        action="auth.email_verified",
-        entity_type="subscriber",
-        entity_id=str(subscriber.id),
-        actor_type=AuditActorType.user,
-        actor_id=str(subscriber.id),
-        metadata={"email": subscriber.email},
-        defer_until_commit=True,
-    )
-    db.commit()
-    db.refresh(subscriber)
-    return subscriber
 
 
 def set_subscriber_email(

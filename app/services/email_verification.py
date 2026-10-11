@@ -1,4 +1,4 @@
-"""Exact Subscriber verification request owner and worker-only materializer.
+"""Exact Subscriber verification request/completion owner and worker materializer.
 
 The profile coordinator calls the flush-only participant in its existing owner
 transaction. Public requests require a fresh adapter session. Legacy mobile
@@ -8,7 +8,8 @@ profile mutation remains outside this bounded cutover.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -46,10 +47,15 @@ _DEFINITION = OwnerCommandDefinition(
     concern="email verification delivery request",
     name="request_email_verification",
 )
+_COMPLETE_DEFINITION = OwnerCommandDefinition(
+    owner="auth.email_verification",
+    concern="email verification completion",
+    name="complete_email_verification",
+)
 
 
 class EmailVerificationError(DomainError):
-    """Stable request refusal, without submitted identity or capability values."""
+    """Stable refusal, without submitted identity or capability values."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +70,126 @@ class EmailVerificationOutcome:
     intent_id: UUID | None
     queued: bool
     replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteEmailVerificationCommand:
+    context: CommandContext
+    token: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class EmailVerificationCompletionOutcome:
+    subscriber_id: UUID
+    email_verified: bool
+    changed: bool
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _invalid_capability() -> EmailVerificationError:
+    return EmailVerificationError(
+        code="auth.email_verification.invalid_capability",
+        message="Invalid or expired verification link.",
+        retryable=False,
+    )
+
+
+def complete_email_verification(
+    db: Session, *, command: CompleteEmailVerificationCommand
+) -> EmailVerificationCompletionOutcome:
+    """Complete exact email proof atomically; possession is not password login.
+
+    The signed email capability supplies the audit principal, as in password
+    recovery. Neither the bearer nor its email claim is durable audit metadata.
+    """
+    from app.services import auth_flow
+    from app.services.capability_recipient import CapabilityRecipientError
+
+    if command.context.scope != EMAIL_VERIFICATION_SCOPE:
+        raise EmailVerificationError(
+            code="auth.email_verification.invalid_scope",
+            message="Email verification scope is required.",
+            retryable=False,
+        )
+    if db.in_transaction():
+        raise EmailVerificationError(
+            code="auth.email_verification.active_caller_transaction",
+            message="Email verification requires a transaction-free session.",
+        )
+
+    def operation() -> EmailVerificationCompletionOutcome:
+        if not isinstance(command.token, str) or not command.token:
+            raise _invalid_capability()
+        try:
+            payload = auth_flow.decode_email_verification_capability(
+                db, token=command.token
+            )
+        except auth_flow.InvalidEmailVerificationCapability:
+            raise _invalid_capability() from None
+        except auth_flow.EmailVerificationCapabilityUnavailable:
+            raise EmailVerificationError(
+                code="auth.email_verification.unavailable",
+                message="Email verification is temporarily unavailable. Please try again.",
+                retryable=True,
+            ) from None
+        try:
+            principal_id = UUID(payload.principal_id)
+            if (
+                payload.purpose != "email_verification"
+                or payload.principal_type != "subscriber"
+                or payload.subject != str(principal_id)
+                or not isinstance(payload.email, str)
+            ):
+                raise _invalid_capability()
+        except (KeyError, ValueError, TypeError, AttributeError):
+            raise _invalid_capability() from None
+        subscriber = _subscriber(db, principal_id, lock=True)
+        if subscriber is None or payload.expires_at <= int(_now().timestamp()):
+            raise _invalid_capability()
+        try:
+            recipient = resolve_capability_recipient(
+                subscriber.email, subject="email verification completion"
+            )
+        except CapabilityRecipientError:
+            raise _invalid_capability() from None
+        if recipient != payload.email:
+            raise _invalid_capability()
+        if subscriber.email_verified:
+            return EmailVerificationCompletionOutcome(principal_id, True, False)
+        subscriber.email_verified = True
+        stage_audit_event(
+            db,
+            actor=AuditActor.user(str(principal_id)),
+            action="auth.email_verified",
+            entity_type="subscriber",
+            entity_id=str(principal_id),
+            metadata={
+                "proof": "email_verification_capability",
+                "command_id": str(command.context.command_id),
+                "correlation_id": str(command.context.correlation_id),
+            },
+        )
+        db.flush()
+        return EmailVerificationCompletionOutcome(principal_id, True, True)
+
+    try:
+        return execute_owner_command(
+            db,
+            definition=_COMPLETE_DEFINITION,
+            context=command.context,
+            operation=operation,
+        )
+    except OperationalError as exc:
+        if getattr(exc.orig, "sqlstate", None) != "55P03":
+            raise
+        raise EmailVerificationError(
+            code="auth.email_verification.lock_timeout",
+            message="Email verification is temporarily unavailable. Please try again.",
+            retryable=True,
+        ) from exc
 
 
 def _digest(email: str) -> str:

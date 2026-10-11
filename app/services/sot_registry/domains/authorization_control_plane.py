@@ -226,7 +226,10 @@ DOMAIN = DomainSOT(
         SOTService(
             name="auth.email_verification",
             module="app.services.email_verification",
-            owns=("email verification delivery request",),
+            owns=(
+                "email verification delivery request",
+                "email verification completion",
+            ),
             depends_on=(
                 "customer.accounts",
                 "identity.capability_recipient",
@@ -243,6 +246,15 @@ DOMAIN = DomainSOT(
                         input_names=("exact Subscriber verification request",),
                         canonical_writer="auth.email_verification",
                     ),
+                    ConcernContract(
+                        name="email verification completion",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "locked Subscriber email verification state",
+                            "signed email capability",
+                        ),
+                        canonical_writer="auth.email_verification",
+                    ),
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
@@ -251,12 +263,24 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Typed request context with trusted actual AuditActor and exact locked/reloaded Subscriber email, verified and active state; configured bounded TTL.",
                     ),
+                    AuthorityInput(
+                        name="locked Subscriber email verification state",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact Subscriber UUID/current canonical email and verified flag, refreshed under the completion row lock; capability expiry is rechecked after lock acquisition, before mutation or no-op success.",
+                    ),
+                    AuthorityInput(
+                        name="signed email capability",
+                        owner="auth.token_signing",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Verified purpose, Subscriber principal UUID and exact email claim, decoded inside the completion owner; capability possession is not password login.",
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
-                    boundary="Public request enters execute_owner_command once; flush-only stage_email_verification participates only in this owner or customer.portal_profile_commands. Audit and communication intent/outbox commit or roll back together.",
-                    locking="Public requests set PostgreSQL transaction-local lock_timeout5s before exact Subscriber UUID FOR UPDATE with populate_existing; caller writes are never rolled back. Profile flush precedes participant reload.",
-                    idempotency="Stable request key uses the existing unique intent dedupe constraint. Email-digest/Subscriber/TTL/purpose fingerprint mismatch fails closed; same evidence replays one intent.",
+                    boundary="Public request and completion each enter execute_owner_command once; completion stages the verified flag and canonical audit atomically. Flush-only stage_email_verification participates only in this owner or customer.portal_profile_commands. Audit and communication intent/outbox commit or roll back together.",
+                    locking="Public request and completion set PostgreSQL transaction-local lock_timeout5s before exact Subscriber UUID FOR UPDATE with populate_existing; caller writes are never rolled back. Profile flush precedes participant reload.",
+                    idempotency="Stable request key uses the existing unique intent dedupe constraint. Email-digest/Subscriber/TTL/purpose fingerprint mismatch fails closed; same evidence replays one intent. Completion is a no-op only for the same current verified address.",
                     retries="Retry complete request after rollback with unchanged context; unique constraint arbitrates cross-Subscriber key races, which fail without delivery.",
                 ),
                 errors=ErrorContract(
@@ -265,13 +289,19 @@ DOMAIN = DomainSOT(
                     )
                     + (
                         "auth.email_verification.invalid_command",
+                        "auth.email_verification.invalid_capability",
+                        "auth.email_verification.unavailable",
+                        "auth.email_verification.active_caller_transaction",
                         "auth.email_verification.invalid_scope",
                         "auth.email_verification.invalid_participant",
                         "auth.email_verification.lock_timeout",
                         "auth.email_verification.idempotency_conflict",
                     ),
-                    mapping_owner="Authenticated API/customer/reseller resend adapters: lock_timeout maps to 503 Retry-After5; impersonation without actual actor is refused403",
-                    retryable_codes=("auth.email_verification.lock_timeout",),
+                    mapping_owner="Completion API/web map invalid capability to generic401/400 and operational failures503 Retry-After5. Authenticated API/customer/reseller resend adapters: lock_timeout maps to 503 Retry-After5; impersonation without actual actor is refused403",
+                    retryable_codes=(
+                        "auth.email_verification.lock_timeout",
+                        "auth.email_verification.unavailable",
+                    ),
                     fail_closed_on=(
                         "changed recipient or verified/inactive account",
                         "malformed purpose/audience/context",
@@ -283,15 +313,15 @@ DOMAIN = DomainSOT(
                     event_types=("auth.email_verification",),
                     schema_version=1,
                     delivery_owner="communications.intents",
-                    compatibility="Intent and Notification bodies are null. Allowlisted descriptor stores UUID, email digest, bounded TTL and purpose; request audit carries safe request IDs and outcome only.",
+                    compatibility="Intent and Notification bodies are null. Allowlisted descriptor stores UUID, email digest, bounded TTL and purpose; request audit carries safe request IDs and outcome only. Completion stages canonical audit only, with proof kind and request UUIDs; no completion delivery event.",
                     replay="Worker revalidates exact current address and unverified state before minting and rendering solely in memory. Existing worker owns sensitive transport/outcomes.",
                 ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.CUT_OVER,
-                    old_owner="auth_flow.send_email_verification",
+                    old_owner="auth_flow.send_email_verification; auth_flow.verify_email",
                     new_owner="auth.email_verification",
                     verification="Focused atomicity, replay, materialization and adapter isolation tests; PostgreSQL lock/unique tests require hosted migrated-schema gate.",
-                    cutover_gate="API and portal/reseller resend plus portal profile changes use intent owner.",
+                    cutover_gate="API and portal/reseller resend plus portal profile changes use intent owner. API/web completion use the atomic capability owner; legacy completion writer is retired.",
                     fallback_retirement="Legacy mobile /me still calls set_subscriber_email and direct compatibility wrapper; retire only with reviewed partial-profile coordinator. S7 remains open; query-token URL remains until browser bridge is implemented.",
                 ),
                 steward="platform security",
@@ -301,6 +331,8 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_email_verification_intents.py",
+                    "tests/test_email_verification_completion.py",
+                    "tests/integration/test_email_verification_completion_pg.py",
                     "tests/integration/test_email_verification_intents_pg.py",
                 ),
             ),

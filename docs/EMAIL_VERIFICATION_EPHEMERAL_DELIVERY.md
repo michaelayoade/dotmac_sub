@@ -56,9 +56,34 @@ an actor or releases the caller transaction. Its evidence is non-authoritative
 and does not replace hosted PostgreSQL acceptance. An architecture guard rejects
 restoring the legacy definitions, imports, alias calls or dynamic alias fallback.
 
+## Atomic email capability completion
+
+`CompleteEmailVerificationCommand` hides its token in repr and returns only UUID
+and boolean outcome values. The owner decodes the existing signed capability
+inside its transaction, validates purpose, Subscriber principal type/UUID and
+email proof, then locks and reloads that exact Subscriber with PostgreSQL
+`lock_timeout=5s`. It compares the current canonical single email address to the
+exact token claim under the lock before writing `email_verified`. Expiry is
+rechecked after lock acquisition, including before an already-verified no-op. A repeated
+proof for the same current verified address succeeds without another audit.
+Changed addresses and malformed/expired capabilities receive a generic refusal.
+The flag and canonical AuditEvent commit or roll back together; audit failure
+cannot leave the account verified. Audit identifies the Subscriber through
+`AuditActor.user` using the verified capability proof, consistent with credential
+recovery. This represents capability possession, not password authentication.
+Audit metadata contains only proof kind and request UUIDs, never email or bearer.
+
+API and web completion adapters open independent owner Sessions, preserving any
+caller pending/flushed transaction. Invalid proofs map to generic API401/web400;
+operational failures map to503 with `Retry-After: 5`. The old
+`auth_flow.verify_email` writer had only these two product callers and is retired;
+compatibility tests now exercise the typed canonical owner. Its legacy decoder
+HTTP401 is translated to a safe capability exception before crossing the owner
+boundary. Other decoder/storage failures remain operational failures.
+
 ## Explicit remaining debt
 
-This is a bounded S7 request slice, not full email verification or S7 completion.
+This bounded request/completion cutover does not complete all S7 work.
 Mobile `/me` still calls legacy `auth_flow.set_subscriber_email`; its partially
 flushed profile transaction must migrate through a reviewed profile coordinator.
 `auth_flow.send_email_verification` and the low-level send compatibility wrapper
@@ -66,12 +91,13 @@ remain solely for that legacy flow and existing compatibility tests. They must
 not be reused by new adapters. No caller transaction may be rolled back merely
 to fit a new owner boundary.
 
-The query-token URL and existing verification completion remain unchanged.
-Completion still needs exact-row locking/current-email predicate and transactional
-audit, and its GET mutation needs a real browser bridge before a fragment URL
-cutover. These are separate protected completion/browser slices.
+The query-token URL and verification GET route remain unchanged. The GET mutation
+needs a real browser bridge before a fragment URL cutover. Completion locking and
+audit are migrated; mobile sending and browser handoff remain separate slices.
 
 Focused unit tests provide fast behavioral evidence only. Hosted PostgreSQL tests
 must run against the real Alembic chain to prove exact locking, bounded caller
 self-block preservation, same-request convergence, owner-level cross-Subscriber
-conflict rollback and direct concurrent unique constraint arbitration. No local Docker or database acceptance is claimed.
+conflict rollback, direct concurrent unique constraint arbitration, and completion
+waiting on an exact Subscriber lock before rejecting an intervening email change
+or a capability expiring while waiting. No local Docker or database acceptance is claimed.

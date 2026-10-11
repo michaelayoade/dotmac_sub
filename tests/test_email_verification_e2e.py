@@ -9,11 +9,12 @@ re-arms verification (reset flag + re-dispatch).
 import uuid
 
 import pytest
-from fastapi import HTTPException
 
 from app.services import auth_flow as auth_flow_service
 from app.services import customer_portal_profile_commands as profile_commands
+from app.services import email_verification
 from app.services.audit_adapter import AuditActor
+from app.services.owner_commands import CommandContext
 from tests.customer_profile_owner_support import (
     profile_command_context,
     profile_owner_session,
@@ -50,6 +51,21 @@ def _capture_email(monkeypatch):
     return sent
 
 
+def _complete(caller, token):
+    with profile_owner_session(caller) as owner_db:
+        return email_verification.complete_email_verification(
+            owner_db,
+            command=email_verification.CompleteEmailVerificationCommand(
+                context=CommandContext.system(
+                    actor="capability:email-verification",
+                    scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                    reason="Email completion fast-unit test",
+                ),
+                token=token,
+            ),
+        )
+
+
 def test_verify_email_round_trip(db_session, subscriber, _no_audit):
     """A freshly minted token flips the subscriber to verified, idempotently."""
     assert subscriber.email_verified is False
@@ -57,20 +73,20 @@ def test_verify_email_round_trip(db_session, subscriber, _no_audit):
     token = auth_flow_service._issue_email_verification_token(
         db_session, str(subscriber.id), subscriber.email
     )
-    result = auth_flow_service.verify_email(db_session, token)
+    result = _complete(db_session, token)
     assert result.email_verified is True
 
     db_session.refresh(subscriber)
     assert subscriber.email_verified is True
 
     # Idempotent: verifying again is a success no-op, not an error.
-    again = auth_flow_service.verify_email(db_session, token)
+    again = _complete(db_session, token)
     assert again.email_verified is True
 
 
 def test_verify_email_rejects_bad_token(db_session, _no_audit):
-    with pytest.raises(HTTPException):
-        auth_flow_service.verify_email(db_session, "not-a-real-token")
+    with pytest.raises(email_verification.EmailVerificationError):
+        _complete(db_session, "not-a-real-token")
 
 
 def test_verify_email_rejects_wrong_email(db_session, subscriber, _no_audit):
@@ -78,8 +94,8 @@ def test_verify_email_rejects_wrong_email(db_session, subscriber, _no_audit):
     token = auth_flow_service._issue_email_verification_token(
         db_session, str(subscriber.id), "stale@example.com"
     )
-    with pytest.raises(HTTPException):
-        auth_flow_service.verify_email(db_session, token)
+    with pytest.raises(email_verification.EmailVerificationError):
+        _complete(db_session, token)
     db_session.refresh(subscriber)
     assert subscriber.email_verified is False
 

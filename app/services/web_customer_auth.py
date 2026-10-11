@@ -367,27 +367,43 @@ def customer_credential_enrollment_submit(
 
 
 def customer_verify_email_page(request: Request, db: Session, token: str):
-    """Verify an email address from the link in the verification email."""
+    """Complete the capability in a fresh owner; retain the existing GET route."""
+    from app.services import email_verification
+
+    error_msg = "This verification link is invalid or has expired."
+    response_status = 400
+    headers = None
     try:
-        auth_flow_service.verify_email(db, token)
+        with db_session_adapter.owner_command_session() as owner_db:
+            email_verification.complete_email_verification(
+                owner_db,
+                command=email_verification.CompleteEmailVerificationCommand(
+                    context=CommandContext.system(
+                        actor="capability:email-verification",
+                        scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                        reason="Customer email capability completion",
+                    ),
+                    token=token,
+                ),
+            )
         return templates.TemplateResponse(
             "customer/auth/verify-email.html",
             {"request": request, "success": True},
         )
-    except Exception as exc:
-        logger.info("Customer email verification failed", exc_info=True)
-        error_msg = "This verification link is invalid or has expired."
-        if (
-            isinstance(exc, HTTPException)
-            and isinstance(exc.detail, str)
-            and exc.detail
-        ):
-            error_msg = exc.detail
-        return templates.TemplateResponse(
-            "customer/auth/verify-email.html",
-            {"request": request, "success": False, "error": error_msg},
-            status_code=400,
-        )
+    except DomainError as exc:
+        if exc.code != "auth.email_verification.invalid_capability":
+            response_status = 503
+    except Exception:
+        response_status = 503
+    if response_status == 503:
+        error_msg = "Email verification is temporarily unavailable. Please try again."
+        headers = {"Retry-After": "5"}
+    return templates.TemplateResponse(
+        "customer/auth/verify-email.html",
+        {"request": request, "success": False, "error": error_msg},
+        status_code=response_status,
+        headers=headers,
+    )
 
 
 def customer_login_submit(
