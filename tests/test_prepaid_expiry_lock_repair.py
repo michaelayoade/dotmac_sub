@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -25,6 +27,7 @@ from app.services.prepaid_expiry_lock_repair import (
     preview_prepaid_expiry_lock_repair,
 )
 from app.services.prepaid_service_renewals import _funding_recovery_status_clause
+from scripts.billing import billing_target_shadow
 
 
 def _candidate(db_session, subscriber_account, subscription):
@@ -89,6 +92,15 @@ def test_repair_recreates_only_prepaid_lock_and_replay_is_idempotent(
         ),
     )
     assert any(item.query == query and item.repairable for item in discovered)
+    assert not discover_prepaid_expiry_lock_repairs(
+        db_session,
+        PrepaidExpiryLockDiscoveryQuery(
+            resolved_since=query.as_of - timedelta(hours=2),
+            resolved_before=query.as_of,
+            as_of=query.as_of,
+            offset=1,
+        ),
+    )
     preview = preview_prepaid_expiry_lock_repair(db_session, query)
     assert preview.repairable
     db_session.commit()
@@ -169,3 +181,65 @@ def test_repair_refuses_unproven_historical_lock(
         PrepaidExpiryLockRepairBlocker.historical_lock_not_expiry_prepaid
         in preview.blockers
     )
+
+
+@pytest.mark.parametrize(
+    "subcommand,extra",
+    (
+        ("preview-prepaid-service-renewal", ()),
+        (
+            "execute-reviewed-prepaid-service-renewal",
+            (
+                "--preview-fingerprint",
+                "0" * 64,
+                "--evidence-ref",
+                "review:unit-test",
+                "--actor",
+                "operator:test",
+                "--idempotency-key",
+                "renewal:test",
+            ),
+        ),
+    ),
+)
+def test_reviewed_renewal_cli_admits_explicit_funding_recovery_context(
+    monkeypatch, subcommand, extra
+):
+    seen = []
+    monkeypatch.setattr(
+        billing_target_shadow,
+        "SessionLocal",
+        lambda: SimpleNamespace(close=lambda: None),
+    )
+    handler_name = (
+        "_cmd_preview_prepaid_service_renewal"
+        if subcommand.startswith("preview")
+        else "_cmd_execute_reviewed_prepaid_service_renewal"
+    )
+    monkeypatch.setattr(
+        billing_target_shadow,
+        handler_name,
+        lambda _db, args: seen.append(args.eligibility_context) or 0,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "billing_target_shadow",
+            subcommand,
+            "--subscription",
+            str(uuid4()),
+            "--starts-at",
+            "2026-10-11T00:00:00+00:00",
+            "--ends-at",
+            "2026-11-11T00:00:00+00:00",
+            "--amount",
+            "100.00",
+            "--eligibility-context",
+            "funding_recovery",
+            *extra,
+        ],
+    )
+
+    assert billing_target_shadow.main() == 0
+    assert seen == ["funding_recovery"]

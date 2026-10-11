@@ -71,6 +71,7 @@ class PrepaidExpiryLockDiscoveryQuery:
     resolved_before: datetime
     as_of: datetime
     limit: int = 100
+    offset: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +141,7 @@ def discover_prepaid_expiry_lock_repairs(
         or query.resolved_before.tzinfo is None
         or query.resolved_since >= query.resolved_before
         or not 1 <= query.limit <= 1000
+        or not 0 <= query.offset <= 100000
     ):
         raise _error(
             "invalid_discovery", "Use a valid bounded expiry window and limit."
@@ -161,8 +163,13 @@ def discover_prepaid_expiry_lock_repairs(
             EnforcementLock.resolved_at >= query.resolved_since,
             EnforcementLock.resolved_at < query.resolved_before,
         )
-        .order_by(Subscription.id, EnforcementLock.resolved_at.desc())
+        .order_by(
+            Subscription.id,
+            EnforcementLock.resolved_at.desc(),
+            EnforcementLock.id,
+        )
         .limit(query.limit)
+        .offset(query.offset)
     ).all()
     return tuple(
         preview_prepaid_expiry_lock_repair(

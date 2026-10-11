@@ -19,6 +19,7 @@ def main() -> int:
     parser.add_argument("--resolved-before", required=True, type=datetime.fromisoformat)
     parser.add_argument("--as-of", type=datetime.fromisoformat)
     parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--offset", type=int, default=0)
     args = parser.parse_args()
 
     query = PrepaidExpiryLockDiscoveryQuery(
@@ -26,6 +27,7 @@ def main() -> int:
         resolved_before=args.resolved_before,
         as_of=args.as_of or datetime.now(UTC),
         limit=args.limit,
+        offset=args.offset,
     )
     with SessionLocal() as db:
         previews = discover_prepaid_expiry_lock_repairs(db, query)
@@ -35,6 +37,7 @@ def main() -> int:
                 "as_of": query.as_of.isoformat(),
                 "count": len(previews),
                 "limit": query.limit,
+                "offset": query.offset,
                 "candidates": [
                     {
                         "subscription_id": str(item.query.subscription_id),

@@ -23,8 +23,11 @@ repeat with reviewed narrower windows or batches as needed:
 python -m scripts.one_off.discover_prepaid_expiry_lock_repairs \
   --resolved-since INCIDENT_WINDOW_START_UTC \
   --resolved-before INCIDENT_WINDOW_END_UTC \
-  --limit 100
+  --limit 100 --offset 0
 ```
+
+Advance `--offset` by the previous batch size to review the remaining rows.
+The ordering is deterministic by subscription and historical-lock identity.
 
 On a development or authorized operations host, preview one exact service:
 
@@ -58,6 +61,33 @@ remain active, and a later confirmed funding event is eligible for the normal
 payment-triggered renewal. Verify the paid invoice, entitlement, billing anchor,
 prepaid lock restoration, and RADIUS projection after that payment. This repair
 does not itself trigger renewal or network restoration.
+
+If confirmed funding was already present before the lock was repaired, do not
+wait for another payment or invent one. Review the exact contracted period,
+tax-inclusive amount, payment-backed credit and any existing entitlement;
+then use the existing reviewed renewal owner with the explicitly limited
+`funding_recovery` eligibility context:
+
+```bash
+python -m scripts.billing.billing_target_shadow preview-prepaid-service-renewal \
+  --subscription SUBSCRIPTION_UUID --starts-at PERIOD_START_UTC \
+  --ends-at PERIOD_END_UTC --amount EXACT_CONTRACT_CHARGE \
+  --eligibility-context funding_recovery
+
+python -m scripts.billing.billing_target_shadow execute-reviewed-prepaid-service-renewal \
+  --subscription SUBSCRIPTION_UUID --starts-at PERIOD_START_UTC \
+  --ends-at PERIOD_END_UTC --amount EXACT_CONTRACT_CHARGE \
+  --eligibility-context funding_recovery \
+  --preview-fingerprint REVIEWED_RENEWAL_SHA256 \
+  --evidence-ref FINANCE_APPROVAL_REFERENCE \
+  --actor APPROVING_OPERATOR --idempotency-key STABLE_RENEWAL_KEY
+```
+
+The renewal owner, not this lock repair, settles the exact invoice, creates
+coverage, advances the billing anchor and requests prepaid-only restoration.
+An independent admin or SLA hold remains active. If the renewal preview is not
+allowed, resolve its funding/coverage blocker through the named finance owner;
+do not weaken the eligibility gate.
 
 Services without a provable historical prepaid lock, or with former admin/SLA
 holds, must not be bulk-assigned a prepaid reason. Route those to a separate
