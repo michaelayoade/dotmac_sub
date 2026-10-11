@@ -142,7 +142,12 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: pending/flushed request-write isolation. tests/authentication_denial_unit.py
 #: adds one explicitly logic-only savepoint Session factory. PostgreSQL denial
 #: proofs reuse the existing migrated factory. No runtime baseline grows.
-TEST_FIXTURE_BASELINE_TOTAL = 201
+#: +6 from tests/integration/test_identity_lock_order_concurrency.py: one
+#: disposable migrated test-engine factory, one setup Session and four explicit
+#: independent sessionmaker sites prove implicit FK blocking, incumbent lock
+#: inversion, tuple arbitration and stale principal-reference refusal. These
+#: are reviewed test fixtures; the production construction baseline is unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 207
 
 
 def _baseline() -> dict[str, int]:
