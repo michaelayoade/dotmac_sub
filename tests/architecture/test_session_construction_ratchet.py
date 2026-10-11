@@ -136,7 +136,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +1 from tests/customer_profile_owner_support.py: canonical profile tests use
 #: a fresh Session within fixture isolation, preserving the caller Session.
 #: This is fast-unit evidence only; no production construction site is added.
-TEST_FIXTURE_BASELINE_TOTAL = 193
+#: +2 from tests/test_tx_trace.py: explicit helper Sessions demonstrate that
+#: independent audit/state roots cannot satisfy owner transaction evidence.
+#: Test-only counterexamples; production construction allowance is unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 195
 
 
 def _baseline() -> dict[str, int]:
