@@ -20,7 +20,7 @@ from app.models.auth import (
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.rbac import Role, SystemUserRole
-from app.models.subscriber import UserType
+from app.models.subscriber import Subscriber, UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.schemas.auth import (
@@ -774,8 +774,13 @@ def test_user_credentials_duplicate_username_is_409_not_500(db_session, person):
     )
     credential_commands.create(db_session, payload)
 
+    other = Subscriber(
+        first_name="Other", last_name="Person", email="other-duplicate@example.test"
+    )
+    db_session.add(other)
+    db_session.flush()
     duplicate = UserCredentialCreate(
-        person_id=person.id,
+        person_id=other.id,
         username="taken@example.com",
         password="Other-Test-Password-42!",
     )
