@@ -52,6 +52,9 @@ def _run_deploy(
     heads_before: str = "670_a",
     heads_after: str | None = None,
     heads_read_fails: bool = False,
+    database_url: str = (
+        "postgresql://dotmac:not-a-real-pw@db.example.test:5432/dotmac_sub"
+    ),
     migration_interrupt: bool = False,
     first_deploy: bool = False,
     manifest_pins_ready: bool = True,
@@ -96,7 +99,7 @@ def _run_deploy(
             else "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
             "GIT_SHA=old0000000000000000000000000000000000000\n"
         )
-        + "DATABASE_URL=postgresql://dotmac:not-a-real-pw@db.example.test:5432/dotmac_sub\n"
+        + f"DATABASE_URL={database_url}\n"
         f"APP_ENV={app_env}\n"
         f"SERVER_NAME={server_name}\n"
     )
@@ -331,6 +334,8 @@ exit 0
         **production_evidence,
         **(extra_env or {}),
     }
+    if "DATABASE_URL" not in (extra_env or {}):
+        env.pop("DATABASE_URL", None)
     result = subprocess.run(
         ["bash", str(repo_root / "scripts/deploy.sh"), image_selector],
         cwd=repo_root,
@@ -742,7 +747,9 @@ def test_failed_migration_restores_pin_without_rollback_or_recreate(
     tmp_path: Path, kwargs: dict[str, object]
 ) -> None:
     result, env_file, docker_log = _run_deploy(
-        tmp_path, extra_env=_HEADS_ENV, **kwargs  # type: ignore[arg-type]
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        **kwargs,  # type: ignore[arg-type]
     )
 
     assert result.returncode != 0
@@ -819,9 +826,7 @@ def test_first_deploy_failed_migration_says_there_is_no_previous_pin(
     )
 
     assert result.returncode != 0
-    assert "no previous pin and no running dotmac_sub_app container" in (
-        result.stderr
-    )
+    assert "no previous pin and no running dotmac_sub_app container" in (result.stderr)
     assert "matches the running" not in result.stderr
     assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" not in (
         env_file.read_text()
@@ -858,6 +863,63 @@ def test_interrupt_during_migration_with_advanced_heads_keeps_pin(
     assert "sha-old0000" not in env_file.read_text()
     assert "Do not recreate containers; repair forward" in result.stderr
     _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_exported_database_url_differing_from_env_refuses_before_any_change(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DATABASE_URL": "postgresql://u:s3cr3t@h.example.test/other"},
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY REFUSED: DATABASE_URL is exported" in result.stderr
+    assert "s3cr3t" not in result.stdout + result.stderr
+    assert "sha-old0000" in env_file.read_text()
+    assert "alembic upgrade heads" not in docker_log.read_text()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:s3cr3t@db.example.test",
+        "postgresql://u:s3cr3t@db.example.test?password=ab/cd",
+        "postgresql://u:p@s3cr3t@db.example.test",
+    ],
+)
+def test_unparseable_database_url_does_not_leak_in_full_script(
+    tmp_path: Path, url: str
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "dotmac_sub"},
+        migration_hard_failure=True,
+        database_url=url,
+    )
+
+    assert result.returncode != 0
+    assert "s3cr3t" not in result.stdout + result.stderr
+    assert "database name unparseable" in result.stderr
+    assert "sha-old0000" not in env_file.read_text()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_migration_container_is_named_per_attempt_and_kept_removable(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path, extra_env=_HEADS_ENV, migration_lock_failures=2
+    )
+
+    assert result.returncode == 0, result.stderr
+    runs = [
+        c for c in docker_log.read_text().splitlines() if "alembic upgrade heads" in c
+    ]
+    names = [c.split("--name ")[1].split()[0] for c in runs]
+    assert len(names) == 3 and len(set(names)) == 3
+    assert all(n.startswith("dotmac_sub_migrate_") for n in names)
+    assert all(" --rm " in c for c in runs)
 
 
 def test_deploy_verifies_every_worker_and_beat_before_success(tmp_path: Path) -> None:

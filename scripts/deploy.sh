@@ -149,6 +149,15 @@ CELERY_BEAT_SERVICE="celery-beat"
 DB_CONTAINER="${DB_CONTAINER:-$(env_value DB_CONTAINER)}"
 DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
 
+# Compose prefers a DATABASE_URL exported in the shell over .env, so alembic
+# (and the app) could target a different database than the one every .env-based
+# check and backup in this script reads. Refuse before anything is changed.
+# Neither value is printed.
+if [[ -n "${DATABASE_URL+x}" && "${DATABASE_URL}" != "$(env_value DATABASE_URL)" ]]; then
+  echo "DEPLOY REFUSED: DATABASE_URL is exported in the environment and differs from .env; compose would use it instead of .env. Unset it and retry." >&2
+  exit 1
+fi
+
 # --- One deploy at a time -------------------------------------------------
 #
 # Nothing used to stop two deploys running at once. On 2026-07-12 two did: each
@@ -438,12 +447,15 @@ stop_candidate_gracefully() {
   CANDIDATE_STARTED=0
 }
 
+MIGRATION_RUN_PREFIX=""
 run_migrations() {
   local attempt=1
+  MIGRATION_RUN_PREFIX="dotmac_sub_migrate_${DEPLOY_RUN_ID:-$$}_"
   local output
   local rc
   while ((attempt <= MIGRATION_MAX_ATTEMPTS)); do
-    if output="$("${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads 2>&1)"; then
+    if output="$("${COMPOSE[@]}" run --rm --no-deps \
+      --name "${MIGRATION_RUN_PREFIX}${attempt}" app alembic upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0
     else
@@ -1484,19 +1496,38 @@ APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
 # never assumed: the alembic_version heads are read before and after. The pin is
 # put back ONLY when both reads succeed and are equal; otherwise the schema may
 # have advanced, the pin is left untouched and the operator must repair forward.
+# Print the database name from a postgres URL, or fail. Never echoes anything
+# that is not a plain identifier, so a malformed URL cannot leak credentials.
+database_name_from_url() {
+  local rest="$1" name
+  [[ "${rest}" == *://* ]] || return 1
+  rest="${rest#*://}"
+  rest="${rest##*@}"
+  rest="${rest%%\?*}"
+  [[ "${rest}" == */* ]] || return 1
+  name="${rest#*/}"
+  [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  printf '%s\n' "${name}"
+}
 read_alembic_heads() {
   local out url url_db target_db
   # Alembic connects with the DATABASE_URL the app container receives from
   # .env (settings.database_url). The heads query goes through the DB
   # container with DB_BACKUP_DB_NAME, so prove both name the same database;
   # otherwise two equal reads would prove nothing. Mismatch = unreadable.
-  # Only database names are printed, never the URL.
+  # Only validated database names are printed, never the URL.
   url="$(env_value DATABASE_URL)"
-  url_db="${url##*/}"
-  url_db="${url_db%%\?*}"
+  if [[ -n "${DATABASE_URL+x}" && "${DATABASE_URL}" != "${url}" ]]; then
+    echo "ALEMBIC HEADS UNREADABLE: DATABASE_URL in the environment differs from .env." >&2
+    return 1
+  fi
+  if ! url_db="$(database_name_from_url "${url}")"; then
+    echo "ALEMBIC HEADS UNREADABLE: database name unparseable from DATABASE_URL." >&2
+    return 1
+  fi
   target_db="${DB_BACKUP_DB_NAME:-$(env_value DB_BACKUP_DB_NAME)}"
-  if [[ -z "${url}" || "${url_db}" == "${url}" || -z "${url_db}" ]]; then
-    echo "ALEMBIC HEADS UNREADABLE: cannot resolve the database name alembic uses from DATABASE_URL." >&2
+  if [[ -n "${target_db}" && ! "${target_db}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "ALEMBIC HEADS UNREADABLE: DB_BACKUP_DB_NAME is not a plain database name." >&2
     return 1
   fi
   if [[ -n "${target_db}" && "${target_db}" != "${url_db}" ]]; then
@@ -1510,9 +1541,29 @@ read_alembic_heads() {
 # Shared by a failed migration and an INT/TERM/HUP during it. The pin is put
 # back ONLY when both head reads succeeded and match; never via restore_prev.
 # Always returns 1 (the deploy has failed).
+# Confirm the one-off migration container is gone first (it can outlive a dead
+# compose client). Still running or unknown = unreadable; it is never killed.
+migration_container_gone() {
+  local tries=0 max="${MIGRATION_PS_POLL_ATTEMPTS:-12}" ids
+  [[ -n "${MIGRATION_RUN_PREFIX}" ]] || return 0
+  while :; do
+    if ! ids="$(docker ps -q --filter "name=${MIGRATION_RUN_PREFIX}" 2>/dev/null)"; then
+      return 1
+    fi
+    [[ -z "${ids}" ]] && return 0
+    tries=$((tries + 1))
+    ((tries >= max)) && return 1
+    sleep "${MIGRATION_PS_POLL_SECONDS:-5}"
+  done
+}
 settle_failed_migration() {
   local heads_after running_image
-  heads_after="$(read_alembic_heads)" || heads_after=""
+  if migration_container_gone; then
+    heads_after="$(read_alembic_heads)" || heads_after=""
+  else
+    echo "Migration container still running or its state is unknown; not trusting a heads read. It was not stopped." >&2
+    heads_after=""
+  fi
   if [[ -z "${MIGRATION_HEADS_BEFORE}" || -z "${heads_after}" || "${MIGRATION_HEADS_BEFORE}" != "${heads_after}" ]]; then
     echo "Alembic heads before: ${MIGRATION_HEADS_BEFORE:-<unreadable>}" >&2
     echo "Alembic heads after:  ${heads_after:-<unreadable>}" >&2
@@ -1569,8 +1620,11 @@ pin_and_migrate() {
     return 0
   fi
   echo "DEPLOY MIGRATION FAILED before any new container served traffic." >&2
+  # Settle BEFORE restoring the original trap: an INT during the settle must
+  # still take the measured-heads path, not restore_prev.
+  settle_failed_migration || true
   install_deploy_interrupt_trap
-  settle_failed_migration
+  return 1
 }
 # --- End pre-swap pin and migration -------------------------------------------
 if ! pin_and_migrate; then

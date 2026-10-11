@@ -42,7 +42,19 @@ install_deploy_interrupt_trap() { trap 'echo ORIGINAL_TRAP >>"$CALLS"' INT TERM 
 restore_prev() { echo restore_prev >>"$CALLS"; return 1; }
 previous_image_rollback_allowed() { echo guard >>"$CALLS"; return 1; }
 APP_CONTAINER=dotmac_sub_app
-docker() { echo "docker $*" >>"$CALLS"; printf '%s\\n' "${RUNNING_IMAGE-$OLD_IMAGE}"; }
+docker() {
+  echo "docker $*" >>"$CALLS"
+  if [[ "$1" == ps ]]; then
+    case "${PS_MODE-gone}" in
+      running) echo abc123 ;;
+      error) return 1 ;;
+    esac
+    return 0
+  fi
+  printf '%s\\n' "${RUNNING_IMAGE-$OLD_IMAGE}"
+}
+MIGRATION_PS_POLL_ATTEMPTS=2
+MIGRATION_PS_POLL_SECONDS=0
 # Heads read #1 is before the migration, read #2 after it.
 database_heads() {
   local n; n="$(cat "$PWD/head-reads" 2>/dev/null || echo 0)"
@@ -56,6 +68,7 @@ database_heads() {
   fi
 }
 run_migrations() {
+  MIGRATION_RUN_PREFIX=dotmac_sub_migrate_test_
   echo "migrate image=$(env_value APP_IMAGE)" >>"$CALLS"
   if [[ -n "${INTERRUPT-}" ]]; then kill -INT $$; sleep 1; fi
   return "$MIGRATE_RC"
@@ -92,10 +105,17 @@ def _script() -> str:
             + "pinned_image() { env_value APP_IMAGE; }\n"
             + "pinned_git_sha() { env_value GIT_SHA; }\n",
         )
-        .replace("@@REPIN@@", _slice(src, "repin_prev() {", "previous_image_rollback_allowed() {"))
+        .replace(
+            "@@REPIN@@",
+            _slice(src, "repin_prev() {", "previous_image_rollback_allowed() {"),
+        )
         .replace(
             "@@PIN_AND_MIGRATE@@",
-            _slice(src, "read_alembic_heads() {", "# --- End pre-swap pin and migration"),
+            _slice(
+                src,
+                "database_name_from_url() {",
+                "# --- End pre-swap pin and migration",
+            ),
         )
     )
 
@@ -164,12 +184,16 @@ def test_trap_is_restored_after_the_migration_window(tmp_path: Path) -> None:
 
 def test_first_deploy_message_does_not_claim_a_running_image(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text(f"DATABASE_URL={DB_URL}\n", encoding="utf-8")
-    script = _script().replace(
-        'PREV_IMAGE="$(pinned_image)"; PREV_IMAGE_PRESENT=1',
-        'PREV_IMAGE=""; PREV_IMAGE_PRESENT=0',
-    ).replace(
-        'PREV_GIT_SHA="$(pinned_git_sha)"; PREV_GIT_SHA_PRESENT=1',
-        'PREV_GIT_SHA=""; PREV_GIT_SHA_PRESENT=0',
+    script = (
+        _script()
+        .replace(
+            'PREV_IMAGE="$(pinned_image)"; PREV_IMAGE_PRESENT=1',
+            'PREV_IMAGE=""; PREV_IMAGE_PRESENT=0',
+        )
+        .replace(
+            'PREV_GIT_SHA="$(pinned_git_sha)"; PREV_GIT_SHA_PRESENT=1',
+            'PREV_GIT_SHA=""; PREV_GIT_SHA_PRESENT=0',
+        )
     )
     result = subprocess.run(
         ["bash", "-c", script],
@@ -215,9 +239,7 @@ def test_matching_backup_db_name_is_accepted(tmp_path: Path) -> None:
 
 
 def test_interrupt_with_unchanged_heads_repins_and_exits_130(tmp_path: Path) -> None:
-    out, err, calls, env = _run(
-        tmp_path, migrate_rc=0, extra_env={"INTERRUPT": "1"}
-    )
+    out, err, calls, env = _run(tmp_path, migrate_rc=0, extra_env={"INTERRUPT": "1"})
     assert "RC=" not in out  # the trap exits the shell
     assert env["APP_IMAGE"] == OLD_IMAGE and env["GIT_SHA"] == OLD_SHA
     assert "heads measured unchanged" in err
@@ -373,6 +395,101 @@ def test_deploy_exits_nonzero_and_does_not_enter_the_restore_trap() -> None:
     src = DEPLOY_SH.read_text(encoding="utf-8")
     tail = src[src.index("# --- End pre-swap pin and migration") :]
     assert tail.index("if ! pin_and_migrate; then") < tail.index("exit 1")
-    block = tail[: tail.index("log \"Verifying database schema contracts\"")]
+    block = tail[: tail.index('log "Verifying database schema contracts"')]
     assert "trap - ERR" in block and "exit 1" in block
     assert "restore_prev" not in block
+
+
+@pytest.mark.parametrize("ps_mode", ["running", "error"])
+def test_migration_container_still_running_or_unknown_keeps_the_pin(
+    tmp_path: Path, ps_mode: str
+) -> None:
+    for kind in ("fail", "interrupt"):
+        extra = {"PS_MODE": ps_mode}
+        if kind == "interrupt":
+            extra["INTERRUPT"] = "1"
+        out, err, calls, env = _run(
+            tmp_path, migrate_rc=0 if kind == "interrupt" else 1, extra_env=extra
+        )
+        assert env["APP_IMAGE"] == NEW_IMAGE, kind
+        assert "still running or its state is unknown" in err
+        assert "Do not recreate containers; repair forward" in err
+        assert not any(
+            c.startswith("docker kill") or c.startswith("docker stop") for c in calls
+        )
+        assert any(
+            c.startswith("docker ps -q --filter name=dotmac_sub_migrate_test_")
+            for c in calls
+        )
+
+
+def test_migration_container_gone_allows_the_measured_repin(tmp_path: Path) -> None:
+    out, err, _, env = _run(tmp_path, migrate_rc=1, extra_env={"PS_MODE": "gone"})
+    assert "RC=1" in out
+    assert env["APP_IMAGE"] == OLD_IMAGE
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:s3cr3t@db.example.test",  # no path
+        "postgresql://u:s3cr3t@db.example.test?password=ab/cd",  # '/' in query
+        "postgresql://u:p@s3cr3t@db.example.test",  # '@' in password, no path
+        "postgresql://u:p@s3cr3t@db.example.test:5432/dot mac",  # invalid name
+        "u:s3cr3t@db.example.test/x",  # no scheme
+    ],
+)
+def test_unparseable_database_url_never_leaks_the_password(
+    tmp_path: Path, url: str
+) -> None:
+    (tmp_path / ".env").write_text(
+        f"APP_IMAGE={OLD_IMAGE}\nGIT_SHA={OLD_SHA}\nDATABASE_URL={url}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", "-c", _script()],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PWD": str(tmp_path),
+            "MIGRATE_RC": "1",
+            "NEW_IMAGE": NEW_IMAGE,
+            "NEW_SHA": NEW_SHA,
+            "BACKUP_MODE": "full",
+            "OLD_IMAGE": OLD_IMAGE,
+            "HEADS_BEFORE": "670_a",
+            "HEADS_AFTER": "670_a",
+            "DB_BACKUP_DB_NAME": "dotmac_sub",
+        },
+    )
+    combined = result.stdout + result.stderr
+    assert "s3cr3t" not in combined
+    assert "database name unparseable" in result.stderr
+    assert "RC=1" in result.stdout
+    assert f"APP_IMAGE={NEW_IMAGE}" in (tmp_path / ".env").read_text()
+
+
+def test_password_with_at_sign_before_a_valid_path_still_parses(
+    tmp_path: Path,
+) -> None:
+    out, _, _, env = _run(
+        tmp_path,
+        migrate_rc=1,
+        extra_env={"DB_BACKUP_DB_NAME": "dotmac_sub"},
+    )
+    assert env["APP_IMAGE"] == OLD_IMAGE  # control: the default URL parses
+
+
+def test_exported_database_url_that_differs_from_env_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    out, err, _, env = _run(
+        tmp_path,
+        migrate_rc=1,
+        extra_env={"DATABASE_URL": "postgresql://x:s3cr3t@h.example.test/other"},
+    )
+    assert env["APP_IMAGE"] == NEW_IMAGE
+    assert "differs from .env" in err
+    assert "s3cr3t" not in out + err
