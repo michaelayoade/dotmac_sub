@@ -35,7 +35,7 @@ from app.schemas.auth import (
 from app.schemas.auth_flow import TokenResponse
 from app.services import auth as auth_service
 from app.services import auth_flow as auth_flow_service
-from app.services import settings_spec, staff_party_authentication
+from app.services import settings_spec
 from app.services import web_auth as web_auth_service
 from app.services import web_system_config as web_system_config_service
 from app.services.auth_flow import hash_password
@@ -679,12 +679,25 @@ def test_web_mfa_enroll_confirm_creates_admin_session(db_session, monkeypatch):
     setup = auth_flow_service.auth_flow.admin_mfa_setup(
         db_session, str(system_user.id), "Authenticator app"
     )
-    enrollment_token = auth_flow_service._issue_mfa_enrollment_token(  # noqa: SLF001
-        db_session,
-        str(system_user.id),
-        "system_user",
-        staff_binding=staff_party_authentication.binding_for_principal(system_user),
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="admin_mfa_required",
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            is_active=True,
+        )
     )
+    db_session.commit()
+    # A genuine v2 enrollment challenge, bound to the credential's version.
+    login_result = auth_flow_service.auth_flow.login(
+        db_session,
+        system_user.email,
+        "secret",
+        _make_request(),
+        None,
+    )
+    enrollment_token = login_result["mfa_enrollment_token"]
     request = _make_request()
     request.scope["headers"].append(
         (

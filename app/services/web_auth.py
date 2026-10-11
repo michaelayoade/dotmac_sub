@@ -442,12 +442,8 @@ def mfa_enroll_confirm(
             if getattr(method, "id", None)
             else []
         )
-        result = auth_flow_service.auth_flow._issue_tokens(  # noqa: SLF001
-            db,
-            "system_user",
-            principal_id,
-            request,
-            staff_binding=binding,
+        result = auth_flow_service.auth_flow.establish_enrolled_session(
+            db, enrollment_token, request
         )
         response: Response
         if recovery_codes:

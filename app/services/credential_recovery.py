@@ -828,6 +828,9 @@ def complete_password_reset(
 
         now = _now()
         credential.password_hash = hash_password(command.new_password)
+        # The secret changed: void every verification and MFA challenge bound
+        # to the previous version (held under the credential FOR UPDATE above).
+        credential.credential_version = int(credential.credential_version or 1) + 1
         updated_marker = now
         if issued_at_seconds is not None and int(now.timestamp()) <= issued_at_seconds:
             updated_marker = now + timedelta(seconds=1)
