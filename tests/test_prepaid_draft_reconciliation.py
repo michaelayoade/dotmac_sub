@@ -82,9 +82,12 @@ from app.services.prepaid_draft_reconciliation import (
     ReconcilePrepaidDraftCommand,
     ReconstructReviewedPrepaidInvoiceSequenceCommand,
     RepairHistoricalPaidPrepaidInvoiceCommand,
+    ReplaceReviewedPaidPrepaidPeriodCommand,
     ReviewedExistingDraftSettlementApproval,
     ReviewedExistingDraftSettlementDisposition,
     ReviewedExistingDraftSettlementQuery,
+    ReviewedPaidPrepaidPeriodReplacementDisposition,
+    ReviewedPaidPrepaidPeriodReplacementQuery,
     ReviewedPrepaidExistingAllocationEvidence,
     ReviewedPrepaidInvoiceSequenceAllocationSelection,
     ReviewedPrepaidInvoiceSequenceApproval,
@@ -104,11 +107,13 @@ from app.services.prepaid_draft_reconciliation import (
     preview_prepaid_draft_cohort,
     preview_prepaid_draft_reconciliation,
     preview_reviewed_existing_prepaid_draft_settlement,
+    preview_reviewed_paid_prepaid_period_replacement,
     preview_reviewed_prepaid_invoice_sequence_reconstruction,
     reconcile_prepaid_draft_invoice,
     reconstruct_reviewed_prepaid_invoice_sequence,
     repair_exact_paid_prepaid_invoice_after_settlement_for_owner,
     repair_historical_paid_prepaid_invoice,
+    replace_reviewed_paid_prepaid_period,
     settle_reviewed_existing_prepaid_draft,
     stage_prepaid_draft_after_funding_change,
 )
@@ -2454,6 +2459,235 @@ def test_reviewed_existing_draft_atomically_supersedes_wrong_future_paid_period(
     assert successor_entitlement.ends_at == wrong_start.replace(tzinfo=None)
     assert subscription.next_billing_at == wrong_start.replace(tzinfo=None)
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("0.00")
+
+
+def test_reviewed_paid_period_replacement_reuses_payment_and_preserves_credit(
+    db_session,
+    subscriber,
+    subscription,
+):
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("100.00"))
+    reviewed_start = datetime(2026, 9, 22, tzinfo=UTC)
+    reviewed_end = datetime(2026, 10, 22, tzinfo=UTC)
+    wrong_start = datetime(2026, 10, 10, 23, tzinfo=UTC)
+    wrong_end = datetime(2026, 11, 10, 23, tzinfo=UTC)
+    predecessor = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        starts_at=datetime(2026, 8, 22, tzinfo=UTC),
+        ends_at=reviewed_start,
+        amount_funded=Decimal("100.00"),
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+    )
+    db_session.add(predecessor)
+
+    wrong_invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    wrong_invoice.status = InvoiceStatus.issued
+    wrong_invoice.billing_period_start = wrong_start
+    wrong_invoice.billing_period_end = wrong_end
+    wrong_invoice.issued_at = wrong_start
+    wrong_invoice.due_at = wrong_start
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            invoice_id=wrong_invoice.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.invoice,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            memo="Wrong lapsed-renewal period",
+            is_active=True,
+            affects_customer_position=False,
+            effective_date=wrong_start,
+            created_at=wrong_start,
+        )
+    )
+    payment = _payment(
+        db_session,
+        subscriber,
+        amount=Decimal("100.00"),
+        paid_at=datetime(2026, 10, 10, 20, tzinfo=UTC),
+    )
+    db_session.add(
+        PaymentProof(
+            account_id=subscriber.id,
+            amount=Decimal("100.00"),
+            verified_amount=Decimal("100.00"),
+            currency="NGN",
+            reference="TRF-REVIEWED-PERIOD",
+            paid_at=payment.paid_at,
+            file_path="pytest/reviewed-period-proof.pdf",
+            status=PaymentProofStatus.verified,
+            verified_by="Finance reviewer",
+            payment_id=payment.id,
+        )
+    )
+    approver = SystemUser(
+        first_name="Finance",
+        last_name="Approver",
+        email=f"finance-period-replacement-{uuid4().hex}@example.com",
+    )
+    db_session.add(approver)
+    db_session.commit()
+
+    allocation_preview = PaymentAllocations.preview(
+        db_session,
+        PaymentAllocationPreviewRequest(
+            payment_id=payment.id,
+            invoice_id=wrong_invoice.id,
+            amount=Decimal("100.00"),
+        ),
+    )
+    old_allocation = PaymentAllocations.stage_confirm(
+        db_session,
+        PaymentAllocationConfirm(
+            payment_id=payment.id,
+            invoice_id=wrong_invoice.id,
+            amount=Decimal("100.00"),
+            preview_fingerprint=allocation_preview.fingerprint,
+            idempotency_key=f"pytest-reviewed-period-{wrong_invoice.id}",
+        ),
+    ).allocation
+    subscription.next_billing_at = wrong_end
+    db_session.commit()
+    old_entitlement = db_session.scalar(
+        select(ServiceEntitlement).where(
+            ServiceEntitlement.source_invoice_id == wrong_invoice.id,
+            ServiceEntitlement.status == ServiceEntitlementStatus.active,
+        )
+    )
+    assert old_entitlement is not None
+
+    query = ReviewedPaidPrepaidPeriodReplacementQuery(
+        subscription_id=subscription.id,
+        superseded_invoice_id=wrong_invoice.id,
+        payment_id=payment.id,
+        service_period_start=reviewed_start,
+        service_period_end=reviewed_end,
+        expected_total=Decimal("100.00"),
+        expected_remaining_credit=Decimal("0.00"),
+        payment_reference="TRF-REVIEWED-PERIOD",
+        approval=ReviewedExistingDraftSettlementApproval(
+            approver_system_user_id=approver.id,
+            approver_name="Finance Approver",
+            approved_at=datetime(2026, 10, 11, 8, tzinfo=UTC),
+            ticket_reference="30347",
+            evidence_sha256="d" * 64,
+        ),
+    )
+    preview = preview_reviewed_paid_prepaid_period_replacement(db_session, query)
+
+    assert preview.disposition is (
+        ReviewedPaidPrepaidPeriodReplacementDisposition.exact_paid_period_replacement
+    )
+    assert preview.superseded_allocation_id == old_allocation.id
+    assert preview.superseded_entitlement_id == old_entitlement.id
+    assert preview.payment_available_after_release == Decimal("100.00")
+    db_session.commit()
+
+    command = ReplaceReviewedPaidPrepaidPeriodCommand(
+        context=CommandContext.system(
+            actor="pytest:billing-operator",
+            scope=REPAIR_SCOPE,
+            reason="Finance reviewed lapsed renewal period",
+            idempotency_key=f"pytest-paid-period-replacement-{wrong_invoice.id}",
+        ),
+        query=query,
+        preview_fingerprint=preview.fingerprint,
+        permission_granted=True,
+        actor_system_user_id=approver.id,
+    )
+    result = replace_reviewed_paid_prepaid_period(db_session, command)
+    replay = replace_reviewed_paid_prepaid_period(db_session, command)
+
+    db_session.refresh(wrong_invoice)
+    db_session.refresh(old_allocation)
+    db_session.refresh(old_entitlement)
+    db_session.refresh(subscription)
+    replacement = db_session.get(Invoice, result.replacement_invoice_id)
+    replacement_allocation = db_session.get(
+        PaymentAllocation, result.replacement_allocation_id
+    )
+    replacement_entitlement = db_session.get(
+        ServiceEntitlement, result.replacement_entitlement_id
+    )
+    assert replay.replayed is True
+    assert replay.replacement_invoice_id == result.replacement_invoice_id
+    assert wrong_invoice.status is InvoiceStatus.void
+    assert old_allocation.is_active is False
+    assert old_entitlement.status is ServiceEntitlementStatus.reversed
+    assert replacement is not None
+    assert replacement.status is InvoiceStatus.paid
+    assert replacement.billing_period_start == reviewed_start.replace(tzinfo=None)
+    assert replacement.billing_period_end == reviewed_end.replace(tzinfo=None)
+    assert replacement_allocation is not None
+    assert replacement_allocation.payment_id == payment.id
+    assert replacement_allocation.amount == Decimal("100.00")
+    assert replacement_entitlement is not None
+    assert replacement_entitlement.starts_at == reviewed_start.replace(tzinfo=None)
+    assert replacement_entitlement.ends_at == reviewed_end.replace(tzinfo=None)
+    assert subscription.next_billing_at == reviewed_end.replace(tzinfo=None)
+    assert result.remaining_credit == Decimal("0.00")
+    assert result.remaining_credit == preview.account_credit_before
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("0.00")
+
+
+def test_reviewed_paid_period_replacement_rejects_incomplete_evidence(
+    db_session,
+    subscriber,
+    subscription,
+):
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("100.00"))
+    wrong_invoice = _draft(
+        db_session,
+        subscriber,
+        subscription,
+        total=Decimal("100.00"),
+    )
+    wrong_invoice.status = InvoiceStatus.paid
+    wrong_invoice.balance_due = Decimal("0.00")
+    wrong_invoice.billing_period_start = datetime(2026, 10, 10, 23, tzinfo=UTC)
+    wrong_invoice.billing_period_end = datetime(2026, 11, 10, 23, tzinfo=UTC)
+    subscription.next_billing_at = wrong_invoice.billing_period_end
+    payment = _payment(db_session, subscriber, amount=Decimal("100.00"))
+    approver = SystemUser(
+        first_name="Finance",
+        last_name="Approver",
+        email=f"finance-period-gap-{uuid4().hex}@example.com",
+    )
+    db_session.add(approver)
+    db_session.commit()
+
+    query = ReviewedPaidPrepaidPeriodReplacementQuery(
+        subscription_id=subscription.id,
+        superseded_invoice_id=wrong_invoice.id,
+        payment_id=payment.id,
+        service_period_start=datetime(2026, 9, 22, tzinfo=UTC),
+        service_period_end=datetime(2026, 10, 22, tzinfo=UTC),
+        expected_total=Decimal("100.00"),
+        expected_remaining_credit=Decimal("0.00"),
+        payment_reference=f"payment:{payment.id}",
+        approval=ReviewedExistingDraftSettlementApproval(
+            approver_system_user_id=approver.id,
+            approver_name="Finance Approver",
+            approved_at=datetime(2026, 10, 11, 8, tzinfo=UTC),
+            ticket_reference="30347",
+            evidence_sha256="e" * 64,
+        ),
+    )
+
+    preview = preview_reviewed_paid_prepaid_period_replacement(db_session, query)
+
+    assert preview.disposition is (
+        ReviewedPaidPrepaidPeriodReplacementDisposition.manual_review
+    )
+    assert preview.actionable is False
 
 
 class SequenceEvidenceChange(StrEnum):

@@ -62,6 +62,20 @@ def test_prepaid_draft_reconciliation_has_one_contracted_owner():
     assert reviewed_draft.role is OwnerRole.RECONCILER
     assert reviewed_draft.canonical_writer == service.name
     assert "canonical funded service entitlement" in reviewed_draft.input_names
+    paid_period_replacement = next(
+        item
+        for item in service.contract.concerns
+        if item.name == "reviewed paid prepaid invoice-period replacement"
+    )
+    assert paid_period_replacement.role is OwnerRole.RECONCILER
+    assert paid_period_replacement.canonical_writer == service.name
+    assert (
+        "reviewed paid-period replacement command"
+        in paid_period_replacement.input_names
+    )
+    assert "financial access restoration protocol" in (
+        paid_period_replacement.input_names
+    )
     sequence = next(
         item
         for item in service.contract.concerns
@@ -238,6 +252,21 @@ def test_sequence_reconstruction_cli_is_dry_run_first_and_permission_gated():
     assert "owner_command_session()" in source
     assert "preview_reviewed_prepaid_invoice_sequence_reconstruction(" in source
     assert "reconstruct_reviewed_prepaid_invoice_sequence(" in source
+    assert "system_user_role_names(" in source
+    assert "has_permission(auth, db, REPAIR_SCOPE)" in source
+
+
+def test_paid_period_replacement_cli_is_dry_run_first_and_permission_gated():
+    source = (
+        ROOT / "scripts/billing/replace_reviewed_paid_prepaid_period.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'parser.add_argument("--apply", action="store_true")' in source
+    assert "if not args.apply:" in source
+    assert "read_session()" in source
+    assert "owner_command_session()" in source
+    assert "preview_reviewed_paid_prepaid_period_replacement(" in source
+    assert "replace_reviewed_paid_prepaid_period(" in source
     assert "system_user_role_names(" in source
     assert "has_permission(auth, db, REPAIR_SCOPE)" in source
 
