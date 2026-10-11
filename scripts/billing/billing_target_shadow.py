@@ -747,6 +747,7 @@ def _cmd_preview_migrated_account_opening(db, args) -> int:
 
 def _cmd_preview_prepaid_service_renewal(db, args) -> int:
     from app.services.prepaid_service_renewals import (
+        PrepaidRenewalEligibilityContext,
         preview_prepaid_service_renewal,
     )
 
@@ -757,6 +758,7 @@ def _cmd_preview_prepaid_service_renewal(db, args) -> int:
         ends_at=_instant(args.ends_at),
         amount=Decimal(args.amount),
         currency=args.currency,
+        eligibility_context=PrepaidRenewalEligibilityContext(args.eligibility_context),
     )
     _emit(
         {
@@ -781,6 +783,7 @@ def _cmd_preview_prepaid_service_renewal(db, args) -> int:
 def _cmd_execute_reviewed_prepaid_service_renewal(db, args) -> int:
     from app.services.prepaid_service_renewals import (
         ExecuteReviewedPrepaidServiceRenewalCommand,
+        PrepaidRenewalEligibilityContext,
         execute_reviewed_prepaid_service_renewal,
     )
 
@@ -799,6 +802,9 @@ def _cmd_execute_reviewed_prepaid_service_renewal(db, args) -> int:
             currency=args.currency,
             expected_preview_fingerprint=args.preview_fingerprint,
             evidence_ref=args.evidence_ref,
+            eligibility_context=PrepaidRenewalEligibilityContext(
+                args.eligibility_context
+            ),
         ),
     )
     renewal = result.renewal
@@ -1522,6 +1528,11 @@ def main() -> int:
     p.add_argument("--ends-at", required=True)
     p.add_argument("--amount", required=True)
     p.add_argument("--currency", default="NGN")
+    p.add_argument(
+        "--eligibility-context",
+        choices=("recurring", "funding_recovery"),
+        default="recurring",
+    )
     p.set_defaults(func=_cmd_preview_prepaid_service_renewal)
 
     p = sub.add_parser(
@@ -1533,6 +1544,11 @@ def main() -> int:
     p.add_argument("--ends-at", required=True)
     p.add_argument("--amount", required=True)
     p.add_argument("--currency", default="NGN")
+    p.add_argument(
+        "--eligibility-context",
+        choices=("recurring", "funding_recovery"),
+        default="recurring",
+    )
     p.add_argument("--preview-fingerprint", required=True)
     p.add_argument("--evidence-ref", required=True)
     p.add_argument("--actor", required=True)

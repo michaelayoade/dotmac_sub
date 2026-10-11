@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.celery_app import celery_app
 from app.services.catalog import subscriptions as subscriptions_service
+from app.services.catalog.subscriptions import SubscriptionExpiryResult
 
 # Outage/ticket suppression predicates live in the shared customer-service-state
 # service (single source of truth for outage-aware comms); re-exported here so
@@ -53,8 +54,8 @@ class ExpiryReminderCandidate:
     retry_jitter=True,
     retry_kwargs={"max_retries": 3},
 )
-def expire_subscriptions() -> dict:
-    """Expire subscriptions that have passed their end_at date."""
+def expire_subscriptions() -> SubscriptionExpiryResult:
+    """Expire fixed-term subscriptions that have passed their end_at date."""
     logger.info("Starting expire_subscriptions")
     with db_session_adapter.session() as session:
         result = subscriptions_service.expire_subscriptions(session)
