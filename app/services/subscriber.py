@@ -464,6 +464,26 @@ def _default_reseller_id(db: Session):
     return any_reseller[0] if any_reseller else None
 
 
+def _apply_validated_connection_type(
+    db: Session,
+    data: dict,
+    *,
+    current_code: str | None = None,
+) -> dict:
+    """Validate an explicit customer classification against its managed owner."""
+
+    if "connection_type" not in data:
+        return data
+    from app.services.customer_connection_types import validate_assignment
+
+    data["connection_type"] = validate_assignment(
+        db,
+        connection_type=data.get("connection_type"),
+        current_code=current_code,
+    )
+    return data
+
+
 class Subscribers(ListResponseMixin):
     @staticmethod
     def prepare_new_account(db: Session, payload: SubscriberCreate) -> Subscriber:
@@ -484,6 +504,7 @@ class Subscribers(ListResponseMixin):
             )
         data = _normalize_subscriber_identity_fields(payload.model_dump())
         data = _apply_validated_lga(data, transport_errors=False)
+        data = _apply_validated_connection_type(db, data)
         requested_status = data.pop("status", SubscriberStatus.active)
         if not bool(data.get("billing_enabled", True)):
             # Approval is an admission fact. An unapproved account may be
@@ -587,6 +608,9 @@ class Subscribers(ListResponseMixin):
             )
             data = _apply_validated_lga(
                 data, current_region=subscriber.region, current_lga=subscriber.lga
+            )
+            data = _apply_validated_connection_type(
+                db, data, current_code=subscriber.connection_type
             )
             requested_status = data.pop("status", None)
             requested_is_active = data.pop("is_active", None)
@@ -1125,6 +1149,9 @@ class Subscribers(ListResponseMixin):
         )
         data = _apply_validated_lga(
             data, current_region=subscriber.region, current_lga=subscriber.lga
+        )
+        data = _apply_validated_connection_type(
+            db, data, current_code=subscriber.connection_type
         )
         updated_fields = list(data.keys())
         # The column's key space is closed. An undeclared key is REFUSED here

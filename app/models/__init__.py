@@ -279,6 +279,9 @@ from app.models.custom_fields import (  # noqa: F401
     CustomFieldType,
     CustomFieldValue,
 )
+from app.models.customer_connection_type import (  # noqa: F401
+    CustomerConnectionTypeDefinition,
+)
 from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoff,
     CustomerExperienceHandoffEvent,

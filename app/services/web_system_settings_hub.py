@@ -32,6 +32,12 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "permission": "custom_fields:hub:read",
             },
             {
+                "name": "Setup Customer Connection Types",
+                "url": "/admin/system/customer-connection-types",
+                "description": "Manage customer last-mile classifications",
+                "permission": "system:settings:read",
+            },
+            {
                 "name": "Preferences & Security",
                 "url": "/admin/system/config/preferences",
                 "description": "Landing page, 2FA, portal title",
