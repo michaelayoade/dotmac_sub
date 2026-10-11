@@ -347,27 +347,22 @@ def test_admin_reset_invalidates_old_mfa_version(db_session, subscriber):
     assert db_session.get(UserCredential, result.credential.id).last_login_at is None
 
 
-def test_staff_update_uses_staff_password_floor(db_session, monkeypatch):
+def test_staff_password_patch_is_refused_and_directed_to_staff_provisioning(
+    db_session,
+):
     from app.models.system_user import SystemUser
-    from app.services import auth_flow
 
-    real_policy = auth_flow.password_min_length_for
-
-    def configured_staff_policy(db, principal_type):
-        assert principal_type == "system_user"
-        return max(real_policy(db, principal_type), 16)
-
-    monkeypatch.setattr(auth_flow, "password_min_length_for", configured_staff_policy)
     user = SystemUser(
-        first_name="Staff", last_name="Test", email="staff-admin-floor@example.test"
+        first_name="Staff", last_name="Test", email="staff-admin-refused@example.test"
     )
     db_session.add(user)
     db_session.flush()
+    original = hash_password(PASSWORD)
     row = UserCredential(
         system_user_id=user.id,
         username=user.email,
         provider=AuthProvider.local,
-        password_hash=hash_password(PASSWORD),
+        password_hash=original,
     )
     db_session.add(row)
     db_session.flush()
@@ -380,10 +375,59 @@ def test_staff_update_uses_staff_password_floor(db_session, monkeypatch):
                 context(),
                 identifier,
                 frozenset({owner.CredentialField.password}),
-                password="Valid-42!",
+                password="Another-Valid-Password-42!",
             ),
         )
-    assert exc.value.code.endswith("invalid_password")
+    assert exc.value.code.endswith("invalid_principal")
+    assert "provisioning" in exc.value.message
+    db_session.expire_all()
+    assert db_session.get(UserCredential, identifier).password_hash == original
+
+
+def test_create_refuses_second_active_local_login(db_session, subscriber):
+    first = create(db_session, subscriber)
+    identity = subscriber.id
+    db_session.commit()
+    with pytest.raises(owner.CredentialAdministrationError) as exc:
+        owner.create_credential(
+            db_session,
+            command=owner.CreateCredential(
+                context=context(),
+                subscriber_id=identity,
+                username="second-login",
+                password=PASSWORD,
+            ),
+        )
+    assert exc.value.code.endswith("conflict")
+    assert PASSWORD not in exc.value.message
+    assert (
+        db_session.query(UserCredential)
+        .filter(UserCredential.subscriber_id == identity)
+        .count()
+        == 1
+    )
+    assert db_session.get(UserCredential, first.credential.id).is_active
+
+
+def test_create_allows_new_login_after_deactivation(db_session, subscriber):
+    identity = subscriber.id
+    first = create(db_session, subscriber)
+    db_session.commit()
+    owner.deactivate_credential(
+        db_session,
+        command=owner.DeactivateCredential(context(), first.credential.id),
+    )
+    db_session.commit()
+    second = owner.create_credential(
+        db_session,
+        command=owner.CreateCredential(
+            context=context(),
+            subscriber_id=identity,
+            username="replacement-login",
+            password=PASSWORD,
+        ),
+    )
+    assert second.credential.is_active
 
 
 def test_radius_metadata_preserves_version_counters_and_sessions(

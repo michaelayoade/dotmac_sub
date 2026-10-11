@@ -264,6 +264,16 @@ def create_credential(db: Session, *, command: CreateCredential) -> CredentialOu
         from app.services.credential_administration_mutation import create
 
         _lock_principal(db, PrincipalType.subscriber, command.subscriber_id)
+        if provider == AuthProvider.local:
+            existing = db.scalar(
+                select(UserCredential.id).where(
+                    UserCredential.subscriber_id == command.subscriber_id,
+                    UserCredential.provider == AuthProvider.local,
+                    UserCredential.is_active.is_(True),
+                )
+            )
+            if existing:
+                raise error("conflict", "Customer already has a portal login.")
         return create(db, command=command, provider=provider, password_hash=hashed)
 
     return _run(db, command.context, operation)
@@ -279,6 +289,15 @@ def update_credential(db: Session, *, command: UpdateCredential) -> CredentialOu
             raise error("credential_not_found", "User credential was not found.")
         kind, principal_id = _principal(row)
         provider = row.provider
+        if (
+            CredentialField.password in command.submitted_fields
+            and kind is not PrincipalType.subscriber
+        ):
+            raise error(
+                "invalid_principal",
+                "Staff and reseller passwords are managed by their own "
+                "provisioning flows.",
+            )
         if (
             CredentialField.password in command.submitted_fields
             and provider != AuthProvider.local
