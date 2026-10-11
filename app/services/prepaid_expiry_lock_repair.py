@@ -19,7 +19,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
-from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.enforcement_lock import (
+    AccessRestrictionMode,
+    EnforcementLock,
+    EnforcementReason,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import suspend_subscription
 from app.services.domain_errors import DomainError
@@ -32,6 +36,7 @@ from app.services.prepaid_service_coverage import (
     PrepaidCoverageStatus,
     resolve_prepaid_service_coverage,
 )
+from app.services.walled_garden_policy import resolve_walled_garden_decision
 
 _OWNER = "access.prepaid_expiry_lock_repair"
 _CONCERN = "reviewed expiry-cleared prepaid lock recovery"
@@ -81,6 +86,7 @@ class PrepaidExpiryLockRepairPreview:
     blockers: tuple[PrepaidExpiryLockRepairBlocker, ...]
     active_lock_ids: tuple[UUID, ...]
     coverage_status: PrepaidCoverageStatus | None
+    access_mode: AccessRestrictionMode | None
 
     @property
     def repairable(self) -> bool:
@@ -125,7 +131,7 @@ def _source(historical_lock_id: UUID) -> str:
 def _validate_as_of(value: datetime) -> None:
     if value.tzinfo is None:
         raise _error("naive_as_of", "Repair reference time must have a timezone.")
-    if value > datetime.now(UTC) + timedelta(minutes=5):
+    if value > datetime.now(UTC) + timedelta(seconds=30):
         raise _error("future_as_of", "Repair reference time cannot be in the future.")
     if datetime.now(UTC) - value > timedelta(minutes=15):
         raise _error("stale_as_of", "Repair preview is too old; use current time.")
@@ -269,6 +275,17 @@ def preview_prepaid_expiry_lock_repair(
         elif coverage_status is PrepaidCoverageStatus.unresolved_projection:
             blockers.append(PrepaidExpiryLockRepairBlocker.coverage_unresolved)
 
+    access_decision = (
+        resolve_walled_garden_decision(
+            db,
+            account,
+            requested_mode=AccessRestrictionMode.captive,
+            subscription=subscription,
+        )
+        if account is not None and subscription is not None
+        else None
+    )
+
     payload = {
         "subscription_id": str(query.subscription_id),
         "historical_lock_id": str(query.historical_lock_id),
@@ -297,6 +314,7 @@ def preview_prepaid_expiry_lock_repair(
             (str(lock.id), lock.reason.value, lock.source) for lock in active_locks
         ],
         "coverage_status": coverage_status.value if coverage_status else None,
+        "access_decision": access_decision.as_dict() if access_decision else None,
         "blockers": [blocker.value for blocker in blockers],
     }
     fingerprint = hashlib.sha256(
@@ -308,6 +326,7 @@ def preview_prepaid_expiry_lock_repair(
         blockers=tuple(blockers),
         active_lock_ids=tuple(lock.id for lock in active_locks),
         coverage_status=coverage_status,
+        access_mode=(access_decision.effective_mode if access_decision else None),
     )
 
 
@@ -374,6 +393,8 @@ def apply_prepaid_expiry_lock_repair(
             str(command.query.subscription_id),
             reason=EnforcementReason.prepaid,
             source=source,
+            access_mode=preview.access_mode or AccessRestrictionMode.hard_reject,
+            requested_access_mode=AccessRestrictionMode.captive,
             notes=command.context.reason,
             evidence_context=command.context,
         )

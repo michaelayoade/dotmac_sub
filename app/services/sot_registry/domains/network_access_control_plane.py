@@ -122,6 +122,7 @@ DOMAIN = DomainSOT(
             owns=("reviewed expiry-cleared prepaid lock recovery",),
             depends_on=(
                 "access.subscription_lifecycle",
+                "access.walled_garden_policy",
                 "financial.prepaid_service_coverage",
             ),
             notes=(
@@ -142,6 +143,7 @@ DOMAIN = DomainSOT(
                             "canonical subscription and account state",
                             "historical expiry-resolved enforcement lock",
                             "current prepaid service coverage",
+                            "current restriction policy",
                         ),
                     ),
                 ),
@@ -175,6 +177,15 @@ DOMAIN = DomainSOT(
                         owner="financial.prepaid_service_coverage",
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source="Current entitlement and applied-grant classification",
+                    ),
+                    AuthorityInput(
+                        name="current restriction policy",
+                        owner="access.walled_garden_policy",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Current per-subscription captive or hard-reject "
+                            "decision for a financial suspension request"
+                        ),
                     ),
                 ),
                 transaction=TransactionContract(
@@ -214,6 +225,7 @@ DOMAIN = DomainSOT(
                     fail_closed_on=(
                         "missing or ambiguous historical expiry lock",
                         "covered or unresolved current prepaid service",
+                        "changed restriction policy or network readiness",
                         "terminal or non-prepaid subscription",
                         "changed preview fingerprint",
                     ),

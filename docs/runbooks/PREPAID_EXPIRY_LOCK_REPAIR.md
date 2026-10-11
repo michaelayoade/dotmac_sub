@@ -60,7 +60,10 @@ the subscription remains suspended, the prepaid lock exists, unrelated holds
 remain active, and a later confirmed funding event is eligible for the normal
 payment-triggered renewal. Verify the paid invoice, entitlement, billing anchor,
 prepaid lock restoration, and RADIUS projection after that payment. This repair
-does not itself trigger renewal or network restoration.
+does not itself trigger renewal or network restoration. The current
+per-subscription walled-garden policy determines whether the recreated prepaid
+lock uses captive access or hard reject; a policy/readiness change invalidates
+the preview.
 
 If confirmed funding was already present before the lock was repaired, do not
 wait for another payment or invent one. Review the exact contracted period,
@@ -92,5 +95,11 @@ do not weaken the eligibility gate.
 Services without a provable historical prepaid lock, or with former admin/SLA
 holds, must not be bulk-assigned a prepaid reason. Route those to a separate
 review under the owning financial and access policies; preserve their current
-suspended state meanwhile. The repair is not a substitute for funding evidence
-or for correcting a terminal fixed-term contract.
+suspended state meanwhile. For a due, underfunded service with no historical
+prepaid lock, the canonical financial-access consequence preview is the path
+to assess a new prepaid suspension, including profile, coverage, shield and
+access-treatment checks. Apply only a reviewed eligible consequence through
+that owner. Former admin and Ticket-SLA holds require their respective owners
+to revalidate whether the original hold is still authorized. The repair is
+not a substitute for funding evidence or for correcting a terminal fixed-term
+contract.

@@ -58,6 +58,9 @@ def main() -> int:
                         if preview.coverage_status
                         else None
                     ),
+                    "access_mode": (
+                        preview.access_mode.value if preview.access_mode else None
+                    ),
                 },
                 indent=2,
                 sort_keys=True,

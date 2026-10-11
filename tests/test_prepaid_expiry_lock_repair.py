@@ -13,7 +13,11 @@ from sqlalchemy import select
 
 from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
-from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.enforcement_lock import (
+    AccessRestrictionMode,
+    EnforcementLock,
+    EnforcementReason,
+)
 from app.models.subscriber import SubscriberStatus
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_expiry_lock_repair import (
@@ -117,6 +121,8 @@ def test_repair_recreates_only_prepaid_lock_and_replay_is_idempotent(
     assert second.active_lock_id == first.active_lock_id
     assert repaired is not None and repaired.is_active is True
     assert repaired.reason is EnforcementReason.prepaid
+    assert repaired.access_mode is preview.access_mode
+    assert repaired.requested_access_mode is AccessRestrictionMode.captive
     assert admin_lock.is_active is True
     assert subscription.status is SubscriptionStatus.suspended
     assert (
@@ -181,6 +187,29 @@ def test_repair_refuses_unproven_historical_lock(
         PrepaidExpiryLockRepairBlocker.historical_lock_not_expiry_prepaid
         in preview.blockers
     )
+
+
+def test_repair_refuses_fixed_term_end(db_session, subscriber_account, subscription):
+    query = _candidate(db_session, subscriber_account, subscription)
+    subscription.end_at = query.as_of - timedelta(seconds=1)
+    db_session.commit()
+
+    preview = preview_prepaid_expiry_lock_repair(db_session, query)
+
+    assert PrepaidExpiryLockRepairBlocker.fixed_term_ended in preview.blockers
+
+
+def test_repair_refuses_stale_as_of(db_session, subscriber_account, subscription):
+    query = _candidate(db_session, subscriber_account, subscription)
+    stale_query = PrepaidExpiryLockRepairQuery(
+        subscription_id=query.subscription_id,
+        historical_lock_id=query.historical_lock_id,
+        as_of=query.as_of - timedelta(minutes=16),
+    )
+
+    with pytest.raises(PrepaidExpiryLockRepairError) as exc:
+        preview_prepaid_expiry_lock_repair(db_session, stale_query)
+    assert exc.value.code.endswith("stale_as_of")
 
 
 @pytest.mark.parametrize(
