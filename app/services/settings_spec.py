@@ -3120,14 +3120,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="local",
         allowed={"local", "sso", "radius"},
     ),
-    SettingSpec(
-        domain=SettingDomain.auth,
-        key="default_session_status",
-        env_var="AUTH_DEFAULT_SESSION_STATUS",
-        value_type=SettingValueType.string,
-        default="active",
-        allowed={"active", "revoked", "expired"},
-    ),
     # --- Field-mobile OIDC federation (docs/designs/OIDC_MOBILE_FEDERATION.md).
     #
     # Every identifier below declares `inherits=False`: a platform row must not
