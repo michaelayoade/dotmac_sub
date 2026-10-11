@@ -12,6 +12,7 @@ from app.services.events.types import Event, EventType
 HANDLED_EVENT_TYPES = frozenset(
     {
         EventType.password_recovery_completed,
+        EventType.credential_administration_completed,
         EventType.customer_credential_enrollment_completed,
     }
 )
@@ -34,6 +35,11 @@ class CredentialSessionProjectionHandler:
             raise ValueError("Unsupported password recovery principal type")
 
         auth_cache.invalidate_principal_strict(principal_type, str(principal_id))
+        if (
+            event.event_type is EventType.credential_administration_completed
+            and not event.payload.get("invalidate_sessions")
+        ):
+            return
         if event.event_type is EventType.customer_credential_enrollment_completed:
             if principal_type != "subscriber":
                 raise ValueError("Credential enrollment requires a subscriber")

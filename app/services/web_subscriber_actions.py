@@ -9,6 +9,8 @@ from uuid import UUID
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.db import SessionLocal
+
 logger = logging.getLogger(__name__)
 
 from app.models.subscriber import SubscriberCategory
@@ -18,6 +20,8 @@ from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services import web_system_restore_tool as web_system_restore_tool_service
 from app.services.audit_helpers import log_audit_event
+from app.services.credential_administration import SubscriberLoginOutcome
+from app.services.owner_commands import CommandContext
 from app.services.web_subscriber_forms import (
     create_subscriber_with_optional_login,
     resolve_form_customer_ids,
@@ -49,6 +53,7 @@ def _parse_category(value: str | None) -> SubscriberCategory | None:
 def create_subscriber_from_form(
     db: Session,
     *,
+    context: CommandContext,
     customer_ref: str | None,
     customer_search: str | None,
     subscriber_type: str | None,
@@ -61,15 +66,18 @@ def create_subscriber_from_form(
     create_user: str | None,
     user_username: str | None,
     user_password: str | None,
-):
-    resolved_type, person_uuid, org_uuid = resolve_form_customer_ids(
-        db=db,
-        customer_ref=customer_ref,
-        customer_search=customer_search,
-        subscriber_type=subscriber_type,
-        person_id=person_id,
-        business_account_id=business_account_id,
-    )
+) -> SubscriberLoginOutcome:
+    with SessionLocal(
+        bind=db.get_bind(), join_transaction_mode="create_savepoint"
+    ) as preparation:
+        resolved_type, person_uuid, org_uuid = resolve_form_customer_ids(
+            db=preparation,
+            customer_ref=customer_ref,
+            customer_search=customer_search,
+            subscriber_type=subscriber_type,
+            person_id=person_id,
+            business_account_id=business_account_id,
+        )
     if not person_uuid:
         raise ValueError("person_id is required")
     return create_subscriber_with_optional_login(
@@ -84,52 +92,7 @@ def create_subscriber_from_form(
         create_user=create_user,
         user_username=user_username,
         user_password=user_password,
-    )
-
-
-def create_subscriber_from_full_form(
-    db: Session,
-    *,
-    customer_type: str,
-    form_data: dict[str, Any],
-    contact_columns: dict[str, list[str]],
-    subscriber_number: str | None,
-    subscriber_category: str | None,
-    subscriber_notes: str | None,
-    is_active: str | None,
-):
-    created_type, created_id = web_customer_actions_service.create_customer_from_form(
-        db=db,
-        customer_type=customer_type,
-        form_data=form_data,
-        contact_columns=contact_columns,
-    )
-
-    if created_type == "person":
-        subscriber_type = "person"
-        person_uuid = UUID(created_id)
-        organization_uuid = None
-    else:
-        subscriber_type = "business"
-        organization_uuid = UUID(created_id)
-        person_uuid = organization_uuid
-
-    notes_value = subscriber_notes
-    if not notes_value and customer_type == "person":
-        notes_value = form_data.get("notes")
-
-    return create_subscriber_with_optional_login(
-        db=db,
-        subscriber_type=subscriber_type,
-        person_uuid=person_uuid,
-        organization_uuid=organization_uuid,
-        subscriber_number=subscriber_number,
-        subscriber_category=subscriber_category,
-        notes=notes_value,
-        is_active=is_active,
-        create_user=None,
-        user_username=None,
-        user_password=None,
+        context=context,
     )
 
 

@@ -39,6 +39,17 @@
 # (the typed home for `splynx_billing_email`) and the UPDATE that removes the
 # moved key from `subscribers.metadata`. Total 123 -> 125.
 
+#
+# 2026-10-11 — `customer.registration_metadata` is the registered flush-only
+# participant restricted to `auth.credential_administration`. Existing optional-
+# login form fields (subscriber_number, category, notes) previously passed via
+# SubscriberUpdate to the generic Subscribers.update loop. Four explicit ORM
+# assignments (number, two category branches, notes) are newly counted; the
+# generic owner remains for its other consumers. This is existing behavior
+# moved into the atomic metadata/login/audit/outbox coordinator, not four new
+# facts. Census 125 -> 129; cutover disposition RETIRE_AFTER_CUTOVER.
+#
+
 2 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 2 cli_script|scripts/migration/backfill_party_status.py
 1 cli_script|scripts/migration/import_crm_phase3.py
@@ -63,6 +74,7 @@
 1 service|app/services/customer_portal_contacts.py
 1 service|app/services/customer_portal_notifications.py
 2 service|app/services/customer_portal_profile_commands.py
+4 service|app/services/customer_registration_metadata.py
 3 service|app/services/gis_sync.py
 1 service|app/services/mrr_snapshot.py
 1 service|app/services/network_subscriber_bridge.py
@@ -76,4 +88,4 @@
 1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 125
+TOTAL 129

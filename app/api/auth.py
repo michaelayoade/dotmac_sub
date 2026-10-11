@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, Query, Request, status
+from collections.abc import Callable, Generator, Mapping
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -16,7 +19,10 @@ from app.schemas.auth import (
 )
 from app.schemas.common import ListResponse
 from app.services import auth as auth_service
+from app.services import credential_administration as credential_admin
 from app.services.auth_dependencies import require_permission, require_role
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 
 router = APIRouter()
 
@@ -37,17 +43,76 @@ router = APIRouter()
 _credential_admin = Depends(require_role("admin"))
 
 
+def _credential_command_session() -> Generator[Session, None, None]:
+    # Authorization uses its own request session. Public command ownership
+    # begins on a fresh session; no caller transaction is committed/discarded.
+    with db_session_adapter.owner_command_session() as db:
+        yield db
+
+
+def _credential_context(auth: Mapping[str, object]) -> CommandContext:
+    principal = auth.get("principal_id")
+    if not principal:
+        raise HTTPException(
+            status_code=403, detail="Credential administrator identity is required"
+        )
+    return CommandContext.system(
+        actor=str(principal),
+        scope=credential_admin.SCOPE,
+        reason="administrative credential command",
+    )
+
+
+def _credential_result(
+    operation: Callable[[], credential_admin.CredentialOutcome],
+) -> credential_admin.CredentialView:
+    try:
+        return operation().credential
+    except credential_admin.CredentialAdministrationError as exc:
+        suffix = exc.code.rsplit(".", 1)[-1]
+        code = (
+            503
+            if suffix == "lock_timeout"
+            else 409
+            if suffix in {"conflict", "stale_credential"}
+            else 404
+            if suffix
+            in {"principal_not_found", "credential_not_found", "radius_not_found"}
+            else 422
+        )
+        raise HTTPException(
+            status_code=code,
+            detail=exc.message,
+            headers={"Retry-After": "1"} if code == 503 else None,
+        ) from exc
+
+
 @router.post(
     "/user-credentials",
     response_model=UserCredentialRead,
     status_code=status.HTTP_201_CREATED,
     tags=["user-credentials"],
-    dependencies=[Depends(require_permission("auth:credential:write"))],
+    dependencies=[
+        Depends(require_permission("auth:credential:write")),
+        _credential_admin,
+    ],
 )
 def create_user_credential(
-    payload: UserCredentialCreate, db: Session = Depends(get_db)
-):
-    return auth_service.user_credentials.create(db, payload)
+    payload: UserCredentialCreate,
+    auth: Mapping[str, object] = _credential_admin,
+    db: Session = Depends(_credential_command_session),
+) -> credential_admin.CredentialView:
+    command = credential_admin.CreateCredential(
+        context=_credential_context(auth),
+        subscriber_id=payload.subscriber_id,
+        username=payload.username,
+        provider=payload.provider,
+        radius_server_id=payload.radius_server_id,
+        password=payload.password,
+    )
+    return _credential_result(
+        lambda: credential_admin.create_credential(db, command=command)
+    )
 
 
 @router.get(
@@ -92,22 +157,52 @@ def list_user_credentials(
     "/user-credentials/{credential_id}",
     response_model=UserCredentialRead,
     tags=["user-credentials"],
-    dependencies=[Depends(require_permission("auth:credential:write"))],
+    dependencies=[
+        Depends(require_permission("auth:credential:write")),
+        _credential_admin,
+    ],
 )
 def update_user_credential(
-    credential_id: str, payload: UserCredentialUpdate, db: Session = Depends(get_db)
-):
-    return auth_service.user_credentials.update(db, credential_id, payload)
+    credential_id: UUID,
+    payload: UserCredentialUpdate,
+    auth: Mapping[str, object] = _credential_admin,
+    db: Session = Depends(_credential_command_session),
+) -> credential_admin.CredentialView:
+    command = credential_admin.UpdateCredential(
+        context=_credential_context(auth),
+        credential_id=credential_id,
+        submitted_fields=frozenset(
+            credential_admin.CredentialField(name) for name in payload.model_fields_set
+        ),
+        username=payload.username,
+        radius_server_id=payload.radius_server_id,
+        password=payload.password,
+    )
+    return _credential_result(
+        lambda: credential_admin.update_credential(db, command=command)
+    )
 
 
 @router.delete(
     "/user-credentials/{credential_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["user-credentials"],
-    dependencies=[Depends(require_permission("auth:credential:write"))],
+    dependencies=[
+        Depends(require_permission("auth:credential:write")),
+        _credential_admin,
+    ],
 )
-def delete_user_credential(credential_id: str, db: Session = Depends(get_db)):
-    auth_service.user_credentials.delete(db, credential_id)
+def delete_user_credential(
+    credential_id: UUID,
+    auth: Mapping[str, object] = _credential_admin,
+    db: Session = Depends(_credential_command_session),
+) -> None:
+    command = credential_admin.DeactivateCredential(
+        context=_credential_context(auth), credential_id=credential_id
+    )
+    _credential_result(
+        lambda: credential_admin.deactivate_credential(db, command=command)
+    )
 
 
 @router.get(

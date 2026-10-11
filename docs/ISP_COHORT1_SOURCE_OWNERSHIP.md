@@ -155,6 +155,19 @@ merge.
 
 ## Writer census
 
+The 2026-10-11 credential administration slice adds the individually classified
+`customer.registration_metadata` participant. It moves existing optional-login
+form subscriber-number, category and notes writes from `SubscriberUpdate` /
+`Subscribers.update` into explicit assignments under the coordinator's principal
+lock. Four AST sites (number, two category branches, notes) raise the census
+from 125 to 129; the generic writer remains for its other consumers. This does
+not add four new business facts. The required new behavior is atomic registration
+metadata, optional credential, audit and outbox completion, with no participant
+commit or adapter bypass. The participant is internal-only and its cohort writes
+have disposition `RETIRE_AFTER_CUTOVER`; this registration grants no target-
+database authority. Prefix policy resolution moved from the form adapter to
+coordinator preparation, so the retired adapter read-handoff baseline is removed.
+
 Counted mechanically across every entry-point family by
 `scripts/architecture/isp_cohort_writers.py` and frozen by **two** baselines,
 because membership and magnitude are different events wanting different
@@ -175,11 +188,11 @@ already-baselined files looks like an ordinary shrink-and-grow pair.
 
 | Family | Files | Write sites |
 |---|---|---|
-| `service` | 19 | 86 |
+| `service` | 20 | 93 |
 | `web_presenter` | 5 | 13 |
-| `cli_script` | 6 | 14 |
-| `migration` | 6 | 8 |
-| **total** | **36** | **121** |
+| `cli_script` | 5 | 12 |
+| `migration` | 8 | 11 |
+| **total** | **38** | **129** |
 
 `api_route`, `webhook_handler`, `web_route`, `task_worker`, `scheduled_job`,
 `event_handler`, `websocket`, `importer`, `poller`, `app_module` and
@@ -350,12 +363,13 @@ account rows belong to cohort 1.
 
 | Path | Owner | Writes |
 |---|---|---|
-| `app/services/party.py` | `party.registry` | 21 |
+| `app/services/party.py` | `party.registry` | 23 |
 | `app/services/customer_canonical_profile_patch.py` | `customer.canonical_profile_patch` | 20 |
+| `app/services/customer_registration_metadata.py` | `customer.registration_metadata` | 4 |
 | `app/services/subscriber.py` | `customer.accounts` | 14 |
 | `app/services/gis_sync.py` | `gis.spatial_sync` | 3 |
 | `app/services/customer_portal_profile_commands.py` | `customer.portal_profile_commands` | 2 |
-| `app/services/web_customer_actions.py` | `customer.profile_commands` | 1 |
+| `app/services/web_customer_actions.py` | `customer.profile_commands` | 7 |
 | `app/services/brand_profiles.py` | `customer.branding` | 2 |
 | `app/services/subscriber_profile_cleanup.py` | `customer.profile_cleanup` | 2 |
 | `app/services/crm_customer_name_repair.py` | `customer.name_remediation` | 1 |

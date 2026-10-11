@@ -24,7 +24,9 @@ from app.schemas.auth import (
     UserCredentialUpdate,
 )
 from app.services import auth as auth_service
+from app.services import credential_administration as credential_admin
 from app.services.common import apply_ordering, apply_pagination, validate_enum
+from tests import credential_administration_fixtures as credential_commands
 
 
 class _FakeRedisClient:
@@ -148,8 +150,8 @@ def test_get_redis_client_error(monkeypatch):
 def test_user_credentials_get_list_delete_errors(db_session):
     with pytest.raises(HTTPException):
         auth_service.user_credentials.get(db_session, str(uuid.uuid4()))
-    with pytest.raises(HTTPException):
-        auth_service.user_credentials.delete(db_session, str(uuid.uuid4()))
+    with pytest.raises(credential_admin.CredentialAdministrationError):
+        credential_commands.deactivate(db_session, str(uuid.uuid4()))
 
 
 def test_user_credentials_update_and_list(db_session, person):
@@ -161,10 +163,9 @@ def test_user_credentials_update_and_list(db_session, person):
         person_id=person.id,
         provider=AuthProvider.radius,
         username="radius-user",
-        password_hash="hash",
         radius_server_id=server.id,
     )
-    credential = auth_service.user_credentials.create(db_session, payload)
+    credential = credential_commands.create(db_session, payload)
 
     listed = auth_service.user_credentials.list(
         db_session,
@@ -176,9 +177,9 @@ def test_user_credentials_update_and_list(db_session, person):
         limit=10,
         offset=0,
     )
-    assert credential in listed
+    assert credential.id in [row.id for row in listed]
 
-    updated = auth_service.user_credentials.update(
+    updated = credential_commands.update(
         db_session,
         str(credential.id),
         UserCredentialUpdate(username="new-radius"),
@@ -190,8 +191,8 @@ def test_user_credentials_update_and_list(db_session, person):
 
 
 def test_user_credentials_update_not_found(db_session):
-    with pytest.raises(HTTPException):
-        auth_service.user_credentials.update(
+    with pytest.raises(credential_admin.CredentialAdministrationError):
+        credential_commands.update(
             db_session, str(uuid.uuid4()), UserCredentialUpdate(username="missing")
         )
 
@@ -375,12 +376,11 @@ def test_api_keys_get_and_update_person(db_session, person):
 
 def test_user_credentials_default_provider(monkeypatch, db_session, person):
     monkeypatch.setattr(
-        auth_service.settings_spec, "resolve_value", lambda *args, **kwargs: "radius"
+        credential_admin, "resolve_value", lambda *args, **kwargs: "radius"
     )
     payload = UserCredentialCreate(
         person_id=person.id,
         username="radius@example.com",
-        password_hash="hash",
     )
-    credential = auth_service.user_credentials.create(db_session, payload)
+    credential = credential_commands.create(db_session, payload)
     assert credential.provider == AuthProvider.radius

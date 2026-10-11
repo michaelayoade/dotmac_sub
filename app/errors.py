@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from starlette.datastructures import MutableHeaders, UploadFile
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -453,6 +453,7 @@ def register_error_handlers(app) -> None:
         return JSONResponse(
             status_code=status_code,
             content=_error_payload(code, message, details, _request_id(request)),
+            headers=headers if isinstance(headers, dict) else None,
         )
 
     @app.exception_handler(HTTPException)
@@ -495,25 +496,9 @@ def register_error_handlers(app) -> None:
             )
 
         # Convert errors to JSON-serializable format.
-        def _sanitize_input(value):
-            if isinstance(value, bytes):
-                return value.decode("utf-8", errors="replace")
-            if isinstance(value, UploadFile):
-                return value.filename or "upload"
-            if isinstance(value, dict):
-                return {key: _sanitize_input(val) for key, val in value.items()}
-            if isinstance(value, (list, tuple, set)):
-                return [_sanitize_input(item) for item in value]
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                return value
-            return str(value)
-
-        # Sanitize the WHOLE error dict, not just "input": a custom
-        # @model_validator that raises ValueError puts the raw exception in
-        # ctx["error"], which is not JSON-serializable and would otherwise make
-        # JSONResponse raise — turning a 422 into a 500. _sanitize_input recurses
-        # into ctx and coerces any non-JSON-native value (e.g. the exception) to str.
-        errors = [_sanitize_input(dict(error)) for error in exc.errors()]
+        # Validation inputs may include passwords, hashes, or bearer material.
+        # Return only bounded location/type/message evidence, never input or ctx.
+        errors = _validation_error_summary(exc)
         return JSONResponse(
             status_code=422,
             content=_error_payload(
