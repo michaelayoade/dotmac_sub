@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REVISION = "32eebc1a6ac05a21275ed4db6f3d1dd28514a045"
 IMAGE_DIGEST = "sha256:" + "a" * 64
 IMAGE_REFERENCE = f"ghcr.io/michaelayoade/dotmac_sub@{IMAGE_DIGEST}"
@@ -46,6 +48,15 @@ def _run_deploy(
     rollback_repin_failure: str | None = None,
     proxy_ready: bool = True,
     migration_lock_failures: int = 0,
+    migration_hard_failure: bool = False,
+    heads_before: str = "670_a",
+    heads_after: str | None = None,
+    heads_read_fails: bool = False,
+    database_url: str = (
+        "postgresql://dotmac:not-a-real-pw@db.example.test:5432/dotmac_sub"
+    ),
+    migration_interrupt: bool = False,
+    first_deploy: bool = False,
     manifest_pins_ready: bool = True,
     github_checks_ready: bool = True,
     background_runtime_ready: bool = True,
@@ -74,14 +85,21 @@ def _run_deploy(
     curl_attempts.write_text("0")
     sed_attempts = tmp_path / "sed-attempts"
     sed_attempts.write_text("0")
+    heads_file = tmp_path / "alembic-heads"
+    heads_file.write_text(heads_before + "\n")
     app_env, server_name = (
         ("production", "dotmac-sub-prod")
         if deployment_target == "production"
         else ("staging", "dotmac-sub-staging")
     )
     (deploy_dir / ".env").write_text(
-        "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
-        "GIT_SHA=old0000000000000000000000000000000000000\n"
+        (
+            ""
+            if first_deploy
+            else "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
+            "GIT_SHA=old0000000000000000000000000000000000000\n"
+        )
+        + f"DATABASE_URL={database_url}\n"
         f"APP_ENV={app_env}\n"
         f"SERVER_NAME={server_name}\n"
     )
@@ -127,6 +145,31 @@ if [[ "$*" == *"alembic upgrade heads"* ]]; then
     echo "canceling statement due to lock timeout" >&2
     exit 1
   fi
+  if [[ "{int(migration_interrupt)}" == "1" ]]; then
+    printf '%s\\n' "{heads_after if heads_after is not None else heads_before}" > "{heads_file}"
+    top=""
+    pid=$PPID
+    while [[ -n "$pid" && "$pid" != "1" && "$pid" != "0" ]]; do
+      if ps -o command= -p "$pid" | grep -q 'deploy.sh'; then top="$pid"; fi
+      pid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+    done
+    kill -INT "$top"
+    sleep 1
+    exit 0
+  fi
+  if [[ "{int(migration_hard_failure)}" == "1" ]]; then
+    printf '%s\\n' "{heads_after if heads_after is not None else heads_before}" > "{heads_file}"
+    echo "psycopg2.errors.UndefinedTable: boom" >&2
+    exit 1
+  fi
+fi
+if [[ "$1" == "exec" && "$*" == *"alembic_version"* ]]; then
+  if [[ "{int(heads_read_fails)}" == "1" ]]; then
+    echo "canceling statement due to statement timeout" >&2
+    exit 1
+  fi
+  cat "{heads_file}"
+  exit 0
 fi
 if [[ "$*" == *"scripts.integrations.verify_manifest_pins"* ]]; then
   exit {0 if manifest_pins_ready else 1}
@@ -291,6 +334,11 @@ exit 0
         **production_evidence,
         **(extra_env or {}),
     }
+    for key in list(env):
+        if key.startswith(
+            ("DATABASE_URL", "DB_BACKUP", "DB_CONTAINER")
+        ) and key not in (extra_env or {}):
+            env.pop(key)
     result = subprocess.run(
         ["bash", str(repo_root / "scripts/deploy.sh"), image_selector],
         cwd=repo_root,
@@ -676,6 +724,223 @@ def test_deploy_retries_a_bounded_migration_lock_timeout(tmp_path: Path) -> None
         if "alembic upgrade heads" in command
     ]
     assert len(attempts) == 3
+
+
+def _assert_failed_pre_swap_migration_left_no_new_state(
+    docker_log: Path,
+) -> None:
+    log = docker_log.read_text()
+    assert "rollback-gate" not in log
+    assert "verify_payment_email_rollback" not in log
+    assert "--name dotmac_sub_app_candidate" not in log
+    assert " up -d " not in log
+
+
+_HEADS_ENV = {"DB_BACKUP_DB_NAME": "dotmac_sub"}
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"migration_lock_failures": 4},  # lock-blocked on every bounded attempt
+        {"migration_hard_failure": True},  # non-lock failure, heads unchanged
+    ],
+)
+def test_failed_migration_restores_pin_without_rollback_or_recreate(
+    tmp_path: Path, kwargs: dict[str, object]
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+    assert result.returncode != 0
+    env_text = env_file.read_text()
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_text
+    assert "GIT_SHA=old0000000000000000000000000000000000000" in env_text
+    assert "restored .env pin to" in result.stderr.lower()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_failed_migration_that_advanced_heads_keeps_pin_and_refuses_to_guess(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        heads_after="670_b",
+    )
+
+    assert result.returncode != 0
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" not in (
+        env_file.read_text()
+    )
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_heads_query_timeout_counts_as_unreadable_and_keeps_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        heads_read_fails=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha-old0000" not in env_file.read_text()
+    assert "<unreadable>" in result.stderr
+    assert "Do not recreate containers; repair forward" in result.stderr
+    assert "PGOPTIONS=-c lock_timeout=5s -c statement_timeout=15s" in (
+        docker_log.read_text()
+    )
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_heads_query_against_another_database_keeps_pin(tmp_path: Path) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "some_other_db"},
+        migration_hard_failure=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha-old0000" not in env_file.read_text()
+    assert "targets database 'some_other_db' but alembic uses 'dotmac_sub'" in (
+        result.stderr
+    )
+    assert "not-a-real-pw" not in result.stdout + result.stderr
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_first_deploy_failed_migration_says_there_is_no_previous_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        first_deploy=True,
+    )
+
+    assert result.returncode != 0
+    assert "no previous pin and no running dotmac_sub_app container" in (result.stderr)
+    assert "matches the running" not in result.stderr
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" not in (
+        env_file.read_text()
+    )
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_interrupt_during_migration_with_unchanged_heads_repins(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path, extra_env=_HEADS_ENV, migration_interrupt=True
+    )
+
+    assert result.returncode == 130
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in (
+        env_file.read_text()
+    )
+    assert "heads measured unchanged" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_interrupt_during_migration_with_advanced_heads_keeps_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_interrupt=True,
+        heads_after="670_b",
+    )
+
+    assert result.returncode == 130
+    assert "sha-old0000" not in env_file.read_text()
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_exported_database_url_differing_from_env_refuses_before_any_change(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DATABASE_URL": "postgresql://u:s3cr3t@h.example.test/other"},
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY REFUSED: DATABASE_URL is exported" in result.stderr
+    assert "s3cr3t" not in result.stdout + result.stderr
+    assert "sha-old0000" in env_file.read_text()
+    assert "alembic upgrade heads" not in docker_log.read_text()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:s3cr3t@db.example.test",
+        "postgresql://u:s3cr3t@db.example.test?password=ab/cd",
+        "postgresql://u:p@s3cr3t@db.example.test",
+    ],
+)
+def test_unparseable_database_url_does_not_leak_in_full_script(
+    tmp_path: Path, url: str
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "dotmac_sub"},
+        migration_hard_failure=True,
+        database_url=url,
+    )
+
+    assert result.returncode != 0
+    assert "s3cr3t" not in result.stdout + result.stderr
+    assert "database name unparseable" in result.stderr
+    assert "sha-old0000" not in env_file.read_text()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_query_string_secret_fragment_is_never_printed_on_db_mismatch(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "dotmac_sub"},
+        migration_hard_failure=True,
+        database_url="postgresql://u@db.example.test/other?password=p@ss/word",
+    )
+
+    out = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "alembic uses 'other'" in result.stderr
+    assert "p@ss" not in out and "ss/word" not in out and "'word'" not in out
+    assert "sha-old0000" not in env_file.read_text()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_migration_container_is_named_per_attempt_and_kept_removable(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path, extra_env=_HEADS_ENV, migration_lock_failures=2
+    )
+
+    assert result.returncode == 0, result.stderr
+    runs = [
+        c for c in docker_log.read_text().splitlines() if "alembic upgrade heads" in c
+    ]
+    names = [c.split("--name ")[1].split()[0] for c in runs]
+    assert len(names) == 3 and len(set(names)) == 3
+    assert all(n.startswith("dotmac_sub_migrate_") for n in names)
+    assert all(" --rm " in c for c in runs)
 
 
 def test_deploy_verifies_every_worker_and_beat_before_success(tmp_path: Path) -> None:

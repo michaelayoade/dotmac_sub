@@ -29,10 +29,6 @@ from app.schemas.auth import (
     ApiKeyCreate,
     ApiKeyGenerateRequest,
     ApiKeyUpdate,
-    MFAMethodCreate,
-    MFAMethodUpdate,
-    SessionCreate,
-    SessionUpdate,
     UserCredentialCreate,
     UserCredentialUpdate,
 )
@@ -274,27 +270,6 @@ class UserCredentials(ListResponseMixin):
 
 class MFAMethods(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: MFAMethodCreate):
-        _ensure_subscriber(db, str(payload.subscriber_id))
-        if payload.is_primary:
-            db.query(MFAMethod).filter(
-                MFAMethod.subscriber_id == payload.subscriber_id,
-                MFAMethod.is_primary.is_(True),
-            ).update({"is_primary": False})
-        method = MFAMethod(**payload.model_dump())
-        db.add(method)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="Primary MFA method already exists for this user",
-            ) from exc
-        db.refresh(method)
-        return method
-
-    @staticmethod
     def get(db: Session, method_id: str):
         method = db.get(MFAMethod, coerce_uuid(method_id))
         if not method:
@@ -347,34 +322,6 @@ class MFAMethods(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, method_id: str, payload: MFAMethodUpdate):
-        method = db.get(MFAMethod, coerce_uuid(method_id))
-        if not method:
-            raise HTTPException(status_code=404, detail="MFA method not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "subscriber_id" in data:
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        if data.get("is_primary"):
-            subscriber_id = data.get("subscriber_id", method.subscriber_id)
-            db.query(MFAMethod).filter(
-                MFAMethod.subscriber_id == subscriber_id,
-                MFAMethod.id != method.id,
-                MFAMethod.is_primary.is_(True),
-            ).update({"is_primary": False})
-        for key, value in data.items():
-            setattr(method, key, value)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="Primary MFA method already exists for this user",
-            ) from exc
-        db.refresh(method)
-        return method
-
-    @staticmethod
     def delete(db: Session, method_id: str):
         method = db.get(MFAMethod, coerce_uuid(method_id))
         if not method:
@@ -386,23 +333,6 @@ class MFAMethods(ListResponseMixin):
 
 
 class Sessions(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: SessionCreate):
-        _ensure_subscriber(db, str(payload.subscriber_id))
-        data = payload.model_dump()
-        fields_set = payload.model_fields_set
-        if "status" not in fields_set:
-            default_status = settings_spec.resolve_value(
-                db, SettingDomain.auth, "default_session_status"
-            )
-            if default_status:
-                data["status"] = validate_enum(default_status, SessionStatus, "status")
-        session = AuthSession(**data)
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-        return session
-
     @staticmethod
     def get(db: Session, session_id: str):
         session = db.get(AuthSession, coerce_uuid(session_id))
@@ -442,20 +372,6 @@ class Sessions(ListResponseMixin):
             },
         )
         return apply_pagination(query, limit, offset).all()
-
-    @staticmethod
-    def update(db: Session, session_id: str, payload: SessionUpdate):
-        session = db.get(AuthSession, coerce_uuid(session_id))
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "subscriber_id" in data:
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        for key, value in data.items():
-            setattr(session, key, value)
-        db.commit()
-        db.refresh(session)
-        return session
 
     @staticmethod
     def delete(db: Session, session_id: str):

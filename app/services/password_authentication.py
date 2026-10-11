@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 from app.models.auth import (
     AuthProvider,
     MFAMethod,
+    MFAMethodType,
     MFARecoveryCode,
     SessionStatus,
     UserCredential,
@@ -82,8 +83,8 @@ _PASSWORD_STEP_COMMAND = OwnerCommandDefinition(
 _MFA_COMMAND = OwnerCommandDefinition(
     owner=OWNER, concern=CONCERN_MFA, name="complete_mfa_challenge"
 )
-_ENROLLED_COMMAND = OwnerCommandDefinition(
-    owner=OWNER, concern=CONCERN_MFA, name="establish_enrolled_session"
+_ENROLLMENT_COMMAND = OwnerCommandDefinition(
+    owner=OWNER, concern=CONCERN_MFA, name="confirm_mfa_enrollment"
 )
 _PASSWORD_FAILURE_COMMAND = OwnerCommandDefinition(
     owner=OWNER, concern=CONCERN_FAILURES, name="record_password_failure"
@@ -196,6 +197,14 @@ class PasswordStepOutcome:
     credential_version: int | None
     staged_session: Any = None
     challenge_token: str | None = None
+
+
+@dataclass(frozen=True)
+class EnrollmentOutcome:
+    """Committed forced enrollment: the staged session and the one-time codes."""
+
+    staged_session: Any
+    recovery_codes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -633,11 +642,17 @@ def _gate_password_step(
         # R8: PPPoE secret authentication never touches user_credentials. Only
         # confirm the secret that was verified is still the live one.
         access_row = db.execute(
-            select(AccessCredential.id).where(
+            select(AccessCredential.id)
+            .where(
                 AccessCredential.id == verified.access_credential_id,
                 AccessCredential.is_active.is_(True),
                 AccessCredential.secret_hash == verified.verified_hash,
             )
+            # FOR SHARE, after the principal KEY SHARE: a concurrent secret
+            # change (ORM UPDATE, FOR NO KEY UPDATE) can no longer commit
+            # between this check and the commit of the session. After a wait
+            # PostgreSQL re-evaluates the predicate on the new row version.
+            .with_for_update(read=True)
         ).first()
         if access_row is None:
             raise PasswordAuthenticationError(
@@ -795,12 +810,14 @@ def _gate_challenge_standing(db: Session, challenge: Challenge, now: datetime) -
         ).first()
     else:
         row = db.execute(
-            select(AccessCredential.id).where(
+            select(AccessCredential.id)
+            .where(
                 AccessCredential.id == challenge.access_credential_id,
                 AccessCredential.is_active.is_(True),
                 AccessCredential.updated_at
                 == _from_epoch_us(challenge.access_credential_updated_us or 0),
             )
+            .with_for_update(read=True)
         ).first()
     if row is None:
         raise _invalid_challenge()
@@ -941,21 +958,60 @@ def complete_mfa(
         raise
 
 
-def establish_enrolled_session(
+def challenge_has_standing(db: Session, challenge: Challenge) -> bool:
+    """Read-only, lock-free check that a challenge's credential still stands.
+
+    For callers that must not write anything until the gated owner command
+    (for example showing the enrollment setup page). It is advisory; the gate
+    inside ``confirm_mfa_enrollment`` is the authority.
+    """
+
+    if challenge.src != SRC_USER_CREDENTIAL:
+        return False
+    return (
+        db.execute(
+            select(UserCredential.id).where(
+                UserCredential.id == challenge.credential_id,
+                UserCredential.credential_version == challenge.credential_version,
+                UserCredential.is_active.is_(True),
+                UserCredential.must_change_password.is_not(True),
+            )
+        ).first()
+        is not None
+    )
+
+
+def confirm_mfa_enrollment(
     db: Session,
     challenge: Challenge,
     *,
     request: Request,
-):
-    """Forced-enrollment completion: same credential gate, then session + audit."""
+    method_id: UUID,
+    expected_secret: str,
+    totp_ok: bool,
+    failure_policy: FailurePolicy,
+) -> EnrollmentOutcome:
+    """Forced enrollment in ONE owner transaction, behind the credential gate.
+
+    Principal KEY SHARE, then the credential gate, then eligibility, and only
+    then the factor: refuse if a confirmed primary exists, activate this pending
+    TOTP method as primary, stage recovery codes, session and audit. A version mismatch (a
+    reset since the password step) refuses before any of it is written, and a
+    later failure rolls the whole transaction back: no factor, no codes, no
+    session. A wrong code rolls back and is counted in its own transaction.
+    """
 
     af = _auth_flow()
     release_read_transaction(db)
     binding = _challenge_binding(challenge)
-    if challenge.principal_type != "system_user" or binding is None:
+    if (
+        challenge.src != SRC_USER_CREDENTIAL
+        or challenge.principal_type != "system_user"
+        or binding is None
+    ):
         raise _invalid_challenge()
 
-    def operation():
+    def operation() -> EnrollmentOutcome:
         _set_lock_timeout(db)
         now = _now()
         _lock_principal_key_share(
@@ -972,6 +1028,68 @@ def establish_enrolled_session(
             audience=challenge.audience,
             staff_refusal_kind="invalid_mfa_token",
         )
+        system_user_id = UUID(str(challenge.principal_id))
+        # Never replace a confirmed factor through an enrollment token: the
+        # credential gate above serializes concurrent enrollments for this user
+        # (it holds the credential row), so this check cannot race another one.
+        existing = db.execute(
+            select(MFAMethod.id).where(
+                MFAMethod.system_user_id == system_user_id,
+                MFAMethod.method_type == MFAMethodType.totp,
+                MFAMethod.is_active.is_(True),
+                MFAMethod.enabled.is_(True),
+                MFAMethod.is_primary.is_(True),
+            )
+        ).first()
+        if existing is not None:
+            raise _invalid_challenge()
+        # Checked before the code so a replayed token cannot drive failure
+        # counts; only then is a wrong code a counted failure.
+        if not totp_ok:
+            raise PasswordAuthenticationError("invalid_mfa_code", "Invalid MFA code.")
+        # No live primary exists. An admin MFA reset leaves the old row
+        # is_primary=True (disabled, inactive); demote it so the unique primary
+        # index admits the new one. A live primary was refused above.
+        db.execute(
+            update(MFAMethod)
+            .where(
+                MFAMethod.system_user_id == system_user_id,
+                MFAMethod.id != method_id,
+                MFAMethod.is_primary.is_(True),
+            )
+            .values(is_primary=False)
+            .execution_options(synchronize_session=False)
+        )
+        activated = db.execute(
+            update(MFAMethod)
+            .where(
+                MFAMethod.id == method_id,
+                MFAMethod.system_user_id == system_user_id,
+                MFAMethod.subscriber_id.is_(None),
+                MFAMethod.method_type == MFAMethodType.totp,
+                # Only a never-confirmed pending row, and only the secret the
+                # code was verified against in phase A (a concurrent setup
+                # re-key must not activate a different secret).
+                MFAMethod.enabled.is_(False),
+                MFAMethod.verified_at.is_(None),
+                MFAMethod.secret == expected_secret,
+                or_(MFAMethod.locked_until.is_(None), MFAMethod.locked_until <= now),
+            )
+            .values(
+                enabled=True,
+                is_primary=True,
+                is_active=True,
+                verified_at=now,
+                failed_attempts=0,
+                locked_until=None,
+                last_used_at=now,
+            )
+            .returning(MFAMethod.id)
+            .execution_options(synchronize_session=False)
+        ).first()
+        if activated is None:
+            raise _invalid_challenge()
+        codes = af.stage_mfa_recovery_codes(db, method_id)
         staged = af.stage_session_issue(
             db,
             principal_type=challenge.principal_type,
@@ -992,21 +1110,23 @@ def establish_enrolled_session(
                 "src": challenge.src,
                 "mfa": True,
                 "enrolled": True,
+                "mfa_method_id": str(method_id),
                 "audience": challenge.audience,
             },
         )
-        return staged
+        return EnrollmentOutcome(staged_session=staged, recovery_codes=tuple(codes))
 
-    return _run(
-        db,
-        _ENROLLED_COMMAND,
-        _context(
-            challenge.principal_type,
-            challenge.principal_id,
-            "Establish a session after forced MFA enrollment",
-        ),
-        operation,
+    context = _context(
+        challenge.principal_type,
+        challenge.principal_id,
+        "Confirm forced MFA enrollment and establish a session",
     )
+    try:
+        return _run(db, _ENROLLMENT_COMMAND, context, operation)
+    except PasswordAuthenticationError as exc:
+        if exc.kind == "invalid_mfa_code":
+            record_mfa_failure(db, method_id, failure_policy)
+        raise
 
 
 # ---------------------------------------------------------------------------

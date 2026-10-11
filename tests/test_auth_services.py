@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 from http.cookies import SimpleCookie
 from pathlib import Path
 from unittest.mock import Mock
@@ -26,9 +27,6 @@ from app.schemas.auth import (
     ApiKeyCreate,
     ApiKeyGenerateRequest,
     ApiKeyUpdate,
-    MFAMethodCreate,
-    MFAMethodUpdate,
-    SessionCreate,
     UserCredentialCreate,
     UserCredentialUpdate,
 )
@@ -366,80 +364,14 @@ def test_user_credentials_require_valid_person(db_session):
     assert exc.value.status_code == 404
 
 
-def test_mfa_primary_switch(db_session, person):
-    payload = MFAMethodCreate(
-        person_id=person.id,
-        method_type="totp",
-        label="primary",
-        secret="encrypted",
-        is_primary=True,
-        enabled=True,
-    )
-    first = auth_service.mfa_methods.create(db_session, payload)
-    second = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type="totp",
-            label="secondary",
-            secret="encrypted2",
-            is_primary=True,
-            enabled=True,
-        ),
-    )
-    db_session.refresh(first)
-    db_session.refresh(second)
-    assert first.is_primary is False
-    assert second.is_primary is True
-
-
-def test_mfa_update_primary_clears_previous(db_session, person):
-    first = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type="totp",
-            label="primary",
-            secret="encrypted",
-            is_primary=True,
-            enabled=True,
-        ),
-    )
-    second = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type="totp",
-            label="secondary",
-            secret="encrypted2",
-            is_primary=False,
-            enabled=True,
-        ),
-    )
-    updated = auth_service.mfa_methods.update(
-        db_session,
-        str(second.id),
-        MFAMethodUpdate(
-            person_id=person.id,
-            is_primary=True,
-        ),
-    )
-    db_session.refresh(first)
-    db_session.refresh(updated)
-    assert first.is_primary is False
-    assert updated.is_primary is True
-
-
 def test_session_delete_revokes(db_session, person):
-    payload = SessionCreate(
-        person_id=person.id,
-        status=SessionStatus.active,
-        token_hash="hash",
-        ip_address="127.0.0.1",
-        user_agent="pytest",
-        expires_at="2099-01-01T00:00:00+00:00",
+    session = AuthSession(
+        subscriber_id=person.id,
+        token_hash="unit-fixture-hash",
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
     )
-    session = auth_service.sessions.create(db_session, payload)
+    db_session.add(session)
+    db_session.commit()
     auth_service.sessions.delete(db_session, str(session.id))
     db_session.refresh(session)
     assert session.status == SessionStatus.revoked

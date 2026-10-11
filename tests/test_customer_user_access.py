@@ -106,9 +106,9 @@ def test_reinvite_preserves_established_password(db_session, subscriber, _no_ema
     svc._ensure_subscriber_local_credential(db_session, subscriber)
     db_session.refresh(cred)
     assert cred.must_change_password is False
-    from app.services.auth_flow import verify_password
+    from app.services.auth_flow import verify_user_password
 
-    assert verify_password("customer-chosen", cred.password_hash)
+    assert verify_user_password("customer-chosen", cred.password_hash)
 
 
 def test_invite_rejected_for_canceled_subscriber(db_session, subscriber, _no_emails):

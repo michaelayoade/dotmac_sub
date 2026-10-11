@@ -1,17 +1,18 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy.exc import IntegrityError
 from starlette.requests import Request
 
 from app.models.auth import (
     ApiKey,
     AuthProvider,
+    MFAMethod,
     MFAMethodType,
-    SessionStatus,
     UserCredential,
 )
+from app.models.auth import Session as AuthSession
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusServer
 from app.models.subscription_engine import SettingValueType
@@ -19,10 +20,6 @@ from app.schemas.auth import (
     ApiKeyCreate,
     ApiKeyGenerateRequest,
     ApiKeyUpdate,
-    MFAMethodCreate,
-    MFAMethodUpdate,
-    SessionCreate,
-    SessionUpdate,
     UserCredentialCreate,
     UserCredentialUpdate,
 )
@@ -206,18 +203,17 @@ def test_mfa_get_delete_errors(db_session):
         auth_service.mfa_methods.delete(db_session, str(uuid.uuid4()))
 
 
-def test_mfa_list_update_delete(db_session, person):
-    method = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type=MFAMethodType.totp,
-            label="primary",
-            secret="encrypted",
-            is_primary=True,
-            enabled=True,
-        ),
+def test_mfa_list_delete(db_session, person):
+    method = MFAMethod(
+        subscriber_id=person.id,
+        method_type=MFAMethodType.totp,
+        label="primary",
+        secret="unit-fixture-secret",
+        is_primary=True,
+        enabled=True,
     )
+    db_session.add(method)
+    db_session.commit()
     listed = auth_service.mfa_methods.list(
         db_session,
         person_id=str(person.id),
@@ -232,70 +228,12 @@ def test_mfa_list_update_delete(db_session, person):
     )
     assert method in listed
 
-    updated = auth_service.mfa_methods.update(
-        db_session,
-        str(method.id),
-        MFAMethodUpdate(label="updated", is_primary=True),
-    )
-    assert updated.label == "updated"
-
     auth_service.mfa_methods.delete(db_session, str(method.id))
     db_session.refresh(method)
     assert method.is_active is False
 
     fetched = auth_service.mfa_methods.get(db_session, str(method.id))
     assert fetched.id == method.id
-
-
-def test_mfa_update_not_found(db_session):
-    with pytest.raises(HTTPException):
-        auth_service.mfa_methods.update(
-            db_session, str(uuid.uuid4()), MFAMethodUpdate(label="x")
-        )
-
-
-def test_mfa_create_commit_error(db_session, person, monkeypatch):
-    def _boom():
-        raise IntegrityError("stmt", "params", "orig")
-
-    monkeypatch.setattr(db_session, "commit", _boom)
-    monkeypatch.setattr(db_session, "rollback", lambda: None)
-    with pytest.raises(HTTPException):
-        auth_service.mfa_methods.create(
-            db_session,
-            MFAMethodCreate(
-                person_id=person.id,
-                method_type=MFAMethodType.totp,
-                label="primary",
-                secret="encrypted",
-                is_primary=True,
-                enabled=True,
-            ),
-        )
-
-
-def test_mfa_update_commit_error(db_session, person, monkeypatch):
-    method = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type=MFAMethodType.totp,
-            label="primary",
-            secret="encrypted",
-            is_primary=True,
-            enabled=True,
-        ),
-    )
-
-    def _boom():
-        raise IntegrityError("stmt", "params", "orig")
-
-    monkeypatch.setattr(db_session, "commit", _boom)
-    monkeypatch.setattr(db_session, "rollback", lambda: None)
-    with pytest.raises(HTTPException):
-        auth_service.mfa_methods.update(
-            db_session, str(method.id), MFAMethodUpdate(is_primary=True)
-        )
 
 
 def test_sessions_get_delete_errors(db_session):
@@ -351,16 +289,14 @@ def test_api_key_list_filters(db_session, person):
     assert len(all_keys) == 1
 
 
-def test_sessions_create_list_update(db_session, person):
-    session = auth_service.sessions.create(
-        db_session,
-        SessionCreate(
-            person_id=person.id,
-            status=SessionStatus.active,
-            token_hash="hash",
-            expires_at="2099-01-01T00:00:00+00:00",
-        ),
+def test_sessions_list_get(db_session, person):
+    session = AuthSession(
+        subscriber_id=person.id,
+        token_hash="unit-fixture-hash",
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
     )
+    db_session.add(session)
+    db_session.commit()
     listed = auth_service.sessions.list(
         db_session,
         person_id=str(person.id),
@@ -372,37 +308,8 @@ def test_sessions_create_list_update(db_session, person):
     )
     assert session in listed
 
-    updated = auth_service.sessions.update(
-        db_session,
-        str(session.id),
-        SessionUpdate(status=SessionStatus.revoked, person_id=person.id),
-    )
-    assert updated.status == SessionStatus.revoked
-
     fetched = auth_service.sessions.get(db_session, str(session.id))
     assert fetched.id == session.id
-
-
-def test_sessions_create_default_status(db_session, person, monkeypatch):
-    monkeypatch.setattr(
-        auth_service.settings_spec, "resolve_value", lambda *args, **kwargs: "revoked"
-    )
-    session = auth_service.sessions.create(
-        db_session,
-        SessionCreate(
-            person_id=person.id,
-            token_hash="hash",
-            expires_at="2099-01-01T00:00:00+00:00",
-        ),
-    )
-    assert session.status == SessionStatus.revoked
-
-
-def test_sessions_update_not_found(db_session):
-    with pytest.raises(HTTPException):
-        auth_service.sessions.update(
-            db_session, str(uuid.uuid4()), SessionUpdate(status=SessionStatus.revoked)
-        )
 
 
 def test_api_key_generate_with_person(db_session, person):

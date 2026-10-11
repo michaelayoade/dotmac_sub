@@ -410,6 +410,24 @@ An exact two-directional source ratchet tracks the temporary scalar callers
 across application and operator entry points. Migration 526 is a Sub-owned
 additive mirror, not a kernel-lineage stamp or an authority cutover.
 
+### Subscription expiry and prepaid renewal boundary
+
+`access.subscription_lifecycle` alone writes terminal subscription state,
+reason-scoped enforcement locks, and the account/access projections. The
+scheduled catalog-expiry adapter may request that transition only after an
+explicit fixed-term `Subscription.end_at` is reached and current prepaid
+coverage is resolved. `Subscription.next_billing_at` is a billing projection,
+not a terminal contract end: its due state is interpreted by
+`financial.prepaid_service_renewals` and `financial.prepaid_enforcement`.
+An unfunded due service remains nonterminal, and existing suspended prepaid
+locks remain available for later payment recovery; historically missing locks
+need a reviewed repair. `access.prepaid_expiry_lock_repair` owns the exact
+historical-lock admissibility decision and delegates the physical lock write to
+`access.subscription_lifecycle`; it cannot infer prepaid authority from a
+suspended status alone. The expiry adapter must not settle
+funding, create a prepaid lock, or resolve one merely because a billing anchor
+is past due.
+
 <!-- BEGIN GENERATED SOT MANIFEST -->
 ## Contracted Ownership Manifest
 
@@ -1212,6 +1230,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `access.test_connection` | bounded subscription test-access grants | `authoritative_record` | staff command ← `auth.permission_gate`<br>grant records ← `access.test_connection`<br>test configuration ← `control.settings_spec` | `owner_managed` | `native` | customer experience and network operations | `docs/designs/SUBSCRIPTION_TEST_CONNECTION.md`<br>`docs/designs/TEST_CONNECTION_FINANCE_ALERT.md`<br>`tests/test_subscription_test_connection.py`<br>`tests/integration/test_subscription_test_connection.py`<br>`tests/architecture/test_subscription_test_connection_boundary.py` |
 | `access.test_connection` | current time-bounded test-access evidence | `resolver` | grant records ← `access.test_connection`<br>security evidence ← `access.subscription_lifecycle` | `owner_managed` | `native` | customer experience and network operations | `docs/designs/SUBSCRIPTION_TEST_CONNECTION.md`<br>`docs/designs/TEST_CONNECTION_FINANCE_ALERT.md`<br>`tests/test_subscription_test_connection.py`<br>`tests/integration/test_subscription_test_connection.py`<br>`tests/architecture/test_subscription_test_connection_boundary.py` |
 | `access.test_connection` | current test-access network consequence | `transport` | grant records ← `access.test_connection`<br>security evidence ← `access.subscription_lifecycle` | `owner_managed` | `native` | customer experience and network operations | `docs/designs/SUBSCRIPTION_TEST_CONNECTION.md`<br>`docs/designs/TEST_CONNECTION_FINANCE_ALERT.md`<br>`tests/test_subscription_test_connection.py`<br>`tests/integration/test_subscription_test_connection.py`<br>`tests/architecture/test_subscription_test_connection_boundary.py` |
+| `access.prepaid_expiry_lock_repair` | reviewed expiry-cleared prepaid lock recovery | `application_coordinator` | reviewed exact-lock repair command ← `access.prepaid_expiry_lock_repair`<br>canonical subscription and account state ← `access.subscription_lifecycle`<br>historical expiry-resolved enforcement lock ← `access.subscription_lifecycle`<br>current prepaid service coverage ← `financial.prepaid_service_coverage`<br>current restriction policy ← `access.walled_garden_policy` | `coordinator_managed` | `native` | billing and network access operations | `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/runbooks/PREPAID_EXPIRY_LOCK_REPAIR.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_prepaid_expiry_lock_repair.py`<br>`tests/architecture/test_prepaid_expiry_lock_repair_boundary.py` |
 | `access.subscription_lifecycle_evidence` | immutable subscription lifecycle transition evidence | `authoritative_record` | canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>typed lifecycle command evidence ← `access.subscription_lifecycle` | `participant` | `complete` | Access lifecycle and customer service-level owners | `docs/designs/OUTAGE_SLA_SPINE.md`<br>`tests/test_subscription_lifecycle_evidence.py`<br>`tests/test_subscription_lifecycle_history.py`<br>`tests/integration/test_lifecycle_events_append_only_postgres.py`<br>`tests/integration/test_lifecycle_evidence_authority_migration.py` |
 | `access.subscription_lifecycle_evidence` | period-scoped subscription lifecycle evidence history | `resolver` | immutable subscription lifecycle evidence rows ← `access.subscription_lifecycle_evidence` | `participant` | `complete` | Access lifecycle and customer service-level owners | `docs/designs/OUTAGE_SLA_SPINE.md`<br>`tests/test_subscription_lifecycle_evidence.py`<br>`tests/test_subscription_lifecycle_history.py`<br>`tests/integration/test_lifecycle_events_append_only_postgres.py`<br>`tests/integration/test_lifecycle_evidence_authority_migration.py` |
 | `access.pppoe_credentials` | canonical PPPoE access credential identity and secret | `authoritative_record` | canonical subscriber identity ← `customer.accounts`<br>canonical subscription lifecycle state ← `access.subscription_lifecycle`<br>catalog-linked target RADIUS profile ← `service_intent.catalog_policy`<br>PPPoE credential generation settings ← `control.settings_spec`<br>credential encryption policy ← `secrets.credential_crypto`<br>typed PPPoE credential command ← `access.pppoe_credentials` | `participant` | `shadowing` | network access | `docs/designs/PROVISIONING_LIFECYCLE_SOT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_pppoe_auto_generation.py`<br>`tests/test_web_catalog_subscriptions.py`<br>`tests/architecture/test_pppoe_activation_boundary.py` |
@@ -4986,7 +5005,11 @@ Dependency order:
 
 Rule: routes authenticate and authorize, but session lifecycle and revocation
 policy belongs in session services. Do not duplicate cookie/session mutation
-logic in route handlers.
+logic in route handlers. Generic administrative session/MFA POST and PATCH
+writers are retired; authentication owns session issuance and server-generated,
+proof-activated MFA enrollment. GET and DELETE retain read/revoke/reset access.
+See `docs/designs/ADMIN_AUTH_CREDENTIAL_WRITE_RETIREMENT.md` for the consumer
+inventory and retirement guard.
 
 The read-only admin control-plane projection may aggregate database-session
 counts and Redis health, but it does not enumerate Redis keys or become a

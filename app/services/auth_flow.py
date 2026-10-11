@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.metrics import CREDENTIAL_FORMAT_REJECTIONS
 from app.models.auth import (
     AuthProvider,
     MFAMethod,
@@ -79,7 +80,7 @@ PASSWORD_CONTEXT = CryptContext(
     # "bcrypt" is deliberately NOT a passlib scheme: with bcrypt>=5 passlib's
     # backend self-test passes a >72-byte secret and raises ValueError, which
     # breaks every bcrypt verification. Legacy bcrypt hashes are verified by
-    # `_verify_legacy_bcrypt` via `bcrypt.checkpw` instead (see verify_password).
+    # `_verify_legacy_bcrypt` via `bcrypt.checkpw` instead (see verify_user_password).
     schemes=["pbkdf2_sha256", "sha512_crypt"],
     default="pbkdf2_sha256",
     deprecated="auto",
@@ -557,37 +558,6 @@ def _issue_mfa_token(
     return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
 
 
-def _issue_mfa_enrollment_token(
-    db: Session | None,
-    principal_id: str,
-    principal_type: str = "system_user",
-    *,
-    staff_binding: staff_party_authentication.StaffSessionBinding | None = None,
-) -> str:
-    now = _now()
-    payload = {
-        "sub": principal_id,
-        "principal_id": principal_id,
-        "principal_type": principal_type,
-        "typ": "mfa_enrollment",
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=5)).timestamp()),
-    }
-    if principal_type == "system_user":
-        if staff_binding is None:
-            raise staff_party_authentication.StaffProjectionError(
-                staff_party_authentication.StaffProjectionRefusal.projection_missing,
-                principal_id,
-            )
-        if str(staff_binding.system_user_id) != str(principal_id):
-            raise staff_party_authentication.StaffProjectionError(
-                staff_party_authentication.StaffProjectionRefusal.projection_conflict,
-                principal_id,
-            )
-        payload["party_id"] = str(staff_binding.party_id)
-    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
-
-
 def staff_binding_from_token_payload(
     payload: Mapping[str, object],
     *,
@@ -954,10 +924,10 @@ def _resolve_access_credential_match(
         # Portal login via PPPoE secrets is being retired: bcrypt-format
         # secret hashes were always refused here (passlib raised ValueError
         # under bcrypt 5). Keep refusing them rather than newly enabling them
-        # now that verify_password can verify bcrypt.
+        # now that verify_user_password can verify bcrypt.
         if _is_bcrypt_hash(credential.secret_hash):
             raise ValueError("bcrypt-format PPPoE secret not accepted")
-        password_matches = verify_password(password, credential.secret_hash)
+        password_matches = verify_service_secret(password, credential.secret_hash)
     except ValueError:
         logger.info(
             "Access credential login refused: stored PPPoE secret unavailable",
@@ -1036,6 +1006,7 @@ def _verify_legacy_bcrypt(password: str, password_hash: str) -> bool:
       password or hash.
     """
     if password_hash.startswith(_BCRYPT_UNSUPPORTED_PREFIXES):
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
         return False
     password_bytes = password.encode("utf-8", errors="surrogatepass")
     if len(password_bytes) > _BCRYPT_MAX_PASSWORD_BYTES:
@@ -1050,18 +1021,47 @@ def _verify_legacy_bcrypt(password: str, password_hash: str) -> bool:
     try:
         return bool(bcrypt.checkpw(password_bytes, password_hash.encode("utf-8")))
     except (ValueError, TypeError):
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
         return False
 
 
-def verify_password(password: str, password_hash: str | None) -> bool:
-    if not password_hash:
+def _verify_legacy_stored_credential(password: str, stored: str | None) -> bool:
+    """Verification-only compatibility; no representation or protocol writes."""
+    if not stored:
         return False
-    decrypted = decrypt_credential(password_hash)
-    if decrypted != password_hash:
-        return secrets.compare_digest(password, decrypted or "")
-    if _is_bcrypt_hash(password_hash):
-        return _verify_legacy_bcrypt(password, password_hash)
-    return cast(bool, PASSWORD_CONTEXT.verify(password, password_hash))
+    try:
+        decrypted = decrypt_credential(stored)
+        if decrypted != stored:
+            return secrets.compare_digest(password, decrypted or "")
+        if _is_bcrypt_hash(stored):
+            return _verify_legacy_bcrypt(password, stored)
+        return cast(bool, PASSWORD_CONTEXT.verify(password, stored))
+    except (ValueError, TypeError, UnicodeError):
+        # Includes unknown/malformed hashes and unavailable reversible values.
+        # Never attach the submitted identifier, secret or hash to telemetry.
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
+        return False
+
+
+def verify_user_password(password: str, password_hash: str | None) -> bool:
+    """Verify UserCredential material, retaining temporary reversible support.
+
+    Refusal requires B-PR3's recovery route and audited cutover setting first.
+    This split neither enables rehash-on-login nor changes password creation.
+    """
+    return _verify_legacy_stored_credential(password, password_hash)
+
+
+def verify_service_secret(password: str, secret_hash: str | None) -> bool:
+    """Verify AccessCredential material without changing storage or protocols.
+
+    The existing shared PPPoE fallback refuses bcrypt; keep that acceptance
+    boundary even though user-password verification supports legacy bcrypt.
+    The portal's separate decrypt-and-compare fallback remains unchanged.
+    """
+    if secret_hash and _is_bcrypt_hash(secret_hash):
+        return False
+    return _verify_legacy_stored_credential(password, secret_hash)
 
 
 LOGIN_MAX_FAILED_ATTEMPTS = 5
@@ -1213,22 +1213,19 @@ def _new_recovery_code() -> str:
     return f"{raw[:5]}-{raw[5:]}"
 
 
-def generate_mfa_recovery_codes(
+def stage_mfa_recovery_codes(
     db: Session,
-    method: MFAMethod | str,
+    method_id: UUID | str,
     count: int = MFA_RECOVERY_CODE_COUNT,
 ) -> list[str]:
-    """Replace recovery codes for an MFA method and return plaintext once."""
-    mfa_method = (
-        method
-        if isinstance(method, MFAMethod)
-        else db.get(MFAMethod, coerce_uuid(method))
-    )
-    if not mfa_method:
-        raise HTTPException(status_code=404, detail="MFA method not found")
+    """Replace a method's recovery codes WITHOUT committing; plaintext returned.
+
+    The caller owns the transaction: forced enrollment stages these inside the
+    credential-gated owner transaction so a refusal discards them.
+    """
 
     db.query(MFARecoveryCode).filter(
-        MFARecoveryCode.mfa_method_id == mfa_method.id,
+        MFARecoveryCode.mfa_method_id == coerce_uuid(method_id),
         MFARecoveryCode.is_active.is_(True),
         MFARecoveryCode.used_at.is_(None),
     ).update({"is_active": False})
@@ -1245,11 +1242,29 @@ def generate_mfa_recovery_codes(
         codes.append(code)
         db.add(
             MFARecoveryCode(
-                mfa_method_id=mfa_method.id,
+                mfa_method_id=coerce_uuid(method_id),
                 code_hash=code_hash,
                 is_active=True,
             )
         )
+    return codes
+
+
+def generate_mfa_recovery_codes(
+    db: Session,
+    method: MFAMethod | str,
+    count: int = MFA_RECOVERY_CODE_COUNT,
+) -> list[str]:
+    """Replace recovery codes for an MFA method and return plaintext once."""
+    mfa_method = (
+        method
+        if isinstance(method, MFAMethod)
+        else db.get(MFAMethod, coerce_uuid(method))
+    )
+    if not mfa_method:
+        raise HTTPException(status_code=404, detail="MFA method not found")
+
+    codes = stage_mfa_recovery_codes(db, mfa_method.id, count)
     db.commit()
     return codes
 
@@ -1474,7 +1489,7 @@ class AuthFlow(ListResponseMixin):
                         db, credential_id, failure_policy
                     )
                 raise
-        elif credential and verify_password(password, snapshot_hash):
+        elif credential and verify_user_password(password, snapshot_hash):
             pass
         else:
             access_match = None
@@ -1958,26 +1973,62 @@ class AuthFlow(ListResponseMixin):
         return tokens_for_staged_session(staged)
 
     @staticmethod
-    def establish_enrolled_session(
-        db: Session, enrollment_token: str, request: Request
-    ) -> dict[str, str]:
-        """Session for a staff user who just completed forced MFA enrollment.
+    def confirm_mfa_enrollment(
+        db: Session,
+        enrollment_token: str,
+        method_id: str,
+        code: str,
+        request: Request,
+    ) -> tuple[dict[str, str], list[str]]:
+        """Forced enrollment: verify the code, then ONE credential-gated commit.
 
-        The enrollment challenge is bound to the credential like an MFA
-        challenge: a reset or disable between the password step and here
-        refuses the session instead of minting one.
+        The enrollment token is a v2 challenge bound to the credential id and
+        version (no legacy fallback). Phase A only reads; the factor, recovery
+        codes, session and audit are all written inside the owner transaction,
+        so a reset since the password step leaves nothing behind.
         """
 
         try:
             challenge = password_authentication.decode_challenge(
                 db, enrollment_token, expected_typ="mfa_enrollment"
             )
-            staged = password_authentication.establish_enrolled_session(
-                db, challenge, request=request
+        except password_authentication.PasswordAuthenticationError as exc:
+            raise _http_from_refusal(exc) from exc
+        if challenge.principal_type != "system_user":
+            raise HTTPException(status_code=401, detail="Invalid MFA token")
+        method = db.get(MFAMethod, coerce_uuid(method_id))
+        if (
+            not method
+            or method.subscriber_id is not None
+            or str(method.system_user_id) != str(challenge.principal_id)
+        ):
+            raise HTTPException(status_code=403, detail="MFA method not allowed")
+        if method.method_type != MFAMethodType.totp:
+            raise HTTPException(status_code=400, detail="Unsupported MFA method")
+        ensure_mfa_not_locked(method)
+        resolved_method_id = method.id
+        phase_a_secret = method.secret or ""
+        totp_ok = bool(
+            pyotp.TOTP(_decrypt_secret(db, method.secret or "")).verify(
+                code, valid_window=0
+            )
+        )
+        failure_policy = _mfa_failure_policy(db)
+        try:
+            outcome = password_authentication.confirm_mfa_enrollment(
+                db,
+                challenge,
+                request=request,
+                method_id=resolved_method_id,
+                expected_secret=phase_a_secret,
+                totp_ok=totp_ok,
+                failure_policy=failure_policy,
             )
         except password_authentication.PasswordAuthenticationError as exc:
             raise _http_from_refusal(exc) from exc
-        return tokens_for_staged_session(staged)
+        return tokens_for_staged_session(outcome.staged_session), list(
+            outcome.recovery_codes
+        )
 
     @staticmethod
     def mfa_verify_response(db: Session, mfa_token: str, code: str, request: Request):
@@ -2422,7 +2473,7 @@ def change_password(
     # write below is gated on it.
     expected_version = int(credential.credential_version)
     credential_id = credential.id
-    if not verify_password(current_password, credential.password_hash):
+    if not verify_user_password(current_password, credential.password_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
     if current_password == new_password:

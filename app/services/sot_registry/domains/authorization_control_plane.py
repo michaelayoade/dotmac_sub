@@ -1295,7 +1295,11 @@ DOMAIN = DomainSOT(
                 "(access credential) authentication never touches "
                 "user_credentials. The hash-representation hook "
                 "replace_password_representation is built but not called by "
-                "login."
+                "login. UserCredential verification uses verify_user_password; "
+                "AccessCredential verification uses verify_service_secret and "
+                "retains its existing bcrypt refusal. Reversible user material "
+                "remains compatible until the recovery route and audited "
+                "refusal setting are delivered and approved for cutover."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -1409,7 +1413,10 @@ DOMAIN = DomainSOT(
                         "their own small owner transaction."
                     ),
                     locking=(
-                        "No SELECT FOR UPDATE and no lock while hashing. A "
+                        "No SELECT FOR UPDATE and no lock while hashing. PPPoE "
+                        "gates take FOR SHARE on the access_credentials row "
+                        "after the principal lock so a secret change cannot "
+                        "commit mid-gate. A "
                         "session-minting command first takes FOR KEY SHARE on "
                         "the principal row (the lock its session foreign key "
                         "needs anyway), so its order matches reset: principal, "
@@ -1417,7 +1424,9 @@ DOMAIN = DomainSOT(
                         "UPDATE on the credential row; it waits on a concurrent "
                         "reset and PostgreSQL re-evaluates the predicate on the "
                         "new row version. Order: principal (key share), "
-                        "credential, recovery codes, MFA method, sessions. "
+                        "credential, recovery codes, MFA method, sessions; forced "
+                        "enrollment: principal, credential, MFA method, "
+                        "recovery codes, sessions. "
                         "lock_timeout is 5s and maps to a retryable refusal."
                     ),
                     idempotency=(

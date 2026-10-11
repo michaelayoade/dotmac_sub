@@ -220,5 +220,7 @@ DOMAIN = DomainSOT(
         "app.web.admin.auth",
     ),
     rule="Routes authenticate and authorize; session services own storage, "
-    "refresh, listing, revocation, and impersonation session policy.",
+    "refresh, listing, revocation, and impersonation session policy. Generic "
+    "administration cannot create or rewrite authentication sessions or MFA "
+    "credentials; authentication owns issuance and proof-bound enrollment.",
 )

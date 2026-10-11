@@ -17,7 +17,7 @@ from app.models.event_store import EventStore
 from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.subscriber import Subscriber
 from app.services import credential_recovery
-from app.services.auth_flow import hash_password, verify_password
+from app.services.auth_flow import hash_password, verify_user_password
 from app.services.domain_errors import DomainError
 from app.services.ephemeral_communication_actions import (
     EPHEMERAL_ACTION_METADATA_KEY,
@@ -198,7 +198,7 @@ def test_completion_changes_credential_revokes_sessions_and_spends_token(
 
     db_session.refresh(credential)
     db_session.refresh(session)
-    assert verify_password("Replacement-password1", credential.password_hash)
+    assert verify_user_password("Replacement-password1", credential.password_hash)
     assert credential.must_change_password is False
     assert session.status == SessionStatus.revoked
     assert outcome.sessions_revoked == 1
@@ -377,7 +377,7 @@ def test_system_user_reset_accepts_password_at_shared_minimum(
     )
     assert outcome.principal_type == "system_user"
     db_session.refresh(credential)
-    assert verify_password("Abcdef1!", credential.password_hash)
+    assert verify_user_password("Abcdef1!", credential.password_hash)
 
 
 def _second_recovery_subscriber(

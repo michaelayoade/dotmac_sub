@@ -9,7 +9,7 @@ from passlib.hash import pbkdf2_sha256, sha512_crypt
 from starlette.requests import Request
 
 from app.models.auth import AuthProvider, UserCredential
-from app.services.auth_flow import AuthFlow, hash_password, verify_password
+from app.services.auth_flow import AuthFlow, hash_password, verify_user_password
 
 
 def _bcrypt_hash(password: str, prefix: str = "2b") -> str:
@@ -21,12 +21,12 @@ def _bcrypt_hash(password: str, prefix: str = "2b") -> str:
 def test_supported_prefixes_verify(prefix):
     stored = _bcrypt_hash("correct horse", prefix)
     assert stored.startswith(f"${prefix}$")
-    assert verify_password("correct horse", stored) is True
-    assert verify_password("wrong horse", stored) is False
+    assert verify_user_password("correct horse", stored) is True
+    assert verify_user_password("wrong horse", stored) is False
 
 
 def test_2x_prefix_is_not_verifiable():
-    assert verify_password("pw", _bcrypt_hash("pw", "2x")) is False
+    assert verify_user_password("pw", _bcrypt_hash("pw", "2x")) is False
 
 
 @pytest.mark.parametrize(
@@ -42,23 +42,23 @@ def test_2x_prefix_is_not_verifiable():
     ],
 )
 def test_malformed_hash_is_false_not_error(bad):
-    assert verify_password("pw", bad) is False
+    assert verify_user_password("pw", bad) is False
 
 
 def test_truncated_real_hash_is_false():
     stored = _bcrypt_hash("pw")
-    assert verify_password("pw", stored[:-10]) is False
+    assert verify_user_password("pw", stored[:-10]) is False
 
 
 def test_exactly_72_bytes_ascii_verifies():
     password = "a" * 72
-    assert verify_password(password, _bcrypt_hash(password)) is True
+    assert verify_user_password(password, _bcrypt_hash(password)) is True
 
 
 def test_73_bytes_fails_closed_and_logs(caplog):
     stored = _bcrypt_hash("a" * 72)
     with caplog.at_level(logging.WARNING, logger="app.services.auth_flow"):
-        assert verify_password("a" * 73, stored) is False
+        assert verify_user_password("a" * 73, stored) is False
     records = [
         r
         for r in caplog.records
@@ -74,21 +74,23 @@ def test_73_bytes_fails_closed_and_logs(caplog):
 def test_multibyte_over_72_bytes_but_under_72_chars_fails():
     password = "é" * 40  # 40 characters, 80 bytes
     assert len(password) < 72 and len(password.encode("utf-8")) > 72
-    assert verify_password(password, _bcrypt_hash("é" * 36)) is False
+    assert verify_user_password(password, _bcrypt_hash("é" * 36)) is False
 
 
 def test_unicode_under_72_bytes_verifies():
     password = "pässwörd-日本語"
     assert len(password.encode("utf-8")) <= 72
-    assert verify_password(password, _bcrypt_hash(password)) is True
+    assert verify_user_password(password, _bcrypt_hash(password)) is True
 
 
 def test_other_schemes_unchanged():
-    assert verify_password("pw", pbkdf2_sha256.hash("pw")) is True
-    assert verify_password("nope", pbkdf2_sha256.hash("pw")) is False
-    assert verify_password("pw", sha512_crypt.using(rounds=5000).hash("pw")) is True
-    assert verify_password("nope", sha512_crypt.hash("pw")) is False
-    assert verify_password("pw", hash_password("pw")) is True
+    assert verify_user_password("pw", pbkdf2_sha256.hash("pw")) is True
+    assert verify_user_password("nope", pbkdf2_sha256.hash("pw")) is False
+    assert (
+        verify_user_password("pw", sha512_crypt.using(rounds=5000).hash("pw")) is True
+    )
+    assert verify_user_password("nope", sha512_crypt.hash("pw")) is False
+    assert verify_user_password("pw", hash_password("pw")) is True
 
 
 def _request() -> Request:
