@@ -409,13 +409,5 @@ class AuditEvents(ListResponseMixin):
         )
         return payload
 
-    @staticmethod
-    def delete(db: Session, event_id: str):
-        event = db.get(AuditEvent, event_id)
-        if not event:
-            raise HTTPException(status_code=404, detail="Audit event not found")
-        event.is_active = False
-        db.commit()
-
 
 audit_events = AuditEvents()

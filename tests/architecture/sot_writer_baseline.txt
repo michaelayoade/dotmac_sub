@@ -197,7 +197,6 @@ app.services.web_network_vlans
 app.services.web_provisioning_bulk_activate
 app.services.web_provisioning_migration
 app.services.web_reseller_routes
-app.services.web_subscriber_actions
 app.services.web_system_api_key_forms
 app.services.web_system_api_key_mutations
 app.services.web_system_company_info
