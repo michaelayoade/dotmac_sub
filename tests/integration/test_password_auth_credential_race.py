@@ -1096,11 +1096,12 @@ def test_reenrollment_after_admin_mfa_reset_leaves_exactly_one_primary(
     staff, token, setup_data = _staff_enrollment(factory, monkeypatch)
     assert _confirm(factory, token, setup_data)[0] == "ok"
     with factory() as session:
+        from tests.mfa_removal_helpers import make_admin
         from tests.test_password_authentication import _remove_mfa_command
 
         user_id = staff.id
-        session.commit()
-        disable_user_mfa(session, command=_remove_mfa_command(user_id))
+        admin_id = make_admin(session)
+        disable_user_mfa(session, command=_remove_mfa_command(user_id, admin_id))
         step = AuthFlow.login(session, staff.email, "secret", _make_request(), None)
         assert step["mfa_enrollment_required"] is True
         new_setup = AuthFlow.admin_mfa_setup(session, str(staff.id), "device2")

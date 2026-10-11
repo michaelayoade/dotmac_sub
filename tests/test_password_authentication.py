@@ -1137,23 +1137,14 @@ def test_replayed_token_with_wrong_code_does_not_count_against_any_factor(
     assert db_session.get(MFAMethod, attacker["method_id"]).failed_attempts == 0
 
 
-def _remove_mfa_command(user_id):
-    from uuid import uuid4
-
+def _remove_mfa_command(user_id, actor_id):
     from app.services import staff_provisioning
-    from app.services.owner_commands import CommandContext
+    from tests.mfa_removal_helpers import make_context
 
-    command_id = uuid4()
     return staff_provisioning.RemoveStaffMfaCommand(
-        context=CommandContext(
-            command_id=command_id,
-            correlation_id=command_id,
-            actor="user:admin-test",
-            scope=staff_provisioning.STAFF_ASSIGN_SCOPE,
-            reason="test",
-            idempotency_key=f"mfa-{command_id}",
-        ),
+        context=make_context(actor_id),
         user_id=user_id,
+        removal_reason="Verified by call-back, ticket T-1",
     )
 
 
@@ -1172,9 +1163,12 @@ def test_reenrollment_after_admin_mfa_reset_succeeds_with_one_primary(
         pyotp.TOTP(setup["secret"]).now(),
         _make_request(),
     )
+    from tests.mfa_removal_helpers import make_admin
+
+    admin_id = make_admin(db_session)
     user_id = system_user.id
     db_session.commit()
-    disable_user_mfa(db_session, command=_remove_mfa_command(user_id))
+    disable_user_mfa(db_session, command=_remove_mfa_command(user_id, admin_id))
 
     step = AuthFlow.login(
         db_session, system_user.email, "secret", _make_request(), None

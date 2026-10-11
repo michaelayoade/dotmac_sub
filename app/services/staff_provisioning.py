@@ -18,14 +18,13 @@ from uuid import UUID
 
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy import func, or_, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
 from app.models.auth import (
     AuthProvider,
     MFAMethod,
-    MFARecoveryCode,
     SessionStatus,
     UserCredential,
 )
@@ -34,7 +33,12 @@ from app.models.dispatch import TechnicianProfile
 from app.models.party import PartyDataClassification, PartyType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
-from app.services import auth_cache, credential_party_binding, credential_recovery
+from app.services import (
+    auth_cache,
+    credential_party_binding,
+    credential_recovery,
+    mfa_removal,
+)
 from app.services import auth_flow as auth_flow_service
 from app.services import party as party_registry
 from app.services import system_user_assignments as assignment_service
@@ -190,6 +194,7 @@ class RemoveStaffMfaCommand:
 
     context: CommandContext
     user_id: UUID
+    removal_reason: str
 
 
 @dataclass(frozen=True)
@@ -2131,6 +2136,42 @@ def set_staff_account_active(
     )
 
 
+def _require_may_remove_staff_mfa(
+    db: Session,
+    *,
+    actor_type: AuditActorType,
+    actor_id: str,
+    target_id: UUID,
+) -> None:
+    """Refuse unless an admin actor removes MFA of a non-admin, other account.
+
+    No role hierarchy exists: ``admin`` is the top role and short-circuits every
+    permission check, so "equal or higher" means the target holds the admin
+    role. The actor must be a human holding the admin role (matching direct
+    password set and the credential API), never an API key, and never the
+    target itself. The error is deliberately generic.
+    """
+
+    denied = _error(
+        "mfa_removal_forbidden",
+        "You are not permitted to remove this account's MFA.",
+    )
+    if actor_type != AuditActorType.user:
+        raise denied
+    if actor_id == str(target_id):
+        raise denied
+    try:
+        actor_uuid = UUID(actor_id)
+    except ValueError as exc:
+        raise denied from exc
+    actor_roles = assignment_service.system_user_role_names(db, actor_uuid)
+    if not any(role.lower() == "admin" for role in actor_roles):
+        raise denied
+    target_roles = assignment_service.system_user_role_names(db, target_id)
+    if any(role.lower() == "admin" for role in target_roles):
+        raise denied
+
+
 def remove_staff_mfa(
     db: Session,
     command: RemoveStaffMfaCommand,
@@ -2144,45 +2185,30 @@ def remove_staff_mfa(
 
     def operation() -> StaffAccountOutcome:
         actor_type, actor_id = _validate_context(command.context)
+        reason = mfa_removal.normalize_reason(command.removal_reason)
+        if reason is None:
+            raise _error(
+                "mfa_removal_reason_required",
+                mfa_removal.REASON_REQUIRED_MESSAGE,
+                field="removal_reason",
+            )
+        mfa_removal.set_lock_timeout(db)
         user = _locked_user(db, command.user_id)
-        methods = list(
-            db.scalars(
-                select(MFAMethod)
-                .where(MFAMethod.system_user_id == user.id)
-                .order_by(MFAMethod.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
+        _require_may_remove_staff_mfa(
+            db, actor_type=actor_type, actor_id=actor_id, target_id=user.id
         )
-        live = [m for m in methods if m.is_active or m.enabled or m.is_primary]
-        codes_deactivated = 0
-        revoked_sessions = 0
-        if live:
-            codes_deactivated = int(
-                db.query(MFARecoveryCode)
-                .filter(
-                    MFARecoveryCode.mfa_method_id.in_([m.id for m in live]),
-                    MFARecoveryCode.is_active.is_(True),
-                )
-                .update({"is_active": False}, synchronize_session=False)
-                or 0
-            )
-            for method in live:
-                method.is_active = False
-                method.enabled = False
-                method.is_primary = False
-                method.secret = None
-                method.failed_attempts = 0
-                method.locked_until = None
-            revoked_sessions = _revoke_active_sessions(db, user.id)
-            db.flush()
-        changed = bool(live)
+        result = mfa_removal.disable_locked_principal_factors(
+            db, principal_column=MFAMethod.system_user_id, principal_id=user.id
+        )
+        revoked_sessions = _revoke_active_sessions(db, user.id) if result.changed else 0
+        changed = result.changed
         _invalidate_auth_after_commit(db, user.id)
         evidence: dict[str, object] = {
             "changed": changed,
-            "methods_disabled": len(live),
-            "recovery_codes_deactivated": codes_deactivated,
+            "methods_disabled": result.methods_disabled,
+            "recovery_codes_deactivated": result.recovery_codes_deactivated,
             "revoked_sessions": int(revoked_sessions),
+            "removal_reason": reason,
         }
         _stage_audit(
             db,
@@ -2194,10 +2220,12 @@ def remove_staff_mfa(
             metadata=evidence,
         )
         if changed:
-            emit_event(
+            _emit_staff_event(
                 db,
-                EventType.credential_administration_completed,
-                {
+                event_type=EventType.credential_administration_completed,
+                user=user,
+                context=command.context,
+                payload={
                     "schema_version": 1,
                     "principal_type": "system_user",
                     "principal_id": str(user.id),
@@ -2206,10 +2234,11 @@ def remove_staff_mfa(
                     "transition": "staff_mfa_removed",
                     "invalidate_sessions": True,
                     "sessions_revoked": int(revoked_sessions),
-                    "recovery_codes_deactivated": codes_deactivated,
-                    "methods_disabled": len(live),
+                    "recovery_codes_deactivated": result.recovery_codes_deactivated,
+                    "methods_disabled": result.methods_disabled,
+                    "removed_at": datetime.now(UTC).isoformat(),
+                    "notify_mfa_removal": True,
                 },
-                actor=command.context.actor,
             )
         return _outcome(
             user,
@@ -2220,12 +2249,17 @@ def remove_staff_mfa(
             context=command.context,
         )
 
-    return execute_owner_command(
-        db,
-        definition=_REMOVE_MFA_COMMAND,
-        context=command.context,
-        operation=operation,
-    )
+    try:
+        return execute_owner_command(
+            db,
+            definition=_REMOVE_MFA_COMMAND,
+            context=command.context,
+            operation=operation,
+        )
+    except OperationalError as exc:
+        if mfa_removal.is_lock_timeout(exc):
+            raise _error("lock_timeout", mfa_removal.LOCK_TIMEOUT_MESSAGE) from exc
+        raise
 
 
 def find_by_email(db: Session, email: str) -> SystemUser | None:

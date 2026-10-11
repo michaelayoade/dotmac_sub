@@ -94,14 +94,21 @@ def test_non_admin_with_permission_is_denied_and_nothing_changes(
             return Query(model)
 
     app.dependency_overrides[get_db] = lambda: Db()
-    assert TestClient(app).delete(f"/api/v1/mfa-methods/{mid}").status_code == 403
+    assert (
+        TestClient(app)
+        .delete(f"/api/v1/mfa-methods/{mid}?reason=Verified+by+phone+T-1")
+        .status_code
+        == 403
+    )
     assert db_session.get(MFAMethod, method.id).is_active is True
 
 
 def test_missing_actor_identity_fails_closed(db_session, subscriber):
     method = _method(db_session, subscriber)
     mid = str(method.id)
-    response = TestClient(_app({}, db_session)).delete(f"/api/v1/mfa-methods/{mid}")
+    response = TestClient(_app({}, db_session)).delete(
+        f"/api/v1/mfa-methods/{mid}?reason=Verified+by+phone+T-1"
+    )
     assert response.status_code == 403
     assert db_session.get(MFAMethod, method.id).is_active is True
 
@@ -112,7 +119,9 @@ def test_admin_revocation_disables_method_codes_and_audits_atomically(
     primary = _method(db_session, subscriber, primary=True, codes=2)
     other = _method(db_session, subscriber, primary=False, codes=1)
     pid, oid, sid = str(primary.id), other.id, str(subscriber.id)
-    response = TestClient(_app(ADMIN, db_session)).delete(f"/api/v1/mfa-methods/{pid}")
+    response = TestClient(_app(ADMIN, db_session)).delete(
+        f"/api/v1/mfa-methods/{pid}?reason=Verified+by+phone+T-1"
+    )
     assert response.status_code == 204
     db_session.expire_all()
     row = db_session.get(MFAMethod, primary.id)
@@ -150,14 +159,24 @@ def test_repeat_revocation_is_a_noop_without_second_audit(db_session, subscriber
     method = _method(db_session, subscriber)
     mid = str(method.id)
     client = TestClient(_app(ADMIN, db_session))
-    assert client.delete(f"/api/v1/mfa-methods/{mid}").status_code == 204
-    assert client.delete(f"/api/v1/mfa-methods/{mid}").status_code == 204
+    assert (
+        client.delete(
+            f"/api/v1/mfa-methods/{mid}?reason=Verified+by+phone+T-1"
+        ).status_code
+        == 204
+    )
+    assert (
+        client.delete(
+            f"/api/v1/mfa-methods/{mid}?reason=Verified+by+phone+T-1"
+        ).status_code
+        == 204
+    )
     assert db_session.query(AuditEvent).count() == 1
 
 
 def test_unknown_method_is_404_without_audit(db_session):
     response = TestClient(_app(ADMIN, db_session)).delete(
-        f"/api/v1/mfa-methods/{uuid4()}"
+        f"/api/v1/mfa-methods/{uuid4()}?reason=Verified+by+phone+T-1"
     )
     assert response.status_code == 404
     assert db_session.query(AuditEvent).count() == 0
@@ -172,7 +191,9 @@ def test_audit_failure_rolls_back_the_state_change(monkeypatch, db_session, subs
 
     monkeypatch.setattr(auth_service, "stage_audit_event", boom)
     with pytest.raises(RuntimeError):
-        auth_service.mfa_methods.delete(db_session, str(mid), actor_id="admin")
+        auth_service.mfa_methods.delete(
+            db_session, str(mid), actor_id="admin", reason="unit test reason"
+        )
     db_session.expire_all()
     row = db_session.get(MFAMethod, mid)
     assert (row.is_active, row.enabled, row.is_primary) == (True, True, True)
@@ -187,7 +208,9 @@ def test_audit_failure_rolls_back_the_state_change(monkeypatch, db_session, subs
 def test_service_refuses_blank_actor(db_session, subscriber):
     method = _method(db_session, subscriber)
     with pytest.raises(HTTPException) as exc:
-        auth_service.mfa_methods.delete(db_session, str(method.id), actor_id=" ")
+        auth_service.mfa_methods.delete(
+            db_session, str(method.id), actor_id=" ", reason="unit test reason"
+        )
     assert exc.value.status_code == 403
 
 
@@ -210,12 +233,19 @@ def test_disable_clears_seed_and_revokes_principal_sessions_with_event(
     )
     db_session.commit()
     mid = method.id
-    auth_service.mfa_methods.delete(db_session, str(mid), actor_id="admin")
+    auth_service.mfa_methods.delete(
+        db_session, str(mid), actor_id="admin", reason="unit test reason"
+    )
     db_session.expire_all()
     assert db_session.get(MFAMethod, mid).secret is None
     session = db_session.query(AuthSession).one()
     assert session.status == SessionStatus.revoked
-    payload = db_session.query(EventStore).one().payload
+    payload = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "credential_administration.completed")
+        .one()
+        .payload
+    )
     assert payload["invalidate_sessions"] is True
     assert payload["principal_type"] == "subscriber"
     assert payload["sessions_revoked"] == 1
@@ -233,7 +263,9 @@ def test_stolen_seed_cannot_reconfirm_disabled_method_nor_demote_new_primary(
     seed = pyotp.random_base32()
     old = _method(db_session, subscriber)
     old_id, sub_id = old.id, str(subscriber.id)
-    auth_service.mfa_methods.delete(db_session, str(old_id), actor_id="admin")
+    auth_service.mfa_methods.delete(
+        db_session, str(old_id), actor_id="admin", reason="unit test reason"
+    )
     # Worst case: a pre-existing disabled row that still carries its seed.
     db_session.get(MFAMethod, old_id).secret = seed
     db_session.commit()
@@ -305,7 +337,9 @@ def test_setup_after_disabling_pending_row_creates_a_new_confirmable_row(
     first = getattr(flow, setup_name)(db_session, pid, "first")
     old_id = first["method_id"]
     if kind == "subscriber":
-        auth_service.mfa_methods.delete(db_session, str(old_id), actor_id="admin")
+        auth_service.mfa_methods.delete(
+            db_session, str(old_id), actor_id="admin", reason="unit test reason"
+        )
     else:
         # Staff/reseller factors are not removable through the generic API.
         old_row = db_session.get(MFAMethod, old_id)
@@ -377,7 +411,9 @@ def test_api_refuses_staff_and_reseller_factors_without_any_change(db_session, k
 
     method = _non_subscriber_method(db_session, kind)
     mid = method.id
-    response = TestClient(_app(ADMIN, db_session)).delete(f"/api/v1/mfa-methods/{mid}")
+    response = TestClient(_app(ADMIN, db_session)).delete(
+        f"/api/v1/mfa-methods/{mid}?reason=Verified+by+phone+T-1"
+    )
     assert response.status_code == 422
     assert "provisioning" in response.text
     db_session.expire_all()
@@ -388,3 +424,46 @@ def test_api_refuses_staff_and_reseller_factors_without_any_change(db_session, k
     assert all(s.status == SessionStatus.active for s in db_session.query(AuthSession))
     assert db_session.query(AuditEvent).count() == 0
     assert db_session.query(EventStore).count() == 0
+
+
+def test_reason_is_required_bounded_and_audited(db_session, subscriber):
+    method = _method(db_session, subscriber)
+    mid = str(method.id)
+    client = TestClient(_app(ADMIN, db_session))
+    for query in ("", "?reason=ab", "?reason=" + "x" * 501, "?reason=%20%20%20%20"):
+        assert client.delete(f"/api/v1/mfa-methods/{mid}{query}").status_code == 422, (
+            query
+        )
+    assert db_session.get(MFAMethod, method.id).is_active is True
+    assert db_session.query(AuditEvent).count() == 0
+    assert (
+        client.delete(
+            f"/api/v1/mfa-methods/{mid}?reason=Verified+by+call-back+T-9"
+        ).status_code
+        == 204
+    )
+    audit = db_session.query(AuditEvent).one()
+    assert audit.metadata_["removal_reason"] == "Verified by call-back T-9"
+
+
+def test_service_refuses_missing_reason(db_session, subscriber):
+    method = _method(db_session, subscriber)
+    with pytest.raises(HTTPException) as exc:
+        auth_service.mfa_methods.delete(
+            db_session, str(method.id), actor_id="admin", reason=" "
+        )
+    assert exc.value.status_code == 422
+    assert db_session.get(MFAMethod, method.id).is_active is True
+
+
+def test_removal_forms_require_a_reason_field():
+    from pathlib import Path
+
+    for name in (
+        "templates/admin/system/users/detail.html",
+        "templates/admin/resellers/detail.html",
+    ):
+        text = Path(name).read_text()
+        assert 'name="removal_reason"' in text
+    rows = Path("templates/admin/system/users/_table_rows.html").read_text()
+    assert "hx-prompt" in rows

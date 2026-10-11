@@ -10,6 +10,7 @@ from typing import cast
 import redis
 from fastapi import HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.auth import (
@@ -267,7 +268,7 @@ class MFAMethods(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def delete(db: Session, method_id: str, *, actor_id: str):
+    def delete(db: Session, method_id: str, *, actor_id: str, reason: str):
         """Disable one MFA method, its recovery codes and the audit atomically.
 
         Recovery codes are keyed to a method (``mfa_method_id``), so disabling a
@@ -279,6 +280,13 @@ class MFAMethods(ListResponseMixin):
 
         if not actor_id or not actor_id.strip():
             raise HTTPException(status_code=403, detail="Administrator is required")
+        from app.services import mfa_removal
+
+        cleaned_reason = mfa_removal.normalize_reason(reason)
+        if cleaned_reason is None:
+            raise HTTPException(
+                status_code=422, detail=mfa_removal.REASON_REQUIRED_MESSAGE
+            )
         from app.models.auth import Session as _AuthSession
         from app.services.credential_administration import (
             PrincipalType,
@@ -360,6 +368,7 @@ class MFAMethods(ListResponseMixin):
                     "method_type": method.method_type.value,
                     "recovery_codes_deactivated": int(codes_deactivated),
                     "sessions_revoked": int(sessions_revoked),
+                    "removal_reason": cleaned_reason,
                 }
                 stage_audit_event(
                     db,
@@ -373,17 +382,26 @@ class MFAMethods(ListResponseMixin):
                     db,
                     EventType.credential_administration_completed,
                     {
-                        **evidence,
+                        **{k: v for k, v in evidence.items() if k != "removal_reason"},
                         "schema_version": 1,
                         "aggregate_type": "mfa_method",
                         "aggregate_id": str(method.id),
                         "transition": "mfa_method_disabled",
                         "invalidate_sessions": True,
+                        "removed_at": datetime.now(UTC).isoformat(),
+                        "notify_mfa_removal": True,
                     },
                     actor=actor_id.strip(),
                     subscriber_id=method.subscriber_id,
                 )
             db.commit()
+        except OperationalError as exc:
+            db.rollback()
+            if mfa_removal.is_lock_timeout(exc):
+                raise HTTPException(
+                    status_code=503, detail=mfa_removal.LOCK_TIMEOUT_MESSAGE
+                ) from exc
+            raise
         except BaseException:
             db.rollback()
             raise
