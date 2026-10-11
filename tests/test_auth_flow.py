@@ -1073,8 +1073,14 @@ def test_forgot_password_flow_rate_limited(db_session, person, monkeypatch):
 
 
 def test_web_forgot_password_submit_sends_email(db_session, person, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    from app.services import db_session_adapter as session_module
     from app.services import web_auth as web_auth_service
 
+    monkeypatch.setattr(
+        session_module, "SessionLocal", lambda: Session(bind=db_session.get_bind())
+    )
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     person.email = "web-forgot@example.com"
     credential = UserCredential(

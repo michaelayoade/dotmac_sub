@@ -136,7 +136,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +1 from tests/customer_profile_owner_support.py: canonical profile tests use
 #: a fresh Session within fixture isolation, preserving the caller Session.
 #: This is fast-unit evidence only; no production construction site is added.
-TEST_FIXTURE_BASELINE_TOTAL = 193
+# Six explicit fixture constructions in test_anonymous_recovery_adapter.py
+# exercise fresh lifecycle rollback and independent file-SQLite connections.
+# The production constructor inventory remains unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 199
 
 
 def _baseline() -> dict[str, int]:

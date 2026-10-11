@@ -233,7 +233,7 @@ def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
     db = object()
     recovery_request = MagicMock()
     monkeypatch.setattr(
-        web_reseller_auth_service.credential_recovery,
+        web_reseller_auth_service.anonymous_recovery_adapter,
         "request_password_recovery",
         recovery_request,
     )
@@ -247,7 +247,6 @@ def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
     assert response.status_code == 200
     assert "Check your email" in response.body.decode()
     recovery_request.assert_called_once()
-    called_db, command = recovery_request.call_args.args
-    assert called_db is db
+    command = recovery_request.call_args.kwargs["command"]
     assert command.email == "reseller@example.com"
     assert command.next_login_path == "/reseller/auth/login?next=/reseller/dashboard"

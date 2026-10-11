@@ -10,8 +10,12 @@ from sqlalchemy.orm import Session
 from starlette.responses import Response
 
 from app.csrf import renew_csrf_cookie
+from app.services import (
+    anonymous_recovery_adapter,
+    credential_recovery,
+    staff_party_authentication,
+)
 from app.services import auth_flow as auth_flow_service
-from app.services import credential_recovery, staff_party_authentication
 from app.services.auth_flow import AuthFlow, LoginAudience
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
@@ -516,18 +520,14 @@ def forgot_password_page(request: Request, success: bool = False):
 
 
 def forgot_password_submit(request: Request, db: Session, email: str):
-    try:
-        credential_recovery.request_password_recovery(
-            db,
-            credential_recovery.RequestPasswordRecoveryCommand(
-                context=_credential_recovery_context(
-                    "Administrative web password recovery request"
-                ),
-                email=email,
+    anonymous_recovery_adapter.request_password_recovery(
+        command=credential_recovery.RequestPasswordRecoveryCommand(
+            context=_credential_recovery_context(
+                "Administrative web password recovery request"
             ),
-        )
-    except Exception:
-        logger.info("Password reset request failed for %s", email, exc_info=True)
+            email=email,
+        ),
+    )
     return templates.TemplateResponse(
         "auth/forgot-password.html",
         {

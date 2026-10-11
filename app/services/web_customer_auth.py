@@ -21,14 +21,15 @@ from app.models.catalog import AccessCredential
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services import auth_flow as auth_flow_service
 from app.services import (
+    anonymous_recovery_adapter,
     credential_recovery,
     customer_credential_enrollment,
     customer_login_identity,
     customer_portal,
     radius_auth,
 )
+from app.services import auth_flow as auth_flow_service
 from app.services import module_manager as module_manager_service
 from app.services import (
     password_authentication as pa,
@@ -305,21 +306,15 @@ def customer_forgot_password_page(request: Request, db: Session, success: bool =
 
 
 def customer_forgot_password_submit(request: Request, db: Session, email: str):
-    try:
-        credential_recovery.request_password_recovery(
-            db,
-            credential_recovery.RequestPasswordRecoveryCommand(
-                context=_credential_recovery_context(
-                    "Customer portal password recovery request"
-                ),
-                email=email,
-                next_login_path=_CUSTOMER_RESET_LOGIN_PATH,
+    anonymous_recovery_adapter.request_password_recovery(
+        command=credential_recovery.RequestPasswordRecoveryCommand(
+            context=_credential_recovery_context(
+                "Customer portal password recovery request"
             ),
-        )
-    except Exception:
-        logger.info(
-            "Customer password reset request failed for %s", email, exc_info=True
-        )
+            email=email,
+            next_login_path=_CUSTOMER_RESET_LOGIN_PATH,
+        ),
+    )
     return templates.TemplateResponse(
         "customer/auth/forgot-password.html",
         {"request": request, "success": True},

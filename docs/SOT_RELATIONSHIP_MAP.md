@@ -5654,7 +5654,13 @@ Authorization:
    capability, revokes database sessions, and stages PII-safe audit and event
    evidence. The completion-event projection handler is the one idempotent repair
    path for auth-cache invalidation and customer/reseller portal-session
-   revocation. API and web adapters own transport error mapping.
+   revocation. API and web adapters own transport error mapping. Anonymous
+   API, staff web, customer web, and reseller web recovery use
+   `anonymous_recovery_adapter` with a dedicated owner-command session. Owner
+   and session lifecycle failures return the existing generic accepted response
+   after owner rollback/adapter closure, with only an unlabeled failure counter
+   and fixed log code (no exception or request data). Exact-principal recovery
+   and reset redemption retain their explicit errors.
 10. `auth.customer_credential_enrollment`: owns purpose-bound local credential
    enrollment for referral-created customer accounts and the atomic
    Subscriber-email verification consequence. It creates no placeholder

@@ -1302,3 +1302,9 @@ CREDENTIAL_FORMAT_REJECTIONS = Counter(
     "credential_format_rejections_total",
     "Credential verification refused unavailable, unknown or malformed stored material",
 )
+
+
+ANONYMOUS_RECOVERY_FAILURES = Counter(
+    "anonymous_password_recovery_failures_total",
+    "Anonymous recovery owner or session lifecycle failures.",
+)

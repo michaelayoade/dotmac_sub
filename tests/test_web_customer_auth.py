@@ -594,7 +594,7 @@ def test_customer_forgot_password_submit_uses_shared_flow(monkeypatch, db_sessio
 
     recovery_request = MagicMock()
     monkeypatch.setattr(
-        web_customer_auth_service.credential_recovery,
+        web_customer_auth_service.anonymous_recovery_adapter,
         "request_password_recovery",
         recovery_request,
     )
@@ -606,8 +606,7 @@ def test_customer_forgot_password_submit_uses_shared_flow(monkeypatch, db_sessio
     assert response.status_code == 200
     assert "Check your email" in response.body.decode()
     recovery_request.assert_called_once()
-    called_db, command = recovery_request.call_args.args
-    assert called_db is db_session
+    command = recovery_request.call_args.kwargs["command"]
     assert command.email == "customer@example.com"
     assert command.next_login_path == "/portal/auth/login?next=/portal/dashboard"
 
