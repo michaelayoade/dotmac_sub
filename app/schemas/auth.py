@@ -9,7 +9,6 @@ from pydantic import (
     ConfigDict,
     Field,
     field_serializer,
-    model_validator,
 )
 
 from app.models.auth import AuthProvider, MFAMethodType, SessionStatus
@@ -29,55 +28,24 @@ class UserCredentialFields(BaseModel):
     is_active: bool = True
 
 
-class UserCredentialBase(UserCredentialFields):
+class UserCredentialCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     subscriber_id: UUID = Field(
         validation_alias=AliasChoices("subscriber_id", "person_id")
     )
-
-
-class UserCredentialCreate(UserCredentialBase):
-    password_hash: str | None = Field(default=None, max_length=255)
-
-    @model_validator(mode="after")
-    def _validate_local_credentials(self) -> UserCredentialCreate:
-        if self.provider == AuthProvider.local:
-            if not self.username or not self.password_hash:
-                raise ValueError(
-                    "Local credentials require username and password_hash."
-                )
-        return self
+    provider: AuthProvider | None = None
+    username: str | None = Field(default=None, max_length=150)
+    radius_server_id: UUID | None = None
+    password: str | None = Field(default=None, max_length=255, repr=False)
 
 
 class UserCredentialUpdate(BaseModel):
-    subscriber_id: UUID | None = Field(
-        default=None, validation_alias=AliasChoices("subscriber_id", "person_id")
-    )
-    provider: AuthProvider | None = None
-    username: str | None = Field(default=None, max_length=150)
-    password_hash: str | None = Field(default=None, max_length=255)
-    radius_server_id: UUID | None = None
-    must_change_password: bool | None = None
-    password_updated_at: datetime | None = None
-    failed_login_attempts: int | None = None
-    locked_until: datetime | None = None
-    last_login_at: datetime | None = None
-    is_active: bool | None = None
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    @model_validator(mode="after")
-    def _validate_local_credentials(self) -> UserCredentialUpdate:
-        fields_set = self.model_fields_set
-        if "provider" in fields_set and self.provider == AuthProvider.local:
-            if "username" not in fields_set or not self.username:
-                raise ValueError("Local credentials require username.")
-            if "password_hash" not in fields_set or not self.password_hash:
-                raise ValueError("Local credentials require password_hash.")
-        if "username" in fields_set and not self.username:
-            if self.provider == AuthProvider.local or "provider" not in fields_set:
-                raise ValueError("Cannot clear username for local credentials.")
-        if "password_hash" in fields_set and not self.password_hash:
-            if self.provider == AuthProvider.local or "provider" not in fields_set:
-                raise ValueError("Cannot clear password_hash for local credentials.")
-        return self
+    username: str | None = Field(default=None, max_length=150)
+    radius_server_id: UUID | None = None
+    password: str | None = Field(default=None, max_length=255, repr=False)
 
 
 class UserCredentialRead(UserCredentialFields):

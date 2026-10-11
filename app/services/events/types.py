@@ -489,6 +489,7 @@ class EventType(enum.Enum):
     # Credential recovery lifecycle (2)
     password_recovery_requested = "password_recovery.requested"
     password_recovery_completed = "password_recovery.completed"
+    credential_administration_completed = "credential_administration.completed"
 
     # Field-mobile OIDC federation lifecycle (2). Payloads carry the ceremony,
     # binding and deployment identities and the admitted principal — never a

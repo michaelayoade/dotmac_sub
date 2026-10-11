@@ -127,7 +127,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +1 from tests/integration/test_password_auth_credential_race.py: independent
 #: worker sessions prove the credential-version gate, MFA completion and
 #: recovery-code spend serialize against a concurrent reset.
-TEST_FIXTURE_BASELINE_TOTAL = 189
+#: +2 from tests/test_credential_administration.py: independent read/write
+#: sessions prove retained ORM objects are refreshed by locked owner admission.
+#: Production preparation uses app.db.SessionLocal, adding no construction debt.
+TEST_FIXTURE_BASELINE_TOTAL = 191
 
 
 def _baseline() -> dict[str, int]:

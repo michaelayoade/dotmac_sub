@@ -591,6 +591,27 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         ),
     ),
     SourceSurface(
+        path="app/services/customer_registration_metadata.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.registration_metadata",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "The registered flush-only participant applies subscriber number, "
+            "category and notes only inside auth.credential_administration, after "
+            "its principal lock. These existing form fields previously passed "
+            "through generic Subscribers.update; explicit assignments add four "
+            "counted sites while metadata, optional login, audit and outbox now "
+            "share the coordinator transaction. Its local cohort writes must "
+            "retire after cutover, not reach the target database directly."
+        ),
+    ),
+    SourceSurface(
         path="app/services/customer_location_requests.py",
         family=EntryPointFamily.SERVICE,
         authority=AuthorityRole.PARALLEL_WRITER,

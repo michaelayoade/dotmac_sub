@@ -20,6 +20,153 @@ from app.services.sot_manifest import (
 )
 from app.services.sot_registry.model import DomainSOT
 
+
+def _credential_administration_service(
+    name: str,
+    module: str,
+    concern: str,
+    *,
+    coordinator: bool,
+    events: tuple[str, ...],
+    dependencies: tuple[str, ...],
+) -> SOTService:
+    input_name = f"{name} command and canonical state"
+    return SOTService(
+        name=name,
+        module=module,
+        owns=(concern,),
+        depends_on=dependencies,
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name=concern,
+                    role=OwnerRole.APPLICATION_COORDINATOR
+                    if coordinator
+                    else OwnerRole.COMMAND_WRITER,
+                    input_names=(input_name,),
+                    canonical_writer=None if coordinator else name,
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name=input_name,
+                    owner=name,
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Typed authorized CommandContext and canonical principal, credential, registration metadata, and AuthSession rows; effective password/provider policy from control.settings_spec.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED
+                if coordinator
+                else TransactionMode.PARTICIPANT,
+                boundary="Public coordinator executes once on a transaction-free session; participants flush only. Credential, subscriber registration metadata, database session revocation, audit and outbox commit or roll back together. Preparation reads/hash occur on a separate session before locks.",
+                locking="Principal FOR UPDATE precedes credential FOR UPDATE; creation serializes on Subscriber. PostgreSQL per-lock wait is bounded at five seconds.",
+                idempotency="No durable command replay claim. Repeated deactivation is a no-op; unique credential identity arbitrates creation. Password reset is a fresh transition on each successful invocation.",
+                retries="Lock timeout is retryable only after rollback and maps to 503 Retry-After. Unknown commit outcome is not automatically retried; inspect committed state before resubmission.",
+            ),
+            errors=ErrorContract(
+                domain_codes=tuple(
+                    f"auth.credential_administration.{code}"
+                    for code in (
+                        "invalid_command_context",
+                        "invalid_password",
+                        "invalid_username",
+                        "invalid_principal",
+                        "principal_not_found",
+                        "credential_not_found",
+                        "radius_not_found",
+                        "invalid_provider",
+                        "stale_credential",
+                        "conflict",
+                        "lock_timeout",
+                    )
+                )
+                + (owner_command_boundary_error_codes(name) if coordinator else ()),
+                mapping_owner="app.api.auth and administrative web adapters",
+                retryable_codes=("auth.credential_administration.lock_timeout",),
+                fail_closed_on=(
+                    "missing trusted actor or credential-write scope",
+                    "active caller transaction including flushed writes",
+                    "stale principal/provider",
+                    "audit or outbox failure",
+                ),
+            ),
+            events=EventContract(
+                event_types=events,
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="Identifiers, version, transition and command evidence only; never passwords, hashes or submitted secret values.",
+                replay="Credential state and AuthSession revocation remain authoritative. Projection handler replay idempotently invalidates principal caches and portal projections.",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="administrative credential session invalidation",
+                    input_names=(input_name,),
+                    writer="auth.credential_administration_mutation",
+                    freshness="AuthSession revocation is atomic; cache/portal projection repair follows durable event dispatch.",
+                    stale_behavior="Failed handler remains retryable. Redis portal revocation remains asynchronous until R-PR2 AuthSession-backed portal validation is deployed.",
+                    drift_signal="Failed credential_session_projection handler attempt.",
+                    rebuild_operation="Replay credential_administration.completed for the exact principal.",
+                    repair_owner="auth.credential_administration",
+                ),
+            )
+            if coordinator
+            else (),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                new_owner=name,
+                old_owner="auth.UserCredentials generic create/update/delete and web subscriber optional-login split commits",
+                verification="Focused behavior and architecture tests plus PostgreSQL hosted concurrency tests.",
+                cutover_gate="All credential API and optional-login writers call the coordinator; arbitrary hash/standing fields return 422.",
+                fallback_retirement="Removed generic credential writers and local form hashing; no hash import HTTP interface.",
+            ),
+            steward="platform security",
+            design_refs=(
+                "docs/designs/CREDENTIAL_ADMINISTRATION.md",
+                "docs/adr/0002-owner-command-transaction-boundary.md",
+            ),
+            test_refs=(
+                "tests/test_credential_administration.py",
+                "tests/architecture/test_credential_administration_boundary.py",
+            ),
+        ),
+    )
+
+
+CREDENTIAL_ADMINISTRATION_SERVICES = (
+    _credential_administration_service(
+        "auth.credential_administration",
+        "app.services.credential_administration",
+        "administrative credential and subscriber login transition",
+        coordinator=True,
+        events=("credential_administration.completed", "subscriber.updated"),
+        dependencies=(
+            "auth.credential_administration_mutation",
+            "customer.registration_metadata",
+            "control.settings_spec",
+            "events.dispatcher",
+            "observability.audit_log",
+        ),
+    ),
+    _credential_administration_service(
+        "auth.credential_administration_mutation",
+        "app.services.credential_administration_mutation",
+        "administrative credential mutation",
+        coordinator=False,
+        events=("credential_administration.completed",),
+        dependencies=("events.dispatcher", "observability.audit_log"),
+    ),
+    _credential_administration_service(
+        "customer.registration_metadata",
+        "app.services.customer_registration_metadata",
+        "subscriber registration metadata mutation",
+        coordinator=False,
+        events=("subscriber.updated",),
+        dependencies=("events.dispatcher", "observability.audit_log"),
+    ),
+)
+
+
 DOMAIN = DomainSOT(
     domain="authorization_control_plane",
     # `oidc` joins `local` here because this domain implements it: the
@@ -29,6 +176,7 @@ DOMAIN = DomainSOT(
     authentication_mechanisms=("local", "oidc"),
     setting_domains=("auth",),
     services=(
+        *CREDENTIAL_ADMINISTRATION_SERVICES,
         SOTService(
             name="auth.permission_gate",
             module="app.services.auth_dependencies",
