@@ -30,7 +30,12 @@ from app.models.catalog import AccessCredential
 from app.services import auth_flow as auth_flow_service
 from app.services import password_authentication as pa
 from app.services.auth_flow import AuthFlow, change_password, hash_password
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
 from tests.test_auth_flow import _make_request, _system_user_with_credential
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 @pytest.fixture(autouse=True)

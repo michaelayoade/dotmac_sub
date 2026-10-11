@@ -4,6 +4,7 @@ import html
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 import pyotp
@@ -74,7 +75,11 @@ def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> 
 
 
 def _record_customer_local_login_failure(
-    db: Session, credential: UserCredential, *, now: datetime | None = None
+    db: Session,
+    credential: UserCredential,
+    *,
+    now: datetime | None = None,
+    request: Request | None = None,
 ) -> None:
     policy = pa.FailurePolicy(
         max_attempts=_setting_int(
@@ -90,6 +95,30 @@ def _record_customer_local_login_failure(
         policy,
         principal_type="subscriber",
         principal_id=str(credential.subscriber_id),
+        request=request,
+        surface=pa.DenialSurface.CUSTOMER_PORTAL,
+    )
+
+
+def _portal_denial(
+    request: Request,
+    *,
+    reason: pa.DenialReason,
+    target: pa.DenialTarget | None,
+    phase: pa.DenialPhase = pa.DenialPhase.PASSWORD,
+    effect: pa.MfaFailureEffect | None = None,
+    status_code: Literal[401, 429, 503] = 401,
+) -> None:
+    pa.record_authentication_denial(
+        pa.denial_for_request(
+            reason=reason,
+            surface=pa.DenialSurface.CUSTOMER_PORTAL,
+            phase=phase,
+            target=target,
+            request=request,
+            effect=effect,
+            status_code=status_code,
+        )
     )
 
 
@@ -122,7 +151,9 @@ def _customer_mfa_context_token(
     )
 
 
-def _decode_customer_mfa_context(db: Session, token: str) -> dict:
+def _decode_customer_mfa_context(
+    db: Session, token: str, *, request: Request | None = None
+) -> dict:
     try:
         payload = auth_flow_service._jwt_decode_token(  # noqa: SLF001
             token,
@@ -130,8 +161,26 @@ def _decode_customer_mfa_context(db: Session, token: str) -> dict:
             auth_flow_service._jwt_algorithm(db),  # noqa: SLF001
         )
     except JWTError as exc:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CHALLENGE,
+                surface=pa.DenialSurface.CUSTOMER_PORTAL,
+                phase=pa.DenialPhase.MFA,
+                target=None,
+                request=request,
+            )
+        )
         raise ValueError("Invalid MFA session") from exc
     if payload.get("typ") != "customer_mfa_context":
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CHALLENGE,
+                surface=pa.DenialSurface.CUSTOMER_PORTAL,
+                phase=pa.DenialPhase.MFA,
+                target=None,
+                request=request,
+            )
+        )
         raise ValueError("Invalid MFA session")
     return payload
 
@@ -189,7 +238,17 @@ def _verify_customer_mfa_token(
     code: str,
     request: Request,
 ) -> StagedSession:
-    challenge = pa.decode_challenge(db, mfa_token, expected_typ="mfa")
+    try:
+        challenge = pa.decode_challenge(db, mfa_token, expected_typ="mfa")
+    except pa.PasswordAuthenticationError:
+        _portal_denial(
+            request,
+            reason=pa.DenialReason.INVALID_CHALLENGE,
+            target=None,
+            phase=pa.DenialPhase.MFA,
+        )
+        raise
+    target = pa.challenge_denial_target(db, challenge)
     subscriber_id = str(context.get("subscriber_id") or "")
     if (
         challenge.principal_type != "subscriber"
@@ -197,24 +256,65 @@ def _verify_customer_mfa_token(
         or challenge.principal_id != subscriber_id
         or str(context.get("account_id") or "") != subscriber_id
     ):
+        _portal_denial(
+            request,
+            reason=pa.DenialReason.INVALID_CHALLENGE,
+            target=target,
+            phase=pa.DenialPhase.MFA,
+        )
         raise ValueError("Invalid MFA session")
     method = auth_flow_service._primary_totp_method(db, "subscriber", subscriber_id)  # noqa: SLF001
     if not method:
+        _portal_denial(
+            request,
+            reason=pa.DenialReason.METHOD,
+            target=target,
+            phase=pa.DenialPhase.MFA,
+        )
         raise ValueError("MFA method not found")
-    auth_flow_service.ensure_mfa_not_locked(method)
+    method_id = method.id
+    method_target = pa.DenialTarget(pa.DenialTargetKind.METHOD, method_id)
+    try:
+        auth_flow_service.ensure_mfa_not_locked(method)
+    except HTTPException:
+        _portal_denial(
+            request,
+            reason=pa.DenialReason.MFA_LOCKED,
+            target=method_target,
+            phase=pa.DenialPhase.MFA,
+            status_code=429,
+        )
+        raise
     secret = auth_flow_service._decrypt_secret(db, method.secret or "")  # noqa: SLF001
     totp_ok = pyotp.TOTP(secret).verify(code.strip(), valid_window=0)
-    return pa.complete_mfa(
-        db,
-        challenge,
-        request=request,
-        method_id=method.id,
-        totp_ok=totp_ok,
-        recovery_code_hash=None,
-        failure_policy=auth_flow_service._mfa_failure_policy(db),  # noqa: SLF001
-        session_sink="customer_portal",
-        expires_at=_portal_expiry(db, bool(context.get("remember"))),
-    )
+    failure_policy = auth_flow_service._mfa_failure_policy(db)  # noqa: SLF001
+    try:
+        return pa.complete_mfa(
+            db,
+            challenge,
+            request=request,
+            method_id=method.id,
+            totp_ok=totp_ok,
+            recovery_code_hash=None,
+            failure_policy=failure_policy,
+            session_sink="customer_portal",
+            expires_at=_portal_expiry(db, bool(context.get("remember"))),
+        )
+    except pa.PasswordAuthenticationError as exc:
+        effect = (
+            pa.MfaFailureEffect(method_id, failure_policy)
+            if exc.kind == "invalid_mfa_code"
+            else None
+        )
+        _portal_denial(
+            request,
+            reason=auth_flow_service._owner_denial_reason(exc),
+            target=method_target if effect else target,
+            phase=pa.DenialPhase.OWNER,
+            effect=effect,
+            status_code=503 if exc.kind == "lock_timeout" else 401,
+        )  # noqa: SLF001
+        raise
 
 
 def _portal_expiry(db: Session, remember: bool) -> datetime:
@@ -469,9 +569,13 @@ def customer_login_submit(
     remember: bool,
     next_url: str | None,
 ):
+    denial_target: pa.DenialTarget | None = None
     try:
         normalized_username = username.strip()
         if not normalized_username:
+            _portal_denial(
+                request, reason=pa.DenialReason.INVALID_CREDENTIALS, target=None
+            )
             raise ValueError("Username is required")
 
         account_id = None
@@ -492,6 +596,9 @@ def customer_login_submit(
         )
         refusal = customer_login_identity.resolution_error(local_resolution)
         if refusal is not None:
+            _portal_denial(
+                request, reason=pa.DenialReason.INVALID_CREDENTIALS, target=None
+            )
             raise refusal
         local_credential = (
             db.get(UserCredential, local_resolution.credential_id)
@@ -504,11 +611,17 @@ def customer_login_submit(
             local_credential is not None and "@" in normalized_username
         )
         if local_credential:
+            denial_target = pa.DenialTarget(
+                pa.DenialTargetKind.CREDENTIAL, local_credential.id
+            )
             now = datetime.now(UTC)
             locked_until = local_credential.locked_until
             if locked_until and locked_until.tzinfo is None:
                 locked_until = locked_until.replace(tzinfo=UTC)
             if locked_until and locked_until > now:
+                _portal_denial(
+                    request, reason=pa.DenialReason.LOCKED, target=denial_target
+                )
                 raise ValueError(
                     auth_flow_service.lockout_detail(
                         "Account locked", locked_until=locked_until
@@ -518,6 +631,11 @@ def customer_login_submit(
                 local_password_failed = True
             else:
                 if local_credential.must_change_password:
+                    _portal_denial(
+                        request,
+                        reason=pa.DenialReason.RESET_REQUIRED,
+                        target=denial_target,
+                    )
                     raise ValueError("Password reset required. Please contact support.")
 
                 authenticated_locally = True
@@ -541,7 +659,15 @@ def customer_login_submit(
 
             def raise_invalid_login() -> None:
                 if local_credential and local_password_failed:
-                    _record_customer_local_login_failure(db, local_credential)
+                    _record_customer_local_login_failure(
+                        db, local_credential, request=request
+                    )
+                else:
+                    _portal_denial(
+                        request,
+                        reason=pa.DenialReason.INVALID_CREDENTIALS,
+                        target=denial_target,
+                    )
                 raise ValueError("Invalid username or password")
 
             if local_password_failed and local_login_is_email_alias:
@@ -557,6 +683,9 @@ def customer_login_submit(
                 window_seconds=900,
             )
             if not decision.allowed:
+                _portal_denial(
+                    request, reason=pa.DenialReason.LOCKED, target=denial_target
+                )
                 raise ValueError(
                     auth_flow_service.lockout_detail(
                         "Account locked",
@@ -583,6 +712,14 @@ def customer_login_submit(
                 if radius_snapshot is not None
                 else None
             )
+            if radius_snapshot is not None:
+                denial_target = pa.DenialTarget(
+                    pa.DenialTargetKind.RADIUS, radius_snapshot.id
+                )
+            elif access_credential is not None:
+                denial_target = pa.DenialTarget(
+                    pa.DenialTargetKind.ACCESS, access_credential.id
+                )
             access_binding = (
                 (
                     access_credential.id,
@@ -598,10 +735,7 @@ def customer_login_submit(
                 )
                 radius_authenticated = True
             except Exception:
-                logger.debug(
-                    "RADIUS auth failed for %s, trying access credential",
-                    normalized_username,
-                )
+                logger.debug("portal_radius_verification_failed")
 
             if radius_authenticated:
                 radius_user = (
@@ -650,6 +784,10 @@ def customer_login_submit(
                     .filter(AccessCredential.is_active.is_(True))
                     .first()
                 )
+                if credential is not None:
+                    denial_target = pa.DenialTarget(
+                        pa.DenialTargetKind.ACCESS, credential.id
+                    )
                 if credential and credential.secret_hash:
                     from app.services.credential_crypto import decrypt_credential
 
@@ -660,16 +798,16 @@ def customer_login_submit(
                         access_credential = credential
                         account_id = credential.subscriber_id
                         subscriber_id = credential.subscriber_id
-                        logger.info(
-                            "Portal login via access credential for %s",
-                            normalized_username,
-                        )
+                        logger.info("portal_access_credential_verified")
                     else:
                         raise_invalid_login()
                 else:
                     raise_invalid_login()
 
         if not account_id or not subscriber_id:
+            _portal_denial(
+                request, reason=pa.DenialReason.DISABLED, target=denial_target
+            )
             raise ValueError("Customer account not found. Please contact support.")
 
         # Status gate for every auth path (local, RADIUS, access-credential
@@ -680,8 +818,14 @@ def customer_login_submit(
             not portal_subscriber
             or portal_subscriber.status == SubscriberStatus.canceled
         ):
+            _portal_denial(
+                request, reason=pa.DenialReason.DISABLED, target=denial_target
+            )
             raise ValueError("Customer account not found. Please contact support.")
         if portal_subscriber.status == SubscriberStatus.disabled:
+            _portal_denial(
+                request, reason=pa.DenialReason.DISABLED, target=denial_target
+            )
             raise ValueError("Account disabled. Please contact support.")
 
         mfa_required = _primary_customer_totp_enabled(db, subscriber_id)
@@ -703,10 +847,20 @@ def customer_login_submit(
                 )
             elif access_credential:
                 if radius_authenticated and access_binding is None:
+                    _portal_denial(
+                        request,
+                        reason=pa.DenialReason.CREDENTIAL_CHANGED,
+                        target=denial_target,
+                    )
                     raise ValueError("Invalid username or password")
                 if radius_authenticated and not auth_flow_service.verify_service_secret(
                     password, access_binding[2] if access_binding else None
                 ):
+                    _portal_denial(
+                        request,
+                        reason=pa.DenialReason.CREDENTIAL_CHANGED,
+                        target=denial_target,
+                    )
                     raise ValueError("Invalid username or password")
                 access_id, access_updated_at, access_hash = (
                     access_binding
@@ -796,6 +950,14 @@ def customer_login_submit(
         return response
 
     except (RuntimeError, pa.PasswordAuthenticationError) as exc:
+        if isinstance(exc, pa.PasswordAuthenticationError):
+            _portal_denial(
+                request,
+                reason=auth_flow_service._owner_denial_reason(exc),
+                target=denial_target,
+                phase=pa.DenialPhase.OWNER,
+                status_code=503 if exc.kind == "lock_timeout" else 401,
+            )  # noqa: SLF001
         if (
             isinstance(exc, pa.PasswordAuthenticationError)
             and exc.kind != "lock_timeout"
@@ -861,7 +1023,7 @@ def customer_mfa_page(request: Request, db: Session, error: str | None = None):
     if not mfa_token or not context_token:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     try:
-        _decode_customer_mfa_context(db, context_token)
+        _decode_customer_mfa_context(db, context_token, request=request)
     except Exception:
         response = RedirectResponse(url="/portal/auth/login", status_code=303)
         _clear_customer_mfa_cookies(response)
@@ -880,7 +1042,7 @@ def customer_mfa_submit(request: Request, db: Session, code: str):
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     try:
-        context = _decode_customer_mfa_context(db, context_token)
+        context = _decode_customer_mfa_context(db, context_token, request=request)
         staged = _verify_customer_mfa_token(
             db,
             mfa_token=mfa_token,

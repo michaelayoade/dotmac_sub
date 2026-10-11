@@ -1593,6 +1593,7 @@ DOMAIN = DomainSOT(
                 "party.staff_session_projection",
                 "control.settings_spec",
                 "observability.audit_log",
+                "runtime.db_sessions",
             ),
             notes=(
                 "Credential standing is version-bound. Password verification "
@@ -1611,7 +1612,12 @@ DOMAIN = DomainSOT(
                 "remains compatible until the recovery route and audited "
                 "refusal setting are delivered and approved for cutover. "
                 "Customer portal local password and MFA use the same owner; "
-                "Redis carries auth_session_id and database standing controls every request."
+                "Redis carries auth_session_id and database standing controls every request. "
+                "Read-only portal source lookup returns immutable canonical RADIUS/access "
+                "snapshots before network verification. Known-target denials are typed "
+                "immutable decisions; failure counters "
+                "and failed AuditEvent evidence commit together in a fresh independent "
+                "owner-command session. Unknown targets produce aggregate telemetry only."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -1671,7 +1677,9 @@ DOMAIN = DomainSOT(
                         source=(
                             "typed CommandContext carrying the authenticating "
                             "principal as actor, the authentication scope and "
-                            "a reason; verified phase-A snapshots carry only "
+                            "a reason; denial evidence uses the distinct system actor "
+                            "auth.password_authentication and never asserts that a "
+                            "resolved target authenticated. Verified phase-A snapshots carry only "
                             "identifiers and the credential_version, never a "
                             "password, hash or token"
                         ),
@@ -1728,8 +1736,13 @@ DOMAIN = DomainSOT(
                         "on a session that phase A has returned transaction-free. "
                         "The credential gate, session insert, presence, "
                         "recovery-code spend, method update and success audit "
-                        "commit or roll back together; failure counters run in "
-                        "their own small owner transaction."
+                        "commit or roll back together. After a typed denial (and failed "
+                        "owner rollback), failure evidence uses owner_command_session "
+                        "on an independent engine connection, never the request session. "
+                        "The optional atomic counter update and failed AuditEvent commit "
+                        "or roll back together. Session-open, staging, flush, commit, close "
+                        "and telemetry failures preserve the original denial; no counter-only fallback. "
+                        "Pending and flushed request writes are never released to record failure."
                     ),
                     locking=(
                         "No lock while hashing. A "
@@ -1795,6 +1808,7 @@ DOMAIN = DomainSOT(
                         "auth.login_succeeded",
                         "auth.password_step_succeeded",
                         "auth.password_changed",
+                        "auth.authentication_denied",
                     ),
                     schema_version=1,
                     delivery_owner="observability.audit_log",
@@ -1802,8 +1816,13 @@ DOMAIN = DomainSOT(
                         "These are audit rows staged in the owner transaction "
                         "(schema_version 1 metadata); no domain event is "
                         "emitted. Metadata carries identifiers and the "
-                        "credential_version only, never a secret, hash, token "
-                        "or raw body."
+                        "credential_version for success only, never a secret, hash, token "
+                        "or raw body. Failed evidence is an AuditEvent with is_success=False, "
+                        "a bounded status, enum reason/surface/phase, canonical target UUID "
+                        "and provenance, fresh attempt UUID, validated-or-generated correlation UUID "
+                        "and normalized trusted client IP. No usernames, versions or Party enrichment. "
+                        "Unknown, ambiguous and invalid unsigned identities produce label-free counters only. "
+                        "EventStore/outbox is not a substitute for required audit evidence."
                     ),
                     replay=(
                         "Audit rows are immutable evidence; credential state "
@@ -1841,9 +1860,14 @@ DOMAIN = DomainSOT(
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/adr/0002-owner-command-transaction-boundary.md",
                     "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
+                    "docs/security/AUTHENTICATION_DENIAL_AUDIT.md",
                 ),
                 test_refs=(
                     "tests/test_password_authentication.py",
+                    "tests/test_authentication_denial_audit.py",
+                    "tests/test_authentication_denial_adapters.py",
+                    "tests/integration/test_authentication_denial_audit.py",
+                    "tests/architecture/test_authentication_denial_boundary.py",
                     "tests/test_web_customer_auth.py",
                     "tests/architecture/test_password_authentication_boundary.py",
                     "tests/integration/test_password_auth_credential_race.py",

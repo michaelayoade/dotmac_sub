@@ -1302,3 +1302,13 @@ CREDENTIAL_FORMAT_REJECTIONS = Counter(
     "credential_format_rejections_total",
     "Credential verification refused unavailable, unknown or malformed stored material",
 )
+
+
+AUTHENTICATION_DENIAL_WRITE_FAILURES = Counter(
+    "authentication_denial_write_failures_total",
+    "Failure-side authentication evidence writes that did not complete.",
+)
+AUTHENTICATION_UNKNOWN_DENIALS = Counter(
+    "authentication_unknown_denials_total",
+    "Authentication denials without a trusted resolved target; no identity labels.",
+)

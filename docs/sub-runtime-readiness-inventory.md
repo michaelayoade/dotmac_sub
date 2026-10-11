@@ -84,10 +84,18 @@ The Test Connection Finance slice adds two test-only `sessionmaker` sites in
 `tests/integration/test_test_connection_finance.py`: one for independently
 committing concurrent creations and one for observing complete request/outbox
 rollback. Both bind the shared migrated PostgreSQL test engine. The reviewed
-aggregate test-fixture ratchet is now 172 (170 from current main plus the two
+aggregate test-fixture ratchet was 172 at that slice (170 plus its two
 period-purchase concurrency fixture sites); production construction sites and
 the production per-file baseline are unchanged. This is test-fixture authorship,
 not an application runtime change.
+
+The authentication-denial slice moves the current test-fixture total from 189
+to 197: one disposable file-SQLite engine, six explicit file-SQLite Session
+sites (independent lifecycle, observation, cleanup failure, lock preservation,
+and pending/flushed request-write proofs), and one named logic-only savepoint
+Session factory. Its PostgreSQL proofs reuse the migrated factory already in
+the inventory. No application engine/session construction or production
+per-file allowance is added.
 
 Every place that builds a `sqlalchemy.Engine` or an ORM `Session` outside
 `app.db`'s canonical `SessionLocal` factory (`app/db.py:69`), swept by AST

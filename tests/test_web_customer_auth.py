@@ -16,6 +16,11 @@ from app.models.system_user import SystemUser
 from app.services import customer_portal
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services.auth_flow import AuthFlow, hash_password
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 def _request_with_cookie(name: str, value: str) -> Request:
@@ -1037,7 +1042,9 @@ def test_customer_mfa_lock_timeout_sets_retry_after(db_session, monkeypatch):
     from app.services import password_authentication as pa
 
     monkeypatch.setattr(
-        web_customer_auth_service, "_decode_customer_mfa_context", lambda *_args: {}
+        web_customer_auth_service,
+        "_decode_customer_mfa_context",
+        lambda *_args, **_kwargs: {},
     )
 
     def fail(*_args, **_kwargs):

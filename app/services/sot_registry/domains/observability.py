@@ -43,7 +43,10 @@ DOMAIN = DomainSOT(
                 "scalar compatibility surface owner by owner. Migration "
                 "524 adds actor_party_id, details, and created_at without an "
                 "authority transfer or kernel-lineage stamp. The aggregate-only "
-                "r1_parity query owns drift detection during expansion."
+                "r1_parity query owns drift detection during expansion. "
+                "Authentication-denial AuditEvents are staged through this persistence "
+                "owner in the password-authentication failure command; audit availability "
+                "never changes admission and counter-only fallback is forbidden."
             ),
             contract=ServiceContract(
                 concerns=(

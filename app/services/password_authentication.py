@@ -36,6 +36,8 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
@@ -56,6 +58,7 @@ from app.models.catalog import AccessCredential
 from app.models.radius import RadiusUser
 from app.services import staff_party_authentication
 from app.services.audit_adapter import AuditActor, stage_audit_event
+from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
     CommandContext,
@@ -88,11 +91,8 @@ _MFA_COMMAND = OwnerCommandDefinition(
 _ENROLLED_COMMAND = OwnerCommandDefinition(
     owner=OWNER, concern=CONCERN_MFA, name="establish_enrolled_session"
 )
-_PASSWORD_FAILURE_COMMAND = OwnerCommandDefinition(
-    owner=OWNER, concern=CONCERN_FAILURES, name="record_password_failure"
-)
-_MFA_FAILURE_COMMAND = OwnerCommandDefinition(
-    owner=OWNER, concern=CONCERN_FAILURES, name="record_mfa_failure"
+_DENIAL_COMMAND = OwnerCommandDefinition(
+    owner=OWNER, concern=CONCERN_FAILURES, name="record_authentication_denial"
 )
 _CHANGE_COMMAND = OwnerCommandDefinition(
     owner=OWNER, concern=CONCERN_CHANGE, name="change_password"
@@ -275,6 +275,206 @@ def resolve_portal_authentication_sources(
         )
         if access is not None
         else None,
+    )
+
+
+class DenialReason(StrEnum):
+    INVALID_CREDENTIALS = "invalid_credentials"
+    LOCKED = "locked"
+    RESET_REQUIRED = "must_change_password"
+    DISABLED = "account_disabled"
+    AUDIENCE = "admin_required"
+    PROJECTION = "projection_unavailable"
+    INVALID_CHALLENGE = "invalid_mfa_token"
+    INVALID_CODE = "invalid_mfa_code"
+    MFA_LOCKED = "mfa_locked"
+    METHOD = "mfa_method_unavailable"
+    CREDENTIAL_CHANGED = "credential_changed"
+    OWNER_UNAVAILABLE = "owner_unavailable"
+    LOCK_TIMEOUT = "lock_timeout"
+    SESSION_ADMISSION = "session_admission_denied"
+    ENROLLMENT_REQUIRED = "enrollment_required"
+
+
+class DenialSurface(StrEnum):
+    LOGIN = "login"
+    CUSTOMER_PORTAL = "customer_portal"
+    VENDOR_API = "vendor_api"
+    VENDOR_WEB = "vendor_web"
+    RESELLER = "reseller"
+    ENROLLMENT = "enrollment"
+    PASSWORD_CHANGE = "password_change"
+    PROFILE_STEP_UP = "profile_step_up"
+    INSPECTOR_STEP_UP = "inspector_step_up"
+
+
+class DenialPhase(StrEnum):
+    PASSWORD = "password"
+    MFA = "mfa"
+    ENROLLMENT = "enrollment"
+    OWNER = "owner"
+    SESSION_ADMISSION = "session_admission"
+    STEP_UP = "step_up"
+
+
+class DenialTargetKind(StrEnum):
+    CREDENTIAL = "user_credential"
+    ACCESS = "access_credential"
+    RADIUS = "radius_user"
+    METHOD = "mfa_method"
+    PRINCIPAL = "principal"
+
+
+class DenialProvenance(StrEnum):
+    RESOLVED_RECORD = "resolved_record"
+    VERIFIED_CHALLENGE = "verified_challenge"
+    AUTHENTICATED_PRINCIPAL = "authenticated_principal"
+
+
+@dataclass(frozen=True, slots=True)
+class DenialTarget:
+    """Resolved identity evidence; this does not assert successful authentication."""
+
+    kind: DenialTargetKind
+    identifier: UUID
+    provenance: DenialProvenance = DenialProvenance.RESOLVED_RECORD
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, DenialTargetKind) or not isinstance(
+            self.provenance, DenialProvenance
+        ):
+            raise TypeError("A denial target requires bounded kind and provenance")
+        if not isinstance(self.identifier, UUID):
+            raise TypeError("A denial target requires a resolved UUID")
+
+
+@dataclass(frozen=True, slots=True)
+class PasswordFailureEffect:
+    credential_id: UUID
+    policy: FailurePolicy
+
+
+@dataclass(frozen=True, slots=True)
+class MfaFailureEffect:
+    method_id: UUID
+    policy: FailurePolicy
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticationDenial:
+    reason: DenialReason
+    surface: DenialSurface
+    phase: DenialPhase
+    target: DenialTarget | None
+    attempt_id: UUID
+    correlation_id: UUID
+    trusted_ip: IPv4Address | IPv6Address | None = None
+    effect: PasswordFailureEffect | MfaFailureEffect | None = None
+    status_code: Literal[400, 401, 403, 404, 409, 428, 429, 503] = 401
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.reason, DenialReason)
+            or not isinstance(self.surface, DenialSurface)
+            or not isinstance(self.phase, DenialPhase)
+        ):
+            raise TypeError("Authentication denial classification must be bounded")
+        if not isinstance(self.attempt_id, UUID) or not isinstance(
+            self.correlation_id, UUID
+        ):
+            raise TypeError("Authentication denial context requires UUIDs")
+        if self.status_code not in {400, 401, 403, 404, 409, 428, 429, 503}:
+            raise ValueError("Authentication denial status is not bounded")
+        if self.trusted_ip is not None and not isinstance(
+            self.trusted_ip, (IPv4Address, IPv6Address)
+        ):
+            raise TypeError("Authentication denial IP must be normalized")
+        if self.effect is not None:
+            expected = (
+                DenialTargetKind.CREDENTIAL
+                if isinstance(self.effect, PasswordFailureEffect)
+                else DenialTargetKind.METHOD
+            )
+            identifier = (
+                self.effect.credential_id
+                if isinstance(self.effect, PasswordFailureEffect)
+                else self.effect.method_id
+            )
+            if (
+                self.target is None
+                or self.target.kind is not expected
+                or self.target.identifier != identifier
+            ):
+                raise ValueError("Failure effect must match the resolved denial target")
+
+
+def denial_for_request(
+    *,
+    reason: DenialReason,
+    surface: DenialSurface,
+    phase: DenialPhase,
+    target: DenialTarget | None,
+    request: Request | None = None,
+    effect: PasswordFailureEffect | MfaFailureEffect | None = None,
+    status_code: Literal[400, 401, 403, 404, 409, 428, 429, 503] = 401,
+) -> AuthenticationDenial:
+    """Normalize request evidence once; never retain request or raw headers."""
+    correlation = uuid.uuid4()
+    trusted_ip = None
+    if request is not None:
+        try:
+            correlation = UUID(request.headers.get("x-request-id", ""))
+        except (ValueError, TypeError, AttributeError):
+            pass
+        try:
+            trusted_ip = ip_address(request.client.host) if request.client else None
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return AuthenticationDenial(
+        reason=reason,
+        surface=surface,
+        phase=phase,
+        target=target,
+        attempt_id=uuid.uuid4(),
+        correlation_id=correlation,
+        trusted_ip=trusted_ip,
+        effect=effect,
+        status_code=status_code,
+    )
+
+
+def challenge_denial_target(db: Session, challenge: Challenge) -> DenialTarget | None:
+    """Resolve a signature-validated envelope to an existing canonical record.
+
+    Signed UUID claims alone are not proof that a target exists. Snapshot this
+    result before entering an owner command, whose rollback may expire ORM rows.
+    """
+    model: type[UserCredential] | type[RadiusUser] | type[AccessCredential]
+    if challenge.src == SRC_USER_CREDENTIAL:
+        kind, model, identifier = (
+            DenialTargetKind.CREDENTIAL,
+            UserCredential,
+            challenge.credential_id,
+        )
+    elif challenge.src == SRC_RADIUS_USER:
+        kind, model, identifier = (
+            DenialTargetKind.RADIUS,
+            RadiusUser,
+            challenge.radius_user_id,
+        )
+    else:
+        kind, model, identifier = (
+            DenialTargetKind.ACCESS,
+            AccessCredential,
+            challenge.access_credential_id,
+        )
+    if identifier is None:
+        return None
+    resolved = db.scalar(select(model.id).where(model.id == identifier))
+    return (
+        DenialTarget(kind, resolved, DenialProvenance.VERIFIED_CHALLENGE)
+        if resolved is not None
+        else None
     )
 
 
@@ -1010,8 +1210,8 @@ def complete_mfa(
     """Phase B of MFA completion; returns the ``StagedSession`` (committed).
 
     Lock order: credential -> mfa_recovery_codes -> mfa_methods -> sessions.
-    A wrong second factor rolls everything back, then records the failure in
-    its own small owner transaction and re-raises ``invalid_mfa_code``.
+    A wrong second factor rolls everything back and raises the typed refusal.
+    The adapter dispatches exactly one independent failure command afterward.
     """
 
     af = _auth_flow()
@@ -1115,12 +1315,7 @@ def complete_mfa(
     context = _context(
         challenge.principal_type, challenge.principal_id, "Complete an MFA challenge"
     )
-    try:
-        return _run(db, _MFA_COMMAND, context, operation)
-    except PasswordAuthenticationError as exc:
-        if exc.kind == "invalid_mfa_code":
-            record_mfa_failure(db, method_id, failure_policy)
-        raise
+    return _run(db, _MFA_COMMAND, context, operation)
 
 
 def establish_enrolled_session(
@@ -1268,6 +1463,88 @@ def mfa_failure_statement(
     )
 
 
+def record_authentication_denial(denial: AuthenticationDenial) -> None:
+    """Best-effort failure owner on an independent session.
+
+    A counter and its audit row commit together, or both roll back. The caller's
+    session is never inspected or completed, including already-flushed writes.
+    Failure evidence cannot grant access or replace the original refusal.
+    """
+    try:
+        from app.metrics import AUTHENTICATION_UNKNOWN_DENIALS
+
+        if denial.target is None:
+            AUTHENTICATION_UNKNOWN_DENIALS.inc()
+            return
+        with db_session_adapter.owner_command_session() as db:
+
+            def operation() -> None:
+                _set_lock_timeout(db)
+                if isinstance(denial.effect, PasswordFailureEffect):
+                    db.execute(
+                        password_failure_statement(
+                            denial.effect.credential_id,
+                            now=_now(),
+                            policy=denial.effect.policy,
+                        )
+                    )
+                elif isinstance(denial.effect, MfaFailureEffect):
+                    db.execute(
+                        mfa_failure_statement(
+                            denial.effect.method_id,
+                            now=_now(),
+                            policy=denial.effect.policy,
+                        )
+                    )
+                assert denial.target is not None
+                stage_audit_event(
+                    db,
+                    action="auth.authentication_denied",
+                    entity_type=denial.target.kind.value,
+                    entity_id=str(denial.target.identifier),
+                    actor=AuditActor.system(OWNER),
+                    is_success=False,
+                    status_code=denial.status_code,
+                    request_id=str(denial.correlation_id),
+                    ip_address=str(denial.trusted_ip) if denial.trusted_ip else None,
+                    metadata={
+                        "schema_version": 1,
+                        "reason": denial.reason.value,
+                        "surface": denial.surface.value,
+                        "phase": denial.phase.value,
+                        "target_id": str(denial.target.identifier),
+                        "provenance": denial.target.provenance.value,
+                        "attempt_id": str(denial.attempt_id),
+                        "correlation_id": str(denial.correlation_id),
+                    },
+                )
+
+            execute_owner_command(
+                db,
+                definition=_DENIAL_COMMAND,
+                context=CommandContext.system(
+                    actor=OWNER,
+                    scope=SCOPE,
+                    reason="Record an authentication denial",
+                    command_id=denial.attempt_id,
+                    correlation_id=denial.correlation_id,
+                ),
+                operation=operation,
+            )
+    except Exception:
+        # No exception text/traceback: database exceptions may contain secrets.
+        try:
+            from app.metrics import AUTHENTICATION_DENIAL_WRITE_FAILURES
+
+            AUTHENTICATION_DENIAL_WRITE_FAILURES.inc()
+        except Exception:
+            pass
+        try:
+            logger.warning("authentication_denial_write_failed")
+        except Exception:
+            pass
+
+
 def record_password_failure(
     db: Session,
     credential_id: UUID,
@@ -1275,48 +1552,41 @@ def record_password_failure(
     *,
     principal_type: str = "user",
     principal_id: str = "unknown",
+    request: Request | None = None,
+    surface: DenialSurface = DenialSurface.LOGIN,
 ) -> None:
-    """Record one wrong password in its own owner transaction.
-
-    A write failure NEVER turns a denial into success: it is logged (no
-    identifier, no password) and swallowed, so the caller still answers 401.
-    """
-
-    release_read_transaction(db)
-
-    def operation() -> None:
-        _set_lock_timeout(db)
-        db.execute(password_failure_statement(credential_id, now=_now(), policy=policy))
-
-    try:
-        _run(
-            db,
-            _PASSWORD_FAILURE_COMMAND,
-            _context(principal_type, principal_id, "Record a failed password"),
-            operation,
+    """Compatibility boundary: the request session is deliberately untouched."""
+    record_authentication_denial(
+        denial_for_request(
+            reason=DenialReason.INVALID_CREDENTIALS,
+            surface=surface,
+            phase=DenialPhase.PASSWORD,
+            target=DenialTarget(DenialTargetKind.CREDENTIAL, credential_id),
+            request=request,
+            effect=PasswordFailureEffect(credential_id, policy),
         )
-    except Exception:
-        logger.warning("password_failure_counter_write_failed", exc_info=True)
+    )
 
 
-def record_mfa_failure(db: Session, method_id: UUID, policy: FailurePolicy) -> None:
-    """Record one wrong second factor in its own owner transaction (fail-safe)."""
-
-    release_read_transaction(db)
-
-    def operation() -> None:
-        _set_lock_timeout(db)
-        db.execute(mfa_failure_statement(method_id, now=_now(), policy=policy))
-
-    try:
-        _run(
-            db,
-            _MFA_FAILURE_COMMAND,
-            _context("mfa_method", str(method_id), "Record a failed MFA code"),
-            operation,
+def record_mfa_failure(
+    db: Session,
+    method_id: UUID,
+    policy: FailurePolicy,
+    *,
+    request: Request | None = None,
+    surface: DenialSurface = DenialSurface.LOGIN,
+) -> None:
+    """Compatibility boundary: the request session is deliberately untouched."""
+    record_authentication_denial(
+        denial_for_request(
+            reason=DenialReason.INVALID_CODE,
+            surface=surface,
+            phase=DenialPhase.MFA,
+            target=DenialTarget(DenialTargetKind.METHOD, method_id),
+            request=request,
+            effect=MfaFailureEffect(method_id, policy),
         )
-    except Exception:
-        logger.warning("mfa_failure_counter_write_failed", exc_info=True)
+    )
 
 
 # ---------------------------------------------------------------------------

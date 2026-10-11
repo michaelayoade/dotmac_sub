@@ -136,7 +136,13 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +1 from tests/customer_profile_owner_support.py: canonical profile tests use
 #: a fresh Session within fixture isolation, preserving the caller Session.
 #: This is fast-unit evidence only; no production construction site is added.
-TEST_FIXTURE_BASELINE_TOTAL = 193
+#: +8 from authentication-denial proofs: tests/test_authentication_denial_audit.py
+#: adds one disposable file-SQLite Engine and six explicit Session sites for
+#: independent lifecycle, observation, cleanup-failure, lock preservation and
+#: pending/flushed request-write isolation. tests/authentication_denial_unit.py
+#: adds one explicitly logic-only savepoint Session factory. PostgreSQL denial
+#: proofs reuse the existing migrated factory. No runtime baseline grows.
+TEST_FIXTURE_BASELINE_TOTAL = 201
 
 
 def _baseline() -> dict[str, int]:

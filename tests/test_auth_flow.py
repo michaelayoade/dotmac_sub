@@ -49,7 +49,12 @@ from app.services.auth_flow import (
     verify_user_password,
 )
 from app.services.owner_commands import CommandContext
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
 from tests.staff_identity_fixtures import add_bound_staff_user, project_staff_login
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 def _make_request(user_agent: str = "pytest"):

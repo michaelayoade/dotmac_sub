@@ -50,7 +50,12 @@ from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
 from app.services import auth_flow as auth_flow_service
 from app.services.auth_flow import AuthFlow, decode_access_token, hash_password
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
 from tests.staff_identity_fixtures import project_staff_login
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

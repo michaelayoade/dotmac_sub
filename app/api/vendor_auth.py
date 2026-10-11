@@ -47,6 +47,7 @@ from app.schemas.vendor_auth import (
     VendorTokenResponse,
 )
 from app.services import auth_flow as auth_flow_service
+from app.services import password_authentication as pa
 from app.services.auth_flow import AuthFlow, wants_refresh_in_body
 from app.services.field import vendor_auth as vendor_admission
 
@@ -100,7 +101,9 @@ def _discard_refused_session(db: Session, refresh_token: str | None) -> None:
         )
 
 
-def _vendor_id_or_refuse(db: Session, result: dict) -> UUID:
+def _vendor_id_or_refuse(
+    db: Session, result: dict, *, request: Request | None = None
+) -> UUID:
     """Admit the freshly minted token, or refuse and discard its session."""
 
     access_token = _issued_token(result, "access_token")
@@ -110,6 +113,20 @@ def _vendor_id_or_refuse(db: Session, result: dict) -> UUID:
             db, access_token=access_token
         )
     except vendor_admission.VendorAdmissionRequiredError as exc:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.SESSION_ADMISSION,
+                surface=pa.DenialSurface.VENDOR_API,
+                phase=pa.DenialPhase.SESSION_ADMISSION,
+                target=pa.DenialTarget(
+                    pa.DenialTargetKind.PRINCIPAL, exc.resolved_principal_id
+                )
+                if exc.resolved_principal_id
+                else None,
+                status_code=403,
+                request=request,
+            )
+        )
         _discard_refused_session(
             db, refresh_token if isinstance(refresh_token, str) else None
         )
@@ -185,6 +202,20 @@ def vendor_login(
         eligibility.status
         is vendor_admission.VendorLoginEligibilityStatus.VENDOR_ACCESS_REQUIRED
     ):
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.AUDIENCE,
+                surface=pa.DenialSurface.VENDOR_API,
+                phase=pa.DenialPhase.PASSWORD,
+                target=pa.DenialTarget(
+                    pa.DenialTargetKind.CREDENTIAL, eligibility.resolved_credential_id
+                )
+                if eligibility.resolved_credential_id
+                else None,
+                request=request,
+                status_code=403,
+            )
+        )
         # A known identity with no vendor membership is refused BEFORE the
         # password is checked, so this endpoint never becomes a credential
         # oracle for the staff surface. An unknown identifier deliberately
@@ -200,6 +231,7 @@ def vendor_login(
         password=payload.password,
         request=request,
         provider=None,
+        denial_surface=pa.DenialSurface.VENDOR_API,
     )
     if result.get("mfa_required") is True:
         return VendorLoginResponse(
@@ -207,11 +239,25 @@ def vendor_login(
             mfa_token=_issued_token(result, "mfa_token"),
         )
     if result.get("mfa_enrollment_required") is True:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.ENROLLMENT_REQUIRED,
+                surface=pa.DenialSurface.VENDOR_API,
+                phase=pa.DenialPhase.ENROLLMENT,
+                target=pa.DenialTarget(
+                    pa.DenialTargetKind.CREDENTIAL, eligibility.resolved_credential_id
+                )
+                if eligibility.resolved_credential_id
+                else None,
+                request=request,
+                status_code=403,
+            )
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=MFA_ENROLMENT_MESSAGE
         )
 
-    vendor_id = _vendor_id_or_refuse(db, result)
+    vendor_id = _vendor_id_or_refuse(db, result, request=request)
     refresh_token = result.get("refresh_token")
     refresh_token = refresh_token if isinstance(refresh_token, str) else None
     body = VendorLoginResponse(
@@ -250,8 +296,9 @@ def vendor_mfa_verify(
         mfa_token=payload.mfa_token,
         code=payload.code,
         request=request,
+        denial_surface=pa.DenialSurface.VENDOR_API,
     )
-    vendor_id = _vendor_id_or_refuse(db, result)
+    vendor_id = _vendor_id_or_refuse(db, result, request=request)
     refresh_token = result.get("refresh_token")
     refresh_token = refresh_token if isinstance(refresh_token, str) else None
     body = VendorTokenResponse(
@@ -296,7 +343,7 @@ def vendor_refresh(
         db=db, refresh_token=resolved, request=request
     )
     result_values = result.model_dump()
-    vendor_id = _vendor_id_or_refuse(db, result_values)
+    vendor_id = _vendor_id_or_refuse(db, result_values, request=request)
     refresh_token = result.refresh_token
     body = VendorTokenResponse(
         access_token=result.access_token,
