@@ -1072,3 +1072,26 @@ def _session_count_staff(factory, staff) -> int:
             .select_from(AuthSession)
             .where(AuthSession.system_user_id == staff.id)
         )
+
+
+def test_reenrollment_after_admin_mfa_reset_leaves_exactly_one_primary(
+    engine, factory, monkeypatch
+):
+    from app.services.web_system_user_mutations import disable_user_mfa
+
+    staff, token, setup_data = _staff_enrollment(factory, monkeypatch)
+    assert _confirm(factory, token, setup_data)[0] == "ok"
+    with factory() as session:
+        disable_user_mfa(session, user_id=str(staff.id))
+        step = AuthFlow.login(session, staff.email, "secret", _make_request(), None)
+        assert step["mfa_enrollment_required"] is True
+        new_setup = AuthFlow.admin_mfa_setup(session, str(staff.id), "device2")
+    outcome = _confirm(factory, step["mfa_enrollment_token"], new_setup)
+    assert outcome[0] == "ok"
+    with factory() as session:
+        primary = session.scalars(
+            select(MFAMethod.id).where(
+                MFAMethod.system_user_id == staff.id, MFAMethod.is_primary.is_(True)
+            )
+        ).all()
+    assert primary == [new_setup["method_id"]]

@@ -1028,8 +1028,6 @@ def confirm_mfa_enrollment(
             audience=challenge.audience,
             staff_refusal_kind="invalid_mfa_token",
         )
-        if not totp_ok:
-            raise PasswordAuthenticationError("invalid_mfa_code", "Invalid MFA code.")
         system_user_id = UUID(str(challenge.principal_id))
         # Never replace a confirmed factor through an enrollment token: the
         # credential gate above serializes concurrent enrollments for this user
@@ -1045,6 +1043,23 @@ def confirm_mfa_enrollment(
         ).first()
         if existing is not None:
             raise _invalid_challenge()
+        # Checked before the code so a replayed token cannot drive failure
+        # counts; only then is a wrong code a counted failure.
+        if not totp_ok:
+            raise PasswordAuthenticationError("invalid_mfa_code", "Invalid MFA code.")
+        # No live primary exists. An admin MFA reset leaves the old row
+        # is_primary=True (disabled, inactive); demote it so the unique primary
+        # index admits the new one. A live primary was refused above.
+        db.execute(
+            update(MFAMethod)
+            .where(
+                MFAMethod.system_user_id == system_user_id,
+                MFAMethod.id != method_id,
+                MFAMethod.is_primary.is_(True),
+            )
+            .values(is_primary=False)
+            .execution_options(synchronize_session=False)
+        )
         activated = db.execute(
             update(MFAMethod)
             .where(

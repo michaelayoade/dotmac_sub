@@ -1108,3 +1108,107 @@ def test_stale_token_with_wrong_code_leaves_failure_counter_unchanged(
     assert excinfo.value.status_code == 401
     db_session.expire_all()
     assert db_session.get(MFAMethod, setup["method_id"]).failed_attempts == 0
+
+
+def test_replayed_token_with_wrong_code_does_not_count_against_any_factor(
+    db_session, monkeypatch
+):
+    system_user, _credential_row, token, setup = _enrollment_step(
+        db_session, monkeypatch
+    )
+    AuthFlow.confirm_mfa_enrollment(
+        db_session,
+        token,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        _make_request(),
+    )
+    attacker = AuthFlow.admin_mfa_setup(db_session, str(system_user.id), "evil")
+    good = pyotp.TOTP(attacker["secret"]).now()
+    bad = "000000" if good != "000000" else "111111"
+    with pytest.raises(HTTPException):
+        AuthFlow.confirm_mfa_enrollment(
+            db_session, token, str(attacker["method_id"]), bad, _make_request()
+        )
+    db_session.expire_all()
+    assert db_session.get(MFAMethod, setup["method_id"]).failed_attempts == 0
+    assert db_session.get(MFAMethod, attacker["method_id"]).failed_attempts == 0
+
+
+def test_reenrollment_after_admin_mfa_reset_succeeds_with_one_primary(
+    db_session, monkeypatch
+):
+    from app.services.web_system_user_mutations import disable_user_mfa
+
+    system_user, _credential_row, token, setup = _enrollment_step(
+        db_session, monkeypatch
+    )
+    AuthFlow.confirm_mfa_enrollment(
+        db_session,
+        token,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        _make_request(),
+    )
+    disable_user_mfa(db_session, user_id=str(system_user.id))
+
+    step = AuthFlow.login(
+        db_session, system_user.email, "secret", _make_request(), None
+    )
+    assert step["mfa_enrollment_required"] is True
+    new_setup = AuthFlow.admin_mfa_setup(db_session, str(system_user.id), "device2")
+    tokens, codes = AuthFlow.confirm_mfa_enrollment(
+        db_session,
+        step["mfa_enrollment_token"],
+        str(new_setup["method_id"]),
+        pyotp.TOTP(new_setup["secret"]).now(),
+        _make_request(),
+    )
+    assert tokens["access_token"] and codes
+    db_session.expire_all()
+    primaries = (
+        db_session.query(MFAMethod)
+        .filter(
+            MFAMethod.system_user_id == system_user.id,
+            MFAMethod.is_primary.is_(True),
+        )
+        .all()
+    )
+    assert [m.id for m in primaries] == [new_setup["method_id"]]
+
+
+def test_web_enroll_confirm_answers_stale_and_wrong_code_identically(
+    db_session, monkeypatch
+):
+    from fastapi import Request
+
+    from app.services import web_auth
+
+    _user, credential, token, setup = _enrollment_step(db_session, monkeypatch)
+
+    def request_with_cookie(value):
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/auth/mfa/enroll/confirm",
+                "headers": [
+                    (b"user-agent", b"pytest"),
+                    (b"cookie", f"mfa_enrollment_pending={value}".encode()),
+                ],
+                "client": ("127.0.0.1", 12345),
+            }
+        )
+
+    good = pyotp.TOTP(setup["secret"]).now()
+    bad = "000000" if good != "000000" else "111111"
+    wrong = web_auth.mfa_enroll_confirm(
+        request_with_cookie(token), db_session, str(setup["method_id"]), bad, "/x"
+    )
+    _reset_credential(db_session, credential)
+    stale = web_auth.mfa_enroll_confirm(
+        request_with_cookie(token), db_session, str(setup["method_id"]), good, "/x"
+    )
+    assert wrong.status_code == stale.status_code == 401
+    assert wrong.context["error"] == stale.context["error"]
+    assert wrong.context["method_id"] == stale.context["method_id"]
