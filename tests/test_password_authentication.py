@@ -98,7 +98,7 @@ def _audit_actions(db_session) -> list[str]:
 def _after_verify(monkeypatch, db_session, mutate):
     """Run ``mutate`` once, right after the first successful verification."""
 
-    real = auth_flow_service.verify_password
+    real = auth_flow_service.verify_user_password
     done = {"n": 0}
 
     def spy(password, password_hash):
@@ -109,7 +109,7 @@ def _after_verify(monkeypatch, db_session, mutate):
             db_session.commit()
         return ok
 
-    monkeypatch.setattr(auth_flow_service, "verify_password", spy)
+    monkeypatch.setattr(auth_flow_service, "verify_user_password", spy)
 
 
 # --------------------------------------------------------------------------
@@ -320,16 +320,16 @@ def test_pppoe_login_leaves_user_credential_byte_identical(db_session, person):
         failed_login_attempts=2,
         username="portal-user@example.com",
     )
-    db_session.add(
-        AccessCredential(
-            subscriber_id=person.id,
-            username="pppoe-r8-001",
-            secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
-            is_active=True,
-        )
+    access_credential = AccessCredential(
+        subscriber_id=person.id,
+        username="pppoe-r8-001",
+        secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+        is_active=True,
     )
+    db_session.add(access_credential)
     db_session.commit()
     before = _row(db_session, credential.id)
+    before_service_secret = access_credential.secret_hash
 
     result = AuthFlow.login(
         db_session, "pppoe-r8-001", "pppoe-secret", _make_request(), None
@@ -337,6 +337,8 @@ def test_pppoe_login_leaves_user_credential_byte_identical(db_session, person):
 
     assert result["access_token"]
     assert _row(db_session, credential.id) == before
+    db_session.refresh(access_credential)
+    assert access_credential.secret_hash == before_service_secret
     assert _row(db_session, credential.id).failed_login_attempts == 2
     assert _row(db_session, credential.id).last_login_at is None
     event = db_session.query(AuditEvent).filter_by(action="auth.login_succeeded").one()
@@ -743,7 +745,7 @@ def test_change_password_bumps_version_revokes_others_and_audits(db_session, per
     assert keep["access_token"] and changed_at
     row = _row(db_session, credential.id)
     assert row.credential_version == 2
-    assert auth_flow_service.verify_password("Brandnew1!", row.password_hash)
+    assert auth_flow_service.verify_user_password("Brandnew1!", row.password_hash)
     db_session.expire_all()
     statuses = {s.id: s.status for s in db_session.query(AuthSession).all()}
     assert statuses[keep_id] is SessionStatus.active

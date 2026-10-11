@@ -172,7 +172,7 @@ def _named(prefix: str) -> bool:
 
 
 def _pause_after_verify(monkeypatch, pause: _Pause, prefix: str) -> None:
-    real = auth_flow_service.verify_password
+    real = auth_flow_service.verify_user_password
 
     def spy(password, password_hash):
         ok = real(password, password_hash)
@@ -180,7 +180,7 @@ def _pause_after_verify(monkeypatch, pause: _Pause, prefix: str) -> None:
             pause.hit()
         return ok
 
-    monkeypatch.setattr(auth_flow_service, "verify_password", spy)
+    monkeypatch.setattr(auth_flow_service, "verify_user_password", spy)
 
 
 def _pause_inside_gate(monkeypatch, pause: _Pause, prefix: str) -> None:
@@ -330,7 +330,7 @@ def test_t1_reset_between_verify_and_gate_mints_no_session(
     assert outcome[:2] == ("http", 401)
     row = _credential_row(factory, account)
     assert row.credential_version == 2
-    assert auth_flow_service.verify_password("Reset-by-owner1!", row.password_hash)
+    assert auth_flow_service.verify_user_password("Reset-by-owner1!", row.password_hash)
     assert row.last_login_at is None
     assert _session_count(factory, account) == 0
     assert _audit_count(factory, account, "auth.login_succeeded") == 0
@@ -549,7 +549,7 @@ def test_t10_change_password_never_overwrites_a_concurrent_reset(
 
     assert outcome == ("http", 409)
     row = _credential_row(factory, account)
-    assert auth_flow_service.verify_password("Reset-by-owner1!", row.password_hash)
+    assert auth_flow_service.verify_user_password("Reset-by-owner1!", row.password_hash)
     assert row.credential_version == 2
 
 

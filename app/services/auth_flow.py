@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.metrics import CREDENTIAL_FORMAT_REJECTIONS
 from app.models.auth import (
     AuthProvider,
     MFAMethod,
@@ -79,7 +80,7 @@ PASSWORD_CONTEXT = CryptContext(
     # "bcrypt" is deliberately NOT a passlib scheme: with bcrypt>=5 passlib's
     # backend self-test passes a >72-byte secret and raises ValueError, which
     # breaks every bcrypt verification. Legacy bcrypt hashes are verified by
-    # `_verify_legacy_bcrypt` via `bcrypt.checkpw` instead (see verify_password).
+    # `_verify_legacy_bcrypt` via `bcrypt.checkpw` instead (see verify_user_password).
     schemes=["pbkdf2_sha256", "sha512_crypt"],
     default="pbkdf2_sha256",
     deprecated="auto",
@@ -954,10 +955,10 @@ def _resolve_access_credential_match(
         # Portal login via PPPoE secrets is being retired: bcrypt-format
         # secret hashes were always refused here (passlib raised ValueError
         # under bcrypt 5). Keep refusing them rather than newly enabling them
-        # now that verify_password can verify bcrypt.
+        # now that verify_user_password can verify bcrypt.
         if _is_bcrypt_hash(credential.secret_hash):
             raise ValueError("bcrypt-format PPPoE secret not accepted")
-        password_matches = verify_password(password, credential.secret_hash)
+        password_matches = verify_service_secret(password, credential.secret_hash)
     except ValueError:
         logger.info(
             "Access credential login refused: stored PPPoE secret unavailable",
@@ -1036,6 +1037,7 @@ def _verify_legacy_bcrypt(password: str, password_hash: str) -> bool:
       password or hash.
     """
     if password_hash.startswith(_BCRYPT_UNSUPPORTED_PREFIXES):
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
         return False
     password_bytes = password.encode("utf-8", errors="surrogatepass")
     if len(password_bytes) > _BCRYPT_MAX_PASSWORD_BYTES:
@@ -1050,18 +1052,47 @@ def _verify_legacy_bcrypt(password: str, password_hash: str) -> bool:
     try:
         return bool(bcrypt.checkpw(password_bytes, password_hash.encode("utf-8")))
     except (ValueError, TypeError):
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
         return False
 
 
-def verify_password(password: str, password_hash: str | None) -> bool:
-    if not password_hash:
+def _verify_legacy_stored_credential(password: str, stored: str | None) -> bool:
+    """Verification-only compatibility; no representation or protocol writes."""
+    if not stored:
         return False
-    decrypted = decrypt_credential(password_hash)
-    if decrypted != password_hash:
-        return secrets.compare_digest(password, decrypted or "")
-    if _is_bcrypt_hash(password_hash):
-        return _verify_legacy_bcrypt(password, password_hash)
-    return cast(bool, PASSWORD_CONTEXT.verify(password, password_hash))
+    try:
+        decrypted = decrypt_credential(stored)
+        if decrypted != stored:
+            return secrets.compare_digest(password, decrypted or "")
+        if _is_bcrypt_hash(stored):
+            return _verify_legacy_bcrypt(password, stored)
+        return cast(bool, PASSWORD_CONTEXT.verify(password, stored))
+    except (ValueError, TypeError, UnicodeError):
+        # Includes unknown/malformed hashes and unavailable reversible values.
+        # Never attach the submitted identifier, secret or hash to telemetry.
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
+        return False
+
+
+def verify_user_password(password: str, password_hash: str | None) -> bool:
+    """Verify UserCredential material, retaining temporary reversible support.
+
+    Refusal requires B-PR3's recovery route and audited cutover setting first.
+    This split neither enables rehash-on-login nor changes password creation.
+    """
+    return _verify_legacy_stored_credential(password, password_hash)
+
+
+def verify_service_secret(password: str, secret_hash: str | None) -> bool:
+    """Verify AccessCredential material without changing storage or protocols.
+
+    The existing shared PPPoE fallback refuses bcrypt; keep that acceptance
+    boundary even though user-password verification supports legacy bcrypt.
+    The portal's separate decrypt-and-compare fallback remains unchanged.
+    """
+    if secret_hash and _is_bcrypt_hash(secret_hash):
+        return False
+    return _verify_legacy_stored_credential(password, secret_hash)
 
 
 LOGIN_MAX_FAILED_ATTEMPTS = 5
@@ -1474,7 +1505,7 @@ class AuthFlow(ListResponseMixin):
                         db, credential_id, failure_policy
                     )
                 raise
-        elif credential and verify_password(password, snapshot_hash):
+        elif credential and verify_user_password(password, snapshot_hash):
             pass
         else:
             access_match = None
@@ -2422,7 +2453,7 @@ def change_password(
     # write below is gated on it.
     expected_version = int(credential.credential_version)
     credential_id = credential.id
-    if not verify_password(current_password, credential.password_hash):
+    if not verify_user_password(current_password, credential.password_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
     if current_password == new_password:

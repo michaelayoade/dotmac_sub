@@ -223,18 +223,18 @@ class TestTicketCreationSchema:
 
 class TestPasswordValidation:
     def test_password_hashing_roundtrip(self) -> None:
-        from app.services.auth_flow import hash_password, verify_password
+        from app.services.auth_flow import hash_password, verify_user_password
 
         password = "TestP@ssw0rd!2024"
         hashed = hash_password(password)
         assert hashed != password
-        assert verify_password(password, hashed)
+        assert verify_user_password(password, hashed)
 
     def test_wrong_password_fails(self) -> None:
-        from app.services.auth_flow import hash_password, verify_password
+        from app.services.auth_flow import hash_password, verify_user_password
 
         hashed = hash_password("correct_password")
-        assert not verify_password("wrong_password", hashed)
+        assert not verify_user_password("wrong_password", hashed)
 
 
 # ---------------------------------------------------------------------------
