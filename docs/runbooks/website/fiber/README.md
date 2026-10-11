@@ -16,7 +16,8 @@ Coverage failure and out-of-area results have different customer wording.
 
 - `dotmac-fiber-acquisition.php`: candidate MU plugin.
 - `fiber-coverage-page.html`: candidate coverage-page source.
-- `test-producer.php`: isolated fixture harness; never install this test file.
+- `dotmac-fiber-outbox.php`: typed encrypted transport store; install beside the MU plugin.
+- `test-producer.php`, `test-outbox.php`, `test-browser.cjs`: isolated fixtures; never install tests.
 
 An authorized website operator must first back up the current plugin and page,
 compare this bundle with the current live source, and apply it to a website
@@ -35,25 +36,30 @@ Run `php test-producer.php` in this directory for the isolated contract harness.
 It uses fake credentials, mocked WordPress, and no network or customer records.
 It does not prove a complete WordPress installation or real server integration.
 
-## Outstanding reliability implementation and acceptance
+## Durable recovery candidate and remaining acceptance
 
-This snapshot is a contract correction, not a completed durable relay. Before
-launch, the follow-up must satisfy every item below:
+The candidate now freezes payload bytes, submitted time, attribution, target and
+delivery ID; encrypts durable pending server records; rejects changed content;
+uses atomic per-delivery claims and bounded retries; and validates receipts on
+both sides. Browser pending input is encrypted in IndexedDB with a nonextractable
+key and serialized across tabs. The success transient has been removed from
+the delivery owner. Pending confirmation never reports a saved Lead or fires
+a Lead conversion. This is implemented source, not an installed website.
 
-- [ ] Freeze the exact serialized payload, attribution and submitted time for
-  one submission ID before its first delivery; reuse identical bytes on retry.
-- [ ] Persist pending deliveries securely so browser closure and process restart
-  cannot silently discard an accepted enquiry; specify retention and recovery.
-- [ ] Use atomic claiming and bounded retry with visible terminal failures.
-- [ ] Reject changed content under an existing submission identity.
-- [ ] Show pending separately from confirmed Selfcare receipt; never report
-  pending delivery as a saved Lead or fire the Lead conversion prematurely.
-- [ ] Require the browser to validate the receipt before displaying success.
-- [ ] Test lost response after commit, retry after restart, concurrency, invalid
-  signature, malformed receipt and repeated delivery using synthetic staging data.
-- [ ] Confirm exactly one Lead and stable reference for an identical replay.
-- [ ] Synchronize the deployed WordPress source with its maintained source copy.
+Read [DELIVERY_RECOVERY.md](DELIVERY_RECOVERY.md) for the owning transport contract,
+retention, filesystem assumptions, required OS worker, failure visibility,
+operator recovery, current read-only evidence and installation/rollback proposal.
+That procedure still requires operator review and explicit target/action
+authorization; no production binding or secret is changed by this PR.
 
-The current success transient is a cache, not a durable pending outbox. The
-current producer regenerates submitted time on an uncached retry. These are
-known remaining defects and must not be described as solved by this bundle.
+Run `php test-producer.php`, `php test-outbox.php`, and `node test-browser.cjs`
+for isolated fixtures. Tests do not contact Selfcare or create Leads. Mocked
+browser storage and receiver counters are not real browser/WordPress/database
+acceptance. The required real staging matrix is documented in DELIVERY_RECOVERY.
+
+Remaining gates: approved test target/binding, real synthetic journeys proving
+one committed Lead/stable replay reference, required CI, secret resolution and
+secure exchange, WordPress connection/outbox settings, worker installation,
+reviewed rollback, maintained `fiber-site` builder synchronization, and explicitly
+authorized installation. Do not describe recovery as operational until the
+worker, persistent private storage and real receiver have passed acceptance.

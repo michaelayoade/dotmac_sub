@@ -1,0 +1,28 @@
+name: Fiber website transport fixtures
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/runbooks/website/fiber/**'
+      - '.github/workflows/fiber-website.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  transport:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install distribution PHP fixture runtime
+        run: sudo apt-get update && sudo apt-get install -y php-cli php-mbstring
+      - name: Lint and exercise isolated transport contracts
+        working-directory: docs/runbooks/website/fiber
+        run: |
+          php -l dotmac-fiber-acquisition.php
+          php -l dotmac-fiber-outbox.php
+          php test-producer.php
+          php test-outbox.php
+          node test-browser.cjs

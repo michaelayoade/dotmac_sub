@@ -1,6 +1,9 @@
 <?php
 // Isolated contract harness: no WordPress bootstrap, database, or HTTP calls.
 define('ABSPATH', __DIR__);
+$outbox_directory = sys_get_temp_dir() . '/fiber-producer-fixture-' . bin2hex(random_bytes(8));
+mkdir($outbox_directory, 0700);
+define('DOTMAC_FIBER_OUTBOX_DIR', $outbox_directory);
 define('DAY_IN_SECONDS', 86400);
 define('MINUTE_IN_SECONDS', 60);
 define('DOTMAC_FIBER_SELFCARE_URL', 'https://selfcare.example.test');
@@ -49,7 +52,7 @@ function wp_remote_post($url, $args) {
 function check($condition, $name) { if (!$condition) { throw new RuntimeException('FAILED: ' . $name); } }
 function request($overrides = []) {
     $input = array_merge([
-        'submission_id' => 'isolated-contract-case', 'full_name' => 'Isolated Fixture',
+        'submission_id' => '22222222-2222-4222-8222-222222222222', 'full_name' => 'Isolated Fixture',
         'phone' => '+2348000000000', 'address' => 'Isolated fixture address',
         'service' => 'home', 'attribution' => ['landing_path' => '/coverage/?utm_source=test', 'utm_source' => 'fixture'],
     ], $overrides);
@@ -75,12 +78,16 @@ $captured_wire = $GLOBALS['wire'];
 $calls = $GLOBALS['calls'];
 $replay = dotmac_fiber_quote_request(request());
 check($GLOBALS['calls'] === $calls && $replay->data['reference'] === 'FBR-ISOLATED', 'receipt replay without second relay');
-$bad = dotmac_fiber_quote_request(request(['submission_id' => 'bad-coordinates', 'latitude' => '91', 'longitude' => '7']));
+$bad = dotmac_fiber_quote_request(request(['submission_id' => '33333333-3333-4333-8333-333333333333', 'latitude' => '91', 'longitude' => '7']));
 check($bad instanceof WP_Error && $bad->code === 'fiber_invalid_location' && $GLOBALS['calls'] === $calls, 'invalid coordinates rejected before HTTP');
 $GLOBALS['upstream']['body'] = json_encode(['reference' => 'FBR-TECHNICAL', 'coverage' => ['status' => 'technical_error', 'summary' => 'Enquiry received; automated check failed.']]);
-$technical = dotmac_fiber_quote_request(request(['submission_id' => 'technical-error']));
+$technical = dotmac_fiber_quote_request(request(['submission_id' => '44444444-4444-4444-8444-444444444444']));
 check($technical instanceof WP_REST_Response && $technical->data['enquiry_status'] === 'received', 'technical failure retains accepted enquiry');
 $GLOBALS['upstream']['body'] = json_encode(['success' => true]);
-$malformed = dotmac_fiber_quote_request(request(['submission_id' => 'malformed-response']));
-check($malformed instanceof WP_Error && $malformed->code === 'fiber_upstream_contract', 'malformed receipt never reported received');
+$malformed = dotmac_fiber_quote_request(request(['submission_id' => '55555555-5555-4555-8555-555555555555']));
+check($malformed instanceof WP_REST_Response && $malformed->status === 202 && $malformed->data['enquiry_status'] === 'pending_confirmation', 'malformed receipt never reported received');
+$conflict = dotmac_fiber_quote_request(request(['address' => 'Changed fixture address']));
+check($conflict instanceof WP_Error && $conflict->code === 'fiber_submission_conflict', 'changed submission content rejected');
+foreach (new DirectoryIterator($outbox_directory) as $file) if (!$file->isDot()) unlink($file->getPathname());
+rmdir($outbox_directory);
 echo json_encode(['checks' => 'passed', 'synthetic_wire_payload' => $captured_wire]), "\n";

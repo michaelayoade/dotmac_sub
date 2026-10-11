@@ -2,12 +2,14 @@
 /**
  * Plugin Name: Dotmac Fiber Acquisition
  * Description: First-party campaign attribution and signed Selfcare quote relay.
- * Version: 1.1.0
+ * Version: 1.2.0
  */
 
 if (!defined('ABSPATH')) {
     exit;
 }
+
+require_once __DIR__ . '/dotmac-fiber-outbox.php';
 
 const DOTMAC_FIBER_COOKIE = 'dotmac_fiber_attribution';
 const DOTMAC_FIBER_COOKIE_DAYS = 30;
@@ -126,22 +128,7 @@ function dotmac_fiber_upstream_config() {
     return $config;
 }
 
-function dotmac_fiber_submission_key($input, $secret) {
-    $candidate = dotmac_fiber_clean($input['submission_id'] ?? '', 120);
-    if ($candidate === '') {
-        $candidate = wp_generate_uuid4();
-    }
-    return hash_hmac('sha256', $candidate, $secret);
-}
-
-function dotmac_fiber_quote_request(WP_REST_Request $request) {
-    if (!dotmac_fiber_rate_limit()) {
-        return new WP_Error('fiber_rate_limited', 'Please wait a few minutes before trying again.', array('status' => 429));
-    }
-    $config = dotmac_fiber_upstream_config();
-    if (!$config) {
-        return new WP_Error('fiber_integration_unavailable', 'Online coverage checks are temporarily unavailable. Please use live chat, or continue on WhatsApp.', array('status' => 503));
-    }
+function dotmac_fiber_build_payload(WP_REST_Request $request): array|WP_Error {
     $input = (array) $request->get_json_params();
     foreach (array('full_name', 'phone', 'address') as $field) {
         if (empty($input[$field])) {
@@ -150,11 +137,6 @@ function dotmac_fiber_quote_request(WP_REST_Request $request) {
     }
     if (!empty($input['email']) && !is_email($input['email'])) {
         return new WP_Error('fiber_invalid_email', 'Please enter a valid email address.', array('status' => 422));
-    }
-    $submission_key = dotmac_fiber_submission_key($input, $config['secret']);
-    $cached = get_transient('dotmac_fiber_submission_' . $submission_key);
-    if (is_array($cached)) {
-        return new WP_REST_Response($cached, 200);
     }
     $attribution = dotmac_fiber_read_attribution();
     if (!$attribution) {
@@ -176,6 +158,12 @@ function dotmac_fiber_quote_request(WP_REST_Request $request) {
         $attribution_payload = array_filter($attribution_payload, static function ($value) {
             return $value !== '' && $value !== null;
         });
+    }
+    if (mb_strlen(dotmac_fiber_clean($input['full_name'], 200)) < 2 || mb_strlen(sanitize_textarea_field($input['address'])) < 5) {
+        return new WP_Error('fiber_invalid_fields', 'Please enter your full name and complete installation address.', array('status' => 422));
+    }
+    if (!$attribution_payload) {
+        return new WP_Error('fiber_attribution_unavailable', 'Please try again; campaign attribution could not be established.', array('status' => 503));
     }
     $location = array(
         'address' => substr(sanitize_textarea_field($input['address']), 0, 500),
@@ -217,44 +205,124 @@ function dotmac_fiber_quote_request(WP_REST_Request $request) {
     if ($attribution_payload) {
         $payload['attribution'] = $attribution_payload;
     }
-    $body = wp_json_encode($payload, JSON_UNESCAPED_SLASHES);
-    // Keep retries tied to the same delivery so the receiving system can deduplicate them.
-    $delivery_id = 'fiber-' . $submission_key;
-    $signature = $config['signature_prefix'] . hash_hmac('sha256', $body, $config['secret']);
+    return $payload;
+}
+
+
+final class DotmacFiberPayloadException extends RuntimeException {
+    public WP_Error $error;
+    public function __construct(WP_Error $error) { $this->error = $error; parent::__construct('invalid_submission'); }
+}
+
+function dotmac_fiber_outbox(): DotmacFiberOutbox {
+    if (!defined('DOTMAC_FIBER_OUTBOX_DIR') || PHP_VERSION_ID < 80100 || !extension_loaded('openssl')) {
+        throw new DotmacFiberDeliveryException('outbox_not_configured');
+    }
+    return new DotmacFiberOutbox(DOTMAC_FIBER_OUTBOX_DIR, hash('sha256', wp_salt('auth') . '|fiber-outbox-v1', true));
+}
+
+function dotmac_fiber_identity(array $input): string {
+    $id = $input['submission_id'] ?? null;
+    if (!is_string($id) || !preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iD', $id)) {
+        throw new DotmacFiberDeliveryException('invalid_submission_identity');
+    }
+    return hash_hmac('sha256', strtolower($id), wp_salt('auth'));
+}
+
+function dotmac_fiber_canonical(array $value): array {
+    ksort($value);
+    foreach ($value as &$item) if (is_array($item)) $item = dotmac_fiber_canonical($item);
+    return $value;
+}
+
+function dotmac_fiber_send_envelope(DotmacFiberEnvelope $envelope): DotmacFiberDeliveryResult {
+    $config = dotmac_fiber_upstream_config();
+    if (!$config) return new DotmacFiberDeliveryResult('attention');
     $url = rtrim($config['base_url'], '/') . '/api/v1/webhooks/fiber-inquiry/' . rawurlencode($config['binding_id']);
-    $response = wp_remote_post($url, array(
-        'timeout' => 20,
-        'headers' => array(
-            'Content-Type' => 'application/json',
-            $config['signature_header'] => $signature,
-            $config['delivery_header'] => $delivery_id,
-        ),
-        'body' => $body,
-    ));
-    if (is_wp_error($response)) {
-        return new WP_Error('fiber_upstream_unavailable', 'We could not confirm whether your enquiry was received. Please contact live chat or WhatsApp before sending it again.', array('status' => 503));
-    }
+    if (!str_starts_with($url, 'https://') || !hash_equals($envelope->url, $url)) return new DotmacFiberDeliveryResult('attention');
+    $response = wp_remote_post($url, [
+        'timeout' => 20, 'redirection' => 0, 'limit_response_size' => 16384,
+        'headers' => ['Content-Type' => 'application/json',
+            $config['signature_header'] => $config['signature_prefix'] . hash_hmac('sha256', $envelope->body, $config['secret']),
+            $config['delivery_header'] => $envelope->deliveryId], 'body' => $envelope->body,
+    ]);
+    if (is_wp_error($response)) return new DotmacFiberDeliveryResult('pending');
     $status = (int) wp_remote_retrieve_response_code($response);
-    $decoded = json_decode(wp_remote_retrieve_body($response), true);
-    if ($status < 200 || $status >= 300 || !is_array($decoded)) {
-        return new WP_Error('fiber_upstream_rejected', 'We could not complete the automated check. Please use live chat, or continue on WhatsApp.', array('status' => 503));
+    if ($status < 200 || $status >= 300) {
+        return new DotmacFiberDeliveryResult(in_array($status, [408, 425, 429], true) || $status >= 500 ? 'pending' : 'attention');
     }
-    $coverage = $decoded['coverage'] ?? null;
-    $valid_states = array('covered', 'survey_required', 'out_of_area', 'manual_review', 'technical_error');
-    if (!is_string($decoded['reference'] ?? null) || trim($decoded['reference']) === '' ||
-        !is_array($coverage) || !in_array($coverage['status'] ?? null, $valid_states, true) ||
-        !is_string($coverage['summary'] ?? null) || trim($coverage['summary']) === '') {
-        return new WP_Error('fiber_upstream_contract', 'We could not confirm the enquiry result. Please contact live chat or WhatsApp before sending it again.', array('status' => 503));
+    try {
+        $wire = json_decode(wp_remote_retrieve_body($response), true, 32, JSON_THROW_ON_ERROR);
+        if (!is_array($wire)) throw new DotmacFiberDeliveryException('invalid_receipt');
+        return new DotmacFiberDeliveryResult('received', new DotmacFiberReceipt($wire));
+    } catch (Throwable $error) { return new DotmacFiberDeliveryResult('pending'); }
+}
+
+function dotmac_fiber_delivery_response(DotmacFiberDeliveryResult $result): WP_REST_Response|WP_Error {
+    if ($result->state === 'received') return new WP_REST_Response($result->receipt->publicResponse(), 200);
+    if ($result->state === 'unknown') return new WP_Error('fiber_submission_unknown', 'No stored submission was found. Retry the same pending request.', ['status' => 404]);
+    return new WP_REST_Response(['enquiry_status' => 'pending_confirmation', 'delivery_state' => $result->state,
+        'message' => $result->state === 'pending'
+            ? 'Your request is pending confirmation. We will retry delivery; a saved Selfcare Lead has not yet been confirmed.'
+            : 'We cannot confirm receipt yet. Please contact Dotmac for help with your pending request; do not send a new enquiry.'], 202);
+}
+
+function dotmac_fiber_quote_request(WP_REST_Request $request): WP_REST_Response|WP_Error {
+    if (!dotmac_fiber_rate_limit()) return new WP_Error('fiber_rate_limited', 'Please wait a few minutes before trying again.', ['status' => 429]);
+    $config = dotmac_fiber_upstream_config();
+    if (!$config) return new WP_Error('fiber_integration_unavailable', 'Online coverage checks are temporarily unavailable. Please use live chat, or continue on WhatsApp.', ['status' => 503]);
+    $input = (array) $request->get_json_params();
+    try {
+        $id = dotmac_fiber_identity($input);
+        $fingerprint = hash('sha256', wp_json_encode(dotmac_fiber_canonical($input), JSON_UNESCAPED_SLASHES));
+        $result = dotmac_fiber_outbox()->deliver($id, $fingerprint, static function () use ($request, $id, $fingerprint, $config): DotmacFiberEnvelope {
+            $payload = dotmac_fiber_build_payload($request);
+            if ($payload instanceof WP_Error) throw new DotmacFiberPayloadException($payload);
+            $url = rtrim($config['base_url'], '/') . '/api/v1/webhooks/fiber-inquiry/' . rawurlencode($config['binding_id']);
+            return new DotmacFiberEnvelope($fingerprint, wp_json_encode($payload, JSON_UNESCAPED_SLASHES), 'fiber-' . $id, $url);
+        }, 'dotmac_fiber_send_envelope', time());
+        return dotmac_fiber_delivery_response($result);
+    } catch (DotmacFiberPayloadException $error) { return $error->error; }
+    catch (DotmacFiberDeliveryException $error) {
+        $conflict = $error->getMessage() === 'submission_content_conflict';
+        return new WP_Error($conflict ? 'fiber_submission_conflict' : 'fiber_delivery_unavailable',
+            $conflict ? 'This submission already contains different details. Continue checking the original pending request.'
+                : 'We cannot confirm receipt. Keep this pending request and contact Dotmac for help.', ['status' => $conflict ? 409 : 503]);
     }
-    $decoded['enquiry_status'] = 'received';
-    set_transient('dotmac_fiber_submission_' . $submission_key, $decoded, DAY_IN_SECONDS);
-    return new WP_REST_Response($decoded, 200);
+}
+
+function dotmac_fiber_submission_status(WP_REST_Request $request): WP_REST_Response|WP_Error {
+    try {
+        $id = dotmac_fiber_identity((array) $request->get_json_params());
+        return dotmac_fiber_delivery_response(dotmac_fiber_outbox()->deliver($id, '',
+            static function () { throw new DotmacFiberDeliveryException('missing_envelope'); }, 'dotmac_fiber_send_envelope', time()));
+    } catch (DotmacFiberDeliveryException $error) {
+        return new WP_Error('fiber_confirmation_unavailable', 'Confirmation is temporarily unavailable. Keep your pending request.', ['status' => 503]);
+    }
+}
+
+if (defined('WP_CLI') && WP_CLI) {
+    WP_CLI::add_command('fiber-outbox run', static function (): void {
+        WP_CLI::log(wp_json_encode(dotmac_fiber_outbox()->run('dotmac_fiber_send_envelope', time())));
+    });
+    WP_CLI::add_command('fiber-outbox inventory', static function (): void {
+        WP_CLI::log(wp_json_encode(dotmac_fiber_outbox()->inventory()));
+    });
+    WP_CLI::add_command('fiber-outbox recover', static function (array $args): void {
+        if (count($args) !== 1) WP_CLI::error('Supply one inventory ID. Recovery preserves the original bytes and delivery ID.');
+        dotmac_fiber_outbox()->recover($args[0], time());
+        WP_CLI::success('Original delivery scheduled for one bounded recovery cycle.');
+    });
 }
 
 add_action('rest_api_init', static function () {
     register_rest_route('dotmac-fiber/v1', '/attribution', array(
         'methods' => WP_REST_Server::CREATABLE,
         'callback' => 'dotmac_fiber_capture_attribution',
+        'permission_callback' => '__return_true',
+    ));
+    register_rest_route('dotmac-fiber/v1', '/submission-status', array(
+        'methods' => WP_REST_Server::CREATABLE, 'callback' => 'dotmac_fiber_submission_status',
         'permission_callback' => '__return_true',
     ));
     register_rest_route('dotmac-fiber/v1', '/quote-request', array(

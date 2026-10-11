@@ -57,7 +57,9 @@ authoritative even when external conversion delivery is delayed or unavailable.
 
 - [ ] Deferred signing secret, secure WordPress exchange, settings and existing
   binding activation verified by the authorized operator.
-- [ ] Website durable retry/recovery acceptance in `website/fiber/README.md`.
+- [ ] Website durable retry/recovery candidate installed and accepted through
+  `website/fiber/DELIVERY_RECOVERY.md`; pending transport records are excluded
+  from saved-Lead reporting. Source implementation alone does not close this gate.
 - [ ] Capture safeguard PR deployed after full GitHub CI and staging acceptance.
 - [ ] Instagram/Facebook coverage-request routes configured to Sales after the
   corrected selector is deployed; existing new-connection routes verified.
