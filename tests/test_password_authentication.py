@@ -10,6 +10,7 @@ exactly the window the defect lived in.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pyotp
 import pytest
@@ -802,3 +803,232 @@ def test_credential_version_is_not_exposed_by_auth_schemas():
         fields = getattr(model, "model_fields", None)
         if isinstance(fields, dict):
             assert "credential_version" not in fields, name
+
+
+# --------------------------------------------------------------------------
+# Forced MFA enrollment is bound to credential standing (R-PR1b)
+# --------------------------------------------------------------------------
+
+
+def _enrollment_step(db_session, monkeypatch):
+    """Staff password step that forces enrollment; returns the pieces."""
+
+    monkeypatch.setattr(auth_flow_service, "_force_admin_mfa", lambda _db: True)
+    system_user, credential = _system_user_with_credential(
+        db_session, "staff-enroll@example.com"
+    )
+    step = AuthFlow.login(
+        db_session, system_user.email, "secret", _make_request(), None
+    )
+    assert step["mfa_enrollment_required"] is True
+    setup = AuthFlow.admin_mfa_setup(db_session, str(system_user.id), "device")
+    return system_user, credential, step["mfa_enrollment_token"], setup
+
+
+def _enrollment_state(db_session, system_user):
+    db_session.expire_all()
+    methods = (
+        db_session.query(MFAMethod)
+        .filter(MFAMethod.system_user_id == system_user.id)
+        .filter(MFAMethod.enabled.is_(True))
+        .count()
+    )
+    return methods, db_session.query(MFARecoveryCode).count(), _sessions(db_session)
+
+
+def _reset_credential(db_session, credential):
+    db_session.execute(
+        update(UserCredential)
+        .where(UserCredential.id == credential.id)
+        .values(
+            password_hash=hash_password("Reset-by-owner1!"),
+            credential_version=UserCredential.credential_version + 1,
+        )
+    )
+    db_session.commit()
+
+
+def test_enrollment_with_matching_version_persists_factor_codes_and_session(
+    db_session, monkeypatch
+):
+    system_user, _credential_row, token, setup = _enrollment_step(
+        db_session, monkeypatch
+    )
+    challenge = pa.decode_challenge(db_session, token, expected_typ="mfa_enrollment")
+    assert challenge.credential_version == 1
+
+    tokens, codes = AuthFlow.confirm_mfa_enrollment(
+        db_session,
+        token,
+        str(setup["method_id"]),
+        pyotp.TOTP(setup["secret"]).now(),
+        _make_request(),
+    )
+
+    assert tokens["access_token"]
+    assert len(codes) > 0
+    methods, recovery, sessions = _enrollment_state(db_session, system_user)
+    assert (methods, recovery, sessions) == (1, len(codes), 1)
+    method = db_session.get(MFAMethod, setup["method_id"])
+    assert method.is_primary and method.enabled and method.verified_at is not None
+    assert "auth.login_succeeded" in _audit_actions(db_session)
+
+
+def test_stale_enrollment_token_after_reset_persists_nothing(db_session, monkeypatch):
+    system_user, credential, token, setup = _enrollment_step(db_session, monkeypatch)
+    _reset_credential(db_session, credential)
+
+    with pytest.raises(HTTPException) as excinfo:
+        AuthFlow.confirm_mfa_enrollment(
+            db_session,
+            token,
+            str(setup["method_id"]),
+            pyotp.TOTP(setup["secret"]).now(),
+            _make_request(),
+        )
+
+    assert excinfo.value.status_code == 401
+    assert _enrollment_state(db_session, system_user) == (0, 0, 0)
+    method = db_session.get(MFAMethod, setup["method_id"])
+    assert not method.enabled and not method.is_primary
+    assert method.verified_at is None
+
+
+def test_reset_between_phase_a_and_gate_rolls_back_enrollment(db_session, monkeypatch):
+    system_user, credential, token, setup = _enrollment_step(db_session, monkeypatch)
+    real = auth_flow_service._decrypt_secret  # noqa: SLF001
+
+    def reset_after_phase_a_read(*args, **kwargs):
+        value = real(*args, **kwargs)
+        _reset_credential(db_session, credential)
+        return value
+
+    monkeypatch.setattr(auth_flow_service, "_decrypt_secret", reset_after_phase_a_read)
+    with pytest.raises(HTTPException) as excinfo:
+        AuthFlow.confirm_mfa_enrollment(
+            db_session,
+            token,
+            str(setup["method_id"]),
+            pyotp.TOTP(setup["secret"]).now(),
+            _make_request(),
+        )
+    assert excinfo.value.status_code == 401
+    assert _enrollment_state(db_session, system_user) == (0, 0, 0)
+
+
+def test_failure_after_gate_rolls_back_factor_codes_and_session(
+    db_session, monkeypatch
+):
+    system_user, _credential_row, token, setup = _enrollment_step(
+        db_session, monkeypatch
+    )
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(pa, "_stage_audit", boom)
+    with pytest.raises(RuntimeError):
+        AuthFlow.confirm_mfa_enrollment(
+            db_session,
+            token,
+            str(setup["method_id"]),
+            pyotp.TOTP(setup["secret"]).now(),
+            _make_request(),
+        )
+    assert _enrollment_state(db_session, system_user) == (0, 0, 0)
+
+
+def test_legacy_enrollment_token_is_refused_without_fallback(db_session, monkeypatch):
+    system_user, _credential_row, _token, setup = _enrollment_step(
+        db_session, monkeypatch
+    )
+    payload = {
+        "sub": str(system_user.id),
+        "principal_id": str(system_user.id),
+        "principal_type": "system_user",
+        "typ": "mfa_enrollment",
+        "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
+    }
+    legacy = _encode(payload)
+
+    with pytest.raises(HTTPException) as excinfo:
+        AuthFlow.confirm_mfa_enrollment(
+            db_session,
+            legacy,
+            str(setup["method_id"]),
+            pyotp.TOTP(setup["secret"]).now(),
+            _make_request(),
+        )
+    assert excinfo.value.status_code == 401
+    assert _enrollment_state(db_session, system_user) == (0, 0, 0)
+
+
+def test_wrong_enrollment_code_persists_nothing_and_counts_a_failure(
+    db_session, monkeypatch
+):
+    system_user, _credential_row, token, setup = _enrollment_step(
+        db_session, monkeypatch
+    )
+    good = pyotp.TOTP(setup["secret"]).now()
+    bad = "000000" if good != "000000" else "111111"
+    with pytest.raises(HTTPException) as excinfo:
+        AuthFlow.confirm_mfa_enrollment(
+            db_session, token, str(setup["method_id"]), bad, _make_request()
+        )
+    assert excinfo.value.status_code == 401
+    assert _enrollment_state(db_session, system_user) == (0, 0, 0)
+    db_session.expire_all()
+    assert db_session.get(MFAMethod, setup["method_id"]).failed_attempts == 1
+
+
+def test_enrollment_web_binding_refuses_stale_and_legacy_tokens(
+    db_session, monkeypatch
+):
+    from app.services import web_auth
+
+    system_user, credential, token, _setup = _enrollment_step(db_session, monkeypatch)
+    assert web_auth._mfa_enrollment_binding(db_session, token)  # noqa: SLF001
+    _reset_credential(db_session, credential)
+    with pytest.raises(ValueError):
+        web_auth._mfa_enrollment_binding(db_session, token)  # noqa: SLF001
+
+
+def test_pppoe_gate_takes_a_row_share_lock(db_session, person):
+    """The PPPoE gates lock the access-credential row FOR SHARE (R-PR1b)."""
+
+    from sqlalchemy.dialects import postgresql
+
+    captured: list[str] = []
+    real = db_session.execute
+
+    def spy(statement, *args, **kwargs):
+        try:
+            captured.append(str(statement.compile(dialect=postgresql.dialect())))
+        except Exception:
+            pass
+        return real(statement, *args, **kwargs)
+
+    access = AccessCredential(
+        subscriber_id=person.id,
+        username="pppoe-lock-001",
+        secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+        is_active=True,
+    )
+    db_session.add(access)
+    db_session.commit()
+    verified = _verified(
+        SimpleNamespace(id=None),
+        person,
+        src=pa.SRC_ACCESS_CREDENTIAL,
+        mfa_required=False,
+        credential_id=None,
+        credential_version=None,
+        access_credential_id=access.id,
+        verified_hash=access.secret_hash,
+    )
+    db_session.execute = spy  # type: ignore[method-assign]
+    try:
+        assert pa._gate_password_step(db_session, verified, datetime.now(UTC)) is None  # noqa: SLF001
+    finally:
+        db_session.execute = real  # type: ignore[method-assign]
+    assert any("FOR SHARE" in sql for sql in captured)

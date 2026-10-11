@@ -2,6 +2,7 @@
 
 import logging
 from urllib.parse import quote
+from uuid import UUID
 
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -11,7 +12,11 @@ from starlette.responses import Response
 
 from app.csrf import renew_csrf_cookie
 from app.services import auth_flow as auth_flow_service
-from app.services import credential_recovery, staff_party_authentication
+from app.services import (
+    credential_recovery,
+    password_authentication,
+    staff_party_authentication,
+)
 from app.services.auth_flow import AuthFlow, LoginAudience
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
@@ -364,13 +369,27 @@ def _mfa_enrollment_binding(
     db: Session,
     token: str,
 ) -> staff_party_authentication.StaffSessionBinding:
-    payload = auth_flow_service._decode_jwt(db, token, "mfa_enrollment")  # noqa: SLF001
-    if payload.get("principal_type") != "system_user":
-        raise ValueError("Invalid MFA enrollment token")
-    binding = auth_flow_service.staff_binding_from_token_payload(
-        payload,
-        invalid_detail="Invalid MFA enrollment token",
+    """Validate the v2 enrollment challenge (credential id + version bound).
+
+    A legacy token (no ``ver``/``cid``/``cv``) is refused: the user restarts
+    login. The standing check is advisory and read-only; the authoritative gate
+    is inside ``password_authentication.confirm_mfa_enrollment``.
+    """
+
+    challenge = password_authentication.decode_challenge(
+        db, token, expected_typ="mfa_enrollment"
     )
+    if challenge.principal_type != "system_user":
+        raise ValueError("Invalid MFA enrollment token")
+    if not password_authentication.challenge_has_standing(db, challenge):
+        raise ValueError("Invalid MFA enrollment token")
+    try:
+        binding = staff_party_authentication.StaffSessionBinding(
+            party_id=UUID(str(challenge.party_id)),
+            system_user_id=UUID(str(challenge.principal_id)),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid MFA enrollment token") from exc
     try:
         principal = staff_party_authentication.resolve_staff_principal_by_party(
             db,
@@ -432,18 +451,11 @@ def mfa_enroll_confirm(
         return RedirectResponse(url="/auth/login", status_code=303)
     redirect_url = _safe_next(next_url)
     try:
-        binding = _mfa_enrollment_binding(db, enrollment_token)
-        principal_id = str(binding.system_user_id)
-        method = auth_flow_service.auth_flow.admin_mfa_confirm(
-            db, method_id, code.strip(), principal_id
-        )
-        recovery_codes = (
-            auth_flow_service.generate_mfa_recovery_codes(db, method)
-            if getattr(method, "id", None)
-            else []
-        )
-        result = auth_flow_service.auth_flow.establish_enrolled_session(
-            db, enrollment_token, request
+        _mfa_enrollment_binding(db, enrollment_token)
+        # One credential-gated owner transaction: factor, recovery codes,
+        # session and audit commit together or not at all.
+        result, recovery_codes = auth_flow_service.auth_flow.confirm_mfa_enrollment(
+            db, enrollment_token, method_id, code.strip(), request
         )
         response: Response
         if recovery_codes:

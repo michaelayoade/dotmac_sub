@@ -1213,22 +1213,19 @@ def _new_recovery_code() -> str:
     return f"{raw[:5]}-{raw[5:]}"
 
 
-def generate_mfa_recovery_codes(
+def stage_mfa_recovery_codes(
     db: Session,
-    method: MFAMethod | str,
+    method_id: UUID | str,
     count: int = MFA_RECOVERY_CODE_COUNT,
 ) -> list[str]:
-    """Replace recovery codes for an MFA method and return plaintext once."""
-    mfa_method = (
-        method
-        if isinstance(method, MFAMethod)
-        else db.get(MFAMethod, coerce_uuid(method))
-    )
-    if not mfa_method:
-        raise HTTPException(status_code=404, detail="MFA method not found")
+    """Replace a method's recovery codes WITHOUT committing; plaintext returned.
+
+    The caller owns the transaction: forced enrollment stages these inside the
+    credential-gated owner transaction so a refusal discards them.
+    """
 
     db.query(MFARecoveryCode).filter(
-        MFARecoveryCode.mfa_method_id == mfa_method.id,
+        MFARecoveryCode.mfa_method_id == coerce_uuid(method_id),
         MFARecoveryCode.is_active.is_(True),
         MFARecoveryCode.used_at.is_(None),
     ).update({"is_active": False})
@@ -1245,11 +1242,29 @@ def generate_mfa_recovery_codes(
         codes.append(code)
         db.add(
             MFARecoveryCode(
-                mfa_method_id=mfa_method.id,
+                mfa_method_id=coerce_uuid(method_id),
                 code_hash=code_hash,
                 is_active=True,
             )
         )
+    return codes
+
+
+def generate_mfa_recovery_codes(
+    db: Session,
+    method: MFAMethod | str,
+    count: int = MFA_RECOVERY_CODE_COUNT,
+) -> list[str]:
+    """Replace recovery codes for an MFA method and return plaintext once."""
+    mfa_method = (
+        method
+        if isinstance(method, MFAMethod)
+        else db.get(MFAMethod, coerce_uuid(method))
+    )
+    if not mfa_method:
+        raise HTTPException(status_code=404, detail="MFA method not found")
+
+    codes = stage_mfa_recovery_codes(db, mfa_method.id, count)
     db.commit()
     return codes
 
@@ -1978,6 +1993,62 @@ class AuthFlow(ListResponseMixin):
         except password_authentication.PasswordAuthenticationError as exc:
             raise _http_from_refusal(exc) from exc
         return tokens_for_staged_session(staged)
+
+    @staticmethod
+    def confirm_mfa_enrollment(
+        db: Session,
+        enrollment_token: str,
+        method_id: str,
+        code: str,
+        request: Request,
+    ) -> tuple[dict[str, str], list[str]]:
+        """Forced enrollment: verify the code, then ONE credential-gated commit.
+
+        The enrollment token is a v2 challenge bound to the credential id and
+        version (no legacy fallback). Phase A only reads; the factor, recovery
+        codes, session and audit are all written inside the owner transaction,
+        so a reset since the password step leaves nothing behind.
+        """
+
+        try:
+            challenge = password_authentication.decode_challenge(
+                db, enrollment_token, expected_typ="mfa_enrollment"
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            raise _http_from_refusal(exc) from exc
+        if challenge.principal_type != "system_user":
+            raise HTTPException(status_code=401, detail="Invalid MFA token")
+        method = db.get(MFAMethod, coerce_uuid(method_id))
+        if (
+            not method
+            or method.subscriber_id is not None
+            or str(method.system_user_id) != str(challenge.principal_id)
+        ):
+            raise HTTPException(status_code=403, detail="MFA method not allowed")
+        if method.method_type != MFAMethodType.totp:
+            raise HTTPException(status_code=400, detail="Unsupported MFA method")
+        ensure_mfa_not_locked(method)
+        resolved_method_id = method.id
+        totp_ok = bool(
+            pyotp.TOTP(_decrypt_secret(db, method.secret or "")).verify(
+                code, valid_window=0
+            )
+        )
+        failure_policy = _mfa_failure_policy(db)
+        try:
+            outcome = password_authentication.confirm_mfa_enrollment(
+                db,
+                challenge,
+                request=request,
+                method_id=resolved_method_id,
+                totp_ok=totp_ok,
+                failure_policy=failure_policy,
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            raise _http_from_refusal(exc) from exc
+        return tokens_for_staged_session(outcome.staged_session), list(
+            outcome.recovery_codes
+        )
 
     @staticmethod
     def mfa_verify_response(db: Session, mfa_token: str, code: str, request: Request):

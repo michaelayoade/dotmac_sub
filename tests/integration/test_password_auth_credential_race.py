@@ -50,6 +50,7 @@ from app.models.auth import (
     UserCredential,
 )
 from app.models.auth import Session as AuthSession
+from app.models.catalog import AccessCredential
 from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber
 from app.services import auth_flow as auth_flow_service
@@ -818,3 +819,228 @@ def test_t13_migration_670_upgrade_and_downgrade_on_a_668_clone(
         assert connection.execute(
             "SELECT count(*) FROM user_credentials"
         ).fetchone() == (3,)
+
+
+# --------------------------------------------------------------------------
+# R-PR1b: forced MFA enrollment bound to credential standing; PPPoE row lock
+# --------------------------------------------------------------------------
+
+
+def _staff_enrollment(factory, monkeypatch):
+    """Staff user whose password step demands enrollment, with a pending TOTP."""
+
+    monkeypatch.setattr(auth_flow_service, "_force_admin_mfa", lambda _db: True)
+    email = f"staff-enroll-{uuid.uuid4().hex[:8]}@example.test"
+    with factory() as setup:
+        system_user, credential = _system_user_with_credential(setup, email)
+        staff = SimpleNamespace(
+            id=system_user.id, credential_id=credential.id, email=email
+        )
+    with factory() as session:
+        step = AuthFlow.login(session, email, "secret", _make_request(), None)
+    assert step["mfa_enrollment_required"] is True
+    with factory() as session:
+        setup_data = AuthFlow.admin_mfa_setup(session, str(staff.id), "device")
+    return staff, step["mfa_enrollment_token"], setup_data
+
+
+def _reset_staff(factory, staff):
+    with factory() as session:
+        session.execute(
+            update(UserCredential)
+            .where(UserCredential.id == staff.credential_id)
+            .values(
+                password_hash=hash_password(RESET_TO),
+                credential_version=UserCredential.credential_version + 1,
+            )
+        )
+        session.commit()
+
+
+def _enrollment_state(factory, staff, method_id):
+    with factory() as session:
+        enabled = session.scalar(
+            select(func.count())
+            .select_from(MFAMethod)
+            .where(MFAMethod.system_user_id == staff.id, MFAMethod.enabled.is_(True))
+        )
+        codes = session.scalar(
+            select(func.count())
+            .select_from(MFARecoveryCode)
+            .where(MFARecoveryCode.mfa_method_id == method_id)
+        )
+        sessions = session.scalar(
+            select(func.count())
+            .select_from(AuthSession)
+            .where(AuthSession.system_user_id == staff.id)
+        )
+    return enabled, codes, sessions
+
+
+def _confirm(factory, token, setup_data, code=None):
+    with factory() as session:
+        try:
+            return (
+                "ok",
+                AuthFlow.confirm_mfa_enrollment(
+                    session,
+                    token,
+                    str(setup_data["method_id"]),
+                    code or pyotp.TOTP(setup_data["secret"]).now(),
+                    _make_request(),
+                ),
+            )
+        except HTTPException as exc:
+            return ("http", exc.status_code, exc.detail)
+
+
+def test_enrollment_with_matching_version_commits_factor_codes_and_session(
+    engine, factory, monkeypatch
+):
+    staff, token, setup_data = _staff_enrollment(factory, monkeypatch)
+    outcome = _confirm(factory, token, setup_data)
+    assert outcome[0] == "ok"
+    enabled, codes, sessions = _enrollment_state(
+        factory, staff, setup_data["method_id"]
+    )
+    assert (enabled, sessions) == (1, 1)
+    assert codes == len(outcome[1][1]) > 0
+
+
+def test_stale_enrollment_token_after_reset_persists_no_factor_codes_or_session(
+    engine, factory, monkeypatch
+):
+    staff, token, setup_data = _staff_enrollment(factory, monkeypatch)
+    _reset_staff(factory, staff)
+    outcome = _confirm(factory, token, setup_data)
+    assert outcome[:2] == ("http", 401)
+    assert _enrollment_state(factory, staff, setup_data["method_id"]) == (0, 0, 0)
+
+
+def test_reset_between_enrollment_verify_and_gate_rolls_everything_back(
+    engine, factory, monkeypatch
+):
+    staff, token, setup_data = _staff_enrollment(factory, monkeypatch)
+    pause = _Pause()
+    real = pa.confirm_mfa_enrollment
+
+    def spy(*args, **kwargs):
+        if _named("racer-a"):
+            pause.hit()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pa, "confirm_mfa_enrollment", spy)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="racer-a") as pool:
+        future = pool.submit(_confirm, factory, token, setup_data)
+        assert pause.reached.wait(WAIT)
+        _reset_staff(factory, staff)
+        pause.resume.set()
+        outcome = future.result(timeout=WAIT)
+    assert outcome[:2] == ("http", 401)
+    assert _enrollment_state(factory, staff, setup_data["method_id"]) == (0, 0, 0)
+
+
+def test_legacy_enrollment_token_is_refused(engine, factory, monkeypatch):
+    staff, _token, setup_data = _staff_enrollment(factory, monkeypatch)
+    payload = {
+        "sub": str(staff.id),
+        "principal_id": str(staff.id),
+        "principal_type": "system_user",
+        "typ": "mfa_enrollment",
+        "exp": int(time.time()) + 300,
+    }
+    with factory() as session:
+        token = auth_flow_service._jwt_encode_token(  # noqa: SLF001
+            payload,
+            auth_flow_service._jwt_secret(session),  # noqa: SLF001
+            auth_flow_service._jwt_algorithm(session),  # noqa: SLF001
+        )
+    outcome = _confirm(factory, token, setup_data)
+    assert outcome[:2] == ("http", 401)
+    assert _enrollment_state(factory, staff, setup_data["method_id"]) == (0, 0, 0)
+
+
+@pytest.fixture
+def pppoe(factory, account):
+    with factory() as setup:
+        access = AccessCredential(
+            subscriber_id=account.subscriber_id,
+            username=f"pppoe-race-{uuid.uuid4().hex[:8]}",
+            secret_hash=auth_flow_service.hash_service_secret("pppoe-secret"),
+            is_active=True,
+        )
+        setup.add(access)
+        setup.commit()
+        data = SimpleNamespace(id=access.id, username=access.username)
+    try:
+        yield data
+    finally:
+        with factory() as cleanup:
+            try:
+                cleanup.execute(
+                    delete(AccessCredential).where(AccessCredential.id == data.id)
+                )
+                cleanup.commit()
+            except Exception:
+                cleanup.rollback()
+
+
+def _rotate_pppoe_secret(factory, pppoe):
+    with factory() as session:
+        session.execute(
+            update(AccessCredential)
+            .where(AccessCredential.id == pppoe.id)
+            .values(secret_hash=auth_flow_service.hash_service_secret("rotated"))
+        )
+        session.commit()
+
+
+def _pppoe_login(factory, pppoe):
+    with factory() as session:
+        try:
+            return (
+                "ok",
+                AuthFlow.login(
+                    session, pppoe.username, "pppoe-secret", _make_request(), None
+                ),
+            )
+        except HTTPException as exc:
+            return ("http", exc.status_code)
+
+
+def test_pppoe_secret_change_before_the_gate_mints_no_session(
+    engine, factory, account, pppoe, monkeypatch
+):
+    pause = _Pause()
+    _pause_after_verify(monkeypatch, pause, "racer-a")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="racer-a") as pool:
+        future = pool.submit(_pppoe_login, factory, pppoe)
+        assert pause.reached.wait(WAIT)
+        _rotate_pppoe_secret(factory, pppoe)
+        pause.resume.set()
+        outcome = future.result(timeout=WAIT)
+    assert outcome[:2] == ("http", 401)
+    assert _session_count(factory, account) == 0
+
+
+def test_pppoe_secret_change_cannot_commit_while_the_gate_holds_its_row(
+    engine, factory, account, pppoe, monkeypatch
+):
+    """The gate holds the access-credential row FOR SHARE until the session
+    commits: a rotation is blocked (proved from pg_stat_activity), then lands
+    after the login, never in the middle of it."""
+
+    pause = _Pause()
+    _pause_inside_gate(monkeypatch, pause, "racer-a")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="racer-a") as pool_a:
+        login_future = pool_a.submit(_pppoe_login, factory, pppoe)
+        assert pause.reached.wait(WAIT)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="racer-b") as pool_b:
+            rotate_future = pool_b.submit(_rotate_pppoe_secret, factory, pppoe)
+            _wait_until_a_session_is_blocked(engine)
+            assert not rotate_future.done()
+            pause.resume.set()
+            rotate_future.result(timeout=WAIT)
+        outcome = login_future.result(timeout=WAIT)
+    assert outcome[0] == "ok"
+    assert _session_count(factory, account) == 1
