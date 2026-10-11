@@ -255,3 +255,63 @@ def test_stolen_seed_cannot_reconfirm_disabled_method_nor_demote_new_primary(
     db_session.expire_all()
     assert db_session.get(MFAMethod, old_id).enabled is False
     assert db_session.get(MFAMethod, fresh_id).is_primary is True
+
+
+def _identity_crypto(monkeypatch):
+    from app.services import auth_flow
+
+    monkeypatch.setattr(auth_flow, "_encrypt_secret", lambda db, value: value)
+    monkeypatch.setattr(auth_flow, "_decrypt_secret", lambda db, value: value)
+    return auth_flow
+
+
+def _principals(db_session, subscriber, kind):
+    from app.models.subscriber import Reseller, ResellerUser
+    from app.models.system_user import SystemUser
+
+    if kind == "subscriber":
+        return subscriber, "mfa_setup", "mfa_confirm", "subscriber_id"
+    if kind == "system_user":
+        user = SystemUser(
+            first_name="S", last_name="U", email=f"{uuid4().hex[:8]}@example.test"
+        )
+    else:
+        reseller = Reseller(name=f"R{uuid4().hex[:6]}")
+        db_session.add(reseller)
+        db_session.flush()
+        user = ResellerUser(
+            reseller_id=reseller.id,
+            email=f"{uuid4().hex[:8]}@example.test",
+            is_active=True,
+            full_name="Reseller Login",
+        )
+    db_session.add(user)
+    db_session.commit()
+    prefix = "admin_" if kind == "system_user" else "reseller_"
+    return user, f"{prefix}mfa_setup", f"{prefix}mfa_confirm", f"{kind}_id"
+
+
+@pytest.mark.parametrize("kind", ["subscriber", "system_user", "reseller_user"])
+def test_setup_after_disabling_pending_row_creates_a_new_confirmable_row(
+    monkeypatch, db_session, subscriber, kind
+):
+    import pyotp
+
+    flow = _identity_crypto(monkeypatch).auth_flow
+    principal, setup_name, confirm_name, column = _principals(
+        db_session, subscriber, kind
+    )
+    pid = str(principal.id)
+    first = getattr(flow, setup_name)(db_session, pid, "first")
+    old_id = first["method_id"]
+    auth_service.mfa_methods.delete(db_session, str(old_id), actor_id="admin")
+
+    second = getattr(flow, setup_name)(db_session, pid, "second")
+    assert second["method_id"] != old_id
+    confirmed = getattr(flow, confirm_name)(
+        db_session, str(second["method_id"]), pyotp.TOTP(second["secret"]).now(), pid
+    )
+    assert confirmed.is_primary and confirmed.is_active
+    db_session.expire_all()
+    old = db_session.get(MFAMethod, old_id)
+    assert (old.is_active, old.enabled, old.secret) == (False, False, None)
