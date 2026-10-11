@@ -196,6 +196,16 @@ period and due boundaries use Africa/Lagos midnight converted to UTC. The
 invoice, allocation ledger evidence, entitlement, anchor, audit, metadata, and
 idempotency reservation commit together.
 
+That generic missing-invoice command intentionally rejects a period that
+already has an active ledger-backed entitlement. When the overlap is the exact
+historical payment-linked debit chain (no invoice and no `AccountAdjustment`),
+the only writer is
+`financial.prepaid_service_renewals.repair_legacy_payment_backed_renewal_invoice`.
+It first reverses the existing customer-position debit and retires the exact
+entitlement, then creates the paid documentary replacement with zero funding
+or coverage delta. The generic command does not acquire this authority and its
+overlap refusal remains a safety invariant.
+
 The selected-payment allocation uses a typed reviewed-document finalization.
 It creates the canonical paid-invoice and entitlement evidence but does not
 emit a second funding-increase observation or invoke financial-access
@@ -738,3 +748,14 @@ or incomplete paid/coverage result, rolling back the complete repair.
 
 This change does not mutate historical customer records during deployment.
 Backlog state changes occur only through an explicit reviewed apply command.
+# Reviewed missing-invoice calendar selection
+
+The entity-scoped missing-paid-invoice repair defaults to Lagos business
+midnight. It may instead select `documented_anniversary` only with an aware
+expected initial anchor and an explicit active reference entitlement belonging
+to the same account and subscription. The reference start/end Lagos clocks must
+agree, its end and the current `next_billing_at` must equal the proposed period
+start, and the proposed end must be the canonical next cadence boundary. The
+selected Payment's Lagos paid date remains the issue-date evidence. These facts
+are fingerprinted and rechecked under lock. Business-midnight mode rejects both
+documentary arguments, so adapters cannot introduce an arbitrary clock.
