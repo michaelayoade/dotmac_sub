@@ -2402,10 +2402,28 @@ def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
-def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.disable_user_mfa(
-        db, user_id=user_id, actor_id=_system_actor_id(request)
-    )
+def user_disable_mfa(
+    request: Request,
+    user_id: str,
+    removal_reason: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_system_user_mutations_service.disable_user_mfa(
+            db,
+            command=staff_provisioning_service.RemoveStaffMfaCommand(
+                context=_system_command_context(
+                    request,
+                    reason="Administrative staff MFA removal",
+                    idempotency_key=f"staff-mfa-removal:{user_id}:{uuid4()}",
+                ),
+                user_id=UUID(user_id),
+                removal_reason=removal_reason or request.headers.get("HX-Prompt", ""),
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return web_system_common_service.error_banner(message)
     return Response(status_code=204)
 
 

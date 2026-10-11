@@ -720,7 +720,8 @@
    "params": [
     "header:authorization",
     "header:x-api-key",
-    "path:method_id!"
+    "path:method_id!",
+    "query:reason!"
    ],
    "request": null,
    "responses": {

@@ -287,6 +287,14 @@ def _effective_access(
     )
 
 
+def effective_access(
+    db: Session, user_id: UUID
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Public read of a user's active role names and effective permission keys."""
+
+    return _effective_access(db, user_id)
+
+
 def _replace_source_roles(
     db: Session,
     *,

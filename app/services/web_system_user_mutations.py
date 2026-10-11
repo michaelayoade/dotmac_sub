@@ -41,31 +41,11 @@ def _user_invite_expiry_minutes(db: Session) -> int:
     return parsed if parsed > 0 else 1440
 
 
-def disable_user_mfa(db: Session, *, user_id: str, actor_id: str | None = None) -> None:
-    """Disable all MFA methods for a system user."""
-    from app.services.audit_adapter import record_audit_event
-
-    system_user = db.get(SystemUser, coerce_uuid(user_id))
-    if not system_user:
-        raise ValueError("User not found")
-    db.query(MFAMethod).filter(MFAMethod.system_user_id == system_user.id).update(
-        {
-            "enabled": False,
-            "is_active": False,
-            "failed_attempts": 0,
-            "locked_until": None,
-        }
-    )
-    record_audit_event(
-        db,
-        action="auth.mfa_disabled",
-        entity_type="system_user",
-        entity_id=str(system_user.id),
-        actor_id=actor_id,
-        metadata={"email": system_user.email},
-    )
-    db.commit()
-    auth_cache.invalidate_principal("system_user", str(system_user.id))
+def disable_user_mfa(
+    db: Session, *, command: staff_provisioning.RemoveStaffMfaCommand
+) -> None:
+    """Disable all MFA methods for a system user via staff provisioning."""
+    staff_provisioning.remove_staff_mfa(db, command)
 
 
 def disable_subscriber_mfa(

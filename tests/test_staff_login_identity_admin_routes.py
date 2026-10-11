@@ -294,3 +294,61 @@ def test_staff_edit_template_password_controls_default_to_no_forced_reset() -> N
         'name="require_password_change" id="require_password_change" checked'
         not in template
     )
+
+
+def _disable_mfa_route():
+    return next(
+        r
+        for r in admin_system.router.routes
+        if getattr(r, "path", "").endswith("/users/{user_id}/disable-mfa")
+    )
+
+
+def test_disable_mfa_route_is_permission_gated_and_csrf_protected() -> None:
+    route = _disable_mfa_route()
+    names = [getattr(d.call, "__name__", "") for d in route.dependant.dependencies]
+    assert "_require_permission" in names
+    from app.main import _CSRF_PROTECTED_PATHS
+
+    assert "/admin/" in _CSRF_PROTECTED_PATHS
+    templates = (PROJECT_ROOT / "templates/admin/system/users/detail.html").read_text()
+    assert "disable-mfa" in templates and "csrf_input.html" in templates
+
+
+def test_disable_mfa_route_builds_typed_command_with_reason(monkeypatch) -> None:
+    user_id = uuid4()
+    captured: list[staff_provisioning.RemoveStaffMfaCommand] = []
+    monkeypatch.setattr(
+        admin_system.web_system_user_mutations_service,
+        "disable_user_mfa",
+        lambda _db, *, command: captured.append(command),
+    )
+    response = admin_system.user_disable_mfa(
+        _request(f"/admin/system/users/{user_id}/disable-mfa"),
+        str(user_id),
+        removal_reason="Call-back to phone on file, ticket T-5",
+        db=object(),
+    )
+    assert response.status_code == 204
+    command = captured[0]
+    assert command.user_id == user_id
+    assert command.removal_reason == "Call-back to phone on file, ticket T-5"
+    assert command.context.scope == staff_provisioning.STAFF_ASSIGN_SCOPE
+
+
+def test_disable_mfa_route_surfaces_missing_reason_and_bad_uuid(db_session) -> None:
+    user_id = uuid4()
+    banner = admin_system.user_disable_mfa(
+        _request(f"/admin/system/users/{user_id}/disable-mfa"),
+        str(user_id),
+        removal_reason="",
+        db=db_session,
+    )
+    assert "reason" in banner.body.decode().lower()
+    bad = admin_system.user_disable_mfa(
+        _request("/admin/system/users/not-a-uuid/disable-mfa"),
+        "not-a-uuid",
+        removal_reason="Call-back, ticket T-5",
+        db=db_session,
+    )
+    assert bad.status_code == 409

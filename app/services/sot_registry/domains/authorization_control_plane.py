@@ -2622,6 +2622,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "reseller portal principal onboarding",
                 "reseller portal access revocation",
+                "reseller portal MFA maintenance",
             ),
             depends_on=(
                 "customer.accounts",
@@ -2662,6 +2663,14 @@ DOMAIN = DomainSOT(
                     ),
                     ConcernContract(
                         name="reseller portal access revocation",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "authorized reseller onboarding principal",
+                            "canonical reseller onboarding state",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="reseller portal MFA maintenance",
                         role=OwnerRole.APPLICATION_COORDINATOR,
                         input_names=(
                             "authorized reseller onboarding principal",
