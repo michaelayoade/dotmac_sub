@@ -736,11 +736,23 @@ def test_get_context_invalid_token(db_session):
 
 def test_get_context_success(db_session, person, reseller, reseller_user):
     """Test get_context returns full context."""
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
+
+    auth_session = AuthSession(
+        subscriber_id=person.id,
+        status=SessionStatus.active,
+        token_hash="reseller-context-bound",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    db_session.add(auth_session)
+    db_session.commit()
     token = reseller_portal._create_session(
         username=person.email,
         person_id=str(person.id),
         reseller_id=str(reseller.id),
         remember=False,
+        auth_session_id=str(auth_session.id),
     )
 
     result = reseller_portal.get_context(db_session, token)

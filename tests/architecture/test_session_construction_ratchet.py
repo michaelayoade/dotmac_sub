@@ -161,7 +161,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: Session sites force exact lock interleavings; two SQLite Session sites prove
 #: caller-flushed-write preservation and independent committed observation.
 #: Test-only additions; production construction allowance is unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 232
+#: Reseller standing PostgreSQL cases add two isolated Session constructors.
+#: These test fixtures do not expand the production construction allowance.
+TEST_FIXTURE_BASELINE_TOTAL = 234
 
 
 def _baseline() -> dict[str, int]:

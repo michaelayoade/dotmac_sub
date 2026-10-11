@@ -33,6 +33,100 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="app_sessions.reseller_standing",
+            module="app.services.reseller_session_standing",
+            owns=(
+                "ordinary reseller cookie database standing",
+                "ordinary reseller cookie refresh deadline",
+            ),
+            depends_on=(
+                "app_sessions.auth",
+                "app_sessions.store",
+                "auth.reseller_onboarding",
+                "control.settings_spec",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="ordinary reseller cookie database standing",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "database authentication session state",
+                            "current reseller ownership",
+                            "bound ordinary cookie identity",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ordinary reseller cookie refresh deadline",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "database authentication session state",
+                            "current reseller ownership",
+                            "bound ordinary cookie identity",
+                            "portal lifetime policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="database authentication session state",
+                        owner="app_sessions.auth",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="AuthSession exclusive principal/status/revoked_at/expiry",
+                    ),
+                    AuthorityInput(
+                        name="current reseller ownership",
+                        owner="auth.reseller_onboarding",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Reseller active standing, active Subscriber identity and current ResellerUser operator membership",
+                    ),
+                    AuthorityInput(
+                        name="bound ordinary cookie identity",
+                        owner="app_sessions.store",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Serialized exact auth_session_id, principal kind/id, exclusive principal identifiers and reseller_id; never authentication authority",
+                    ),
+                    AuthorityInput(
+                        name="portal lifetime policy",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Configured sliding and absolute TTLs supplied as typed query values",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Reads in the caller transaction with no_autoflush; never commit or roll back caller work.",
+                    locking="Fresh scalar-column queries with populate_existing execution semantics under caller isolation, no ORM refresh or locks; next request rechecks committed revocation.",
+                    idempotency="No mutation or external effects; deterministic for the observed database state and decision clock.",
+                    retries="Storage failure propagates for adapter 503; never authorize from cached standing.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="reseller HTTP adapters",
+                    fail_closed_on=(
+                        "missing or malformed ordinary binding",
+                        "principal or reseller ownership mismatch",
+                        "inactive, revoked or expired database standing",
+                        "database unavailable",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="Redis-only ordinary reseller cookie standing",
+                    new_owner="app_sessions.reseller_standing",
+                    verification="Ordinary principal, revocation, stale identity-map, deadline and source-boundary tests.",
+                    cutover_gate="Ordinary get_context and refresh require exact current database standing.",
+                    fallback_retirement="Unbound ordinary cookies require re-login; explicit legacy impersonation actor/binding remains excluded and unresolved.",
+                ),
+                steward="platform security",
+                design_refs=("docs/designs/RESELLER_COOKIE_DATABASE_STANDING.md",),
+                test_refs=(
+                    "tests/test_reseller_session_standing.py",
+                    "tests/architecture/test_reseller_session_standing_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="app_sessions.customer_portal",
             module="app.services.customer_portal_session",
             owns=(
