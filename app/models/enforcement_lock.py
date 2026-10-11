@@ -80,6 +80,7 @@ class EnforcementLock(Base):
             "reason",
             unique=True,
             postgresql_where=text("is_active = true"),
+            sqlite_where=text("is_active = 1"),
         ),
         # Resolved locks must have resolution metadata
         CheckConstraint(
