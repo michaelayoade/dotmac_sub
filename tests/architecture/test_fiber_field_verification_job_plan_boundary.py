@@ -33,7 +33,14 @@ def test_job_plan_owner_composes_evidence_and_delegates_every_job_write():
     assert "work_order_commands" in imported
     assert "stage_audit_event" in imported
     assert "work_order_commands.create(" in source
-    assert "work_order_commands.assign(" in source
+    assert "work_order_commands._stage_assignment(" in source
+    assert "work_order_commands.assign(" not in source
+    assert (
+        "commit=False"
+        not in source.split("work_order_commands._stage_assignment(", 1)[1].split(
+            ")", 1
+        )[0]
+    )
     assert "work_order_commands.validate_subscriber_target(" in source
     assert "commit=False" in source
     assert "expected_plan_sha256" in source

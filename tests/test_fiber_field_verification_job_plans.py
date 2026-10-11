@@ -21,6 +21,7 @@ from app.models.fiber_topology_staging import (
 )
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import WorkOrderHeaderUpdate
 from app.services.auth_dependencies import require_user_auth
@@ -141,6 +142,7 @@ def _args(
         "scheduled_start": datetime.now(UTC) + timedelta(hours=1),
         "scheduled_end": datetime.now(UTC) + timedelta(hours=3),
         "assigned_technician_id": technician.id if technician else None,
+        "assigned_vendor_id": None,
         "assignment_reason": "Exact fiber evidence route",
         "idempotency_key": "pytest-fiber-field-plan-0001",
     }
@@ -240,6 +242,29 @@ def test_execute_atomically_creates_assigns_audits_and_replays(db_session):
         ),
     )
     assert work_order.metadata_["fiber_field_verification_plan"] == original_plan
+
+
+def test_job_plan_can_assign_to_an_active_native_vendor(db_session):
+    feature = _stage(db_session, "FAT-PLAN-VENDOR")
+    subscriber = _subscriber(db_session)
+    vendor = Vendor(name="Fiber contractor", is_active=True)
+    db_session.add(vendor)
+    db_session.flush()
+    args = {
+        **_args(db_session, [feature], subscriber),
+        "assigned_vendor_id": vendor.id,
+    }
+    preview = preview_fiber_field_verification_job_plan(db_session, **args)
+    result = execute_fiber_field_verification_job_plan(
+        db_session,
+        expected_plan_sha256=preview["plan_sha256"],
+        auth={"principal_type": "system_user", "principal_id": str(uuid.uuid4())},
+        request_id="fiber-plan-vendor-1",
+        **args,
+    )
+
+    assert result["assignment"].assigned_vendor_id == vendor.id
+    assert result["assignment"].assigned_technician_id is None
 
 
 def test_execute_rejects_changed_confirmation_and_worklist(db_session):

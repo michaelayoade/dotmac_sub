@@ -23,7 +23,7 @@ Subcommands::
     poetry run python -m scripts.billing.billing_target_shadow correct-unused-prepaid-renewal --account <id> --subscription <id> --adjustment <id> --entitlement <id> --preview-fingerprint <sha256> --actor user:<id> --reason <approval-ref> --idempotency-key <key>
     poetry run python -m scripts.billing.billing_target_shadow correct-renewal-terms --subscription <id> --action apply_reviewed_term --source finance_review --expected-amount <amount> --amount <amount> --reference <ref> --actor <system-user-uuid> --idempotency-key <key>
     poetry run python -m scripts.billing.billing_target_shadow request-renewal-term-record --subscription <id> --amount <amount> --expected-current-amount none --reason <text> --evidence-ref <ref> --evidence-sha256 <sha256> --actor <system-user-uuid> --idempotency-key <key>
-    poetry run python -m scripts.billing.billing_target_shadow approve-renewal-term-record --request <request-id> --amount <amount> --approver <different-system-user-uuid> --idempotency-key <key>
+    poetry run python -m scripts.billing.billing_target_shadow approve-renewal-term-record --request <request-id> --amount <amount> --approver <different-system-user-uuid> --idempotency-key <key> [--sole-approver-justification <text>]
     poetry run python -m scripts.billing.billing_target_shadow list-renewal-term-record-requests [--subscription <id>] [--include-recorded]
 
 The renewal-term commands take real staff identities (SystemUser UUIDs)
@@ -472,6 +472,7 @@ def _cmd_approve_renewal_term_record(db, args) -> int:
             approved_amount=args.amount,
             approved_by=args.approver,
             permission_granted=granted,
+            sole_approver_justification=args.sole_approver_justification,
         ),
         context=_staff_context(
             f"four-eyes approval of renewal-term record request {args.request}",
@@ -1446,6 +1447,11 @@ def main() -> int:
         help="SystemUser UUID of the approving staff member",
     )
     p.add_argument("--idempotency-key", required=True)
+    p.add_argument(
+        "--sole-approver-justification",
+        default=None,
+        help="justification for approving your own request under the governed sole-approver exception (see docs/runbooks/SOLE_APPROVER_EXCEPTION.md); refused unless the exception is enabled, unexpired and names you",
+    )
     p.set_defaults(func=_cmd_approve_renewal_term_record)
 
     p = sub.add_parser(

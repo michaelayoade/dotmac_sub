@@ -1197,6 +1197,23 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
             "fact and is idempotent; once applied it matches no row again."
         ),
     ),
+    SourceSurface(
+        path="alembic/versions/665_backfill_splynx_billing_email_contacts.py",
+        family=EntryPointFamily.MIGRATION,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="alembic migration lineage",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Moves the Splynx billing email from `subscribers.metadata` onto the "
+            "existing typed billing contact and removes the key; never "
+            "overwrites a typed value, and re-runs write nothing."
+        ),
+    ),
 )
 
 

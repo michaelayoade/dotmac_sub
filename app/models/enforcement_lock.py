@@ -86,6 +86,11 @@ class EnforcementLock(Base):
             "is_active = true OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL)",
             name="ck_enforcement_locks_resolved_metadata",
         ),
+        # The effective treatment never exceeds the requested one.
+        CheckConstraint(
+            "access_mode <> 'captive' OR requested_access_mode = 'captive'",
+            name="ck_enforcement_locks_effective_within_request",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -114,6 +119,20 @@ class EnforcementLock(Base):
         default=AccessRestrictionMode.hard_reject,
         server_default=AccessRestrictionMode.hard_reject.value,
         nullable=False,
+    )
+    # The network treatment the lock's originator REQUESTED. ``access_mode``
+    # is the effective treatment the canonical walled-garden policy granted
+    # for that request when the lock was created or last re-evaluated; it can
+    # never exceed the request (a hard-reject request is never upgraded).
+    # ``NULL`` means the lock predates structured request evidence and is
+    # treated as a hard-reject request (fail closed).
+    requested_access_mode: Mapped[AccessRestrictionMode | None] = mapped_column(
+        Enum(
+            AccessRestrictionMode,
+            name="accessrestrictionmode",
+            create_constraint=False,
+        ),
+        nullable=True,
     )
     source: Mapped[str] = mapped_column(
         String(255), nullable=False

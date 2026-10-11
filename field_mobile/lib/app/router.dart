@@ -105,47 +105,67 @@ GoRouter buildRouter(Ref ref) {
       ),
       GoRoute(
         path: '/jobs/:id/chat',
-        builder: (_, state) =>
-            JobChatScreen(jobId: state.pathParameters['id']!),
+        builder: (_, state) => _CapabilityGate(
+          capability: FieldCapability.chat,
+          builder: () => JobChatScreen(jobId: state.pathParameters['id']!),
+        ),
       ),
       GoRoute(
         path: '/jobs/:id/fiber-evidence',
-        builder: (_, state) => WorkOrderEvidenceMapScreen(
-          workOrderPublicId: state.pathParameters['id']!,
+        builder: (_, state) => _CapabilityGate(
+          capability: FieldCapability.fiberEvidence,
+          builder: () => WorkOrderEvidenceMapScreen(
+            workOrderPublicId: state.pathParameters['id']!,
+          ),
         ),
       ),
       GoRoute(
         path: '/materials/new',
-        builder: (_, state) => NewMaterialRequestScreen(
-          initialWorkOrderId: state.uri.queryParameters['workOrderId'],
-          initialWorkOrderLabel: state.uri.queryParameters['workOrderLabel'],
-          initialProjectId: state.uri.queryParameters['projectId'],
-          initialTicketId: state.uri.queryParameters['ticketId'],
+        builder: (_, state) => _CapabilityGate(
+          capability: FieldCapability.materials,
+          builder: () => NewMaterialRequestScreen(
+            initialWorkOrderId: state.uri.queryParameters['workOrderId'],
+            initialWorkOrderLabel: state.uri.queryParameters['workOrderLabel'],
+            initialProjectId: state.uri.queryParameters['projectId'],
+            initialTicketId: state.uri.queryParameters['ticketId'],
+          ),
         ),
       ),
       GoRoute(
         path: '/materials/:id',
-        builder: (_, state) =>
-            MaterialRequestDetailScreen(id: state.pathParameters['id']!),
+        builder: (_, state) => _CapabilityGate(
+          capability: FieldCapability.materials,
+          builder: () =>
+              MaterialRequestDetailScreen(id: state.pathParameters['id']!),
+        ),
       ),
       GoRoute(
         path: '/expenses/new',
-        builder: (_, state) => NewExpenseRequestScreen(
-          initialWorkOrderId: state.uri.queryParameters['workOrderId'],
-          initialWorkOrderLabel: state.uri.queryParameters['workOrderLabel'],
-          initialProjectId: state.uri.queryParameters['projectId'],
-          initialTicketId: state.uri.queryParameters['ticketId'],
+        builder: (_, state) => _CapabilityGate(
+          capability: FieldCapability.expenses,
+          builder: () => NewExpenseRequestScreen(
+            initialWorkOrderId: state.uri.queryParameters['workOrderId'],
+            initialWorkOrderLabel: state.uri.queryParameters['workOrderLabel'],
+            initialProjectId: state.uri.queryParameters['projectId'],
+            initialTicketId: state.uri.queryParameters['ticketId'],
+          ),
         ),
       ),
       GoRoute(
         path: '/expenses/:id',
-        builder: (_, state) =>
-            ExpenseRequestDetailScreen(id: state.pathParameters['id']!),
+        builder: (_, state) => _CapabilityGate(
+          capability: FieldCapability.expenses,
+          builder: () =>
+              ExpenseRequestDetailScreen(id: state.pathParameters['id']!),
+        ),
       ),
       GoRoute(
         path: '/manager/expenses/:id',
-        builder: (_, state) => ManagerExpenseDetailScreen(
-          expenseRequestId: state.pathParameters['id']!,
+        builder: (_, state) => _CapabilityGate(
+          capability: FieldCapability.expenses,
+          builder: () => ManagerExpenseDetailScreen(
+            expenseRequestId: state.pathParameters['id']!,
+          ),
         ),
       ),
       GoRoute(
@@ -184,7 +204,10 @@ GoRouter buildRouter(Ref ref) {
             routes: [
               GoRoute(
                 path: '/materials',
-                builder: (_, _) => const MaterialsScreen(),
+                builder: (_, _) => _CapabilityGate(
+                  capability: FieldCapability.materials,
+                  builder: () => const MaterialsScreen(),
+                ),
               ),
             ],
           ),
@@ -192,7 +215,10 @@ GoRouter buildRouter(Ref ref) {
             routes: [
               GoRoute(
                 path: '/expenses',
-                builder: (_, _) => const _ExpensesSwitch(),
+                builder: (_, _) => _CapabilityGate(
+                  capability: FieldCapability.expenses,
+                  builder: () => const _ExpensesSwitch(),
+                ),
               ),
             ],
           ),
@@ -211,6 +237,65 @@ GoRouter buildRouter(Ref ref) {
 }
 
 final routerProvider = Provider<GoRouter>(buildRouter);
+
+/// The protected child is constructed only after current server evidence
+/// permits it, including restored branches and directly opened links.
+class _CapabilityGate extends ConsumerWidget {
+  const _CapabilityGate({required this.capability, required this.builder});
+  final FieldCapability capability;
+  final Widget Function() builder;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final me = ref.watch(meProvider);
+    final availability = ref
+        .watch(fieldCapabilitiesProvider)
+        .forCapability(capability);
+    final managerEvidence = ref.watch(managerProfileProvider);
+    final manager = managerEvidence.isLoading || managerEvidence.hasError
+        ? null
+        : managerEvidence.asData?.value;
+    final managerAvailable =
+        manager?.isManager == true &&
+        switch (capability) {
+          FieldCapability.materials => true,
+          FieldCapability.expenses => manager!.allows(
+            'operations:expense_request:read',
+          ),
+          _ => false,
+        };
+    if (availability.available || managerAvailable) return builder();
+    return Scaffold(
+      appBar: AppBar(title: const Text('Feature unavailable')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (me.isLoading) const CircularProgressIndicator(),
+              Text(
+                me.hasError
+                    ? 'Could not check account capabilities.'
+                    : availability.reason ??
+                          'This feature is unavailable for this account.',
+              ),
+              if (me.hasError)
+                TextButton(
+                  onPressed: () => ref.invalidate(meProvider),
+                  child: const Text('Retry'),
+                ),
+              TextButton(
+                onPressed: () => context.go('/today'),
+                child: const Text('Back to work orders'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _CompletionRoute extends ConsumerWidget {
   const _CompletionRoute({required this.jobId});
@@ -440,7 +525,8 @@ class _AppShell extends ConsumerWidget {
     final managerProfileState = ref.watch(managerProfileProvider);
     final managerProfile = managerProfileState.valueOrNull;
     final isManager = !isVendor && managerProfile?.isManager == true;
-    final items = isVendor
+    final capabilities = ref.watch(fieldCapabilitiesProvider);
+    final candidateItems = isVendor
         ? _vendorNav
         : isManager
         ? [
@@ -450,13 +536,26 @@ class _AppShell extends ConsumerWidget {
         : managerProfileState.hasValue
         ? _staffNav
         : _provisionalStaffNav;
+    final items = [
+      for (final item in candidateItems)
+        if ((item.branchIndex != 3 ||
+                capabilities.materials.available ||
+                isManager) &&
+            (item.branchIndex != 4 ||
+                capabilities.expenses.available ||
+                (isManager &&
+                    managerProfile!.allows('operations:expense_request:read'))))
+          item,
+    ];
     // Map the active branch to its position in the visible set (0 if the
     // current branch is hidden for this mode).
     final selected = items.indexWhere(
       (i) => i.branchIndex == shell.currentIndex,
     );
     return Scaffold(
-      body: LocationTrackingHost(child: shell),
+      body: capabilities.locationTracking.available
+          ? LocationTrackingHost(child: shell)
+          : shell,
       bottomNavigationBar: NavigationBar(
         selectedIndex: selected < 0 ? 0 : selected,
         onDestinationSelected: (pos) => shell.goBranch(items[pos].branchIndex),

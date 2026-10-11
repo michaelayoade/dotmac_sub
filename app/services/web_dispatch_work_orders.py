@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -21,9 +22,9 @@ from app.models.dispatch import (
 from app.models.project import Project, ProjectTask
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
-    WorkOrderAssignmentQueueCreate,
     WorkOrderHeaderCreate,
     WorkOrderHeaderUpdate,
 )
@@ -32,6 +33,7 @@ from app.services import dispatch as dispatch_service
 from app.services import service_address as service_address_service
 from app.services import work_order_views
 from app.services.common import coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field.note_commands import (
     ListStaffFieldWorkOrderNotes,
     StaffFieldNoteAccess,
@@ -40,7 +42,19 @@ from app.services.field.note_commands import (
 )
 from app.services.field.work_order_status import WORK_ORDER_TERMINAL_VALUES
 from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
+from app.services.owner_commands import CommandContext
 from app.services.ui_contracts import Action, Kpi, StateValue
+from app.services.work_order_assignment_contracts import (
+    AssignmentTarget,
+    TechnicianAssignmentTarget,
+    VendorAssignmentTarget,
+    WorkOrderAssignmentCommand,
+    WorkOrderAssignmentEligibilityQuery,
+    WorkOrderAssignmentOutcome,
+    WorkOrderAssignmentPreview,
+    WorkOrderAssignmentQuery,
+)
+from app.services.work_order_commands import work_order_commands
 from app.services.work_order_views import WorkOrderListFilters
 
 WORK_ORDERS_LIST_URL = "/admin/dispatch/work-orders"
@@ -233,25 +247,16 @@ def _work_order_kpis(counts: dict[str, int]) -> dict[str, Kpi]:
     }
 
 
-def _queue_action(work_order: WorkOrder) -> Action:
-    """Assignment eligibility owned by the work-order transition command.
-
-    Mirrors ``work_order_commands.preview_assignment``: a soft-deleted or
-    terminal work order cannot be assigned. Eligibility is derived here, never
-    re-read from the status string in the template.
-    """
-    if not work_order.is_active:
-        allowed, reason = False, "Work order is inactive"
-    elif work_order.status in WORK_ORDER_TERMINAL_VALUES:
-        allowed = False
-        reason = f"Cannot assign a work order in status {work_order.status}"
-    else:
-        allowed, reason = True, None
+def _queue_action(db: Session, work_order: WorkOrder) -> Action:
+    eligibility = work_order_commands.assignment_eligibility(
+        db,
+        query=WorkOrderAssignmentEligibilityQuery(work_order.public_id),
+    )
     return Action(
         key="queue",
-        label="Queue",
-        allowed=allowed,
-        reason=reason,
+        label="Preview assignment",
+        allowed=eligibility.allowed,
+        reason=eligibility.reason,
         permission="operations:dispatch:assign",
         tone=StatusTone.info,
     )
@@ -289,6 +294,36 @@ def _technician_options(db: Session) -> list[dict[str, str]]:
         .all()
     )
     return [{"id": str(row.id), "label": _technician_label(row)} for row in rows]
+
+
+def _vendor_options(db: Session) -> list[dict[str, str]]:
+    rows = (
+        db.query(Vendor)
+        .filter(Vendor.is_active.is_(True))
+        .order_by(Vendor.name, Vendor.id)
+        .all()
+    )
+    return [{"id": str(row.id), "label": row.name} for row in rows]
+
+
+def _current_assignment_target(db: Session, work_order: WorkOrder) -> str | None:
+    entry = (
+        db.query(WorkOrderAssignmentQueue)
+        .filter(
+            WorkOrderAssignmentQueue.work_order_mirror_id == work_order.id,
+            WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
+        )
+        .one_or_none()
+    )
+    if entry is None:
+        return None
+    if entry.assigned_vendor_id is not None:
+        return f"vendor:{entry.assigned_vendor_id}"
+    return (
+        f"technician:{entry.assigned_technician_id}"
+        if entry.assigned_technician_id
+        else None
+    )
 
 
 def _project_options(db: Session, *, limit: int = 200) -> list[dict[str, str]]:
@@ -468,7 +503,7 @@ def list_page(
             if row.origin_ticket_id
             else None,
             "queue_status": queue_status.get(str(row.id)),
-            "actions": {"queue": _queue_action(row)},
+            "actions": {"queue": _queue_action(db, row)},
         }
         for row, subscriber in rows
     ]
@@ -525,6 +560,7 @@ def list_page(
         "subscriber_options": _subscriber_options(db),
         "project_options": project_options,
         "technician_options": _technician_options(db),
+        "vendor_options": _vendor_options(db),
         "create_prefill": create_prefill,
         "create_prefill_error": create_prefill_error,
         "create_work_order_action": create_work_order_action,
@@ -597,9 +633,11 @@ def detail_page(
         "outage_work_order_link": outage_work_order_link,
         "outage_incident": outage_incident,
         "queue_status": queue_status,
-        "queue_action": _queue_action(row),
+        "queue_action": _queue_action(db, row),
+        "current_assignment_target": _current_assignment_target(db, row),
         "priorities": PRIORITY_OPTIONS,
         "technician_options": _technician_options(db),
+        "vendor_options": _vendor_options(db),
         "material_requests": material_requests.items,
         "field_notes": field_note_page.items if field_note_page else (),
         "field_note_total": field_note_page.total if field_note_page else 0,
@@ -696,26 +734,51 @@ def update_from_form(
     )
 
 
+class WorkOrderAssignmentFormInput(BaseModel):
+    """Validated browser selection; IDs are parsed at this transport boundary."""
+
+    model_config = ConfigDict(frozen=True)
+    target_selection: str = Field(min_length=1, max_length=80)
+    reason: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _valid_target(self) -> WorkOrderAssignmentFormInput:
+        _target = self.assignment_target
+        return self
+
+    @property
+    def assignment_target(self) -> AssignmentTarget:
+        kind, separator, raw_id = self.target_selection.partition(":")
+        if not separator or kind not in {"technician", "vendor"}:
+            raise ValueError("Select a technician or vendor")
+        identity = UUID(raw_id)
+        return (
+            VendorAssignmentTarget(identity)
+            if kind == "vendor"
+            else TechnicianAssignmentTarget(identity)
+        )
+
+
+def preview_assignment_from_form(
+    db: Session,
+    *,
+    work_order_id: str,
+    selection: WorkOrderAssignmentFormInput,
+) -> WorkOrderAssignmentPreview:
+    return work_order_commands.preview_assignment(
+        db,
+        query=WorkOrderAssignmentQuery(
+            work_order_public_id=work_order_id,
+            target=selection.assignment_target,
+        ),
+    )
+
+
 def queue_assignment_from_form(
     db: Session,
-    work_order_id: str,
-    form: dict[str, Any],
     *,
-    auth: dict[str, Any] | None = None,
-    request_id: str | None = None,
-) -> WorkOrderAssignmentQueue:
-    technician_id = _clean(form.get("assigned_technician_id"))
-    if technician_id is None:
-        raise HTTPException(status_code=422, detail="Technician is required")
-    payload = WorkOrderAssignmentQueueCreate(
-        crm_work_order_id=work_order_id,
-        status=_clean(form.get("status")) or DispatchQueueStatus.queued,
-        assigned_technician_id=coerce_uuid(technician_id),
-        reason=_clean(form.get("reason")),
-    )
-    return dispatch_service.assignment_queue.create(
-        db,
-        payload,
-        auth=auth,
-        request_id=request_id,
-    )
+    command: WorkOrderAssignmentCommand,
+    context: CommandContext,
+) -> WorkOrderAssignmentOutcome:
+    db_session_adapter.release_read_transaction(db)
+    return work_order_commands.assign(db, command=command, context=context)

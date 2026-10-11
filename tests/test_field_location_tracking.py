@@ -312,14 +312,13 @@ def test_location_ping_rejects_technician_after_reassignment(db_session):
         )
     )
     db_session.flush()
-    db_session.add(
-        WorkOrderAssignmentQueue(
-            work_order_mirror_id=row.id,
-            status="assigned",
-            assigned_technician_id=new_profile.id,
-            updated_at=datetime.now(UTC),
-        )
+    assignment = (
+        db_session.query(WorkOrderAssignmentQueue)
+        .filter_by(work_order_mirror_id=row.id, status="assigned")
+        .one()
     )
+    assignment.assigned_technician_id = new_profile.id
+    assignment.updated_at = datetime.now(UTC)
     db_session.commit()
 
     result = field_location_tracking.record_batch(
@@ -637,11 +636,11 @@ def test_geofence_runs_after_the_ingest_owner_command_commits(db_session, monkey
     observed: dict[str, object] = {}
     original_evaluate = geofence_module.evaluate
 
-    def _spy_evaluate(db, principal, latitude, longitude):
+    def _spy_evaluate(db, query):
         observed["owner_command_active"] = owner_command_active(
             db, owner="operations.field_location_ingest"
         )
-        return original_evaluate(db, principal, latitude, longitude)
+        return original_evaluate(db, query)
 
     monkeypatch.setattr(geofence_module, "evaluate", _spy_evaluate)
 

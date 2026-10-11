@@ -4944,6 +4944,23 @@ def _normalize_payment_allocation_key(value: str) -> str:
     return key
 
 
+LEGACY_OVER_ALLOCATION_OWNER = "financial.legacy_over_allocation_correction"
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedLegacyOverAllocationReturn:
+    """Reviewed return of one legacy over-allocation to account credit."""
+
+    allocation_id: UUID
+    payment_id: UUID
+    invoice_id: UUID
+    expected_amount: Decimal
+    reviewed_by: UUID
+    preview_fingerprint: str
+    idempotency_key: str
+    reason: str
+
+
 class PaymentAllocations(ListResponseMixin):
     @staticmethod
     def available_amount(db: Session, payment_id: str) -> Decimal:
@@ -6244,6 +6261,74 @@ class PaymentAllocations(ListResponseMixin):
             reversal_consumption_ledger_entry_id=reversal_consumption.id,
             reversed_at=allocation.reversed_at,
         )
+
+    @staticmethod
+    def stage_reviewed_legacy_over_allocation_return_for_owner(
+        db: Session,
+        reviewed: ReviewedLegacyOverAllocationReturn,
+    ) -> PaymentAllocation:
+        """Deactivate one legacy allocation that carries no ledger evidence.
+
+        Legacy means Splynx/import provenance on the payment as well as absent
+        ledger fields; a Sub-native allocation without ledger fields is refused.
+
+        Flush-only participant for ``financial.legacy_over_allocation_correction``.
+        A legacy (Splynx-era) allocation never posted a paired invoice credit or
+        account-credit consumption, so the ledger already holds the payment as
+        unallocated credit; returning it needs no ledger posting, and posting a
+        reversal would double-count the credit. This participant therefore only
+        marks the allocation reversed with its reviewed provenance. It never
+        touches ledger entries, the payment amount, or the invoice's status or
+        balance; the coordinating owner proves that the invoice stays fully paid
+        by its remaining allocations.
+        """
+
+        def _reject(message: str) -> DomainError:
+            return DomainError(
+                code="financial.payments.legacy_over_allocation_return_rejected",
+                message=message,
+                details={"allocation_id": str(reviewed.allocation_id)},
+                retryable=False,
+            )
+
+        if not owner_command_active(db, owner=LEGACY_OVER_ALLOCATION_OWNER):
+            raise _reject("Legacy over-allocation return requires its owner command.")
+        allocation = lock_for_update(db, PaymentAllocation, reviewed.allocation_id)
+        payment = lock_for_update(db, Payment, reviewed.payment_id)
+        invoice = lock_for_update(db, Invoice, reviewed.invoice_id)
+        if (
+            allocation is None
+            or payment is None
+            or invoice is None
+            or allocation.payment_id != payment.id
+            or allocation.invoice_id != invoice.id
+            or not allocation.is_active
+            or allocation.reversed_at is not None
+            or allocation.ledger_entry_id is not None
+            or allocation.consumption_ledger_entry_id is not None
+            or allocation.preview_fingerprint is not None
+            or allocation.idempotency_key is not None
+            or allocation.reversal_ledger_entry_id is not None
+            or allocation.reversal_consumption_ledger_entry_id is not None
+            or allocation.reversal_idempotency_key is not None
+            or (payment.splynx_payment_id is None and payment.import_run_id is None)
+            or round_money(to_decimal(allocation.amount))
+            != round_money(reviewed.expected_amount)
+            or invoice.status is not InvoiceStatus.paid
+            or round_money(to_decimal(invoice.balance_due)) > Decimal("0.00")
+            or not reviewed.reason.strip()
+        ):
+            raise _reject("Reviewed legacy allocation evidence no longer matches.")
+        now = datetime.now(UTC)
+        allocation.is_active = False
+        allocation.reversed_at = now
+        allocation.reversal_preview_fingerprint = reviewed.preview_fingerprint
+        allocation.reversal_idempotency_key = reviewed.idempotency_key
+        allocation.reversal_reason = reviewed.reason.strip()
+        allocation.reversal_actor_id = reviewed.reviewed_by
+        payment.updated_at = now
+        db.flush()
+        return allocation
 
 
 class PaymentChannels(ListResponseMixin):

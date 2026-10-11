@@ -92,6 +92,12 @@ class SettingSpec(ListResponseMixin):
     #: Translated to the kernel spec verbatim (``settings_kernel_bridge``); the
     #: kernel resolver is what actually shortens the chain.
     inherits: bool = True
+    #: ``True`` keeps the key out of every generic writer (REST PUT, the
+    #: ``DomainSettings`` create/update/upsert/delete helpers, form savers). The
+    #: only write path is ``apply_admin_settings_form_updates`` (scope
+    #: ``control:settings:write``), which audits every change. Declare it for a
+    #: governance switch whose change must always leave an audit event.
+    owner_command_only: bool = False
     allowed: set[str] | None = None
     min_value: int | None = None
     max_value: int | None = None
@@ -5404,6 +5410,58 @@ SETTINGS_SPECS: list[SettingSpec] = [
         string_normalization=SettingStringNormalization.LOWERCASE,
     ),
 ]
+
+# Governed sole-approver exception (Governance decision style of 53). Off by
+# default and inert on or after the review date; no environment bootstrap on
+# purpose. The four keys are ``owner_command_only``: generic writers (REST PUT,
+# DomainSettings.upsert_by_key and friends) refuse them, so the only way to
+# change them is apply_admin_settings_form_updates (control:settings:write),
+# which audits every write. Read only through
+# app.services.sole_approver_exception.
+SETTINGS_SPECS.extend(
+    [
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_enabled",
+            env_var=None,
+            value_type=SettingValueType.boolean,
+            default=False,
+            label="Sole-approver exception enabled",
+            inherits=False,
+            owner_command_only=True,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_principal",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception principal (system user UUID)",
+            inherits=False,
+            owner_command_only=True,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_review_due",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception review date (YYYY-MM-DD, Africa/Lagos, inert on or after)",
+            inherits=False,
+            owner_command_only=True,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_decision_ref",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception decision reference",
+            inherits=False,
+            owner_command_only=True,
+        ),
+    ]
+)
 
 # These cadence and worker-tuning settings were previously resolved through
 # scheduler-local call-site defaults. Registering them here makes the schema,

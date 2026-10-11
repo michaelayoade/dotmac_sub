@@ -154,8 +154,7 @@ DYNAMIC: Final = "<dynamic>"
 #: not come back: not declared, not read, not written. The migration holds the
 #: same tuple and the guard keeps the two equal.
 #:
-#: ``splynx_billing_email`` is NOT here: ``web_subscriber_details`` still reads
-#: it as the billing-email fallback, so it stays on the rows that carry it.
+#: ``splynx_billing_email`` is NOT here: see ``PROVENANCE_ONLY_SPLYNX_KEYS``.
 RETIRED_SPLYNX_KEYS: Final[tuple[str, ...]] = (
     "splynx_login",
     "splynx_category",
@@ -171,6 +170,19 @@ RETIRED_SPLYNX_KEYS: Final[tuple[str, ...]] = (
     "splynx_conversion_date",
     "splynx_password_cleartext",
 )
+
+#: Splynx import keys whose values were moved to a typed home and whose reader
+#: was cut over, but which may still sit on rows the move deliberately left
+#: alone. ``splynx_billing_email`` was moved onto billing contacts by migration
+#: ``665_backfill_splynx_billing_email_contacts``; rows where it conflicts with
+#: an existing billing contact, or is not a valid address, keep it as frozen
+#: provenance for human review (the migration's audit row lists their ids).
+#:
+#: Read-only provenance: product code must not read or write these (the same
+#: textual scan as the retired keys), and they are not declared in the
+#: writable registry. When no row carries one any more, move it to
+#: ``RETIRED_SPLYNX_KEYS`` with a purge migration.
+PROVENANCE_ONLY_SPLYNX_KEYS: Final[tuple[str, ...]] = ("splynx_billing_email",)
 
 #: Where a reintroduced reference would live. Textual, not AST: these names are
 #: distinctive enough that any quoted occurrence is a reference, and the AST

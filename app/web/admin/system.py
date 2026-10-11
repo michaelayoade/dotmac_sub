@@ -94,12 +94,17 @@ from app.services import web_system_settings_views as web_system_settings_views_
 from app.services import web_system_user_edit as web_system_user_edit_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services import web_system_users as web_system_users_service
+from app.services import web_walled_garden_settings as walled_garden_settings_service
 from app.services.audit_helpers import (
     build_audit_activities,
     build_audit_activities_for_types,
     log_audit_event,
 )
-from app.services.auth_dependencies import load_permission_keys, require_permission
+from app.services.auth_dependencies import (
+    can,
+    load_permission_keys,
+    require_permission,
+)
 from app.services.brand_theme import (
     DEFAULT_HEX,
     DEFAULT_SECONDARY_HEX,
@@ -5648,6 +5653,239 @@ def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_
         url=f"/admin/system/config/radius?push_status={status}&push_message={message}",
         status_code=303,
     )
+
+
+# --- 8.21 Walled-garden allowed resources ---
+_WALLED_GARDEN_PATH = "/admin/system/config/walled-garden"
+_WALLED_GARDEN_NOTICES = frozenset(
+    action.value for action in walled_garden_settings_service.WalledGardenEditAction
+)
+
+
+def _walled_garden_page_response(
+    request: Request,
+    db: Session,
+    *,
+    edit_key: str | None = None,
+    form: walled_garden_settings_service.WalledGardenEntryFormState | None = None,
+    notice: str | None = None,
+    notice_key: str | None = None,
+    page_error: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    page = walled_garden_settings_service.build_walled_garden_settings_page(
+        db, edit_key=edit_key, form=form
+    )
+    return templates.TemplateResponse(
+        request,
+        "admin/system/config/walled_garden.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-walled-garden",
+                "page": page,
+                "can_edit": can(request, "system:settings:write"),
+                "notice": notice if notice in _WALLED_GARDEN_NOTICES else None,
+                "notice_key": notice_key,
+                "page_error": page_error,
+            },
+        ),
+        status_code=status_code,
+    )
+
+
+def _walled_garden_redirect(
+    outcome: walled_garden_settings_service.WalledGardenEditOutcome,
+) -> RedirectResponse:
+    return RedirectResponse(
+        url=(
+            f"{_WALLED_GARDEN_PATH}?notice={outcome.action.value}"
+            f"&entry={quote_plus(outcome.entry_key)}"
+        ),
+        status_code=303,
+    )
+
+
+def _walled_garden_context(request: Request, *, reason: str) -> CommandContext:
+    return _system_command_context(
+        request,
+        reason=reason,
+        idempotency_key=f"walled-garden-settings:{uuid4()}",
+        scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+    )
+
+
+def _walled_garden_error_status(
+    error: walled_garden_settings_service.WalledGardenEditError,
+) -> int:
+    codes = walled_garden_settings_service.WalledGardenEditErrorCode
+    if error.error_code in {codes.STALE, codes.ENTRY_NOT_FOUND}:
+        return 409
+    return 400
+
+
+@router.get(
+    "/config/walled-garden",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def config_walled_garden_page(
+    request: Request,
+    edit: str | None = None,
+    notice: str | None = None,
+    entry: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Allowed resources reachable while captive, plus router readiness."""
+    return _walled_garden_page_response(
+        request, db, edit_key=edit, notice=notice, notice_key=entry
+    )
+
+
+@router.post(
+    "/config/walled-garden/entries",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def config_walled_garden_save_entry(
+    request: Request,
+    expected_fingerprint: str = Form(...),
+    label: str = Form(""),
+    kind: str = Form(""),
+    hosts: str = Form(""),
+    key: str = Form(""),
+    original_key: str | None = Form(None),
+    enabled: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Add an entry, or change an existing entry's label, kind, and hosts."""
+    service = walled_garden_settings_service
+    editing = bool(original_key and original_key.strip())
+    draft = service.WalledGardenEntryDraft(
+        label=label,
+        kind=kind,
+        hosts=service.parse_hosts_text(hosts),
+        key=key,
+        enabled=enabled == "true",
+    )
+    entry_ref = original_key.strip() if editing and original_key else key.strip()
+    try:
+        outcome = service.save_walled_garden_entry(
+            db,
+            command=service.SaveWalledGardenEntryCommand(
+                context=_walled_garden_context(
+                    request,
+                    reason=(
+                        f"Walled garden: {'update' if editing else 'add'} "
+                        f"allowed resource {entry_ref or 'new'}"
+                    ),
+                ),
+                expected_fingerprint=expected_fingerprint,
+                draft=draft,
+                original_key=original_key.strip() if editing and original_key else None,
+            ),
+        )
+    except service.WalledGardenEditError as exc:
+        form = service.WalledGardenEntryFormState(
+            mode=(
+                service.WalledGardenFormMode.edit
+                if editing
+                else service.WalledGardenFormMode.add
+            ),
+            original_key=original_key.strip() if editing and original_key else None,
+            key=key,
+            label=label,
+            kind=kind,
+            hosts_text=hosts,
+            enabled=draft.enabled,
+            field_errors={
+                item.value: message for item, message in exc.field_errors.items()
+            },
+            form_error=exc.message,
+        )
+        return _walled_garden_page_response(
+            request, db, form=form, status_code=_walled_garden_error_status(exc)
+        )
+    return _walled_garden_redirect(outcome)
+
+
+@router.post(
+    "/config/walled-garden/entries/{entry_key}/enabled",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def config_walled_garden_set_enabled(
+    request: Request,
+    entry_key: str,
+    expected_fingerprint: str = Form(...),
+    enabled: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Enable or disable one allowed resource."""
+    service = walled_garden_settings_service
+    if enabled not in {"true", "false"}:
+        raise HTTPException(status_code=400, detail="enabled must be true or false")
+    turn_on = enabled == "true"
+    try:
+        outcome = service.set_walled_garden_entry_enabled(
+            db,
+            command=service.SetWalledGardenEntryEnabledCommand(
+                context=_walled_garden_context(
+                    request,
+                    reason=(
+                        f"Walled garden: {'enable' if turn_on else 'disable'} "
+                        f"allowed resource {entry_key}"
+                    ),
+                ),
+                expected_fingerprint=expected_fingerprint,
+                key=entry_key,
+                enabled=turn_on,
+            ),
+        )
+    except service.WalledGardenEditError as exc:
+        return _walled_garden_page_response(
+            request,
+            db,
+            page_error=exc.message,
+            status_code=_walled_garden_error_status(exc),
+        )
+    return _walled_garden_redirect(outcome)
+
+
+@router.post(
+    "/config/walled-garden/entries/{entry_key}/remove",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def config_walled_garden_remove_entry(
+    request: Request,
+    entry_key: str,
+    expected_fingerprint: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Remove one allowed resource from the setting."""
+    service = walled_garden_settings_service
+    try:
+        outcome = service.remove_walled_garden_entry(
+            db,
+            command=service.RemoveWalledGardenEntryCommand(
+                context=_walled_garden_context(
+                    request,
+                    reason=f"Walled garden: remove allowed resource {entry_key}",
+                ),
+                expected_fingerprint=expected_fingerprint,
+                key=entry_key,
+            ),
+        )
+    except service.WalledGardenEditError as exc:
+        return _walled_garden_page_response(
+            request,
+            db,
+            page_error=exc.message,
+            status_code=_walled_garden_error_status(exc),
+        )
+    return _walled_garden_redirect(outcome)
 
 
 # --- 8.22 CPE Configuration: REMOVED (inert/dead config; no active consumer) ---

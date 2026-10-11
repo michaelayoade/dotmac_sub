@@ -1296,3 +1296,9 @@ def record_customer_device_command_refusal(*, command: str, code: str) -> None:
     CUSTOMER_DEVICE_COMMAND_REFUSALS_TOTAL.labels(
         command=str(command), code=str(code)
     ).inc()
+
+
+CREDENTIAL_FORMAT_REJECTIONS = Counter(
+    "credential_format_rejections_total",
+    "Credential verification refused unavailable, unknown or malformed stored material",
+)

@@ -90,6 +90,16 @@ def test_network_guidance_explains_independent_map_proposal_review() -> None:
     assert "canonical asset change" in content
 
 
+def test_network_guidance_explains_map_layer_visibility_controls() -> None:
+    guide = guidance_for_path("/admin/network/map")
+
+    assert guide is not None
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "all layers or none" in content
+    assert "individual layer checkbox" in content
+    assert "do not modify canonical network data" in content
+
+
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
     expected = {
         "/admin/dashboard": "admin-workspace",
@@ -399,7 +409,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 59
+    assert len(guides) == 61
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -464,3 +474,24 @@ def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None
     assert "fresh successful native olt poll" in content
     assert "linked monitoring record" in content
     assert "active" in content and "current" in content
+
+
+def test_walled_garden_page_has_its_own_guide() -> None:
+    guide = guidance_for_path("/admin/system/config/walled-garden")
+    assert guide is not None
+    assert guide.id == "walled-garden"
+    settings = guidance_for_path("/admin/system/config/radius")
+    assert settings is not None
+    assert settings.id == "settings"
+
+
+def test_subledger_opening_correction_pages_have_their_own_guide() -> None:
+    base = "/admin/billing/accounts/11111111-1111-1111-1111-111111111111"
+    for suffix in ("", "/preview", "/confirm"):
+        path = f"{base}/subledger-opening/NGN/correction{suffix}"
+        guide = guidance_for_path(path)
+        assert guide is not None, path
+        assert guide.id == "subledger-opening-correction", path
+    account = guidance_for_path(base)
+    assert account is not None
+    assert account.id == "billing-accounts"

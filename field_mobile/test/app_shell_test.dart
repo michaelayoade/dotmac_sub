@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'support/field_capability_fixtures.dart';
 
 import 'package:dotmac_field/app/app.dart';
 import 'package:dotmac_field/core/api/token_store.dart';
@@ -14,6 +15,7 @@ import 'package:dotmac_field/features/jobs/job_models.dart';
 import 'package:dotmac_field/features/jobs/jobs_providers.dart';
 import 'package:dotmac_field/features/location/location_cadence.dart';
 import 'package:dotmac_field/features/location/location_ping_service.dart';
+import 'package:dotmac_field/features/location/location_tracking_controller.dart';
 import 'package:dotmac_field/features/manager/manager_providers.dart';
 import 'package:dotmac_field/features/profile/profile_screen.dart';
 import 'package:dotmac_field/features/vendor/vendor_map_screen.dart';
@@ -105,9 +107,11 @@ Widget _app({
   List<ManagerJob> managerJobs = const [],
   List<ExpenseRequest> managerExpenses = const [],
   Future<JobList> Function()? jobsLoader,
+  Future<MeSummary> Function()? meLoader,
   AttendanceRepositoryContract? attendanceRepository,
   AttendanceLocationSource? attendanceLocationSource,
   List<Override> extra = const [],
+  FieldExecutionCapabilities capabilities = availableFieldCapabilities,
 }) {
   return ProviderScope(
     overrides: [
@@ -157,11 +161,14 @@ Widget _app({
           ),
         ),
         meProvider.overrideWith(
-          (ref) async => const MeSummary(
-            name: 'Chidi Tech',
-            openJobs: 2,
-            completedToday: 1,
-          ),
+          (ref) async => meLoader != null
+              ? await meLoader()
+              : MeSummary(
+                  capabilities: capabilities,
+                  name: 'Chidi Tech',
+                  openJobs: 2,
+                  completedToday: 1,
+                ),
         ),
         jobsListProvider.overrideWith(
           (ref) =>
@@ -256,6 +263,7 @@ void main() {
     await tester.pumpWidget(
       _app(
         controller: _VendorController.new,
+        capabilities: const FieldExecutionCapabilities(),
         extra: [
           vendorNearbyPlantProvider.overrideWith(
             (ref) async =>
@@ -271,8 +279,8 @@ void main() {
     expect(find.text('Today'), findsOneWidget);
     expect(find.text('Map'), findsOneWidget); // vendor-scoped nearby-plant map
     expect(find.text('Schedule'), findsOneWidget);
-    expect(find.text('Materials'), findsOneWidget);
-    expect(find.text('Expenses'), findsOneWidget);
+    expect(find.text('Materials'), findsNothing);
+    expect(find.text('Expenses'), findsNothing);
     expect(find.text('Profile'), findsOneWidget);
 
     await tester.tap(find.text('Map'));
@@ -295,6 +303,7 @@ void main() {
           permissions: [
             'operations:work_order:read',
             'operations:dispatch:read',
+            'operations:expense_request:read',
           ],
           isManager: true,
         ),
@@ -440,6 +449,31 @@ void main() {
 
     expect(find.text('My expense requests (1)'), findsOneWidget);
     expect(find.text('Manager site transport'), findsOneWidget);
+  });
+
+  testWidgets('manager without technician retains manager capabilities', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        managerProfile: const ManagerProfile(
+          name: 'Manager only',
+          roles: ['field_manager'],
+          permissions: ['operations:expense_request:read'],
+          isManager: true,
+        ),
+        meLoader: () => Future.error(StateError('No technician profile')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Materials'), findsOneWidget);
+    expect(find.text('Expenses'), findsOneWidget);
+    expect(find.byType(LocationTrackingHost), findsNothing);
+    await tester.tap(find.widgetWithText(NavigationDestination, 'Expenses'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pending'), findsOneWidget);
+    expect(find.text('Feature unavailable'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('manager materials appear after capability loads', (

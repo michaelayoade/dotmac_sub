@@ -17,6 +17,12 @@ from app.services.automation_contracts import (
 from app.services.sot_registry.domains.provisioning_operations.core import (
     SERVICES as CORE_SERVICES,
 )
+from app.services.sot_registry.domains.provisioning_operations.field_execution import (
+    ASSIGNMENT_RECORDS,
+)
+from app.services.sot_registry.domains.provisioning_operations.field_execution import (
+    SERVICES as FIELD_EXECUTION_SERVICES,
+)
 from app.services.sot_registry.domains.provisioning_operations.vendor_delivery import (
     SERVICES as VENDOR_DELIVERY_SERVICES,
 )
@@ -126,6 +132,8 @@ DOMAIN = DomainSOT(
     ),
     services=(
         *CORE_SERVICES,
+        *FIELD_EXECUTION_SERVICES,
+        ASSIGNMENT_RECORDS,
         *VENDOR_IDENTITY_SERVICES,
         *VENDOR_DELIVERY_SERVICES,
     ),

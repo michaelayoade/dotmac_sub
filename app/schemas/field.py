@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -30,14 +30,52 @@ class DeviceTokenRead(BaseModel):
     last_seen_at: datetime
 
 
+class FieldCapabilityAvailability(BaseModel):
+    """Owner-observed availability, independent of mobile login labels."""
+
+    model_config = ConfigDict(frozen=True)
+
+    available: bool = True
+    reason: str | None = None
+
+
+class FieldExecutionCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    attendance: FieldCapabilityAvailability = Field(
+        default_factory=FieldCapabilityAvailability
+    )
+    location_tracking: FieldCapabilityAvailability = Field(
+        default_factory=FieldCapabilityAvailability
+    )
+    fiber_evidence: FieldCapabilityAvailability = Field(
+        default_factory=FieldCapabilityAvailability
+    )
+    chat: FieldCapabilityAvailability = Field(
+        default_factory=FieldCapabilityAvailability
+    )
+    materials: FieldCapabilityAvailability = Field(
+        default_factory=FieldCapabilityAvailability
+    )
+    expenses: FieldCapabilityAvailability = Field(
+        default_factory=FieldCapabilityAvailability
+    )
+    equipment: FieldCapabilityAvailability = Field(
+        default_factory=FieldCapabilityAvailability
+    )
+
+
 class FieldMeResponse(BaseModel):
-    person_id: UUID
+    person_id: UUID | None
     name: str
     email: str | None = None
     technician_title: str | None = None
     region: str | None = None
     open_jobs: int
     completed_today: int
+    capabilities: FieldExecutionCapabilities = Field(
+        default_factory=FieldExecutionCapabilities
+    )
 
 
 class FieldJobSummary(BaseModel):
@@ -139,7 +177,7 @@ class FieldAttachmentRead(BaseModel):
     longitude: float | None = None
     captured_at: datetime | None = None
     signer_name: str | None = None
-    uploaded_by_person_id: UUID
+    uploaded_by_person_id: UUID | None
     uploaded_by_system_user_id: UUID | None = None
     client_ref: UUID | None = None
     asset_type: str | None = None
@@ -172,7 +210,7 @@ class FieldWorkLogRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    person_id: UUID
+    person_id: UUID | None
     start_at: datetime
     end_at: datetime | None = None
     minutes: int
@@ -208,7 +246,7 @@ class FieldJobEventRead(BaseModel):
     event: str
     previous_status: str | None = None
     new_status: str | None = None
-    person_id: UUID
+    person_id: UUID | None
     system_user_id: UUID | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -248,6 +286,21 @@ class FieldCompletionRequirements(BaseModel):
     signature_unavailable_reason_allowed: bool
 
 
+class FieldTransitionPayloadInput(BaseModel):
+    reason: str | None = None
+    signature_unavailable_reason: str | None = None
+    movement_session_id: UUID | None = None
+    destination_type: str | None = None
+    destination_id: str | None = None
+    destination_label: str | None = None
+    destination_latitude: float | None = Field(default=None, ge=-90, le=90)
+    destination_longitude: float | None = Field(default=None, ge=-180, le=180)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    label: str | None = None
+    accuracy_m: float | None = Field(default=None, ge=0)
+
+
 class FieldTransitionRequest(BaseModel):
     event: Literal[
         "accept",
@@ -265,7 +318,9 @@ class FieldTransitionRequest(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     note: str | None = Field(default=None, max_length=2000)
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: FieldTransitionPayloadInput = Field(
+        default_factory=FieldTransitionPayloadInput
+    )
 
 
 class FieldTransitionResponse(BaseModel):
@@ -1476,6 +1531,8 @@ class FieldManagerJob(BaseModel):
     work_type: str | None = None
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
+    assigned_vendor_id: UUID | None = None
+    revision: datetime
     assigned_to_person_id: UUID | None = None
     assigned_to_label: str | None = None
     subscriber_label: str | None = None
@@ -1486,10 +1543,19 @@ class FieldManagerJob(BaseModel):
 
 
 class FieldManagerJobAssignRequest(BaseModel):
-    person_id: str = Field(min_length=1, max_length=64)
+    person_id: str | None = Field(default=None, min_length=1, max_length=64)
+    vendor_id: UUID | None = None
+    expected_revision: datetime | None = None
+    command_id: UUID = Field(default_factory=uuid4)
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
     status: str | None = Field(default=None, max_length=20)
+
+    @model_validator(mode="after")
+    def require_one_assignee(self) -> FieldManagerJobAssignRequest:
+        if (self.person_id is None) == (self.vendor_id is None):
+            raise ValueError("Exactly one of person_id or vendor_id is required")
+        return self
 
 
 class FieldManagerJobUnassignRequest(BaseModel):

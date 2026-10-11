@@ -263,7 +263,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Enter verified identity, contact, address, and service-location information.",
         "Review the profile, then create the billing account or continue to subscription setup when needed.",
         route_templates=("/admin/customers/new", "/admin/customers/wizard"),
-        notes=("Do not use placeholder identity data for a production customer.",),
+        notes=(
+            "Do not use placeholder identity data for a production customer.",
+            "Payment-portal access during a suspension is not set on this form. "
+            "Network operations grant it per service through the captive access "
+            "policy, and only on routers whose walled garden is ready.",
+        ),
     ),
     _guide(
         "customer-detail",
@@ -377,6 +382,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "For a shared outage, open Network → Outages and select Create infrastructure ticket on the open outage row before issuing field work.",
         "The infrastructure ticket has no subscriber and is linked to the outage; use the linked ticket and the outage row Resolve action for canonical follow-up.",
         "On Network Map, use Import Map to stage a KML or KMZ file for review, or Export Map to download the permitted layers; staging does not change the canonical map.",
+        "On Network Map, use All layers or None to change layer visibility at once, or use an individual layer checkbox to show only the network assets needed for the investigation; wait for the asset count to finish loading before treating an empty view as evidence that data is missing.",
         "Review each staged feature's name, geometry, suggested asset type, and blocker; correct classifications before submission.",
         "Submit eligible new point assets into the existing proposal review. Route geometry and other blocked features stay staged until their separate review is complete.",
         "On the fiber map, submit supported FDH and closure moves for review; the canonical map position changes only after approval.",
@@ -385,8 +391,13 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",
             "Map imports accept optional asset IDs when available and keep unsupported or sensitive features blocked for review.",
+            "Layer visibility changes are local to the map view and do not modify canonical network data.",
         ),
-        route_templates=("/admin/network/fiber-change-requests", "/admin/network"),
+        route_templates=(
+            "/admin/network/fiber-change-requests",
+            "/admin/network",
+            "/admin/network/map",
+        ),
     ),
     _guide(
         "olt-operational-health",
@@ -688,6 +699,27 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "subledger-opening-correction",
+        "Billing",
+        "Correct a customer subledger opening balance",
+        "Finance reviewers and billing leads",
+        "Correct a wrong migrated opening balance for one account and currency, with a reviewed preview and an audit trail.",
+        (),
+        "Open the correction from the account's subledger opening panel and confirm the account, currency, and current opening amount.",
+        "Enter the corrected opening amount, a clear reason, and the review reference that supports it, then request a preview.",
+        "Review the preview of the resulting opening and balance change; correct any highlighted field and preview again, because nothing is changed until you confirm.",
+        "Tick the confirmation and confirm only the preview you reviewed; if the evidence changed, reload and review again.",
+        "Return to the account and verify the opening panel, the ledger, and the audit record show the correction.",
+        notes=(
+            "A stale preview or confirmation is rejected; the opening is never changed by the preview itself.",
+            "Only staff with the opening correction permission can use this page.",
+        ),
+        route_templates=(
+            "/admin/billing/accounts/{account_id}/subledger-opening/{currency}/correction",
+            "/admin/billing/accounts/{account_id}/subledger-opening/{currency}/correction/**",
+        ),
+    ),
+    _guide(
         "payments",
         "Payments",
         "Record and allocate payments",
@@ -948,12 +980,14 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         (),
         "Search or filter the work-order list by status, priority, technician, team, or date.",
         "Open a work order to confirm its customer, linked ticket or project, scope, location, and current assignment.",
-        "Create or update planning details before assigning a technician and schedule.",
+        "Create or update planning details and schedule before assigning the work.",
+        "Select one active technician or vendor organization, review the assignment preview and current work state, then confirm. If the work changed, refresh the preview before trying again.",
         "Track notes, materials, expenses, evidence, and completion from the work-order detail page.",
         "For shared outages, open the outage console, confirm the incident, scope revision, infrastructure ticket, and team assignment, then issue infrastructure field work with a clear reason.",
         route_templates=("/admin/dispatch/work-orders",),
         notes=(
             "Shared outage work has no individual customer target; verify the outage scope and infrastructure location before issuing it.",
+            "Vendor Field access follows the current confirmed assignment. Reassignment or deactivated membership removes access; imported vendor labels do not assign work.",
         ),
     ),
     _guide(
@@ -1163,6 +1197,22 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use audit and health evidence when a saved setting does not produce the expected behavior.",
     ),
     _guide(
+        "walled-garden",
+        "Settings",
+        "Manage walled-garden allowed resources",
+        "Network and settings administrators",
+        "Choose which named resources suspended subscribers can still reach while captive, and check whether routers carry them.",
+        ("/admin/system/config/walled-garden",),
+        "Review the derived captive portal entry, each configured resource and its hosts, and whether it is enabled.",
+        "Add a resource or edit an existing one's label, kind, and hosts; correct any highlighted field and save again, because nothing is saved while a field is invalid.",
+        "Enable, disable, or remove a resource; if the page reports that the setting changed, reload it and repeat the change.",
+        "Check Router readiness: a saved change is desired state only, and routers report missing or still-present resources until the walled-garden module is re-applied.",
+        notes=(
+            "The portal entry comes from the Captive Portal URL and IP on the RADIUS Configuration page and cannot be edited here.",
+            "Resource keys cannot change after creation because routers carry them in rule tags; remove and re-add a resource to rename its key.",
+        ),
+    ),
+    _guide(
         "meta-connection",
         "Meta connection",
         "Manage the Meta connection",
@@ -1339,33 +1389,38 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("transfer-network-map", "Import or export a Network Map file", 4),
         _action(
+            "toggle-network-map-layers",
+            "Toggle Network Map layer visibility",
+            5,
+        ),
+        _action(
             "review-network-map-import",
             "Review staged map features",
-            5,
+            6,
             permission="network:fiber:import",
         ),
         _action(
             "submit-network-map-import",
             "Submit eligible point proposals",
-            6,
+            7,
             permission="network:fiber:import",
         ),
         _action(
             "review-fiber-map-movement",
             "Review fiber map movement",
-            7,
+            8,
             permission="network:fiber:read",
         ),
         _action(
             "review-fiber-change-proposals",
             "Review Map V2 asset proposals",
-            8,
+            9,
             permission="network:fiber:review",
         ),
         _action(
             "find-fdh-cabinet",
             "Find an FDH cabinet",
-            9,
+            10,
             permission="network:fiber:read",
         ),
     ),
@@ -1587,6 +1642,23 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="billing:outage_compensation:approve",
         ),
         _action("verify-period-review", "Verify the reviewed result", 4),
+    ),
+    "subledger-opening-correction": (
+        _action("review-opening-correction", "Review the opening", 0),
+        _action(
+            "preview-opening-correction",
+            "Enter and preview a correction",
+            1,
+            2,
+            permission="billing:customer_subledger_opening:correct",
+        ),
+        _action(
+            "confirm-opening-correction",
+            "Confirm a reviewed correction",
+            3,
+            permission="billing:customer_subledger_opening:correct",
+        ),
+        _action("verify-opening-correction", "Verify the correction", 4),
     ),
     "payments": (
         _action(
@@ -1833,11 +1905,17 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             2,
             permission="operations:dispatch:write",
         ),
-        _action("track-work-order", "Track work-order delivery", 3),
+        _action(
+            "assign-work-order",
+            "Review and confirm technician or vendor assignment",
+            3,
+            permission="operations:dispatch:assign",
+        ),
+        _action("track-work-order", "Track work-order delivery", 4),
         _action(
             "issue-outage-work-order",
             "Issue shared-outage field work",
-            4,
+            5,
             permission="operations:dispatch:write",
         ),
     ),
@@ -2040,6 +2118,22 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("investigate-setting", "Investigate setting behavior", 3),
     ),
+    "walled-garden": (
+        _action("review-walled-garden", "Review allowed resources", 0),
+        _action(
+            "save-walled-garden-resource",
+            "Add or edit a resource",
+            1,
+            permission="system:settings:write",
+        ),
+        _action(
+            "toggle-walled-garden-resource",
+            "Enable, disable, or remove a resource",
+            2,
+            permission="system:settings:write",
+        ),
+        _action("check-walled-garden-readiness", "Check router readiness", 3),
+    ),
     "meta-connection": (
         _action("review-meta-connection", "Review the Meta connection", 0),
         _action(
@@ -2118,6 +2212,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "credit",
             "service-extension",
             "service-period-review",
+            "subledger-opening-correction",
             "payments",
             "payment-proofs",
             "payment-reconciliation",
@@ -2209,7 +2304,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
     AdminHelpNavigationSection(
         "settings",
         "Settings",
-        ("settings", "smtp-senders", "custom-fields-center"),
+        ("settings", "walled-garden", "smtp-senders", "custom-fields-center"),
         "system:settings:read",
     ),
     AdminHelpNavigationSection(
@@ -2229,6 +2324,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),
     "service-period-review": ("billing:extension:read",),
+    "subledger-opening-correction": ("billing:customer_subledger_opening:correct",),
     "payments": ("billing:payment:read",),
     "payment-proofs": ("billing:proof:read",),
     "payment-reconciliation": ("billing:ledger:read",),

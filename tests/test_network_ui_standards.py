@@ -332,6 +332,26 @@ def test_network_map_filters_bypass_none_only_for_selected_results() -> None:
     assert "All loaded assets" in source
 
 
+def test_network_map_layer_controls_bind_before_batched_feature_rendering() -> None:
+    source = (TEMPLATES / "admin/network/map.html").read_text(encoding="utf-8")
+
+    controls_bound = source.index("layersAll.addEventListener('click'")
+    feature_render_started = source.index(
+        "requestMapFrame(mapFeatures.length > 0 ? processMapFeatureBatch"
+    )
+
+    assert controls_bound < feature_render_started
+    assert "mapFeatures.forEach" not in source
+    assert "function processMapFeatureBatch()" in source
+    assert "requestMapFrame(processMapFeatureBatch);" in source
+    assert "p.connectivity ? p.connectivity.layer : 'unknown'" in source
+    assert "p.connectivity ? p.connectivity.presentation" in source
+    assert "let pendingSearchQuery = null;" in source
+    assert "if (!mapFeaturesReady)" in source
+    assert "mapViewInteracted" in source
+    assert "skippedMapFeatures += 1;" in source
+
+
 def test_shared_confirmation_assets_and_critical_actions_are_wired():
     base = (TEMPLATES / "base.html").read_text()
     confirmation_js = Path("static/js/action-confirmations.js").read_text()

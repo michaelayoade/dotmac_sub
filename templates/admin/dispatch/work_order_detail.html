@@ -20,7 +20,7 @@
 <div><dt class="text-xs font-semibold uppercase text-slate-500">Type</dt><dd class="mt-1">{{ (work_order.work_type or 'work')|replace('_', ' ')|title }}</dd></div>
 <div><dt class="text-xs font-semibold uppercase text-slate-500">Priority</dt><dd class="mt-1">{{ (work_order.priority or 'normal')|title }}</dd></div>
 <div><dt class="text-xs font-semibold uppercase text-slate-500">Schedule</dt><dd class="mt-1">{{ work_order.scheduled_start | app_datetime('%d %b %Y %H:%M', 'Unscheduled') }}</dd></div>
-<div><dt class="text-xs font-semibold uppercase text-slate-500">Technician</dt><dd class="mt-1">{{ work_order.assigned_to_name or 'Unassigned' }}</dd></div>
+<div><dt class="text-xs font-semibold uppercase text-slate-500">Assigned to</dt><dd class="mt-1">{{ work_order.assigned_to_name or 'Unassigned' }}</dd></div>
 <div><dt class="text-xs font-semibold uppercase text-slate-500">Queue</dt><dd class="mt-1">{% if queue_status %}{{ status_badge(queue_status|replace('_', ' ')|title, variant='info') }}{% else %}Not queued{% endif %}</dd></div>
 </dl>
 {% if work_order.address %}<div class="mt-5 border-t pt-4"><p class="text-xs font-semibold uppercase text-slate-500">Site</p><p class="mt-1">{{ work_order.address }}</p></div>{% endif %}
@@ -139,12 +139,14 @@
 </template>
 {% endif %}
 {% endcall %}
-</div><aside class="space-y-6 xl:col-span-4">{% call card('Dispatch technician', color='cyan') %}
-<p class="mb-4 text-sm text-slate-500">Creation defines the work scope. Assignment is the next dispatch decision.</p>
+</div><aside class="space-y-6 xl:col-span-4">{% call card('Dispatch work', color='cyan') %}
+<p class="mb-4 text-sm text-slate-500">Select the technician or vendor responsible for this visit, then review the change.</p>
 {% if action_permitted(request, queue_action) %}<form method="post" action="/admin/dispatch/work-orders/{{ work_order.public_id }}/queue" class="space-y-3">{% include "components/forms/csrf_input.html" %}
-<label class="block text-sm font-semibold">Technician <span class="text-rose-600" aria-hidden="true">*</span><select name="assigned_technician_id" required class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900"><option value="">Select technician</option>{% for option in technician_options %}<option value="{{ option.id }}">{{ option.label }}</option>{% endfor %}</select></label>
-<input type="hidden" name="status" value="assigned"><label class="block text-sm font-semibold">Reason<input name="reason" maxlength="2000" placeholder="Dispatch context" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900"></label>
-<button class="w-full rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white">Assign technician</button></form>
+<label class="block text-sm font-semibold">Assign to <span class="text-rose-600" aria-hidden="true">*</span><select name="target_selection" required class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900"><option value="">Select technician or vendor</option>
+<optgroup label="Technicians">{% for option in technician_options %}<option value="technician:{{ option.id }}" {% if current_assignment_target == 'technician:' ~ option.id %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</optgroup>
+<optgroup label="Vendors">{% for option in vendor_options %}<option value="vendor:{{ option.id }}" {% if current_assignment_target == 'vendor:' ~ option.id %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</optgroup></select></label>
+<label class="block text-sm font-semibold">Reason<input name="reason" maxlength="2000" placeholder="Dispatch context" class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 dark:bg-slate-900"></label>
+<button class="w-full rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white">Review assignment</button></form>
 {% elif can(request, queue_action.permission) %}<p class="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">{{ queue_action.reason }}</p>{% endif %}
 {% endcall %}</aside></div></div>
 <script src="/static/js/work-order-expense-form.js"></script>

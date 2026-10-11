@@ -194,8 +194,13 @@ def ensure_prepaid_entitlement_for_paid_invoice_line(
     invoice: Invoice,
     line: InvoiceLine,
     reconciliation_fingerprint: str | None = None,
+    reconciled_by: str = "financial.prepaid_service_coverage_reconciliation",
 ) -> ServiceEntitlement | None:
-    """Stage one exact paid-line entitlement without completing a transaction."""
+    """Stage one exact paid-line entitlement without completing a transaction.
+
+    ``reconciled_by`` names the reviewed owner that supplied
+    ``reconciliation_fingerprint``; it is recorded only with a fingerprint.
+    """
     if (
         not invoice.is_active
         or invoice.status != InvoiceStatus.paid
@@ -232,7 +237,7 @@ def ensure_prepaid_entitlement_for_paid_invoice_line(
     if reconciliation_fingerprint:
         metadata.update(
             {
-                "reconciled_by": "financial.prepaid_service_coverage_reconciliation",
+                "reconciled_by": reconciled_by,
                 "reconciliation_fingerprint": reconciliation_fingerprint,
             }
         )
@@ -368,6 +373,75 @@ def ensure_prepaid_entitlement_for_wallet_debit(
         },
     )
     db.add(entitlement)
+    db.flush()
+    return entitlement
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedFundingDebitLink:
+    """Reviewed statement that one renewal debit funded one existing entitlement."""
+
+    entitlement_id: UUID
+    ledger_entry_id: UUID
+    adjustment_id: UUID
+    evidence_ref: str
+
+
+class EntitlementLinkError(ValueError):
+    """The reviewed funding-debit link no longer matches the stored evidence."""
+
+
+def link_prepaid_entitlement_to_funding_debit_for_owner(
+    db: Session,
+    link: ReviewedFundingDebitLink,
+) -> ServiceEntitlement:
+    """Record that a renewal debit funded an existing entitlement (flush-only).
+
+    Participant for ``financial.prepaid_renewal_origin_correction``. It adds
+    only the ledger-debit source link and its provenance to an active
+    entitlement that has no other funding source of that kind. The period,
+    funded amount, currency, subscription, status, and invoice link are never
+    changed, so no coverage is created or extended and no money moves.
+    """
+
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(
+        db, owner="financial.prepaid_renewal_origin_correction"
+    ):
+        raise EntitlementLinkError("funding-debit link requires the origin owner")
+    entitlement = db.scalar(
+        select(ServiceEntitlement)
+        .where(ServiceEntitlement.id == link.entitlement_id)
+        .with_for_update()
+    )
+    entry = db.scalar(select(LedgerEntry).where(LedgerEntry.id == link.ledger_entry_id))
+    adjustment = db.scalar(
+        select(AccountAdjustment).where(AccountAdjustment.id == link.adjustment_id)
+    )
+    if (
+        entitlement is None
+        or entry is None
+        or adjustment is None
+        or entitlement.status != ServiceEntitlementStatus.active
+        or entitlement.source_ledger_entry_id is not None
+        or entitlement.source_billing_grant_id is not None
+        or entitlement.source_pause_episode_id is not None
+        or entitlement.source_outage_compensation_id is not None
+        or adjustment.ledger_entry_id != entry.id
+        or adjustment.account_id != entitlement.account_id
+        or entry.account_id != entitlement.account_id
+        or not entry.is_active
+        or not link.evidence_ref.strip()
+    ):
+        raise EntitlementLinkError("reviewed funding-debit link evidence mismatch")
+    entitlement.source_ledger_entry_id = entry.id
+    entitlement.metadata_ = {
+        **(entitlement.metadata_ or {}),
+        "source_ledger_entry_id": str(entry.id),
+        "source_account_adjustment_id": str(adjustment.id),
+        "funding_debit_link_evidence_ref": link.evidence_ref.strip(),
+    }
     db.flush()
     return entitlement
 

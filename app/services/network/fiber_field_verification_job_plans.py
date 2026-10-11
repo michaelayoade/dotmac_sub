@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import WorkOrderHeaderCreate
 from app.services.audit_adapter import stage_audit_event
@@ -31,6 +32,12 @@ from app.services.network.fiber_field_verification_job_scope import (
 from app.services.network.fiber_topology_field_worklist import (
     FiberTopologyFieldWorklistReport,
     reconcile_fiber_field_worklist,
+)
+from app.services.owner_commands import CommandContext
+from app.services.work_order_assignment_contracts import (
+    TechnicianAssignmentTarget,
+    VendorAssignmentTarget,
+    WorkOrderAssignmentCommand,
 )
 from app.services.work_order_commands import work_order_commands
 
@@ -166,16 +173,17 @@ def _feature_scope(row: dict[str, object]) -> dict[str, object]:
 def preview_fiber_field_verification_job_plan(
     db: Session,
     *,
-    expected_worklist_report_sha256: object,
-    staged_feature_ids: Sequence[object],
-    subscriber_id: object,
+    expected_worklist_report_sha256: str,
+    staged_feature_ids: Sequence[uuid.UUID | str],
+    subscriber_id: uuid.UUID | str,
     title: str,
     description: str | None,
     priority: str,
     address: str | None,
     scheduled_start: datetime | None,
     scheduled_end: datetime | None,
-    assigned_technician_id: object | None,
+    assigned_technician_id: uuid.UUID | str | None,
+    assigned_vendor_id: uuid.UUID | str | None = None,
     assignment_reason: str | None,
     idempotency_key: str,
 ) -> dict[str, object]:
@@ -219,12 +227,24 @@ def preview_fiber_field_verification_job_plan(
             str(exc.detail), status_code=exc.status_code
         ) from exc
     technician_uuid: uuid.UUID | None = None
+    vendor_uuid: uuid.UUID | None = None
+    if assigned_technician_id is not None and assigned_vendor_id is not None:
+        raise FiberFieldVerificationJobPlanError(
+            "choose either a technician or a vendor for assignment"
+        )
     if assigned_technician_id is not None:
         technician_uuid = _uuid(assigned_technician_id, "assigned_technician_id")
         technician = db.get(TechnicianProfile, technician_uuid)
         if technician is None or not technician.is_active:
             raise FiberFieldVerificationJobPlanError(
                 "active technician not found", status_code=404
+            )
+    if assigned_vendor_id is not None:
+        vendor_uuid = _uuid(assigned_vendor_id, "assigned_vendor_id")
+        vendor = db.get(Vendor, vendor_uuid)
+        if vendor is None or not vendor.is_active:
+            raise FiberFieldVerificationJobPlanError(
+                "active vendor not found", status_code=404
             )
 
     selected_features = [
@@ -235,6 +255,7 @@ def preview_fiber_field_verification_job_plan(
         "assigned_technician_id": (
             str(technician_uuid) if technician_uuid is not None else None
         ),
+        "assigned_vendor_id": str(vendor_uuid) if vendor_uuid is not None else None,
         "assignment_reason": str(assignment_reason or "").strip() or None,
         "description": str(description or "").strip() or None,
         "idempotency_key": normalized_key,
@@ -263,7 +284,7 @@ def preview_fiber_field_verification_job_plan(
 def execute_fiber_field_verification_job_plan(
     db: Session,
     *,
-    expected_plan_sha256: object,
+    expected_plan_sha256: str,
     auth: dict[str, Any] | None = None,
     request_id: str | None = None,
     **preview_args: Any,
@@ -337,22 +358,45 @@ def execute_fiber_field_verification_job_plan(
             commit=False,
         )
         assignment: WorkOrderAssignmentQueue | None = None
-        if command.get("assigned_technician_id") is not None:
-            assignment = work_order_commands.assign(
-                db,
-                work_order.public_id,
-                technician_id=command["assigned_technician_id"],
-                scheduled_start=work_order.scheduled_start,
-                scheduled_end=work_order.scheduled_end,
-                reason=(
-                    str(command["assignment_reason"])
-                    if command.get("assignment_reason") is not None
-                    else "fiber_field_verification_plan"
-                ),
-                auth=auth,
-                request_id=request_id,
-                commit=False,
+        if (
+            command.get("assigned_technician_id") is not None
+            or command.get("assigned_vendor_id") is not None
+        ):
+            assignment_command_id = uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"fiber-verification-assignment:{command['idempotency_key']}",
             )
+            assignment_outcome = work_order_commands._stage_assignment(
+                db,
+                command=WorkOrderAssignmentCommand(
+                    work_order_public_id=work_order.public_id,
+                    target=(
+                        VendorAssignmentTarget(
+                            _uuid(command["assigned_vendor_id"], "assigned_vendor_id")
+                        )
+                        if command.get("assigned_vendor_id") is not None
+                        else TechnicianAssignmentTarget(
+                            _uuid(
+                                command["assigned_technician_id"],
+                                "assigned_technician_id",
+                            )
+                        )
+                    ),
+                    scheduled_start=work_order.scheduled_start,
+                    scheduled_end=work_order.scheduled_end,
+                    reason=str(command["assignment_reason"])
+                    if command.get("assignment_reason") is not None
+                    else "fiber_field_verification_plan",
+                ),
+                context=CommandContext.system(
+                    actor=_actor(auth)[1] or "fiber_field_verification",
+                    scope="operations:dispatch:assign",
+                    reason="Fiber verification plan assignment",
+                    command_id=assignment_command_id,
+                    idempotency_key=str(assignment_command_id),
+                ),
+            )
+            assignment = db.get(WorkOrderAssignmentQueue, assignment_outcome.queue_id)
         replayed = existing_before is not None
         if not replayed:
             actor_type, actor_id = _actor(auth)

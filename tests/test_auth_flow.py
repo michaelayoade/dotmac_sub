@@ -46,7 +46,7 @@ from app.services.auth_flow import (
     hash_password,
     request_password_reset,
     reset_password,
-    verify_password,
+    verify_user_password,
 )
 from app.services.owner_commands import CommandContext
 from tests.staff_identity_fixtures import add_bound_staff_user, project_staff_login
@@ -827,7 +827,7 @@ def test_reset_password_updates_only_local_credential(db_session, person, monkey
     db_session.refresh(radius_credential)
     db_session.refresh(local_credential)
     assert radius_credential.password_hash is None
-    assert verify_password("Resetpass1!", local_credential.password_hash)
+    assert verify_user_password("Resetpass1!", local_credential.password_hash)
     assert local_credential.must_change_password is False
     assert local_credential.failed_login_attempts == 0
 
@@ -856,7 +856,7 @@ def test_change_password_updates_only_local_credential(db_session, person):
     db_session.refresh(radius_credential)
     db_session.refresh(local_credential)
     assert radius_credential.password_hash is None
-    assert verify_password("Resetpass1!", local_credential.password_hash)
+    assert verify_user_password("Resetpass1!", local_credential.password_hash)
     assert local_credential.must_change_password is False
 
 
@@ -1127,6 +1127,9 @@ def test_password_reset_does_not_bypass_mfa(db_session, person, monkeypatch):
     result = request_password_reset(db_session, person.email)
     assert result
     reset_password(db_session, result["token"], "Brandnew1!")
+    # The legacy compatibility redemption joins this session's transaction;
+    # login (phase A) requires a transaction-free session, so settle it.
+    db_session.commit()
 
     login_result = AuthFlow.login(
         db_session, person.email, "Brandnew1!", _make_request(), None
@@ -1652,7 +1655,7 @@ def test_change_password_revokes_other_sessions(db_session, person, monkeypatch)
     assert sessions[0].status == SessionStatus.active
     assert sessions[1].status == SessionStatus.revoked
     db_session.refresh(credential)
-    assert verify_password("Resetpass1!", credential.password_hash)
+    assert verify_user_password("Resetpass1!", credential.password_hash)
 
 
 def test_reset_password_rejects_canceled_subscriber(db_session, person, monkeypatch):

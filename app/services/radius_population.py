@@ -138,16 +138,6 @@ def _captive_reject_work_item(
     )
 
 
-def _captive_redirect_allowed(subscriber: object | None) -> bool:
-    """Compatibility adapter to the canonical captive eligibility owner."""
-    if subscriber is None:
-        return False
-    from app.models.subscriber import Subscriber
-    from app.services.walled_garden_policy import captive_account_eligible
-
-    return captive_account_eligible(cast(Subscriber, subscriber))
-
-
 def _committed_mbps(offer: CatalogOffer) -> tuple[int, int] | None:
     """The rate floor this offer promises, as (upload, download) Mbps.
 
@@ -296,10 +286,11 @@ def _radreply_attrs(
     Customer-level block dominates: even if subscription is active, the customer
     gets blocked RADIUS treatment.
 
-    `captive_redirect_enabled`: per-customer opt-in for the soft walled-garden
-    captive redirect. Only opted-in blocked subscribers get the
-    Mikrotik-Address-List=suspended attribute; non-opted blocked subscribers are
-    hard-rejected in radcheck (see populate()), so they get no captive radreply.
+    `captive_redirect_enabled`: the canonical per-subscription captive decision
+    (``access.walled_garden_policy`` -> projection plan ``captive``). Only
+    captive blocked subscriptions get the Mikrotik-Address-List=suspended
+    attribute; every other blocked subscription is hard-rejected in radcheck
+    (see populate()), so it gets no captive radreply.
 
     `additional_routes`: extra routed IP blocks (subscriber_additional_routes) as
     (cidr, metric) tuples. Emitted as Framed-Route for non-walled-garden subs only
@@ -356,9 +347,9 @@ def _radreply_attrs(
     if profile and profile.idle_timeout:
         attrs.append(("Idle-Timeout", ":=", str(profile.idle_timeout)))
 
-    # Soft captive walled-garden — only for blocked subscribers who OPTED IN
-    # (per-customer captive_redirect_enabled). Non-opted blocked subscribers get
-    # a hard reject in radcheck instead, so they never reach this radreply.
+    # Soft captive walled-garden — only for blocked subscriptions the canonical
+    # captive policy resolved to captive. Every other blocked subscription gets
+    # a hard reject in radcheck instead, so it never reaches this radreply.
     is_blocked = not full_test_access and (
         subscriber_blocked
         or sub.status
@@ -738,7 +729,6 @@ def populate(
         "radcheck_upserts": 0,
         "radreply_upserts": 0,
         "blocked_users_written": 0,
-        "captive_ineligible_optins": 0,
         "skipped_ambiguous_ipv4_ledger": 0,
         "captive_downgraded_to_reject": 0,
     }
@@ -1054,11 +1044,6 @@ def populate(
             test_access = projection.test_access
             normal_projection = normal_login_projections[login].plan
             captive = projection.mode == "captive"
-            if (
-                getattr(sub.subscriber, "captive_redirect_enabled", False)
-                and not captive
-            ):
-                _increment_result_count(stats, "captive_ineligible_optins")
 
             # A hard reject is a complete RADIUS projection in its own right and
             # does not need a customer password.  Resolve it before credential
