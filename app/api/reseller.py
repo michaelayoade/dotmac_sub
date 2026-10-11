@@ -308,7 +308,7 @@ def my_reseller_dashboard(
 @router.get("/accounts")
 def my_reseller_accounts(
     search: str | None = None,
-    status: str | None = Query(default=None, pattern="^(overdue|suspended)$"),
+    status: reseller_portal.ResellerAccountListStatusFilter | None = None,
     order_by: str = Query(
         default="created_at", pattern="^(created_at|balance|overdue|name)$"
     ),
@@ -320,20 +320,21 @@ def my_reseller_accounts(
 ) -> dict:
     """The reseller's managed customer accounts (paginated, filter+sortable)."""
     reseller_id = _reseller_id(db, principal)
-    return {
-        "items": reseller_portal.list_accounts(
-            db,
-            reseller_id,
-            limit,
-            offset,
-            search,
+    result = reseller_portal.query_reseller_account_list(
+        db,
+        reseller_portal.ResellerAccountListQuery(
+            reseller_id=UUID(reseller_id),
+            limit=limit,
+            offset=offset,
+            search=search,
             status_filter=status,
-            order_by=order_by,
-            order_dir=order_dir,
+            order_by=reseller_portal.ResellerAccountListOrder(order_by),
+            order_dir=reseller_portal.ResellerAccountListDirection(order_dir),
         ),
-        "count": reseller_portal.count_accounts(
-            db, reseller_id, search, status_filter=status
-        ),
+    )
+    return {
+        "items": list(result.items),
+        "count": result.total,
         "limit": limit,
         "offset": offset,
     }

@@ -964,3 +964,23 @@ implementation.
   never see the action and are refused by the route (403).
 - Responsive: panel facts stack; the history table scrolls horizontally inside
   its card; the editor is a single column at every width.
+
+## Reseller Account List Contract
+
+- Audience and job: a reseller scans and searches the customer accounts assigned
+  to that exact reseller. `customer.reseller_account_list` owns the list and
+  matching count; routes and templates only parse and render its typed filter.
+- Default cohort: `new`, `active`, `blocked`, `suspended`, `paused`, and
+  `delinquent` accounts may appear. `disabled` and `canceled` remain absent from
+  the default list. Disabled accounts appear through the exact **Disabled**
+  filter.
+- Canceled cohort: the exact **Canceled** filter shows retained canceled accounts
+  assigned to the reseller. Legacy imported rows carrying deletion evidence stay
+  excluded. Every canceled row is labeled read-only and offers no detail,
+  impersonation, or lifecycle action.
+- Scope isolation: canceled-list visibility never widens account detail,
+  customer impersonation, lifecycle commands, dashboard counts, revenue totals,
+  overdue totals, or billing drill-downs. Those consumers retain their existing
+  non-canceled scope.
+- Pagination and count: list and count consume the same reseller, search, and
+  status filter so page totals cannot disagree with the visible cohort.

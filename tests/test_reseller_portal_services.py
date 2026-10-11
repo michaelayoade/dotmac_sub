@@ -1403,12 +1403,18 @@ def test_list_accounts_filters_and_sorts(db_session, reseller, subscriber):
     db_session.commit()
 
     overdue = reseller_portal.list_accounts(
-        db_session, str(reseller.id), 50, 0, status_filter="overdue"
+        db_session,
+        str(reseller.id),
+        50,
+        0,
+        status_filter=reseller_portal.ResellerAccountListStatusFilter.overdue,
     )
     assert [a["id"] for a in overdue] == [str(subscriber.id)]
     assert (
         reseller_portal.count_accounts(
-            db_session, str(reseller.id), status_filter="overdue"
+            db_session,
+            str(reseller.id),
+            status_filter=reseller_portal.ResellerAccountListStatusFilter.overdue,
         )
         == 1
     )
