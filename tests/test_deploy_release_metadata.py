@@ -51,6 +51,9 @@ def _run_deploy(
     migration_hard_failure: bool = False,
     heads_before: str = "670_a",
     heads_after: str | None = None,
+    heads_read_fails: bool = False,
+    migration_interrupt: bool = False,
+    first_deploy: bool = False,
     manifest_pins_ready: bool = True,
     github_checks_ready: bool = True,
     background_runtime_ready: bool = True,
@@ -87,8 +90,13 @@ def _run_deploy(
         else ("staging", "dotmac-sub-staging")
     )
     (deploy_dir / ".env").write_text(
-        "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
-        "GIT_SHA=old0000000000000000000000000000000000000\n"
+        (
+            ""
+            if first_deploy
+            else "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
+            "GIT_SHA=old0000000000000000000000000000000000000\n"
+        )
+        + "DATABASE_URL=postgresql://dotmac:not-a-real-pw@db.example.test:5432/dotmac_sub\n"
         f"APP_ENV={app_env}\n"
         f"SERVER_NAME={server_name}\n"
     )
@@ -134,6 +142,18 @@ if [[ "$*" == *"alembic upgrade heads"* ]]; then
     echo "canceling statement due to lock timeout" >&2
     exit 1
   fi
+  if [[ "{int(migration_interrupt)}" == "1" ]]; then
+    printf '%s\\n' "{heads_after if heads_after is not None else heads_before}" > "{heads_file}"
+    top=""
+    pid=$PPID
+    while [[ -n "$pid" && "$pid" != "1" && "$pid" != "0" ]]; do
+      if ps -o command= -p "$pid" | grep -q 'deploy.sh'; then top="$pid"; fi
+      pid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+    done
+    kill -INT "$top"
+    sleep 1
+    exit 0
+  fi
   if [[ "{int(migration_hard_failure)}" == "1" ]]; then
     printf '%s\\n' "{heads_after if heads_after is not None else heads_before}" > "{heads_file}"
     echo "psycopg2.errors.UndefinedTable: boom" >&2
@@ -141,6 +161,10 @@ if [[ "$*" == *"alembic upgrade heads"* ]]; then
   fi
 fi
 if [[ "$1" == "exec" && "$*" == *"alembic_version"* ]]; then
+  if [[ "{int(heads_read_fails)}" == "1" ]]; then
+    echo "canceling statement due to statement timeout" >&2
+    exit 1
+  fi
   cat "{heads_file}"
   exit 0
 fi
@@ -743,6 +767,95 @@ def test_failed_migration_that_advanced_heads_keeps_pin_and_refuses_to_guess(
     assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" not in (
         env_file.read_text()
     )
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_heads_query_timeout_counts_as_unreadable_and_keeps_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        heads_read_fails=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha-old0000" not in env_file.read_text()
+    assert "<unreadable>" in result.stderr
+    assert "Do not recreate containers; repair forward" in result.stderr
+    assert "PGOPTIONS=-c lock_timeout=5s -c statement_timeout=15s" in (
+        docker_log.read_text()
+    )
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_heads_query_against_another_database_keeps_pin(tmp_path: Path) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "some_other_db"},
+        migration_hard_failure=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha-old0000" not in env_file.read_text()
+    assert "targets database 'some_other_db' but alembic uses 'dotmac_sub'" in (
+        result.stderr
+    )
+    assert "not-a-real-pw" not in result.stdout + result.stderr
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_first_deploy_failed_migration_says_there_is_no_previous_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        first_deploy=True,
+    )
+
+    assert result.returncode != 0
+    assert "no previous pin and no running dotmac_sub_app container" in (
+        result.stderr
+    )
+    assert "matches the running" not in result.stderr
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" not in (
+        env_file.read_text()
+    )
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_interrupt_during_migration_with_unchanged_heads_repins(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path, extra_env=_HEADS_ENV, migration_interrupt=True
+    )
+
+    assert result.returncode == 130
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in (
+        env_file.read_text()
+    )
+    assert "heads measured unchanged" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_interrupt_during_migration_with_advanced_heads_keeps_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_interrupt=True,
+        heads_after="670_b",
+    )
+
+    assert result.returncode == 130
+    assert "sha-old0000" not in env_file.read_text()
     assert "Do not recreate containers; repair forward" in result.stderr
     _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
 
