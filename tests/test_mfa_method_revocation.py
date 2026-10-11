@@ -304,7 +304,14 @@ def test_setup_after_disabling_pending_row_creates_a_new_confirmable_row(
     pid = str(principal.id)
     first = getattr(flow, setup_name)(db_session, pid, "first")
     old_id = first["method_id"]
-    auth_service.mfa_methods.delete(db_session, str(old_id), actor_id="admin")
+    if kind == "subscriber":
+        auth_service.mfa_methods.delete(db_session, str(old_id), actor_id="admin")
+    else:
+        # Staff/reseller factors are not removable through the generic API.
+        old_row = db_session.get(MFAMethod, old_id)
+        old_row.is_active = old_row.enabled = old_row.is_primary = False
+        old_row.secret = None
+        db_session.commit()
 
     second = getattr(flow, setup_name)(db_session, pid, "second")
     assert second["method_id"] != old_id
@@ -315,3 +322,69 @@ def test_setup_after_disabling_pending_row_creates_a_new_confirmable_row(
     db_session.expire_all()
     old = db_session.get(MFAMethod, old_id)
     assert (old.is_active, old.enabled, old.secret) == (False, False, None)
+
+
+def _non_subscriber_method(db_session, kind):
+    from datetime import UTC, datetime
+
+    from app.models.auth import Session as AuthSession
+    from app.models.subscriber import Reseller, ResellerUser
+    from app.models.system_user import SystemUser
+
+    if kind == "system_user":
+        user = SystemUser(
+            first_name="S", last_name="U", email=f"{uuid4().hex[:8]}@example.test"
+        )
+    else:
+        reseller = Reseller(name=f"R{uuid4().hex[:6]}")
+        db_session.add(reseller)
+        db_session.flush()
+        user = ResellerUser(
+            reseller_id=reseller.id,
+            email=f"{uuid4().hex[:8]}@example.test",
+            is_active=True,
+            full_name="Reseller Login",
+        )
+    db_session.add(user)
+    db_session.flush()
+    method = MFAMethod(
+        method_type=MFAMethodType.totp,
+        label="m",
+        secret="unit-fixture-secret",
+        is_primary=True,
+        enabled=True,
+        **{f"{kind}_id": user.id},
+    )
+    db_session.add(method)
+    db_session.flush()
+    db_session.add(MFARecoveryCode(mfa_method_id=method.id, code_hash=uuid4().hex))
+    session_row = AuthSession(
+        token_hash=uuid4().hex,
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        **({"system_user_id": user.id} if kind == "system_user" else {}),
+    )
+    if kind == "system_user":
+        db_session.add(session_row)
+    db_session.commit()
+    return method
+
+
+@pytest.mark.parametrize("kind", ["system_user", "reseller_user"])
+def test_api_refuses_staff_and_reseller_factors_without_any_change(db_session, kind):
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
+    from app.models.event_store import EventStore
+
+    method = _non_subscriber_method(db_session, kind)
+    mid = method.id
+    response = TestClient(_app(ADMIN, db_session)).delete(f"/api/v1/mfa-methods/{mid}")
+    assert response.status_code == 422
+    assert "provisioning" in response.text
+    db_session.expire_all()
+    row = db_session.get(MFAMethod, mid)
+    assert (row.is_active, row.enabled, row.is_primary) == (True, True, True)
+    assert row.secret == "unit-fixture-secret"
+    assert db_session.query(MFARecoveryCode).one().is_active is True
+    assert all(s.status == SessionStatus.active for s in db_session.query(AuthSession))
+    assert db_session.query(AuditEvent).count() == 0
+    assert db_session.query(EventStore).count() == 0

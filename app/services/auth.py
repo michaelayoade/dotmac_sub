@@ -302,6 +302,18 @@ class MFAMethods(ListResponseMixin):
             if not probe:
                 raise HTTPException(status_code=404, detail="MFA method not found")
             kind, principal_id = principal_of(probe)
+            if kind is not PrincipalType.subscriber:
+                # Staff and reseller factors are removed by their owners
+                # (staff provisioning / reseller management), which hold the
+                # matching permission model. Refuse before any lock or write.
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Staff and reseller MFA factors are managed by their "
+                        "own provisioning flows (staff provisioning, reseller "
+                        "management)."
+                    ),
+                )
             # Lock order matches login/complete_mfa: principal, then method,
             # then recovery codes. State is re-read after the locks.
             _lock_principal(db, kind, principal_id)

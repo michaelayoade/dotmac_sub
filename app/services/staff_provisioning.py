@@ -22,7 +22,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.auth import AuthProvider, SessionStatus, UserCredential
+from app.models.auth import (
+    AuthProvider,
+    MFAMethod,
+    MFARecoveryCode,
+    SessionStatus,
+    UserCredential,
+)
 from app.models.auth import Session as AuthSession
 from app.models.dispatch import TechnicianProfile
 from app.models.party import PartyDataClassification, PartyType
@@ -76,6 +82,11 @@ _SET_ACTIVE_COMMAND = OwnerCommandDefinition(
     owner="auth.staff_provisioning",
     concern="staff account provisioning",
     name="set_staff_account_active",
+)
+_REMOVE_MFA_COMMAND = OwnerCommandDefinition(
+    owner="auth.staff_provisioning",
+    concern="staff identity maintenance",
+    name="remove_staff_mfa",
 )
 _UPDATE_IDENTITY_COMMAND = OwnerCommandDefinition(
     owner="auth.staff_provisioning",
@@ -171,6 +182,14 @@ class SetStaffAccountActiveCommand:
     context: CommandContext
     user_id: UUID
     is_active: bool
+
+
+@dataclass(frozen=True)
+class RemoveStaffMfaCommand:
+    """Administrative removal of every MFA factor of one staff principal."""
+
+    context: CommandContext
+    user_id: UUID
 
 
 @dataclass(frozen=True)
@@ -2107,6 +2126,103 @@ def set_staff_account_active(
     return execute_owner_command(
         db,
         definition=_SET_ACTIVE_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def remove_staff_mfa(
+    db: Session,
+    command: RemoveStaffMfaCommand,
+) -> StaffAccountOutcome:
+    """Disable all MFA factors of a staff principal atomically.
+
+    Principal lock first (same order as login), then the factor rows. Seeds are
+    wiped, recovery codes deactivated, active sessions revoked and the audit is
+    staged in the same transaction. A repeat call is a no-op (audited, no event).
+    """
+
+    def operation() -> StaffAccountOutcome:
+        actor_type, actor_id = _validate_context(command.context)
+        user = _locked_user(db, command.user_id)
+        methods = list(
+            db.scalars(
+                select(MFAMethod)
+                .where(MFAMethod.system_user_id == user.id)
+                .order_by(MFAMethod.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        live = [m for m in methods if m.is_active or m.enabled or m.is_primary]
+        codes_deactivated = 0
+        revoked_sessions = 0
+        if live:
+            codes_deactivated = int(
+                db.query(MFARecoveryCode)
+                .filter(
+                    MFARecoveryCode.mfa_method_id.in_([m.id for m in live]),
+                    MFARecoveryCode.is_active.is_(True),
+                )
+                .update({"is_active": False}, synchronize_session=False)
+                or 0
+            )
+            for method in live:
+                method.is_active = False
+                method.enabled = False
+                method.is_primary = False
+                method.secret = None
+                method.failed_attempts = 0
+                method.locked_until = None
+            revoked_sessions = _revoke_active_sessions(db, user.id)
+            db.flush()
+        changed = bool(live)
+        _invalidate_auth_after_commit(db, user.id)
+        evidence: dict[str, object] = {
+            "changed": changed,
+            "methods_disabled": len(live),
+            "recovery_codes_deactivated": codes_deactivated,
+            "revoked_sessions": int(revoked_sessions),
+        }
+        _stage_audit(
+            db,
+            action="auth.mfa_disabled",
+            user_id=user.id,
+            context=command.context,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            metadata=evidence,
+        )
+        if changed:
+            emit_event(
+                db,
+                EventType.credential_administration_completed,
+                {
+                    "schema_version": 1,
+                    "principal_type": "system_user",
+                    "principal_id": str(user.id),
+                    "aggregate_type": "system_user",
+                    "aggregate_id": str(user.id),
+                    "transition": "staff_mfa_removed",
+                    "invalidate_sessions": True,
+                    "sessions_revoked": int(revoked_sessions),
+                    "recovery_codes_deactivated": codes_deactivated,
+                    "methods_disabled": len(live),
+                },
+                actor=command.context.actor,
+            )
+        return _outcome(
+            user,
+            role_names=assignment_service.system_user_role_names(db, user.id),
+            created=False,
+            changed=changed,
+            invite_requested=False,
+            context=command.context,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_REMOVE_MFA_COMMAND,
         context=command.context,
         operation=operation,
     )
