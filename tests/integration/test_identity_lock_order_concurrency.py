@@ -106,14 +106,14 @@ def identities(engine: Engine) -> Identities:
             password_hash="not-a-real-hash",
             is_active=True,
         )
-        legacy = AuthSession(
+        auth_session = AuthSession(
             system_user_id=user.id,
-            party_id=None,
+            party_id=person.id,
             token_hash=f"legacy-{uuid4().hex}",
             status=SessionStatus.active,
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
-        db.add_all([binding, credential, other, legacy])
+        db.add_all([binding, credential, other, auth_session])
         db.flush()
         assert (
             user.party_binding_source is not None
@@ -123,7 +123,7 @@ def identities(engine: Engine) -> Identities:
             user.id,
             person.id,
             approver.id,
-            legacy.id,
+            auth_session.id,
             binding.id,
             credential.id,
             subscriber.id,
@@ -236,7 +236,9 @@ def test_principal_lock_then_session_fk_does_not_cycle_with_adoption(
                 holder.commit()
             finally:
                 holder.rollback()
-        assert future.result(timeout=15) is (owner == "staff_adoption")
+        # The migration-541 ratchet makes every usable staff session
+        # Party-bound, so both post-cutover owner paths are exact replays.
+        assert future.result(timeout=15) is True
 
 
 def test_projection_collision_never_locks_incumbent_after_binding(
