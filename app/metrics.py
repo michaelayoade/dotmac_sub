@@ -29,6 +29,10 @@ WORKER_STARTUP_DURATION = Histogram(
 APPLICATION_READINESS = Gauge(
     "application_readiness", "Whether essential startup and routes are ready"
 )
+AUDIT_SETTINGS_FALLBACKS = Counter(
+    "audit_settings_fallbacks_total",
+    "Supplementary request audit settings failures using enabled defaults",
+)
 INTEGRATION_ROUTE_404 = Counter(
     "integration_route_404_total",
     "404 responses for registered integration routes",

@@ -136,7 +136,7 @@ def test_audit_middleware_skips_webhooks_without_db(monkeypatch):
     assert response.body == b"ok"
 
 
-def test_audit_middleware_fails_open_when_settings_refresh_fails(monkeypatch):
+def test_audit_middleware_keeps_logging_when_settings_refresh_fails(monkeypatch):
     monkeypatch.setattr(main, "_AUDIT_SETTINGS_CACHE", None)
     monkeypatch.setattr(main, "_AUDIT_SETTINGS_CACHE_AT", None)
     monkeypatch.setattr(main, "SessionLocal", lambda: _DummySession())
@@ -145,6 +145,15 @@ def test_audit_middleware_fails_open_when_settings_refresh_fails(monkeypatch):
         raise OperationalError("select 1", {}, RuntimeError("too many clients"))
 
     monkeypatch.setattr(main, "_load_audit_settings", _raise_operational_error)
+    audit_calls = []
+    fallback_count = main.AUDIT_SETTINGS_FALLBACKS._value.get()
+    monkeypatch.setattr(
+        main,
+        "_try_log_audit_request",
+        lambda request, response: audit_calls.append(
+            (request.url.path, response.status_code)
+        ),
+    )
 
     response = _run_async(
         main.audit_middleware(
@@ -155,6 +164,8 @@ def test_audit_middleware_fails_open_when_settings_refresh_fails(monkeypatch):
 
     assert response.status_code == 200
     assert response.body == b"ok"
+    assert audit_calls == [("/portal/payments", 200)]
+    assert main.AUDIT_SETTINGS_FALLBACKS._value.get() == fallback_count + 1
 
 
 def test_audit_middleware_uses_stale_settings_without_db_refresh(monkeypatch):
