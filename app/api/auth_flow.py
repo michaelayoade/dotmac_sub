@@ -44,8 +44,12 @@ from app.schemas.auth_flow import (
     VerifyEmailRequest,
     VerifyEmailResponse,
 )
+from app.services import (
+    anonymous_recovery_adapter,
+    credential_recovery,
+    customer_credential_enrollment,
+)
 from app.services import auth_flow as auth_flow_service
-from app.services import credential_recovery, customer_credential_enrollment
 from app.services import session_manager as session_manager_service
 from app.services import user_profile as user_profile_service
 from app.services.auth_dependencies import require_user_auth
@@ -480,9 +484,8 @@ def forgot_password(
     Request a password reset email.
     Always returns success to prevent email enumeration.
     """
-    credential_recovery.request_password_recovery(
-        db,
-        credential_recovery.RequestPasswordRecoveryCommand(
+    anonymous_recovery_adapter.request_password_recovery(
+        command=credential_recovery.RequestPasswordRecoveryCommand(
             context=_credential_recovery_context(
                 "Public API password recovery request"
             ),

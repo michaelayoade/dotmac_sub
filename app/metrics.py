@@ -1328,3 +1328,8 @@ AUTHENTICATION_UNKNOWN_DENIALS = Counter(
     "authentication_unknown_denials_total",
     "Authentication denials without a trusted resolved target; no identity labels.",
 )
+
+ANONYMOUS_RECOVERY_FAILURES = Counter(
+    "anonymous_password_recovery_failures_total",
+    "Anonymous recovery owner or session lifecycle failures.",
+)

@@ -163,7 +163,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: Test-only additions; production construction allowance is unchanged.
 #: Reseller standing PostgreSQL cases add two isolated Session constructors.
 #: These test fixtures do not expand the production construction allowance.
-TEST_FIXTURE_BASELINE_TOTAL = 234
+# Six explicit fixture constructions in test_anonymous_recovery_adapter.py
+# exercise fresh lifecycle rollback and independent file-SQLite connections.
+# The production constructor inventory remains unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 240
 
 
 def _baseline() -> dict[str, int]:
