@@ -1213,6 +1213,22 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "customer-connection-types",
+        "Settings",
+        "Manage customer connection types",
+        "System and customer administrators",
+        "Manage the reusable connection types that classify each customer's last-mile connection.",
+        ("/admin/system/customer-connection-types",),
+        "Review each configured type, its active state, display order, and assigned customer count.",
+        "Add a type or edit its name, description, display order, and active state; its stable code does not change after creation.",
+        "Deactivate a type when it should no longer be offered for new customer assignments.",
+        "Verify that active types are available on customer forms and that existing inactive assignments remain visible.",
+        notes=(
+            "Adding, editing, activating, or deactivating a type requires system settings write permission.",
+            "Deactivation preserves existing customer assignments and their readable labels.",
+        ),
+    ),
+    _guide(
         "meta-connection",
         "Meta connection",
         "Manage the Meta connection",
@@ -2134,6 +2150,30 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("check-walled-garden-readiness", "Check router readiness", 3),
     ),
+    "customer-connection-types": (
+        _action(
+            "review-customer-connection-types",
+            "Review customer connection types",
+            0,
+        ),
+        _action(
+            "save-customer-connection-type",
+            "Add or edit a customer connection type",
+            1,
+            permission="system:settings:write",
+        ),
+        _action(
+            "deactivate-customer-connection-type",
+            "Deactivate a customer connection type",
+            2,
+            permission="system:settings:write",
+        ),
+        _action(
+            "verify-customer-connection-types",
+            "Verify customer connection type availability",
+            3,
+        ),
+    ),
     "meta-connection": (
         _action("review-meta-connection", "Review the Meta connection", 0),
         _action(
@@ -2304,7 +2344,13 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
     AdminHelpNavigationSection(
         "settings",
         "Settings",
-        ("settings", "walled-garden", "smtp-senders", "custom-fields-center"),
+        (
+            "settings",
+            "walled-garden",
+            "customer-connection-types",
+            "smtp-senders",
+            "custom-fields-center",
+        ),
         "system:settings:read",
     ),
     AdminHelpNavigationSection(
