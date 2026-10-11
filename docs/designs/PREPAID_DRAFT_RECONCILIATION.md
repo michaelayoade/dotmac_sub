@@ -590,6 +590,47 @@ draft creation remains owned by `financial.prepaid_recovery_billing`, while
 every resulting prepaid draft is classified and reconciled here regardless of
 which approved path created it.
 
+## Reviewed paid-period replacement
+
+A lapsed prepaid subscription can receive a payment after its historical
+anniversary has passed. If an older funding event is replayed as fresh funding,
+the canonical renewal path may create and settle a future-shifted invoice even
+though the immediately preceding period remains missing. When no periodless
+draft exists, the existing reviewed-draft command has no safe target and must
+not manufacture one in an adapter.
+
+The separate `replace_reviewed_paid_prepaid_period` owner command handles only
+that no-draft shape. Its typed query names the subscription, wrong paid invoice,
+sole funding Payment, exact replacement UTC instants, expected contract total,
+unchanged remaining credit, verified payment reference, Finance approver,
+ticket, and evidence digest. Preview is read-only and requires:
+
+- one active, non-proforma, fully paid invoice with one positive line, one
+  active full-value allocation from the selected successful unreturned
+  Payment, and one matching active invoice-backed entitlement;
+- a replacement interval with the strict lapsed-renewal shape `replacement
+  start < wrong start < replacement end < wrong end`;
+- exactly one surviving entitlement ending at the replacement start and no
+  competing invoice or entitlement overlapping the replacement interval;
+- exact current contract cadence, subtotal, tax, total, currency, payment
+  proof reference, account credit, allocation-release preview, and billing
+  anchor; and
+- an active named Finance approver plus an authorized operator principal.
+
+Apply enters `execute_owner_command` once. It locks all evidence, recomputes the
+fingerprint, voids the wrong invoice through the invoice owner, releases only
+its allocation, revokes only its entitlement, and retracts the anchor to the
+end of surviving coverage. It then invokes the canonical prepaid-renewal owner
+to create and settle the replacement invoice from the same selected Payment.
+The resulting entitlement, renewal event, final anchor, metadata, audit record,
+and idempotency reservation commit together. The expected customer credit must
+be identical before and after; any changed cent or ambiguous overlap rolls back
+the whole repair.
+
+The operator CLI is dry-run first. Deployment does not apply this repair; a
+production operator still needs separate authorization for the exact reviewed
+fingerprint and production target.
+
 ## Reviewed multi-invoice sequence reconstruction
 
 Some cutover defects span several consecutive invoices and payments. Repairing

@@ -3163,6 +3163,7 @@ SERVICES: tuple[SOTService, ...] = (
             "reviewed paid prepaid invoice coverage correction",
             "reviewed missing prepaid paid-invoice repair",
             "reviewed existing prepaid draft settlement",
+            "reviewed paid prepaid invoice-period replacement",
             "reviewed prepaid invoice sequence reconstruction",
             "reviewed prepaid invoice sequence funding correction",
             "reviewed pre-opening invoice settlement correction",
@@ -3286,6 +3287,12 @@ SERVICES: tuple[SOTService, ...] = (
             "the historical draft from its selected Payment, and invokes the "
             "canonical renewal participant to consume only the released "
             "payment-proof Payment for the immediately following period."
+            " A separate Finance-approved paid-period replacement command "
+            "handles the no-draft case: it proves one lapsed auto-renewal "
+            "overlap, exact preceding coverage, payment allocation, verified "
+            "proof, contract charge, and unchanged customer credit; then it "
+            "voids the wrong paid invoice and invokes the canonical renewal "
+            "participant for the reviewed replacement period."
         ),
         contract=ServiceContract(
             concerns=(
@@ -3351,6 +3358,21 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "reviewed existing-draft settlement command",
                         "canonical prepaid draft invoice",
+                        "canonical prepaid subscription contract",
+                        "canonical payment-backed account credit",
+                        "verified payment proof",
+                        "canonical superseded paid invoice allocation evidence",
+                        "canonical funded service entitlement",
+                        "invoice and payment participant protocols",
+                        "financial access restoration protocol",
+                    ),
+                    canonical_writer="financial.prepaid_draft_reconciliation",
+                ),
+                ConcernContract(
+                    name="reviewed paid prepaid invoice-period replacement",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "reviewed paid-period replacement command",
                         "canonical prepaid subscription contract",
                         "canonical payment-backed account credit",
                         "verified payment proof",
@@ -3490,6 +3512,19 @@ SERVICES: tuple[SOTService, ...] = (
                         "explicit continuous-period funding decision, "
                         "approval timestamp, ticket, evidence digest, preview "
                         "fingerprint, actor, reason, and idempotency evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="reviewed paid-period replacement command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:prepaid_reconciliation:repair permission checked "
+                        "against a named staff principal plus exact subscription, "
+                        "superseded invoice, payment, UTC service-period instants, "
+                        "total, remaining credit, payment reference, Finance "
+                        "approver, ticket, evidence digest, preview fingerprint, "
+                        "actor, reason, and idempotency evidence"
                     ),
                 ),
                 AuthorityInput(
@@ -3769,6 +3804,15 @@ SERVICES: tuple[SOTService, ...] = (
                     "issue, selected-payment allocation, entitlement, reviewed "
                     "anchor projection, conditional access restoration, Finance "
                     "approval metadata, audit, event, and idempotency evidence. The "
+                    "reviewed paid-period replacement command locks the named "
+                    "account, paid invoice, allocation, payment, settlement, "
+                    "proof, subscription, all service entitlements, and approver; "
+                    "then atomically voids the wrong document, releases only its "
+                    "allocation, retires its entitlement, retracts the anchor to "
+                    "surviving coverage, creates and settles the canonical "
+                    "replacement renewal from the same Payment, and commits the "
+                    "corrected anchor, audit, event, metadata, and idempotency "
+                    "evidence with zero customer-credit delta. The "
                     "invoice-sequence command locks every named invoice, payment, "
                     "settlement ledger row, legacy allocation pair, subscription, "
                     "opening source, and approver; it then commits settlement "
@@ -3848,6 +3892,11 @@ SERVICES: tuple[SOTService, ...] = (
                     "selected payment capacity, expected cutoff balance, "
                     "contract charge, explicit cadence, or preview fingerprint "
                     "is absent, stale, or ambiguous",
+                    "a reviewed paid-period replacement without one exact "
+                    "future-shifted paid invoice, full selected-payment allocation, "
+                    "verified proof, active matching entitlement, exact preceding "
+                    "coverage, contract cadence and charge, unchanged expected "
+                    "credit, or non-overlapping replacement period",
                     "a reviewed invoice sequence whose periods are current, "
                     "non-contiguous, contract-mismatched, overlapping, partially "
                     "funded, whose selected payments are not fully conserved "
@@ -4007,6 +4056,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                 "docs/designs/PREPAID_DRAFT_RECONCILIATION.md",
+                "docs/runbooks/REVIEWED_PAID_PREPAID_PERIOD_REPLACEMENT.md",
                 "docs/runbooks/REVIEWED_PREPAID_INVOICE_SEQUENCE_RECONSTRUCTION.md",
             ),
             test_refs=(
