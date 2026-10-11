@@ -409,7 +409,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 61
+    assert len(guides) == 63
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -495,3 +495,14 @@ def test_subledger_opening_correction_pages_have_their_own_guide() -> None:
     account = guidance_for_path(base)
     assert account is not None
     assert account.id == "billing-accounts"
+
+
+def test_mfa_removal_guides_state_the_controls() -> None:
+    staff = guidance_for_path("/admin/system/users/abc")
+    assert staff is not None and staff.id == "system-user-mfa-removal"
+    staff_text = " ".join((*staff.steps, *staff.notes)).lower()
+    for phrase in ("reason", "admin role", "your own mfa", "emailed", "break-glass"):
+        assert phrase in staff_text
+    reseller = guidance_for_path("/admin/resellers/abc")
+    assert reseller is not None and reseller.id == "reseller-user-mfa-removal"
+    assert "portal access" in " ".join(reseller.steps).lower()

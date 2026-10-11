@@ -1185,6 +1185,38 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         excluded_route_prefixes=("/admin/system/email",),
     ),
     _guide(
+        "system-user-mfa-removal",
+        "System Overview",
+        "Remove a staff member's MFA after a lost device",
+        "Administrators holding the assign-roles permission",
+        "Let a staff member sign in again after losing their authenticator, with a recorded reason and an email notice to them.",
+        ("/admin/system/users",),
+        "Verify the person first through a contact channel already on file, never the channel the request arrived on, and open a ticket.",
+        "Open the staff user and choose Disable MFA, then enter a reason of 3 to 500 characters that records how you verified them and the ticket reference.",
+        "Confirm: all of the user's MFA factors and unused recovery codes are removed, their sessions end, and the user is emailed that the removal happened and who did it.",
+        "Check the audit record, and ask the user to set MFA up again; sign-in goes straight to enrolment only when forced admin MFA is on.",
+        notes=(
+            "You must hold the admin role and the assign-roles permission; you cannot remove your own MFA, and you cannot remove the MFA of another administrator.",
+            "If an administrator loses their device, use the break-glass procedure in the MFA lost-device runbook instead.",
+        ),
+    ),
+    _guide(
+        "reseller-user-mfa-removal",
+        "Resellers",
+        "Remove a reseller user's MFA after a lost device",
+        "Administrators holding the reseller-write permission",
+        "Let a reseller portal user sign in again after losing their authenticator, with a recorded reason and an email notice to them.",
+        ("/admin/resellers",),
+        "Verify the person first through a contact channel already on file, never the channel the request arrived on, and open a ticket.",
+        "Open the reseller, find the user under Portal access, choose More, then Remove MFA, and enter a reason of 3 to 500 characters with the verification and ticket reference.",
+        "Confirm: the user's MFA factors and unused recovery codes are removed, their sessions end, and the user is emailed that the removal happened.",
+        "Check the audit record and ask the user to set MFA up again from their account security settings.",
+        notes=(
+            "You must hold the admin role and the reseller-write permission, and the user must belong to the reseller whose page you are on; you cannot remove your own MFA.",
+            "The action appears only for reseller users, not for customers linked to the reseller.",
+        ),
+    ),
+    _guide(
         "settings",
         "Settings",
         "Manage application settings",
@@ -2110,6 +2142,28 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("verify-system-change", "Verify and audit a system change", 3),
     ),
+    "system-user-mfa-removal": (
+        _action("verify-staff-requester", "Verify the requester", 0),
+        _action(
+            "remove-staff-mfa",
+            "Remove a staff member's MFA",
+            1,
+            permission="rbac:assign",
+        ),
+        _action("confirm-staff-mfa-removal", "Confirm the removal", 2),
+        _action("follow-up-staff-mfa", "Audit and re-enrol", 3),
+    ),
+    "reseller-user-mfa-removal": (
+        _action("verify-reseller-requester", "Verify the requester", 0),
+        _action(
+            "remove-reseller-mfa",
+            "Remove a reseller user's MFA",
+            1,
+            permission="reseller:write",
+        ),
+        _action("confirm-reseller-mfa-removal", "Confirm the removal", 2),
+        _action("follow-up-reseller-mfa", "Audit and re-enrol", 3),
+    ),
     "settings": (
         _action("choose-settings-area", "Choose a settings area", 0),
         _action("review-effective-setting", "Review an effective setting", 1),
@@ -2299,7 +2353,10 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "provisioning", "Provisioning", ("provisioning",), "provisioning:read"
     ),
     AdminHelpNavigationSection(
-        "system", "System Overview", ("system-overview",), "system:settings:read"
+        "system",
+        "System Overview",
+        ("system-overview", "system-user-mfa-removal", "reseller-user-mfa-removal"),
+        "system:settings:read",
     ),
     AdminHelpNavigationSection(
         "settings",
