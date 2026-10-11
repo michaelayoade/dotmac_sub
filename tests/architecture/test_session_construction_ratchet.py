@@ -166,7 +166,12 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 # Six explicit fixture constructions in test_anonymous_recovery_adapter.py
 # exercise fresh lifecycle rollback and independent file-SQLite connections.
 # The production constructor inventory remains unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 240
+#: +2 from tests/test_credential_security_inventory.py:52,99: disposable SQLite
+#: engines prove bounded SQL aggregates and shared UTC age-band cutoffs. These
+#: are fast unit fixtures, not PostgreSQL acceptance or production construction.
+#: +1 from tests/test_argon2id_benchmark.py: a disposable SQLite engine proves
+#: the benchmark report path without adding a production construction site.
+TEST_FIXTURE_BASELINE_TOTAL = 243
 
 
 def _baseline() -> dict[str, int]:

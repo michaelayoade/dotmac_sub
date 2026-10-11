@@ -410,6 +410,57 @@ DOMAIN = DomainSOT(
         ),
         *CREDENTIAL_ADMINISTRATION_SERVICES,
         SOTService(
+            name="auth.credential_security_inventory",
+            module="app.services.credential_security_inventory",
+            owns=("credential security aggregate census",),
+            depends_on=("auth.password_authentication",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="credential security aggregate census",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("stored user credential security state",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="stored user credential security state",
+                        owner="auth.password_authentication",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="user_credentials format prefixes, principal links, provider, activity and timestamps",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Adapter supplies a clean PostgreSQL REPEATABLE READ READ ONLY snapshot; no writes or transaction completion in query.",
+                    locking="No row locks; one repeatable-read snapshot.",
+                    idempotency="Same snapshot and UTC observation time produce the same bounded counts.",
+                    retries="Retry failed reads with a fresh snapshot.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.credential_security_inventory.read_only_required",
+                    ),
+                    mapping_owner="credential_security_inventory CLI; fixed redacted error output",
+                    fail_closed_on=(
+                        "dirty session",
+                        "non-PostgreSQL database",
+                        "write-capable snapshot",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="auth.credential_security_inventory",
+                ),
+                steward="platform security",
+                design_refs=("docs/runbooks/CREDENTIAL_SECURITY_INVENTORY.md",),
+                test_refs=(
+                    "tests/test_credential_security_inventory.py",
+                    "tests/architecture/test_credential_security_inventory_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="auth.permission_gate",
             module="app.services.auth_dependencies",
             owns=(
