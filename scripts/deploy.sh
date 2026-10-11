@@ -1469,15 +1469,35 @@ APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
 # The compose one-off migration container reads APP_IMAGE/GIT_SHA from .env, so
 # the candidate pin must be written first. The OLD app and workers keep serving
 # throughout (PRIMARY_REPLACED=0, no candidate started). If the migration fails
-# here nothing new ever served and alembic ran in one transaction, so it rolled
-# back. That is NOT a rollback: restore_prev (payment-email floor guard) is
-# deliberately not invoked and not bypassed. We only put the .env pin back to
-# the value that matches the containers still running, so a later recreate
-# cannot start the new image against the un-migrated schema.
+# here nothing new ever served. That is NOT a rollback: restore_prev (the
+# payment-email floor guard) is deliberately not invoked and not bypassed.
+#
+# Alembic normally runs in one transaction, but migrations that use
+# autocommit_block commit earlier revisions, so "nothing committed" is MEASURED,
+# never assumed: the alembic_version heads are read before and after. The pin is
+# put back ONLY when both reads succeed and are equal; otherwise the schema may
+# have advanced, the pin is left untouched and the operator must repair forward.
+read_alembic_heads() {
+  local out
+  out="$(database_heads 2>/dev/null)" || return 1
+  [[ -n "${out}" ]] || return 1
+  printf '%s\n' "${out}"
+}
 pin_and_migrate() {
+  local heads_before="" heads_after="" running_image rc
+
+  if [[ "${BACKUP_MODE}" != "skip_production_post_migration_resume" ]]; then
+    heads_before="$(read_alembic_heads)" || heads_before=""
+  fi
+
   log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
-  set_env_value APP_IMAGE "${IMAGE}" || return 1
-  set_env_value GIT_SHA "${FULL_SHA}" || return 1
+  if ! set_env_value APP_IMAGE "${IMAGE}" || ! set_env_value GIT_SHA "${FULL_SHA}"; then
+    echo "DEPLOY PIN WRITE FAILED: restoring the previous pin; nothing was migrated or recreated." >&2
+    if ! repin_prev; then
+      echo "DEPLOY PIN RESTORE FAILED: .env may be half-updated; set APP_IMAGE=${PREV_IMAGE:-<unset>} GIT_SHA=${PREV_GIT_SHA:-<unset>} by hand before any container is recreated." >&2
+    fi
+    return 1
+  fi
 
   # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
   # merged heads), so use `heads` (plural), never `head`.
@@ -1490,8 +1510,21 @@ pin_and_migrate() {
     return 0
   fi
   echo "DEPLOY MIGRATION FAILED before any new container served traffic." >&2
+  heads_after="$(read_alembic_heads)" || heads_after=""
+  if [[ -z "${heads_before}" || -z "${heads_after}" || "${heads_before}" != "${heads_after}" ]]; then
+    echo "Alembic heads before: ${heads_before:-<unreadable>}" >&2
+    echo "Alembic heads after:  ${heads_after:-<unreadable>}" >&2
+    echo "Schema may have advanced (or could not be proven unchanged); .env pin left at ${IMAGE}. Do not recreate containers; repair forward." >&2
+    return 1
+  fi
+  running_image="$(docker inspect "${APP_CONTAINER}" --format '{{.Config.Image}}' 2>/dev/null || true)"
   if repin_prev; then
-    echo "Restored .env pin to the running image ${PREV_IMAGE:-<unset>} (GIT_SHA ${PREV_GIT_SHA:-<unset>}); no container was restarted or recreated and no rollback path was used. Migration ran in one transaction and was rolled back (alembic head unchanged). Repair forward and redeploy." >&2
+    if [[ "${running_image}" == "${PREV_IMAGE}" ]]; then
+      echo "Restored .env pin to ${PREV_IMAGE:-<unset>} (GIT_SHA ${PREV_GIT_SHA:-<unset>}), which matches the running ${APP_CONTAINER} image." >&2
+    else
+      echo "WARNING: restored .env pin to ${PREV_IMAGE:-<unset>}, but ${APP_CONTAINER} reports image '${running_image:-unknown}'; verify before recreating containers." >&2
+    fi
+    echo "Alembic heads measured unchanged (${heads_after//$'\n'/ }). No container was restarted or recreated and no rollback path was used. Repair forward and redeploy." >&2
   else
     echo "DEPLOY PIN RESTORE FAILED: .env may still pin ${IMAGE}; set APP_IMAGE=${PREV_IMAGE:-<unset>} GIT_SHA=${PREV_GIT_SHA:-<unset>} by hand before any container is recreated." >&2
   fi

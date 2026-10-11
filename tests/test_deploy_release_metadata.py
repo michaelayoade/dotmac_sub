@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REVISION = "32eebc1a6ac05a21275ed4db6f3d1dd28514a045"
 IMAGE_DIGEST = "sha256:" + "a" * 64
 IMAGE_REFERENCE = f"ghcr.io/michaelayoade/dotmac_sub@{IMAGE_DIGEST}"
@@ -46,6 +48,9 @@ def _run_deploy(
     rollback_repin_failure: str | None = None,
     proxy_ready: bool = True,
     migration_lock_failures: int = 0,
+    migration_hard_failure: bool = False,
+    heads_before: str = "670_a",
+    heads_after: str | None = None,
     manifest_pins_ready: bool = True,
     github_checks_ready: bool = True,
     background_runtime_ready: bool = True,
@@ -74,6 +79,8 @@ def _run_deploy(
     curl_attempts.write_text("0")
     sed_attempts = tmp_path / "sed-attempts"
     sed_attempts.write_text("0")
+    heads_file = tmp_path / "alembic-heads"
+    heads_file.write_text(heads_before + "\n")
     app_env, server_name = (
         ("production", "dotmac-sub-prod")
         if deployment_target == "production"
@@ -127,6 +134,15 @@ if [[ "$*" == *"alembic upgrade heads"* ]]; then
     echo "canceling statement due to lock timeout" >&2
     exit 1
   fi
+  if [[ "{int(migration_hard_failure)}" == "1" ]]; then
+    printf '%s\\n' "{heads_after if heads_after is not None else heads_before}" > "{heads_file}"
+    echo "psycopg2.errors.UndefinedTable: boom" >&2
+    exit 1
+  fi
+fi
+if [[ "$1" == "exec" && "$*" == *"alembic_version"* ]]; then
+  cat "{heads_file}"
+  exit 0
 fi
 if [[ "$*" == *"scripts.integrations.verify_manifest_pins"* ]]; then
   exit {0 if manifest_pins_ready else 1}
@@ -676,6 +692,59 @@ def test_deploy_retries_a_bounded_migration_lock_timeout(tmp_path: Path) -> None
         if "alembic upgrade heads" in command
     ]
     assert len(attempts) == 3
+
+
+def _assert_failed_pre_swap_migration_left_no_new_state(
+    docker_log: Path,
+) -> None:
+    log = docker_log.read_text()
+    assert "rollback-gate" not in log
+    assert "verify_payment_email_rollback" not in log
+    assert "--name dotmac_sub_app_candidate" not in log
+    assert " up -d " not in log
+
+
+_HEADS_ENV = {"DB_BACKUP_DB_NAME": "dotmac_sub"}
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"migration_lock_failures": 4},  # lock-blocked on every bounded attempt
+        {"migration_hard_failure": True},  # non-lock failure, heads unchanged
+    ],
+)
+def test_failed_migration_restores_pin_without_rollback_or_recreate(
+    tmp_path: Path, kwargs: dict[str, object]
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path, extra_env=_HEADS_ENV, **kwargs  # type: ignore[arg-type]
+    )
+
+    assert result.returncode != 0
+    env_text = env_file.read_text()
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_text
+    assert "GIT_SHA=old0000000000000000000000000000000000000" in env_text
+    assert "restored .env pin to" in result.stderr.lower()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_failed_migration_that_advanced_heads_keeps_pin_and_refuses_to_guess(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        heads_after="670_b",
+    )
+
+    assert result.returncode != 0
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" not in (
+        env_file.read_text()
+    )
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
 
 
 def test_deploy_verifies_every_worker_and_beat_before_success(tmp_path: Path) -> None:

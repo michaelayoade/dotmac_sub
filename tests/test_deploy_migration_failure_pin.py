@@ -38,7 +38,29 @@ CALLS="$PWD/calls"
 # Anything on the guarded rollback path must never be reached.
 restore_prev() { echo restore_prev >>"$CALLS"; return 1; }
 previous_image_rollback_allowed() { echo guard >>"$CALLS"; return 1; }
+APP_CONTAINER=dotmac_sub_app
+docker() { echo "docker $*" >>"$CALLS"; printf '%s\\n' "${RUNNING_IMAGE-$OLD_IMAGE}"; }
+# Heads read #1 is before the migration, read #2 after it.
+database_heads() {
+  local n; n="$(cat "$PWD/head-reads" 2>/dev/null || echo 0)"
+  echo $((n + 1)) >"$PWD/head-reads"
+  if ((n == 0)); then
+    [[ -n "${HEADS_BEFORE-}" ]] || return 1
+    printf '%s\\n' ${HEADS_BEFORE}
+  else
+    [[ -n "${HEADS_AFTER-}" ]] || return 1
+    printf '%s\\n' ${HEADS_AFTER}
+  fi
+}
 run_migrations() { echo "migrate image=$(env_value APP_IMAGE)" >>"$CALLS"; return "$MIGRATE_RC"; }
+if [[ -n "${FAIL_GIT_SHA_WRITE-}" ]]; then
+  _real_set_env_value="$(declare -f set_env_value)"
+  set_env_value() {
+    if [[ "$1" == GIT_SHA && "$2" == "$NEW_SHA" ]]; then return 1; fi
+    _real_set_env_value_body "$@"
+  }
+  eval "${_real_set_env_value/set_env_value/_real_set_env_value_body}"
+fi
 compose_up() { echo up >>"$CALLS"; }
 COMPOSE=(compose_up)
 
@@ -66,12 +88,18 @@ def _script() -> str:
         .replace("@@REPIN@@", _slice(src, "repin_prev() {", "previous_image_rollback_allowed() {"))
         .replace(
             "@@PIN_AND_MIGRATE@@",
-            _slice(src, "pin_and_migrate() {", "# --- End pre-swap pin and migration"),
+            _slice(src, "read_alembic_heads() {", "# --- End pre-swap pin and migration"),
         )
     )
 
 
-def _run(tmp_path: Path, *, migrate_rc: int, backup_mode: str = "full") -> tuple[str, str, list[str], dict[str, str]]:
+def _run(
+    tmp_path: Path,
+    *,
+    migrate_rc: int,
+    backup_mode: str = "full",
+    extra_env: dict[str, str] | None = None,
+) -> tuple[str, str, list[str], dict[str, str]]:
     (tmp_path / ".env").write_text(
         f"OTHER=keep\nAPP_IMAGE={OLD_IMAGE}\nGIT_SHA={OLD_SHA}\n", encoding="utf-8"
     )
@@ -86,6 +114,10 @@ def _run(tmp_path: Path, *, migrate_rc: int, backup_mode: str = "full") -> tuple
             "NEW_IMAGE": NEW_IMAGE,
             "NEW_SHA": NEW_SHA,
             "BACKUP_MODE": backup_mode,
+            "OLD_IMAGE": OLD_IMAGE,
+            "HEADS_BEFORE": "670_a",
+            "HEADS_AFTER": "670_a",
+            **(extra_env or {}),
         },
     )
     env = dict(
@@ -101,9 +133,10 @@ def test_failed_migration_restores_the_running_pin(tmp_path: Path) -> None:
     assert "RC=1" in out
     assert env == {"OTHER": "keep", "APP_IMAGE": OLD_IMAGE, "GIT_SHA": OLD_SHA}
     # the migration really ran against the candidate pin, then it was undone
-    assert calls == [f"migrate image={NEW_IMAGE}"]
-    assert f"Restored .env pin to the running image {OLD_IMAGE}" in err
-    assert "alembic head unchanged" in err
+    assert f"migrate image={NEW_IMAGE}" in calls
+    assert f"Restored .env pin to {OLD_IMAGE}" in err
+    assert "matches the running dotmac_sub_app image" in err
+    assert "heads measured unchanged (670_a)" in err
     assert "no rollback path was used" in err
 
 
@@ -120,7 +153,7 @@ def test_successful_migration_keeps_the_new_pin(tmp_path: Path) -> None:
     out, err, calls, env = _run(tmp_path, migrate_rc=0)
     assert "RC=0" in out
     assert env == {"OTHER": "keep", "APP_IMAGE": NEW_IMAGE, "GIT_SHA": NEW_SHA}
-    assert calls == [f"migrate image={NEW_IMAGE}"]
+    assert f"migrate image={NEW_IMAGE}" in calls
     assert "Restored" not in err
 
 
@@ -132,7 +165,47 @@ def test_post_migration_resume_keeps_the_new_pin_and_skips_migration(
     )
     assert "RC=0" in out
     assert env["APP_IMAGE"] == NEW_IMAGE
-    assert calls == []
+    assert not any(c.startswith("migrate") for c in calls)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"HEADS_AFTER": "670_b"},  # autocommit_block committed an earlier revision
+        {"HEADS_BEFORE": ""},  # cannot prove the starting point
+        {"HEADS_AFTER": ""},  # cannot prove the end point
+    ],
+)
+def test_schema_possibly_advanced_leaves_the_pin_and_says_so(
+    tmp_path: Path, extra: dict[str, str]
+) -> None:
+    out, err, calls, env = _run(tmp_path, migrate_rc=1, extra_env=extra)
+    assert "RC=1" in out
+    assert env["APP_IMAGE"] == NEW_IMAGE
+    assert env["GIT_SHA"] == NEW_SHA
+    assert "Alembic heads before:" in err and "Alembic heads after:" in err
+    assert "Do not recreate containers; repair forward" in err
+    assert "Restored" not in err
+    assert "restore_prev" not in calls and "guard" not in calls and "up" not in calls
+
+
+def test_a_drifted_running_image_is_called_out(tmp_path: Path) -> None:
+    other = "registry.example.test/app@sha256:" + "c" * 64
+    out, err, _, env = _run(tmp_path, migrate_rc=1, extra_env={"RUNNING_IMAGE": other})
+    assert "RC=1" in out
+    assert env["APP_IMAGE"] == OLD_IMAGE
+    assert f"reports image '{other}'" in err
+    assert "matches the running" not in err
+
+
+def test_failed_git_sha_write_restores_the_half_updated_pin(tmp_path: Path) -> None:
+    out, err, calls, env = _run(
+        tmp_path, migrate_rc=0, extra_env={"FAIL_GIT_SHA_WRITE": "1"}
+    )
+    assert "RC=1" in out
+    assert env == {"OTHER": "keep", "APP_IMAGE": OLD_IMAGE, "GIT_SHA": OLD_SHA}
+    assert "DEPLOY PIN WRITE FAILED" in err
+    assert not any(c.startswith("migrate") for c in calls)
 
 
 def test_deploy_exits_nonzero_and_does_not_enter_the_restore_trap() -> None:
