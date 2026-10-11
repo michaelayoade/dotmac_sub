@@ -63,6 +63,7 @@ from app.services import (
     password_authentication,
     staff_party_authentication,
     team_inbox_assignment,
+    user_passwords,
 )
 from app.services import radius_auth as radius_auth_service
 from app.services.capability_recipient import resolve_capability_recipient
@@ -1176,13 +1177,33 @@ def _verify_legacy_stored_credential(password: str, stored: str | None) -> bool:
         return False
 
 
-def verify_user_password(password: str, password_hash: str | None) -> bool:
-    """Verify UserCredential material, retaining temporary reversible support.
+def verify_user_password_outcome(
+    request: user_passwords.UserPasswordVerification,
+) -> user_passwords.PasswordVerificationOutcome:
+    """Typed user-only policy boundary; no upgrade, notice, or persistence."""
+    return user_passwords.verify_user_password(
+        request, legacy_verify=_verify_legacy_stored_credential
+    )
 
-    Refusal requires B-PR3's recovery route and audited cutover setting first.
-    This split neither enables rehash-on-login nor changes password creation.
-    """
-    return _verify_legacy_stored_credential(password, password_hash)
+
+def verify_user_password(
+    password: str,
+    password_hash: str | None,
+    *,
+    reversible_policy: user_passwords.ReversiblePasswordPolicy = (
+        user_passwords.ReversiblePasswordPolicy.COMPAT
+    ),
+    argon2_limits: user_passwords.Argon2idVerificationLimits | None = None,
+) -> bool:
+    """Compatibility adapter; refusal is explicit, never a runtime policy flip."""
+    return verify_user_password_outcome(
+        user_passwords.UserPasswordVerification(
+            password=password,
+            stored=password_hash,
+            reversible_policy=reversible_policy,
+            argon2_limits=argon2_limits,
+        )
+    ).accepted
 
 
 def verify_service_secret(password: str, secret_hash: str | None) -> bool:

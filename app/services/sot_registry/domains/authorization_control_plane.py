@@ -177,6 +177,76 @@ DOMAIN = DomainSOT(
     setting_domains=("auth",),
     services=(
         SOTService(
+            name="auth.user_passwords",
+            module="app.services.user_passwords",
+            owns=(
+                "user password representation verification",
+                "explicit Argon2id hash parameters",
+            ),
+            notes=(
+                "User-only stateless foundation. Existing adapters default COMPAT; REFUSE "
+                "is explicit and is not connected to settings. Service-secret compatibility "
+                "remains in auth_flow. No rehash, notices, or persistence."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="user password representation verification",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "submitted user password and stored representation",
+                            "explicit password policy and parameters",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="explicit Argon2id hash parameters",
+                        role=OwnerRole.POLICY,
+                        input_names=("explicit password policy and parameters",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="submitted user password and stored representation",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed UserPasswordVerification supplied by auth_flow; no database or secret-reference reads under REFUSE.",
+                    ),
+                    AuthorityInput(
+                        name="explicit password policy and parameters",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="ReversiblePasswordPolicy, Argon2idParameters and explicit Argon2idVerificationLimits; absent verification limits deny Argon2, COMPAT adapter default, no production parameter default.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="Stateless verification and hashing; never writes or completes a transaction.",
+                    locking="No database locks; credential standing remains the authentication owner's responsibility.",
+                    idempotency="Verification repeats the same decision; hashing intentionally generates a fresh random salt.",
+                    retries="No automatic retries; compatibility secret-resolution failures retain their existing error boundary.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("auth.user_passwords.invalid_argon2id_parameters",),
+                    mapping_owner="auth_flow compatibility adapter and future password creation owners",
+                    fail_closed_on=(
+                        "malformed or unsupported hashes",
+                        "REFUSE reversible material before resolution",
+                        "bcrypt input above 72 UTF-8 bytes",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="auth.user_passwords",
+                ),
+                steward="platform security",
+                design_refs=("docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md",),
+                test_refs=(
+                    "tests/test_user_password_policy.py",
+                    "tests/test_auth_legacy_bcrypt.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="identity.capability_recipient",
             module="app.services.capability_recipient",
             owns=("exact authorized capability email recipient",),

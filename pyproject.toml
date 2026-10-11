@@ -25,6 +25,7 @@ dependencies = [
     "opentelemetry-instrumentation-celery==0.47b0",
     "python-jose[cryptography]==3.3.0",
     "passlib[bcrypt]==1.7.4",
+    "argon2-cffi==25.1.0",
     "pyotp==2.9.0",
     "cryptography==42.0.8",
     "paramiko==3.4.1",

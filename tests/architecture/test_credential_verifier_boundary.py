@@ -44,7 +44,12 @@ def test_real_user_authentication_modules_use_user_verifier() -> None:
         path = ROOT / "app" / "services" / f"{module}.py"
         tree = ast.parse(path.read_text())
         calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
-        expected_calls = 2 if module in {"auth_flow", "web_system_db_inspector"} else 1
+        expected_calls = {
+            "auth_flow": 3,  # Login, password change, and typed policy delegation.
+            "web_system_db_inspector": 2,
+            "web_customer_auth": 1,
+            "web_system_profiles": 1,
+        }[module]
         assert (
             sum(_called_name(node) == "verify_user_password" for node in calls)
             == expected_calls
@@ -53,6 +58,54 @@ def test_real_user_authentication_modules_use_user_verifier() -> None:
             assert all(
                 _called_name(node) != "verify_service_secret" for node in calls
             ), path
+
+
+def test_login_and_password_change_use_the_user_facade() -> None:
+    tree = ast.parse((ROOT / "app/services/auth_flow.py").read_text())
+    for name, expected_args in (
+        ("login", ("password", "snapshot_hash")),
+        ("change_password", ("current_password", "credential.password_hash")),
+    ):
+        function = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        calls = [node for node in ast.walk(function) if isinstance(node, ast.Call)]
+        user_calls = [
+            node for node in calls if _called_name(node) == "verify_user_password"
+        ]
+        assert len(user_calls) == 1, name
+        assert isinstance(user_calls[0].func, ast.Name), name
+        assert tuple(ast.unparse(arg) for arg in user_calls[0].args) == expected_args
+        assert all(_called_name(node) != "verify_service_secret" for node in calls)
+
+
+def test_typed_user_policy_facade_delegates_only_to_user_password_owner() -> None:
+    tree = ast.parse((ROOT / "app/services/auth_flow.py").read_text())
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    policy = functions["verify_user_password_outcome"]
+    assert ast.unparse(policy.args.args[0].annotation) == (
+        "user_passwords.UserPasswordVerification"
+    )
+    assert ast.unparse(policy.returns) == "user_passwords.PasswordVerificationOutcome"
+    calls = [node for node in ast.walk(policy) if isinstance(node, ast.Call)]
+    assert len(calls) == 1
+    delegation = calls[0]
+    assert ast.unparse(delegation.func) == "user_passwords.verify_user_password"
+    assert [ast.unparse(arg) for arg in delegation.args] == ["request"]
+    assert [(kw.arg, ast.unparse(kw.value)) for kw in delegation.keywords] == [
+        ("legacy_verify", "_verify_legacy_stored_credential")
+    ]
+
+    facade = functions["verify_user_password"]
+    facade_calls = [node for node in ast.walk(facade) if isinstance(node, ast.Call)]
+    assert {_called_name(node) for node in facade_calls} == {
+        "verify_user_password_outcome",
+        "UserPasswordVerification",
+    }
 
 
 def test_portal_verifiers_are_bound_to_their_credential_sources() -> None:
