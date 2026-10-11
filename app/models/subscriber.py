@@ -35,6 +35,7 @@ from sqlalchemy.orm.attributes import get_history
 
 from app.db import Base
 from app.models.catalog import BillingMode
+from app.models.customer_connection_type import CustomerConnectionTypeDefinition
 from app.models.organization import Organization  # noqa: F401 (mapper registry)
 from app.models.party import Party
 from app.models.subscription_engine import SettingValueType, SettingValueTypeType
@@ -53,13 +54,6 @@ class ContactMethod(enum.Enum):
     phone = "phone"
     sms = "sms"
     push = "push"
-
-
-class CustomerConnectionType(enum.Enum):
-    """Customer last-mile medium used for regional connectivity reporting."""
-
-    wireless = "wireless"
-    wired = "wired"
 
 
 class SubscriberStatus(enum.Enum):
@@ -324,8 +318,17 @@ class Subscriber(Base):
     pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pop_sites.id", ondelete="SET NULL"), index=True
     )
-    connection_type: Mapped[CustomerConnectionType | None] = mapped_column(
-        Enum(CustomerConnectionType, native_enum=False, length=16)
+    connection_type: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey(
+            "customer_connection_types.code",
+            name="fk_subscribers_connection_type_definition",
+            ondelete="RESTRICT",
+        ),
+        index=True,
+    )
+    connection_type_definition: Mapped[CustomerConnectionTypeDefinition | None] = (
+        relationship()
     )
 
     # === Account Fields (from Subscriber + SubscriberAccount) ===

@@ -258,6 +258,136 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="customer.connection_types",
+            module="app.services.customer_connection_types",
+            owns=(
+                "customer connection type definition lifecycle",
+                "customer connection type assignment eligibility",
+            ),
+            depends_on=(
+                "auth.permission_gate",
+                "customer.accounts",
+                "events.dispatcher",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer connection type definition lifecycle",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=("authorized connection type command",),
+                        canonical_writer="customer.connection_types",
+                    ),
+                    ConcernContract(
+                        name="customer connection type assignment eligibility",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "configured customer connection types",
+                            "requested customer connection type assignment",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authorized connection type command",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "typed SaveConnectionTypeCommand or "
+                            "DisableConnectionTypeCommand authorized for "
+                            "system:settings:write"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="configured customer connection types",
+                        owner="customer.connection_types",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "customer_connection_types rows written only by this owner"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="requested customer connection type assignment",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "explicit connection-type code submitted through a typed "
+                            "Subscriber create or update contract"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "one public connection-type definition command owns one "
+                        "atomic transaction; assignment validation is read-only"
+                    ),
+                    locking=(
+                        "updates and disables lock the selected definition; database "
+                        "uniqueness arbitrates concurrent names and stable codes"
+                    ),
+                    idempotency=(
+                        "disable replays preserve inactive state; immutable codes keep "
+                        "existing customer assignments stable"
+                    ),
+                    retries=(
+                        "retry the complete definition command after transient database "
+                        "failure with the same business intent"
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "customer.connection_types"
+                        ),
+                        "customer.connection_types.invalid_type",
+                        "customer.connection_types.type_not_found",
+                        "customer.connection_types.duplicate_type",
+                        "customer.connection_types.unknown_type",
+                        "customer.connection_types.inactive_type",
+                    ),
+                    mapping_owner="admin customer connection types web adapter",
+                    fail_closed_on=(
+                        "unknown or inactive new assignment",
+                        "missing definition",
+                        "duplicate name or stable code",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("customer.connection_type_changed",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "additive payload changes only within schema version 1"
+                    ),
+                    replay="durable event-store delivery replays by event identity",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    new_owner="customer.connection_types",
+                    old_owner="hard-coded CustomerConnectionType enum",
+                    verification=(
+                        "managed-definition, customer-form, and regional-report tests"
+                    ),
+                    cutover_gate=(
+                        "all customer assignments resolve through configured definitions"
+                    ),
+                    fallback_retirement=(
+                        "customer forms and reports contain no hard-coded type choices"
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/designs/CUSTOMER_CONNECTION_TYPES.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                ),
+                test_refs=(
+                    "tests/test_customer_connection_types.py",
+                    "tests/test_web_regional_reports.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.search",
             module="app.services.customer_search",
             owns=("bounded active customer search and customer identity selection",),

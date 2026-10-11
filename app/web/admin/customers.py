@@ -39,6 +39,7 @@ from app.services import (
     subscriber_party_binding_repair,
     web_prepaid_activation_funding,
 )
+from app.services import customer_connection_types as customer_connection_types_service
 from app.services import customer_network_path as customer_network_path_service
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
@@ -115,6 +116,23 @@ def _reseller_form_context(
             if managed and reseller and reseller.contact_email
             else (reseller.name if managed and reseller else "")
         ),
+    }
+
+
+def _connection_type_form_context(
+    db: Session,
+    *,
+    current_code: str | None = None,
+    selected_code: str | None = None,
+) -> dict[str, object]:
+    effective_code = selected_code if selected_code is not None else current_code
+    return {
+        "customer_connection_types": (
+            customer_connection_types_service.connection_type_options(
+                db, current_code=effective_code
+            )
+        ),
+        "selected_connection_type": effective_code or "",
     }
 
 
@@ -757,6 +775,7 @@ def customer_wizard_form(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             "default_country": customer_defaults.get("country_code", "NG"),
+            **_connection_type_form_context(db),
         },
     )
 
@@ -831,6 +850,7 @@ def customer_new(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             **_reseller_form_context(db, None),
+            **_connection_type_form_context(db),
             **web_custom_fields_service.build_creation_form_context(
                 db,
                 target_type="subscriber",
@@ -1025,6 +1045,9 @@ async def customer_create(
                 "managed_by_reseller": managed_by_reseller is not None,
                 "selected_reseller_id": reseller_id or "",
                 "selected_reseller_label": reseller_label or "",
+                **_connection_type_form_context(
+                    db, selected_code=connection_type or ""
+                ),
                 **web_custom_fields_service.build_creation_form_context(
                     db,
                     target_type="subscriber",
@@ -2221,6 +2244,7 @@ def person_edit(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             **_reseller_form_context(db, customer.reseller_id),
+            **_connection_type_form_context(db, current_code=customer.connection_type),
             "inbox_conversation_id": inbox_conversation_id,
         },
     )
@@ -2268,6 +2292,7 @@ def business_edit(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             **_reseller_form_context(db, customer.reseller_id),
+            **_connection_type_form_context(db, current_code=customer.connection_type),
         },
     )
 
@@ -2474,6 +2499,13 @@ def person_update(
                 **_reseller_form_context(
                     db, customer.reseller_id if customer is not None else None
                 ),
+                **_connection_type_form_context(
+                    db,
+                    current_code=(
+                        customer.connection_type if customer is not None else None
+                    ),
+                    selected_code=connection_type or "",
+                ),
                 "inbox_conversation_id": inbox_conversation_id,
             },
             status_code=400,
@@ -2581,6 +2613,13 @@ def business_update(
                 **_reseller_form_context(
                     db, customer.reseller_id if customer is not None else None
                 ),
+                **_connection_type_form_context(
+                    db,
+                    current_code=(
+                        customer.connection_type if customer is not None else None
+                    ),
+                    selected_code=connection_type or "",
+                ),
             },
             status_code=400,
         )
@@ -2656,6 +2695,12 @@ def person_convert_to_business(
                 "customer_audit_items": _customer_audit_items(db, customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
+                **_connection_type_form_context(
+                    db,
+                    current_code=(
+                        customer.connection_type if customer is not None else None
+                    ),
+                ),
             },
             status_code=400,
         )
