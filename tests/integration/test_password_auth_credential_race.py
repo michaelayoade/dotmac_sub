@@ -184,6 +184,20 @@ def _pause_after_verify(monkeypatch, pause: _Pause, prefix: str) -> None:
     monkeypatch.setattr(auth_flow_service, "verify_user_password", spy)
 
 
+def _pause_after_service_verify(monkeypatch, pause: _Pause, prefix: str) -> None:
+    """Like ``_pause_after_verify`` for the PPPoE secret verifier."""
+
+    real = auth_flow_service.verify_service_secret
+
+    def spy(password, secret_hash):
+        ok = real(password, secret_hash)
+        if ok and _named(prefix):
+            pause.hit()
+        return ok
+
+    monkeypatch.setattr(auth_flow_service, "verify_service_secret", spy)
+
+
 def _pause_inside_gate(monkeypatch, pause: _Pause, prefix: str) -> None:
     """Block one thread after its gate UPDATE (it holds the credential row)."""
 
@@ -1012,7 +1026,7 @@ def test_pppoe_secret_change_before_the_gate_mints_no_session(
     engine, factory, account, pppoe, monkeypatch
 ):
     pause = _Pause()
-    _pause_after_verify(monkeypatch, pause, "racer-a")
+    _pause_after_service_verify(monkeypatch, pause, "racer-a")
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="racer-a") as pool:
         future = pool.submit(_pppoe_login, factory, pppoe)
         assert pause.reached.wait(WAIT)
