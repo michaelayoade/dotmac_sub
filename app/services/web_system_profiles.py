@@ -15,7 +15,7 @@ from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRo
 from app.models.system_user import SystemUser
 from app.services import session_manager as session_manager_service
 from app.services import staff_provisioning
-from app.services.auth_flow import verify_password
+from app.services.auth_flow import verify_user_password
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,7 @@ def verify_current_password(
         .scalars()
         .first()
     )
-    return bool(credential and verify_password(password, credential.password_hash))
+    return bool(credential and verify_user_password(password, credential.password_hash))
 
 
 def get_user_detail_data(

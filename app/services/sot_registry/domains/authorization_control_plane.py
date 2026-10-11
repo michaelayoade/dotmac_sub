@@ -1295,7 +1295,11 @@ DOMAIN = DomainSOT(
                 "(access credential) authentication never touches "
                 "user_credentials. The hash-representation hook "
                 "replace_password_representation is built but not called by "
-                "login."
+                "login. UserCredential verification uses verify_user_password; "
+                "AccessCredential verification uses verify_service_secret and "
+                "retains its existing bcrypt refusal. Reversible user material "
+                "remains compatible until the recovery route and audited "
+                "refusal setting are delivered and approved for cutover."
             ),
             contract=ServiceContract(
                 concerns=(

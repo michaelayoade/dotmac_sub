@@ -410,6 +410,21 @@ An exact two-directional source ratchet tracks the temporary scalar callers
 across application and operator entry points. Migration 526 is a Sub-owned
 additive mirror, not a kernel-lineage stamp or an authority cutover.
 
+### Subscription expiry and prepaid renewal boundary
+
+`access.subscription_lifecycle` alone writes terminal subscription state,
+reason-scoped enforcement locks, and the account/access projections. The
+scheduled catalog-expiry adapter may request that transition only after an
+explicit fixed-term `Subscription.end_at` is reached and current prepaid
+coverage is resolved. `Subscription.next_billing_at` is a billing projection,
+not a terminal contract end: its due state is interpreted by
+`financial.prepaid_service_renewals` and `financial.prepaid_enforcement`.
+An unfunded due service remains nonterminal, and existing suspended prepaid
+locks remain available for later payment recovery; historically missing locks
+need a reviewed repair. The expiry adapter must not settle
+funding, create a prepaid lock, or resolve one merely because a billing anchor
+is past due.
+
 <!-- BEGIN GENERATED SOT MANIFEST -->
 ## Contracted Ownership Manifest
 

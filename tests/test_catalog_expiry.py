@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
 from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionAnchorBasis,
@@ -24,7 +25,7 @@ def _prepaid_due(subscription) -> None:
     subscription.next_billing_at = NOW - timedelta(days=1)
 
 
-def test_expire_subscriptions_expires_uncovered_prepaid_service(
+def test_expire_subscriptions_keeps_uncovered_prepaid_service_nonterminal(
     db_session, subscription
 ):
     _prepaid_due(subscription)
@@ -36,17 +37,63 @@ def test_expire_subscriptions_expires_uncovered_prepaid_service(
     )
 
     db_session.refresh(subscription)
+    assert subscription.status == SubscriptionStatus.active
+    assert result["subscriptions_matched"] == 0
+    assert result["subscriptions_expired"] == 0
+    assert result["subscriptions_coverage_protected"] == 0
+    assert result["subscriptions_coverage_unresolved"] == 0
+
+
+def test_expire_subscriptions_keeps_suspended_prepaid_service_nonterminal(
+    db_session, subscriber_account, subscription
+):
+    _prepaid_due(subscription)
+    subscription.status = SubscriptionStatus.suspended
+    lock = EnforcementLock(
+        subscription_id=subscription.id,
+        subscriber_id=subscriber_account.id,
+        reason=EnforcementReason.prepaid,
+        source="test:prepaid_due",
+    )
+    db_session.add(lock)
+    db_session.commit()
+
+    result = catalog_service.subscriptions.expire_subscriptions(
+        db_session,
+        run_at=NOW,
+    )
+
+    db_session.refresh(subscription)
+    db_session.refresh(lock)
+    assert subscription.status == SubscriptionStatus.suspended
+    assert lock.is_active is True
+    assert result["subscriptions_matched"] == 0
+    assert result["subscriptions_expired"] == 0
+
+
+def test_expire_subscriptions_expires_uncovered_fixed_term_prepaid_service(
+    db_session, subscription
+):
+    _prepaid_due(subscription)
+    subscription.end_at = NOW - timedelta(days=1)
+    db_session.commit()
+
+    result = catalog_service.subscriptions.expire_subscriptions(
+        db_session,
+        run_at=NOW,
+    )
+
+    db_session.refresh(subscription)
     assert subscription.status == SubscriptionStatus.expired
     assert result["subscriptions_matched"] == 1
     assert result["subscriptions_expired"] == 1
-    assert result["subscriptions_coverage_protected"] == 0
-    assert result["subscriptions_coverage_unresolved"] == 0
 
 
 def test_expire_subscriptions_keeps_prepaid_service_with_paid_coverage(
     db_session, subscriber_account, subscription
 ):
     _prepaid_due(subscription)
+    subscription.end_at = NOW - timedelta(days=1)
     db_session.add(
         ServiceEntitlement(
             account_id=subscriber_account.id,
@@ -74,6 +121,7 @@ def test_expire_subscriptions_keeps_prepaid_service_with_outage_extension(
     db_session, subscriber_account, subscription
 ):
     _prepaid_due(subscription)
+    subscription.end_at = NOW - timedelta(days=1)
     extension = ServiceExtension(
         reason="verified outage compensation",
         window_start=NOW - timedelta(days=3),
