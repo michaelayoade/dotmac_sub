@@ -124,8 +124,14 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def _source(historical_lock_id: UUID) -> str:
-    return f"prepaid-expiry-lock-repair:{historical_lock_id}"
+def _source(
+    historical_lock_id: UUID, idempotency_key: str, expected_fingerprint: str
+) -> str:
+    key_digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:16]
+    return (
+        f"prepaid-expiry-lock-repair:{historical_lock_id}:"
+        f"{key_digest}:{expected_fingerprint}"
+    )
 
 
 def _validate_as_of(value: datetime) -> None:
@@ -336,6 +342,13 @@ def apply_prepaid_expiry_lock_repair(
     """Recheck reviewed evidence, then recreate one prepaid lock atomically."""
     if not command.context.idempotency_key:
         raise _error("idempotency_required", "A stable idempotency key is required.")
+    if len(command.expected_fingerprint) != 64 or any(
+        character not in "0123456789abcdef"
+        for character in command.expected_fingerprint
+    ):
+        raise _error(
+            "invalid_preview_fingerprint", "A SHA-256 preview fingerprint is required."
+        )
 
     def operation() -> PrepaidExpiryLockRepairOutcome:
         # Payment/enforcement coordinators take the account lock before child
@@ -358,7 +371,11 @@ def apply_prepaid_expiry_lock_repair(
             .with_for_update()
         ).first()
 
-        source = _source(command.query.historical_lock_id)
+        source = _source(
+            command.query.historical_lock_id,
+            command.context.idempotency_key or "",
+            command.expected_fingerprint,
+        )
         existing = db.scalar(
             select(EnforcementLock).where(
                 EnforcementLock.subscription_id == command.query.subscription_id,

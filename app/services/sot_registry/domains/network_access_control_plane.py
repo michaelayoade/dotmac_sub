@@ -199,9 +199,9 @@ DOMAIN = DomainSOT(
                         "before fingerprint recheck and prepaid lock creation."
                     ),
                     idempotency=(
-                        "The historical lock ID determines a unique repair source; "
-                        "a replay returns that active lock and an unrelated active "
-                        "prepaid lock blocks a second repair."
+                        "Historical lock ID, operator key and preview fingerprint "
+                        "determine the repair source; an exact replay returns its "
+                        "active lock and a conflicting prepaid lock blocks repair."
                     ),
                     retries=(
                         "Retry transient database failures with the same key; "
@@ -218,6 +218,7 @@ DOMAIN = DomainSOT(
                         "access.prepaid_expiry_lock_repair.stale_as_of",
                         "access.prepaid_expiry_lock_repair.invalid_discovery",
                         "access.prepaid_expiry_lock_repair.idempotency_required",
+                        "access.prepaid_expiry_lock_repair.invalid_preview_fingerprint",
                         "access.prepaid_expiry_lock_repair.stale_preview",
                         "access.prepaid_expiry_lock_repair.repair_blocked",
                     ),

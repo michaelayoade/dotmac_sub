@@ -112,6 +112,20 @@ def test_repair_recreates_only_prepaid_lock_and_replay_is_idempotent(
 
     first = apply_prepaid_expiry_lock_repair(db_session, command)
     second = apply_prepaid_expiry_lock_repair(db_session, command)
+    with pytest.raises(PrepaidExpiryLockRepairError):
+        apply_prepaid_expiry_lock_repair(
+            db_session,
+            PrepaidExpiryLockRepairCommand(
+                query=query,
+                expected_fingerprint=preview.fingerprint,
+                context=CommandContext.system(
+                    actor="operator:other",
+                    scope=f"subscription:{query.subscription_id}",
+                    reason="Conflicting repair attempt",
+                    idempotency_key="repair:different-key",
+                ),
+            ),
+        )
 
     db_session.refresh(subscription)
     db_session.refresh(admin_lock)
