@@ -242,7 +242,15 @@ and financial-enforcement input, not an expiry trigger. Unfunded prepaid
 service remains nonterminal; the prepaid enforcement owner decides warning,
 grace, suspension, and restoration. Existing reason-scoped locks are preserved;
 historically missing prepaid locks require reviewed repair before the current
-payment-recovery path can renew those suspended services. Fixed-term expiry still
+payment-recovery path can renew those suspended services. The exact-lock
+recovery command in
+`docs/runbooks/PREPAID_EXPIRY_LOCK_REPAIR.md` accepts only a historical prepaid
+lock proved to have been cleared by expiry, rechecks current uncovered service,
+and leaves independent holds intact. Services without that historical proof
+remain for separate finance/access review. For already-confirmed funding, the
+existing reviewed renewal owner can be invoked with its `funding_recovery`
+eligibility context after the lock is repaired; it alone settles the invoice,
+coverage and restoration. Fixed-term expiry still
 checks authoritative coverage and holds unresolved projections before acting.
 
 The prepaid-renewal owner's billing-anchor repair discovers absent or lagging

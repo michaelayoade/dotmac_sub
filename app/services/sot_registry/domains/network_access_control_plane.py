@@ -117,6 +117,141 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="access.prepaid_expiry_lock_repair",
+            module="app.services.prepaid_expiry_lock_repair",
+            owns=("reviewed expiry-cleared prepaid lock recovery",),
+            depends_on=(
+                "access.subscription_lifecycle",
+                "access.walled_garden_policy",
+                "financial.prepaid_service_coverage",
+            ),
+            notes=(
+                "This coordinator admits an operator-reviewed exact historical "
+                "prepaid lock resolved by expiry only when its subscription "
+                "remains suspended, due, and uncovered. It locks and rechecks "
+                "the fingerprint, then asks access.subscription_lifecycle to "
+                "recreate that one prepaid lock. It never moves money, grants "
+                "coverage, clears other holds, or changes terminal state."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="reviewed expiry-cleared prepaid lock recovery",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "reviewed exact-lock repair command",
+                            "canonical subscription and account state",
+                            "historical expiry-resolved enforcement lock",
+                            "current prepaid service coverage",
+                            "current restriction policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="reviewed exact-lock repair command",
+                        owner="access.prepaid_expiry_lock_repair",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Operator-selected subscription and historical lock IDs, "
+                            "as-of, fingerprint, actor, reason, and idempotency key"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical subscription and account state",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Locked Subscription and Subscriber lifecycle state",
+                    ),
+                    AuthorityInput(
+                        name="historical expiry-resolved enforcement lock",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Exact inactive prepaid EnforcementLock with "
+                            "resolved_by=expired and resolved_at evidence"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current prepaid service coverage",
+                        owner="financial.prepaid_service_coverage",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Current entitlement and applied-grant classification",
+                    ),
+                    AuthorityInput(
+                        name="current restriction policy",
+                        owner="access.walled_garden_policy",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Current per-subscription captive or hard-reject "
+                            "decision for a financial suspension request"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary=(
+                        "One public owner command holds the root transaction; "
+                        "the lifecycle lock participant only stages and flushes."
+                    ),
+                    locking=(
+                        "Lock account, subscription, and selected historical lock "
+                        "before fingerprint recheck and prepaid lock creation."
+                    ),
+                    idempotency=(
+                        "Historical lock ID, operator key and preview fingerprint "
+                        "determine the repair source; an exact replay returns its "
+                        "active lock and a conflicting prepaid lock blocks repair."
+                    ),
+                    retries=(
+                        "Retry transient database failures with the same key; "
+                        "changed or ambiguous evidence needs a fresh preview."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "access.prepaid_expiry_lock_repair"
+                        ),
+                        "access.prepaid_expiry_lock_repair.naive_as_of",
+                        "access.prepaid_expiry_lock_repair.future_as_of",
+                        "access.prepaid_expiry_lock_repair.stale_as_of",
+                        "access.prepaid_expiry_lock_repair.invalid_discovery",
+                        "access.prepaid_expiry_lock_repair.idempotency_required",
+                        "access.prepaid_expiry_lock_repair.invalid_preview_fingerprint",
+                        "access.prepaid_expiry_lock_repair.stale_preview",
+                        "access.prepaid_expiry_lock_repair.repair_blocked",
+                    ),
+                    mapping_owner="reviewed lock-repair CLI adapter",
+                    fail_closed_on=(
+                        "missing or ambiguous historical expiry lock",
+                        "covered or unresolved current prepaid service",
+                        "changed restriction policy or network readiness",
+                        "terminal or non-prepaid subscription",
+                        "changed preview fingerprint",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="access.prepaid_expiry_lock_repair",
+                    verification=(
+                        "Exact-lock preview, stale-preview, replay, payment "
+                        "eligibility, and unrelated-lock preservation tests"
+                    ),
+                ),
+                steward="billing and network access operations",
+                design_refs=(
+                    "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                    "docs/runbooks/PREPAID_EXPIRY_LOCK_REPAIR.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_prepaid_expiry_lock_repair.py",
+                    "tests/architecture/test_prepaid_expiry_lock_repair_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="access.subscription_lifecycle_evidence",
             module="app.services.subscription_lifecycle_evidence",
             owns=(
