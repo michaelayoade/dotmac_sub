@@ -92,6 +92,14 @@ echo "RC=$?"
 """
 
 
+_SCRUBBED_PREFIXES = ("DATABASE_URL", "DB_", "DEPLOY_", "MIGRATION_", "PRODUCTION_")
+
+
+def _base_env() -> dict[str, str]:
+    """Inherited environment minus anything the deploy logic reads (hermetic)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith(_SCRUBBED_PREFIXES)}
+
+
 def _slice(source: str, start: str, end: str) -> str:
     return source[source.index(start) : source.index(end)]
 
@@ -138,7 +146,7 @@ def _run(
         text=True,
         cwd=tmp_path,
         env={
-            **os.environ,
+            **_base_env(),
             "PWD": str(tmp_path),
             "MIGRATE_RC": str(migrate_rc),
             "NEW_IMAGE": NEW_IMAGE,
@@ -201,7 +209,7 @@ def test_first_deploy_message_does_not_claim_a_running_image(tmp_path: Path) -> 
         text=True,
         cwd=tmp_path,
         env={
-            **os.environ,
+            **_base_env(),
             "PWD": str(tmp_path),
             "MIGRATE_RC": "1",
             "NEW_IMAGE": NEW_IMAGE,
@@ -270,7 +278,7 @@ def test_interrupt_exit_status_is_130(tmp_path: Path) -> None:
         text=True,
         cwd=tmp_path,
         env={
-            **os.environ,
+            **_base_env(),
             "PWD": str(tmp_path),
             "MIGRATE_RC": "0",
             "NEW_IMAGE": NEW_IMAGE,
@@ -306,7 +314,7 @@ database_heads; echo "RC=$?"
         capture_output=True,
         text=True,
         cwd=tmp_path,
-        env={**os.environ, "DOCKER_RC": "1"},  # psql exits 1 on a timeout
+        env={**_base_env(), "DOCKER_RC": "1"},  # psql exits 1 on a timeout
     )
     args = (tmp_path / "docker-args").read_text(encoding="utf-8")
     assert "PGOPTIONS=-c lock_timeout=5s -c statement_timeout=15s" in args
@@ -455,7 +463,7 @@ def test_unparseable_database_url_never_leaks_the_password(
         text=True,
         cwd=tmp_path,
         env={
-            **os.environ,
+            **_base_env(),
             "PWD": str(tmp_path),
             "MIGRATE_RC": "1",
             "NEW_IMAGE": NEW_IMAGE,
@@ -531,7 +539,7 @@ docker() {{ printf '%s\\n' "$*" >docker-args; echo 670_a; }}
 {fn}
 database_heads; echo "RC=$?"
 """
-    env = {k: v for k, v in os.environ.items() if not k.startswith("DB_BACKUP")}
+    env = _base_env()
     result = subprocess.run(
         ["bash", "-c", script],
         capture_output=True,

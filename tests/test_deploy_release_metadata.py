@@ -334,8 +334,11 @@ exit 0
         **production_evidence,
         **(extra_env or {}),
     }
-    if "DATABASE_URL" not in (extra_env or {}):
-        env.pop("DATABASE_URL", None)
+    for key in list(env):
+        if key.startswith(
+            ("DATABASE_URL", "DB_BACKUP", "DB_CONTAINER")
+        ) and key not in (extra_env or {}):
+            env.pop(key)
     result = subprocess.run(
         ["bash", str(repo_root / "scripts/deploy.sh"), image_selector],
         cwd=repo_root,
