@@ -127,7 +127,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +1 from tests/integration/test_password_auth_credential_race.py: independent
 #: worker sessions prove the credential-version gate, MFA completion and
 #: recovery-code spend serialize against a concurrent reset.
-TEST_FIXTURE_BASELINE_TOTAL = 189
+#: +2 from tests/test_credential_security_inventory.py:52,99: disposable SQLite
+#: engines prove bounded SQL aggregates and shared UTC age-band cutoffs. These
+#: are fast unit fixtures, not PostgreSQL acceptance or production construction.
+TEST_FIXTURE_BASELINE_TOTAL = 191
 
 
 def _baseline() -> dict[str, int]:
