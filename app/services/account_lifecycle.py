@@ -2824,7 +2824,11 @@ def derive_account_status_without_override(
         return SubscriberStatus.paused
     if all(s.status == SubscriptionStatus.disabled for s in subs):
         return SubscriberStatus.disabled
-    return SubscriberStatus.canceled
+    # Service expiry or cancellation is not an account deletion. Keep the
+    # customer account available for portal sign-in and recovery while marking
+    # the account suspended; only the explicit account-deletion transition
+    # owns SubscriberStatus.canceled.
+    return SubscriberStatus.suspended
 
 
 def derive_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
@@ -2969,12 +2973,13 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
       3. Any subscription blocked/stopped → blocked
       4. Any subscription pending → new
       5. All remaining subscriptions disabled → disabled
-      6. All terminal (canceled/expired/hidden/archived) → canceled
+      6. Other terminal-only service histories → suspended (login-capable)
       7. No subscriptions → new
 
     ``delinquent`` is only reachable from the active branch by design: once a
-    subscription is suspended/blocked the stronger status wins, and once all
-    are terminal the account is canceled. This makes the derivation
+    subscription is suspended/blocked the stronger status wins. Expired or
+    canceled service records do not delete the customer account; account
+    cancellation is an explicit deletion transition. This makes the derivation
     the single producer of ``delinquent`` (it was previously written
     out-of-band and silently clobbered here).
 
@@ -3008,6 +3013,20 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
 
     if new_status in {SubscriberStatus.disabled, SubscriberStatus.canceled}:
         clear_prepaid_enforcement_timers(db, subscriber_id)
+    elif new_status == SubscriberStatus.suspended:
+        # A suspended account derived from terminal-only service history has
+        # no service left for prepaid timers to enforce. Preserve those timers
+        # when any recoverable service or an explicit disabled service remains.
+        has_remaining_service = db.scalar(
+            select(Subscription.id)
+            .where(
+                Subscription.subscriber_id == subscriber_id,
+                Subscription.status.not_in((*_TERMINAL, SubscriptionStatus.disabled)),
+            )
+            .limit(1)
+        )
+        if has_remaining_service is None:
+            clear_prepaid_enforcement_timers(db, subscriber_id)
 
     _stage_subscription_access_projection(db, subscriber)
     db.flush()
