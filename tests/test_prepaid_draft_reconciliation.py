@@ -1944,6 +1944,64 @@ def test_missing_invoice_preview_fails_closed_when_expected_remainder_changes(
     assert db_session.query(Invoice).count() == 0
 
 
+def test_missing_invoice_documented_anniversary_preserves_reference_clock(
+    db_session,
+    subscriber,
+    subscription,
+):
+    period_start = datetime(2026, 8, 27, 5, 30, tzinfo=UTC)
+    period_end = datetime(2026, 9, 27, 5, 30, tzinfo=UTC)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.suspended
+    subscription.next_billing_at = period_start
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("17500.00"))
+    tax_rate = TaxRate(name=f"VAT-{uuid4().hex[:8]}", rate=Decimal("7.5000"))
+    db_session.add(tax_rate)
+    db_session.flush()
+    subscriber.tax_rate_id = tax_rate.id
+    reference = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        starts_at=datetime(2026, 7, 27, 5, 30, tzinfo=UTC),
+        ends_at=period_start,
+        amount_funded=Decimal("18812.50"),
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+    )
+    payment = _payment(
+        db_session,
+        subscriber,
+        amount=Decimal("18812.50"),
+        paid_at=datetime(2026, 8, 27, 8, tzinfo=UTC),
+    )
+    db_session.add(reference)
+    db_session.commit()
+
+    preview = preview_missing_paid_prepaid_invoice_repair(
+        db_session,
+        MissingPaidPrepaidInvoiceRepairQuery(
+            account_id=subscriber.id,
+            subscription_id=subscription.id,
+            payment_id=payment.id,
+            issued_on=date(2026, 8, 27),
+            due_on=date(2026, 9, 27),
+            next_billing_on=date(2026, 9, 27),
+            expected_total=Decimal("18812.50"),
+            expected_remaining_credit=Decimal("0.00"),
+            calendar=ReviewedPrepaidCalendarSelection(
+                basis=ReviewedPrepaidCalendarBasis.documented_anniversary,
+                expected_initial_anchor_at=period_start,
+            ),
+            documentary_entitlement_id=reference.id,
+        ),
+    )
+
+    assert preview.actionable is True
+    assert preview.billing_period_start == period_start
+    assert preview.billing_period_end == period_end
+    assert preview.due_at == period_end
+
+
 def test_reviewed_existing_draft_settles_selected_verified_payment_atomically(
     db_session,
     subscriber,

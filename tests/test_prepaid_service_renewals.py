@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 
+from app.models.audit import AuditEvent
 from app.models.billing import (
     AccountAdjustment,
     Invoice,
@@ -17,6 +20,8 @@ from app.models.billing import (
     LedgerSource,
     Payment,
     PaymentAllocation,
+    PaymentReversal,
+    PaymentReversalOrigin,
     PaymentStatus,
     ServiceEntitlement,
     ServiceEntitlementStatus,
@@ -37,8 +42,14 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.access_resolution import PrepaidFundingDecision
+from app.services.billing._common import get_account_credit_balance
 from app.services.billing.invoices import InvoiceOwnerError, Invoices
+from app.services.billing.payments import payment_application_summary
 from app.services.customer_financial_ledger import calculate_customer_balance
+from app.services.customer_portal_flow_billing import (
+    CustomerInvoiceHistoryQuery,
+    _get_customer_invoice_history,
+)
 from app.services.domain_errors import DomainError
 from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
 from app.services.events.types import Event, EventType
@@ -50,26 +61,38 @@ from app.services.prepaid_calendar_contracts import (
 )
 from app.services.prepaid_service_renewals import (
     CorrectLegacyRenewalTaxInvoiceCommand,
+    CorrectTaxInclusiveRenewalDocumentCommand,
     ExecuteReviewedPrepaidServiceRenewalCommand,
     FundingChangeRenewalDisposition,
+    LegacyPaymentBackedRenewalInvoiceRepairDisposition,
+    LegacyPaymentBackedRenewalInvoiceRepairQuery,
     LegacyRenewalTaxInvoiceCorrectionDisposition,
     LegacyRenewalTaxInvoiceCorrectionQuery,
     PrepaidServiceRenewalError,
+    PrepaidServiceRenewalSource,
     PrepaidSettlementPeriodQuery,
     PrepaidSubscriptionSettlementPeriodQuery,
+    RepairLegacyPaymentBackedRenewalInvoiceCommand,
     RunDuePrepaidServiceRenewalsCommand,
+    TaxInclusiveRenewalDocumentCorrectionDisposition,
+    TaxInclusiveRenewalDocumentCorrectionQuery,
     apply_due_prepaid_service_after_funding_change,
     confirm_prepaid_service_renewal,
     correct_legacy_prepaid_renewal_tax_invoice,
+    correct_tax_inclusive_renewal_document,
     execute_due_prepaid_service_renewals,
     execute_reviewed_prepaid_service_renewal,
+    preview_legacy_payment_backed_renewal_invoice_repair,
     preview_legacy_prepaid_renewal_tax_invoice_correction,
     preview_prepaid_service_renewal,
+    preview_tax_inclusive_renewal_document_correction,
+    repair_legacy_payment_backed_renewal_invoice,
     resolve_prepaid_monthly_charge_detail,
     resolve_prepaid_settlement_period,
     resolve_prepaid_subscription_settlement_period,
     resolve_reviewed_prepaid_service_period,
     run_due_prepaid_service_renewals,
+    stage_prepaid_service_renewed_outcome,
 )
 from tests.prepaid_funding_helpers import (
     create_test_settled_payment_credit,
@@ -509,6 +532,598 @@ def test_legacy_tax_correction_rolls_back_reversal_when_invoice_owner_rejects(
         .count()
         == 0
     )
+
+
+def test_tax_inclusive_renewal_document_correction_is_zero_delta_and_replayable(
+    db_session, subscriber, subscription
+):
+    (
+        period_start,
+        period_end,
+        payment,
+        adjustment,
+        entitlement,
+    ) = _legacy_tax_correction_fixture(db_session, subscriber, subscription)
+    ledger_entry = db_session.get(LedgerEntry, adjustment.ledger_entry_id)
+    assert ledger_entry is not None
+    adjustment.amount = Decimal("75250.00")
+    adjustment.prepaid_funding_before = Decimal("75250.50")
+    adjustment.prepaid_funding_after = Decimal("0.50")
+    ledger_entry.amount = Decimal("75250.00")
+    entitlement.amount_funded = Decimal("75250.00")
+    subscription.status = SubscriptionStatus.suspended
+    db_session.commit()
+    query = TaxInclusiveRenewalDocumentCorrectionQuery(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        adjustment_id=adjustment.id,
+        entitlement_id=entitlement.id,
+        payment_id=payment.id,
+        expected_invoice_total=Decimal("75250.00"),
+        expected_remaining_credit=Decimal("0.50"),
+    )
+
+    base_only = preview_legacy_prepaid_renewal_tax_invoice_correction(
+        db_session,
+        LegacyRenewalTaxInvoiceCorrectionQuery(
+            account_id=query.account_id,
+            subscription_id=query.subscription_id,
+            adjustment_id=query.adjustment_id,
+            entitlement_id=query.entitlement_id,
+            expected_invoice_total=query.expected_invoice_total,
+            expected_remaining_credit=query.expected_remaining_credit,
+        ),
+    )
+    preview = preview_tax_inclusive_renewal_document_correction(db_session, query)
+
+    assert (
+        base_only.disposition
+        is LegacyRenewalTaxInvoiceCorrectionDisposition.manual_review
+    )
+    assert preview.disposition is (
+        TaxInclusiveRenewalDocumentCorrectionDisposition.exact_tax_inclusive_renewal
+    )
+    assert preview.credit_before == Decimal("0.50")
+    assert preview.temporary_credit_after_reversal == Decimal("75250.50")
+    db_session.rollback()
+    command = CorrectTaxInclusiveRenewalDocumentCommand(
+        context=CommandContext.system(
+            actor=f"user:{subscriber.id}",
+            scope="billing:ledger:write",
+            reason="FIN-TEST reviewed documentary conversion",
+            idempotency_key=f"pytest-tax-inclusive-document:{subscription.id}",
+        ),
+        query=query,
+        preview_fingerprint=preview.fingerprint,
+        permission_evidence="pytest active billing:ledger:write role",
+    )
+    result = correct_tax_inclusive_renewal_document(db_session, command)
+    replay = correct_tax_inclusive_renewal_document(db_session, command)
+
+    invoice = db_session.get(Invoice, result.invoice_id)
+    replacement = db_session.get(ServiceEntitlement, result.replacement_entitlement_id)
+    db_session.refresh(subscription)
+    assert invoice is not None
+    assert replacement is not None
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.subtotal == Decimal("70000.00")
+    assert invoice.tax_total == Decimal("5250.00")
+    assert invoice.total == Decimal("75250.00")
+    assert result.remaining_credit == Decimal("0.50")
+    assert replacement.starts_at.replace(tzinfo=UTC) == period_start
+    assert replacement.ends_at.replace(tzinfo=UTC) == period_end
+    assert subscription.status is SubscriptionStatus.suspended
+    assert subscription.next_billing_at.replace(tzinfo=UTC) == period_end
+    history = _get_customer_invoice_history(
+        db_session,
+        CustomerInvoiceHistoryQuery(
+            account_id=subscriber.id,
+            status=None,
+            page=1,
+            per_page=20,
+        ),
+    )
+    assert invoice.id in {item.id for item in history.invoices}
+    assert replay.replayed is True
+    assert replay.invoice_id == result.invoice_id
+
+
+def test_tax_inclusive_document_correction_rejects_prepaid_suspension_lock(
+    db_session, subscriber, subscription
+):
+    _, _, payment, adjustment, entitlement = _legacy_tax_correction_fixture(
+        db_session, subscriber, subscription
+    )
+    ledger_entry = db_session.get(LedgerEntry, adjustment.ledger_entry_id)
+    assert ledger_entry is not None
+    adjustment.amount = Decimal("75250.00")
+    adjustment.prepaid_funding_before = Decimal("75250.50")
+    adjustment.prepaid_funding_after = Decimal("0.50")
+    ledger_entry.amount = Decimal("75250.00")
+    entitlement.amount_funded = Decimal("75250.00")
+    subscription.status = SubscriptionStatus.suspended
+    db_session.add(
+        EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.prepaid,
+            source="pytest:prepaid-lock",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    preview = preview_tax_inclusive_renewal_document_correction(
+        db_session,
+        TaxInclusiveRenewalDocumentCorrectionQuery(
+            account_id=subscriber.id,
+            subscription_id=subscription.id,
+            adjustment_id=adjustment.id,
+            entitlement_id=entitlement.id,
+            payment_id=payment.id,
+            expected_invoice_total=Decimal("75250.00"),
+            expected_remaining_credit=Decimal("0.50"),
+        ),
+    )
+
+    assert preview.disposition is (
+        TaxInclusiveRenewalDocumentCorrectionDisposition.manual_review
+    )
+    assert db_session.query(Invoice).count() == 0
+
+
+def _legacy_payment_backed_invoice_repair_fixture(db_session, subscriber, subscription):
+    period_start = datetime(2026, 7, 27, tzinfo=UTC)
+    period_end = datetime(2026, 8, 27, tzinfo=UTC)
+    subscriber.billing_mode = BillingMode.prepaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = period_end
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("35000.00"))
+    tax_rate = TaxRate(
+        name="Synthetic renewal VAT",
+        code=f"VAT-SYNTH-{uuid4()}",
+        rate=Decimal("7.5000"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
+    subscriber.tax_rate_id = tax_rate.id
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("0.00"),
+        position_at=period_start - timedelta(days=2),
+    )
+    payment = create_test_settled_payment_credit(
+        db_session,
+        subscriber.id,
+        Decimal("37625.00"),
+        paid_at=period_start - timedelta(days=1),
+    )
+    payment.settlement.prepaid_amount = Decimal("37625.00")
+    legacy_ledger = LedgerEntry(
+        account_id=subscriber.id,
+        payment_id=payment.id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.invoice,
+        category=LedgerCategory.internet_service,
+        amount=Decimal("37625.00"),
+        currency="NGN",
+        memo="Synthetic legacy wallet prepaid renewal",
+        effective_date=period_start,
+        created_at=period_start,
+        is_active=True,
+        affects_customer_position=True,
+    )
+    db_session.add(legacy_ledger)
+    db_session.flush()
+    entitlement = ServiceEntitlement(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        source_ledger_entry_id=legacy_ledger.id,
+        starts_at=period_start,
+        ends_at=period_end,
+        amount_funded=Decimal("37625.00"),
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+        metadata_={
+            "source": "wallet_prepaid_renewal",
+            "source_ledger_entry_id": str(legacy_ledger.id),
+        },
+        created_at=period_start,
+    )
+    db_session.add(entitlement)
+    db_session.flush()
+    stage_prepaid_service_renewed_outcome(
+        db_session,
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        entitlement_id=entitlement.id,
+        invoice_id=None,
+        ledger_entry_id=legacy_ledger.id,
+        period_start=period_start,
+        renewed_through=period_end,
+        amount=Decimal("37625.00"),
+        currency="NGN",
+        source=PrepaidServiceRenewalSource.direct_payment,
+        trigger_payment_id=payment.id,
+    )
+    db_session.commit()
+    query = LegacyPaymentBackedRenewalInvoiceRepairQuery(
+        account_id=subscriber.id,
+        subscription_id=subscription.id,
+        payment_id=payment.id,
+        ledger_entry_id=legacy_ledger.id,
+        entitlement_id=entitlement.id,
+        expected_period_start=period_start,
+        expected_period_end=period_end,
+        expected_gross_total=Decimal("37625.00"),
+        expected_currency="NGN",
+        expected_available_funding_after_repair=Decimal("0.00"),
+    )
+    return query, payment, legacy_ledger, entitlement
+
+
+def _legacy_payment_backed_repair_command(query, fingerprint):
+    actor_user_id = uuid4()
+    return RepairLegacyPaymentBackedRenewalInvoiceCommand(
+        context=CommandContext.system(
+            actor=f"user:{actor_user_id}",
+            scope="billing:ledger:write",
+            reason="SYNTHETIC-FINANCE-EVIDENCE-001",
+            idempotency_key=f"legacy-payment-renewal-repair:{query.subscription_id}",
+        ),
+        query=query,
+        preview_fingerprint=fingerprint,
+        actor_user_id=actor_user_id,
+        permission_granted=True,
+        permission_evidence="SYNTHETIC-APPROVAL-001",
+    )
+
+
+def test_legacy_payment_backed_renewal_repair_is_conservative_and_portal_visible(
+    db_session, subscriber, subscription
+):
+    query, payment, legacy_ledger, legacy_entitlement = (
+        _legacy_payment_backed_invoice_repair_fixture(
+            db_session, subscriber, subscription
+        )
+    )
+    invoices_before = db_session.query(Invoice).count()
+    ledger_before = db_session.query(LedgerEntry).count()
+    funding_before = get_account_credit_balance(
+        db_session, str(subscriber.id), currency="NGN"
+    )
+    preview = preview_legacy_payment_backed_renewal_invoice_repair(db_session, query)
+
+    assert (
+        preview.disposition
+        is LegacyPaymentBackedRenewalInvoiceRepairDisposition.exact_legacy_chain
+    )
+    assert preview.actionable is True
+    assert preview.subtotal == Decimal("35000.00")
+    assert preview.tax_total == Decimal("2625.00")
+    assert preview.gross_total == Decimal("37625.00")
+    assert preview.available_funding_before == funding_before == Decimal("0.00")
+    assert preview.available_funding_after == funding_before
+    assert db_session.query(Invoice).count() == invoices_before
+    assert db_session.query(LedgerEntry).count() == ledger_before
+
+    command = _legacy_payment_backed_repair_command(query, preview.fingerprint)
+    db_session.rollback()
+    result = repair_legacy_payment_backed_renewal_invoice(db_session, command)
+
+    invoice = db_session.get(Invoice, result.invoice_id)
+    replacement = db_session.get(ServiceEntitlement, result.replacement_entitlement_id)
+    db_session.refresh(legacy_entitlement)
+    db_session.refresh(subscription)
+    assert invoice is not None
+    assert replacement is not None
+    assert invoice.is_active is True
+    assert invoice.is_proforma is False
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert invoice.subtotal == Decimal("35000.00")
+    assert invoice.tax_total == Decimal("2625.00")
+    assert invoice.total == Decimal("37625.00")
+    assert legacy_entitlement.status is ServiceEntitlementStatus.reversed
+    assert replacement.status is ServiceEntitlementStatus.active
+    assert replacement.source_invoice_id == invoice.id
+    assert replacement.source_invoice_line_id == result.invoice_line_id
+    assert replacement.starts_at.replace(tzinfo=UTC) == query.expected_period_start
+    assert replacement.ends_at.replace(tzinfo=UTC) == query.expected_period_end
+    assert subscription.next_billing_at.replace(tzinfo=UTC) == query.expected_period_end
+    assert result.billing_anchor_before == result.billing_anchor_after
+    assert result.available_funding_before == result.available_funding_after
+    assert (
+        get_account_credit_balance(db_session, str(subscriber.id), currency="NGN")
+        == funding_before
+    )
+    allocation = db_session.get(PaymentAllocation, result.payment_allocation_id)
+    reversal = db_session.get(LedgerEntry, result.reversal_ledger_entry_id)
+    assert allocation is not None and allocation.payment_id == payment.id
+    assert allocation.amount == Decimal("37625.00")
+    assert reversal is not None
+    assert reversal.reversal_of_entry_id == legacy_ledger.id
+    payment_summary = payment_application_summary(db_session, payment)
+    assert payment_summary.amount_credited == Decimal("37625.00")
+    assert payment_summary.invoice_amount_applied == Decimal("37625.00")
+    assert payment_summary.prepaid_amount_applied == Decimal("0.00")
+    assert payment_summary.unallocated_credit == Decimal("0.00")
+    history = _get_customer_invoice_history(
+        db_session,
+        CustomerInvoiceHistoryQuery(
+            account_id=subscriber.id,
+            status=None,
+            page=1,
+            per_page=20,
+        ),
+    )
+    assert invoice.id in {item.id for item in history.invoices}
+
+    counts_before_replay = (
+        db_session.query(Invoice).count(),
+        db_session.query(PaymentAllocation).count(),
+        db_session.query(ServiceEntitlement).count(),
+        db_session.query(LedgerEntry).count(),
+        db_session.query(EventStore).count(),
+        db_session.query(AuditEvent).count(),
+    )
+    db_session.rollback()
+    replay = repair_legacy_payment_backed_renewal_invoice(db_session, command)
+    assert replay.replayed is True
+    assert replay.invoice_id == result.invoice_id
+    assert replay.audit_event_id == result.audit_event_id
+    assert replay.domain_event_id == result.domain_event_id
+    assert counts_before_replay == (
+        db_session.query(Invoice).count(),
+        db_session.query(PaymentAllocation).count(),
+        db_session.query(ServiceEntitlement).count(),
+        db_session.query(LedgerEntry).count(),
+        db_session.query(EventStore).count(),
+        db_session.query(AuditEvent).count(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("drift", "value"),
+    [
+        ("account", None),
+        ("subscription", None),
+        ("payment", None),
+        ("payment_status", PaymentStatus.partially_refunded),
+        ("prepaid_consumption", Decimal("100.00")),
+        ("ledger_active", False),
+        ("ledger_amount", Decimal("37624.99")),
+        ("ledger_currency", "USD"),
+        ("entitlement_source", "unexpected"),
+        ("anchor", datetime(2026, 8, 28, tzinfo=UTC)),
+        ("period_end", datetime(2026, 8, 28, tzinfo=UTC)),
+        ("gross", Decimal("37624.99")),
+        ("funding", Decimal("0.01")),
+        ("tax_rate", Decimal("8.0000")),
+        ("contract_price", Decimal("35000.01")),
+    ],
+)
+def test_legacy_payment_backed_repair_preview_rejects_evidence_drift(
+    db_session, subscriber, subscription, drift, value
+):
+    query, payment, ledger, entitlement = _legacy_payment_backed_invoice_repair_fixture(
+        db_session, subscriber, subscription
+    )
+    if drift == "account":
+        query = replace(query, account_id=uuid4())
+    elif drift == "subscription":
+        query = replace(query, subscription_id=uuid4())
+    elif drift == "payment":
+        query = replace(query, payment_id=uuid4())
+    elif drift == "payment_status":
+        payment.status = value
+        db_session.commit()
+    elif drift == "prepaid_consumption":
+        payment.settlement.prepaid_amount = value
+        db_session.commit()
+    elif drift == "ledger_active":
+        ledger.is_active = value
+        db_session.commit()
+    elif drift == "ledger_amount":
+        ledger.amount = value
+        db_session.commit()
+    elif drift == "ledger_currency":
+        ledger.currency = value
+        db_session.commit()
+    elif drift == "entitlement_source":
+        entitlement.metadata_ = {"source": value}
+        db_session.commit()
+    elif drift == "anchor":
+        subscription.next_billing_at = value
+        db_session.commit()
+    elif drift == "period_end":
+        query = replace(query, expected_period_end=value)
+    elif drift == "gross":
+        query = replace(query, expected_gross_total=value)
+    elif drift == "funding":
+        query = replace(query, expected_available_funding_after_repair=value)
+    elif drift == "tax_rate":
+        tax_rate = db_session.get(TaxRate, subscriber.tax_rate_id)
+        assert tax_rate is not None
+        tax_rate.rate = value
+        db_session.commit()
+    elif drift == "contract_price":
+        price = db_session.scalar(
+            select(OfferPrice).where(
+                OfferPrice.offer_id == subscription.offer_id,
+                OfferPrice.price_type == PriceType.recurring,
+                OfferPrice.is_active.is_(True),
+            )
+        )
+        assert price is not None
+        price.amount = value
+        subscription.unit_price = value
+        db_session.commit()
+
+    preview = preview_legacy_payment_backed_renewal_invoice_repair(db_session, query)
+
+    assert (
+        preview.disposition
+        is LegacyPaymentBackedRenewalInvoiceRepairDisposition.manual_review
+    )
+    assert db_session.query(Invoice).count() == 0
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.reversal_of_entry_id == ledger.id)
+        .count()
+        == 0
+    )
+
+
+def test_legacy_payment_backed_repair_rejects_missing_settlement(
+    db_session, subscriber, subscription
+):
+    query, payment, ledger, _entitlement = (
+        _legacy_payment_backed_invoice_repair_fixture(
+            db_session, subscriber, subscription
+        )
+    )
+    settlement = payment.settlement
+    assert settlement is not None
+    db_session.delete(settlement)
+    db_session.commit()
+    missing = preview_legacy_payment_backed_renewal_invoice_repair(db_session, query)
+    assert missing.actionable is False
+
+
+def test_legacy_payment_backed_repair_rejects_payment_reversal(
+    db_session, subscriber, subscription
+):
+    query, payment, _ledger, _entitlement = (
+        _legacy_payment_backed_invoice_repair_fixture(
+            db_session, subscriber, subscription
+        )
+    )
+    db_session.add(
+        PaymentReversal(
+            payment_id=payment.id,
+            amount=payment.amount,
+            currency=payment.currency,
+            origin=PaymentReversalOrigin.administrative_correction,
+            reason="Synthetic reversed settlement",
+        )
+    )
+    db_session.commit()
+
+    preview = preview_legacy_payment_backed_renewal_invoice_repair(db_session, query)
+
+    assert preview.actionable is False
+
+
+def test_legacy_payment_backed_repair_rejects_account_adjustment_owned_debit(
+    db_session, subscriber, subscription
+):
+    query, _payment, ledger, _entitlement = (
+        _legacy_payment_backed_invoice_repair_fixture(
+            db_session, subscriber, subscription
+        )
+    )
+    db_session.add(
+        AccountAdjustment(
+            account_id=subscriber.id,
+            category=LedgerCategory.internet_service,
+            amount=ledger.amount,
+            currency=ledger.currency,
+            memo="Synthetic competing adjustment ownership",
+            reason="Synthetic evidence-shape rejection",
+            origin="prepaid_service_renewal",
+            origin_ref=(
+                f"{subscription.id}:{query.expected_period_start.isoformat()}:"
+                f"{query.expected_period_end.isoformat()}"
+            ),
+            prepaid_funding_before=Decimal("37625.00"),
+            prepaid_funding_after=Decimal("0.00"),
+            postpaid_receivables=Decimal("0.00"),
+            collection_blocking_balance=Decimal("0.00"),
+            access_consequence="none_adjustment_only",
+            preview_fingerprint="b" * 64,
+            idempotency_key=f"synthetic-adjustment-owner:{ledger.id}",
+            ledger_entry_id=ledger.id,
+        )
+    )
+    db_session.commit()
+
+    preview = preview_legacy_payment_backed_renewal_invoice_repair(db_session, query)
+
+    assert preview.actionable is False
+
+
+def test_legacy_payment_backed_repair_rejects_competing_invoice(
+    db_session, subscriber, subscription
+):
+    query, _payment, _ledger, _entitlement = (
+        _legacy_payment_backed_invoice_repair_fixture(
+            db_session, subscriber, subscription
+        )
+    )
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        subtotal=Decimal("35000.00"),
+        tax_total=Decimal("2625.00"),
+        total=Decimal("37625.00"),
+        balance_due=Decimal("37625.00"),
+        billing_period_start=query.expected_period_start,
+        billing_period_end=query.expected_period_end,
+        is_active=True,
+        is_proforma=False,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Synthetic competing service invoice",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("35000.00"),
+            amount=Decimal("35000.00"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    preview = preview_legacy_payment_backed_renewal_invoice_repair(db_session, query)
+
+    assert preview.actionable is False
+    assert preview.existing_invoice_id == invoice.id
+
+
+def test_legacy_payment_backed_repair_rejects_additional_coverage_overlap(
+    db_session, subscriber, subscription
+):
+    query, _payment, _ledger, _entitlement = (
+        _legacy_payment_backed_invoice_repair_fixture(
+            db_session, subscriber, subscription
+        )
+    )
+    db_session.add(
+        ServiceEntitlement(
+            account_id=subscriber.id,
+            subscription_id=subscription.id,
+            starts_at=query.expected_period_start + timedelta(days=1),
+            ends_at=query.expected_period_end,
+            amount_funded=Decimal("1.00"),
+            currency="NGN",
+            status=ServiceEntitlementStatus.active,
+            metadata_={"source": "synthetic_competing_coverage"},
+        )
+    )
+    db_session.commit()
+
+    preview = preview_legacy_payment_backed_renewal_invoice_repair(db_session, query)
+
+    assert preview.actionable is False
 
 
 def test_funding_event_without_payment_id_remains_retryable(db_session, subscriber):

@@ -3246,7 +3246,10 @@ SERVICES: tuple[SOTService, ...] = (
             "remaining credit. It creates and settles one invoice only when "
             "those fingerprinted facts remain exact and no competing document "
             "or coverage exists; fully payment-backed repair does not depend "
-            "on or alter the migrated opening baseline."
+            "on or alter the migrated opening baseline. Business midnight remains "
+            "the default; an explicit documented-anniversary selection additionally "
+            "requires one active same-account replacement entitlement whose exact "
+            "Lagos clock, end/current anchor, and next cadence boundary agree."
             " A separate pre-opening settlement correction accepts only an "
             "invoice exactly reconstructed into an approved customer opening, "
             "one later active allocation, and its exact unreversed two-lane "
@@ -3348,6 +3351,8 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical prepaid subscription contract",
                         "canonical payment-backed account credit",
                         "canonical paid invoice allocation evidence",
+                        "canonical reviewed service calendar",
+                        "canonical funded service entitlement",
                         "invoice and payment participant protocols",
                     ),
                     canonical_writer="financial.prepaid_draft_reconciliation",
@@ -4329,16 +4334,20 @@ SERVICES: tuple[SOTService, ...] = (
             "bounded scheduled renewal catch-up",
             "fingerprint-approved missed renewal execution",
             "reviewed legacy prepaid renewal tax-invoice correction",
+            "reviewed tax-inclusive prepaid renewal documentary correction",
+            "reviewed legacy payment-backed prepaid renewal invoice repair",
             "reviewed unused prepaid renewal correction",
             "suspension-aware prepaid renewal eligibility",
         ),
         depends_on=(
             "access.subscription_lifecycle",
+            "auth.permission_gate",
             "billing.contracts",
             "customer.accounts",
             "financial.account_adjustments",
             "financial.customer_subledger",
             "financial.invoices",
+            "financial.ledger",
             "financial.payments",
             "financial.billing_tax_resolution",
             "financial.prepaid_funding_reconstruction",
@@ -4413,7 +4422,22 @@ SERVICES: tuple[SOTService, ...] = (
             "entitlement, creates and fully settles the canonical tax-inclusive "
             "invoice from payment-backed credit, and replaces the entitlement "
             "atomically. It is fingerprint-bound, account-scoped, audited, and "
-            "fails closed on any evidence or balance drift. A reviewed unused "
+            "fails closed on any evidence or balance drift. The distinct legacy "
+            "tax-inclusive documentary correction does not reinterpret that base-only "
+            "lane: it requires a selected succeeded, settled, unreturned Payment and "
+            "an adjustment already equal to the canonical gross charge, permits a "
+            "manual suspension only without a prepaid enforcement lock, reverses the "
+            "selected adjustment, and settles the replacement invoice exclusively "
+            "from that Payment with zero funding, coverage, anchor, or status delta. "
+            "The distinct legacy "
+            "payment-backed renewal repair accepts only an active succeeded and "
+            "unreturned settled Payment, its exact payment-linked invoice-source "
+            "service debit with no invoice or AccountAdjustment, and the one linked "
+            "active entitlement. It appends the ledger reversal, replaces coverage "
+            "with a paid invoice-backed entitlement for the identical period, and "
+            "reclassifies only that selected immutable legacy prepaid consumption "
+            "into the active paid allocation so payment reporting cannot count both. "
+            "It proves zero funding and anchor delta in one owner transaction. A reviewed unused "
             "renewal correction accepts only one exact un-invoiced adjustment "
             "and linked active entitlement: it reverses the historical ledger "
             "debit and entitlement atomically, restoring verified prepaid funding "
@@ -4613,6 +4637,41 @@ SERVICES: tuple[SOTService, ...] = (
                     canonical_writer="financial.prepaid_service_renewals",
                 ),
                 ConcernContract(
+                    name=(
+                        "reviewed tax-inclusive prepaid renewal documentary correction"
+                    ),
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "prepaid subscription and renewal terms",
+                        "canonical subscription lifecycle state",
+                        "effective compatibility tax treatment",
+                        "settled payment evidence",
+                        "verified customer funding position",
+                        "funded service entitlement evidence",
+                        "exact legacy account-adjustment evidence",
+                        "invoice and payment participant protocols",
+                    ),
+                    canonical_writer="financial.prepaid_service_renewals",
+                ),
+                ConcernContract(
+                    name=(
+                        "reviewed legacy payment-backed prepaid renewal invoice repair"
+                    ),
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "prepaid subscription and renewal terms",
+                        "effective compatibility tax treatment",
+                        "settled payment evidence",
+                        "verified customer funding position",
+                        "funded service entitlement evidence",
+                        "exact legacy payment-linked renewal debit evidence",
+                        "staff repair permission and approval evidence",
+                        "invoice and payment participant protocols",
+                        "canonical ledger reversal protocol",
+                    ),
+                    canonical_writer="financial.prepaid_service_renewals",
+                ),
+                ConcernContract(
                     name="reviewed unused prepaid renewal correction",
                     role=OwnerRole.RECONCILER,
                     input_names=(
@@ -4722,6 +4781,35 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
+                    name="exact legacy payment-linked renewal debit evidence",
+                    owner="financial.ledger",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "one active unreversed customer-position debit with no "
+                        "invoice or AccountAdjustment, exact Payment link, service "
+                        "category, currency, gross amount, and linked entitlement"
+                    ),
+                ),
+                AuthorityInput(
+                    name="staff repair permission and approval evidence",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "active user UUID, billing ledger-write permission result, "
+                        "non-secret approval reference, reason, preview fingerprint, "
+                        "and bounded idempotency key"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical ledger reversal protocol",
+                    owner="financial.ledger",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed flush-only append of one unique structural reversal "
+                        "after locked immutable ledger evidence is revalidated"
+                    ),
+                ),
+                AuthorityInput(
                     name="invoice and payment participant protocols",
                     owner="financial.invoices",
                     kind=AuthorityKind.CONTROL_INPUT,
@@ -4744,10 +4832,12 @@ SERVICES: tuple[SOTService, ...] = (
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
                     "Settlement-triggered, scheduled, reviewed missed-period, "
-                    "legacy tax-correction, and unused-renewal correction "
+                    "legacy tax-correction, tax-inclusive documentary correction, "
+                    "legacy payment-backed repair, and "
+                    "unused-renewal correction "
                     "public commands enter "
                     "execute_owner_command once on a transaction-free session. "
-                    "Validation, adjustment reversal, paid invoice, entitlement, "
+                    "Validation, ledger or adjustment reversal, paid invoice, entitlement, "
                     "anchor, posting group, renewed outcome, and audit/event "
                     "evidence commit or roll back together."
                 ),
@@ -4756,6 +4846,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "re-preview. Legacy and unused-renewal corrections additionally "
                     "lock the exact "
                     "subscription, adjustment, and entitlement before re-preview; "
+                    "the payment-backed repair locks the subscription, Payment, "
+                    "PaymentSettlement, ledger debit, and entitlement; "
                     "entitlement overlap and unique period-line identity prevent a "
                     "second funded result for the same period."
                 ),
@@ -4767,7 +4859,13 @@ SERVICES: tuple[SOTService, ...] = (
                     "exact paid invoice, entitlement, period, and application effects. "
                     "Legacy correction binds account, subscription, adjustment, "
                     "entitlement, canonical invoice total, retained credit, and "
-                    "preview fingerprint to one reservation. Unused-renewal "
+                    "preview fingerprint to one reservation. "
+                    "The tax-inclusive correction additionally binds the selected "
+                    "Payment and uses a distinct reservation scope and invoice marker. "
+                    "The payment-backed repair binds all five entity identities, "
+                    "period, gross, currency, conserved funding, permission evidence, "
+                    "preview fingerprint, and idempotency key to one invoice. "
+                    "Unused-renewal "
                     "correction binds the exact account, subscription, adjustment, "
                     "entitlement, preview fingerprint, and idempotency key."
                 ),
@@ -4806,6 +4904,19 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.prepaid_service_renewals.legacy_tax_correction_not_actionable",
                     "financial.prepaid_service_renewals.legacy_tax_correction_not_found",
                     "financial.prepaid_service_renewals.legacy_tax_correction_write_conflict",
+                    "financial.prepaid_service_renewals.tax_inclusive_document_correction_drift",
+                    "financial.prepaid_service_renewals.tax_inclusive_document_correction_incomplete",
+                    "financial.prepaid_service_renewals.tax_inclusive_document_correction_not_actionable",
+                    "financial.prepaid_service_renewals.tax_inclusive_document_correction_not_found",
+                    "financial.prepaid_service_renewals.tax_inclusive_document_correction_write_conflict",
+                    "financial.prepaid_service_renewals.zero_delta_invariant_failed",
+                    "financial.prepaid_service_renewals.legacy_payment_invoice_repair_drift",
+                    "financial.prepaid_service_renewals.legacy_payment_invoice_repair_incomplete",
+                    "financial.prepaid_service_renewals.legacy_payment_invoice_repair_not_actionable",
+                    "financial.prepaid_service_renewals.legacy_payment_invoice_repair_not_found",
+                    "financial.prepaid_service_renewals.legacy_payment_invoice_repair_write_conflict",
+                    "financial.prepaid_service_renewals.ledger_reversal_rejected",
+                    "financial.prepaid_service_renewals.financial_conservation_failed",
                     "financial.prepaid_service_renewals.mode_not_prepaid",
                     "financial.prepaid_service_renewals.payment_account_mismatch",
                     "financial.prepaid_service_renewals.payment_not_found",
@@ -4828,6 +4939,8 @@ SERVICES: tuple[SOTService, ...] = (
                 mapping_owner=("billing automation, durable event, and staff adapters"),
                 retryable_codes=(
                     "financial.prepaid_service_renewals.legacy_tax_correction_write_conflict",
+                    "financial.prepaid_service_renewals.tax_inclusive_document_correction_write_conflict",
+                    "financial.prepaid_service_renewals.legacy_payment_invoice_repair_write_conflict",
                 ),
                 fail_closed_on=(
                     "missing or non-canonical settlement evidence",
@@ -4835,6 +4948,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "stale preview or entitlement overlap",
                     "invoice, allocation, entitlement, or posting-group failure",
                     "legacy adjustment, entitlement, tax, amount, or credit drift",
+                    "tax-inclusive adjustment, selected payment, suspension lock, "
+                    "tax, amount, residual credit, anchor, or status drift",
+                    "legacy payment, settlement, direct debit, entitlement, period, "
+                    "currency, tax, funding, permission, or anchor drift",
                     "unused-renewal adjustment, entitlement, invoice-link, or fingerprint drift",
                 ),
             ),
@@ -4846,7 +4963,9 @@ SERVICES: tuple[SOTService, ...] = (
                 schema_version=2,
                 delivery_owner="events.dispatcher",
                 compatibility=(
-                    "Version 2 carries the exact account, subscription, paid "
+                    "Version 2 optionally identifies the reviewed tax-inclusive or legacy "
+                    "payment-backed repair, Payment, direct debit reversal, and "
+                    "replacement evidence, and carries the exact account, subscription, paid "
                     "invoice, entitlement, funded period, amount, currency, and "
                     "trigger. Readers retain version-1 legacy debit compatibility."
                 ),
@@ -4911,6 +5030,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/designs/FUNDED_PREPAID_RENEWAL_INVOICING.md",
                 "docs/designs/USAGE_ALLOWANCE_RESET_CYCLES.md",
                 "docs/runbooks/LEGACY_PREPAID_RENEWAL_TAX_INVOICE_CORRECTION.md",
+                "docs/runbooks/LEGACY_PAYMENT_BACKED_PREPAID_RENEWAL_INVOICE_REPAIR.md",
                 "docs/runbooks/REVIEWED_MIGRATED_PREPAID_OPENING_REPAIR.md",
                 "docs/runbooks/UNUSED_PREPAID_RENEWAL_CORRECTION.md",
             ),
@@ -4919,6 +5039,8 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/services/billing/test_payment_status_recompute.py",
                 "tests/test_subledger_forward_shadow.py",
                 "tests/architecture/test_prepaid_billing_anchor_ownership.py",
+                "tests/architecture/test_legacy_payment_backed_renewal_invoice_repair_boundary.py",
+                "tests/integration/test_prepaid_draft_reconciliation_concurrency.py",
             ),
         ),
     ),

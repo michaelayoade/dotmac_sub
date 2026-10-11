@@ -166,6 +166,7 @@ class PaymentAllocationFinalizationMode(str, Enum):
     historical_debt = "historical_debt"
     issuance_reserved_credit = "issuance_reserved_credit"
     reviewed_document_correction = "reviewed_document_correction"
+    legacy_prepaid_debit_replacement = "legacy_prepaid_debit_replacement"
 
 
 @dataclass(frozen=True, slots=True)
@@ -4393,6 +4394,8 @@ def _payment_has_exact_unallocated_evidence(
 def _payment_unallocated_credit_remaining(
     db: Session,
     payment: Payment,
+    *,
+    released_legacy_prepaid_amount: Decimal = Decimal("0.00"),
 ) -> Decimal:
     if not _payment_has_exact_unallocated_evidence(db, payment):
         return Decimal("0.00")
@@ -4408,6 +4411,10 @@ def _payment_unallocated_credit_remaining(
         PaymentAllocation.is_active.is_(True)
     ).filter(LedgerEntry.is_active.is_(True)).scalar() or Decimal("0.00")
     prepaid_consumed = _payment_prepaid_service_amount(db, payment)
+    released = round_money(released_legacy_prepaid_amount)
+    if released < Decimal("0.00"):
+        return Decimal("0.00")
+    prepaid_consumed = round_money(prepaid_consumed - min(released, prepaid_consumed))
     return max(
         Decimal("0.00"),
         round_money(
@@ -4443,7 +4450,37 @@ def _payment_prepaid_service_amount(db: Session, payment: Payment) -> Decimal:
     # Historical inline settlements recorded both settlement fields and a
     # renewal outcome for the same debit. Taking the larger evidenced value
     # avoids double counting while retaining immutable historical receipts.
-    return max(settlement_amount, outcome_amount)
+    legacy_amount = max(settlement_amount, outcome_amount)
+    # A reviewed repair does not delete either historical fact. Its paid
+    # invoice and active allocation append the canonical reclassification, so
+    # the old direct-prepaid amount must stop appearing as an additional use of
+    # the same receipt. Metadata is identity evidence only; the allocation and
+    # paid document remain the authoritative amount/status facts.
+    reclassified_amount = round_money(
+        sum(
+            (
+                to_decimal(allocation.amount)
+                for allocation in payment.allocations
+                if allocation.is_active
+                and allocation.invoice is not None
+                and allocation.invoice.is_active
+                and allocation.invoice.status is InvoiceStatus.paid
+                and isinstance(allocation.invoice.metadata_, dict)
+                and isinstance(
+                    allocation.invoice.metadata_.get(
+                        "legacy_payment_backed_renewal_invoice_repair"
+                    ),
+                    dict,
+                )
+                and allocation.invoice.metadata_[
+                    "legacy_payment_backed_renewal_invoice_repair"
+                ].get("payment_id")
+                == str(payment.id)
+            ),
+            Decimal("0.00"),
+        )
+    )
+    return round_money(max(Decimal("0.00"), legacy_amount - reclassified_amount))
 
 
 def payment_application_summary(
@@ -4501,6 +4538,7 @@ def _payment_allocation_fingerprint(
     account_credit_before: Decimal,
     receivable_before: Decimal,
     funding_position_at: datetime | None,
+    released_legacy_prepaid_amount: Decimal = Decimal("0.00"),
 ) -> str:
     encoded = json.dumps(
         {
@@ -4518,6 +4556,9 @@ def _payment_allocation_fingerprint(
                 funding_position_at.isoformat()
                 if funding_position_at is not None
                 else None
+            ),
+            "released_legacy_prepaid_amount": (
+                f"{round_money(released_legacy_prepaid_amount):.2f}"
             ),
         },
         sort_keys=True,
@@ -4690,6 +4731,7 @@ def _build_payment_allocation_preview(
     funding_position_at: datetime | None = None,
     allow_existing_allocation: bool = False,
     reserve_prepaid_funding: bool = True,
+    released_legacy_prepaid_amount: Decimal = Decimal("0.00"),
 ) -> PaymentAllocationPreview:
     payment = get_by_id(db, Payment, payload.payment_id)
     if not payment:
@@ -4764,7 +4806,11 @@ def _build_payment_allocation_preview(
             status_code=409,
             detail="Allocation exceeds the current invoice receivable",
         )
-    payment_unallocated_before = _payment_unallocated_credit_remaining(db, payment)
+    payment_unallocated_before = _payment_unallocated_credit_remaining(
+        db,
+        payment,
+        released_legacy_prepaid_amount=released_legacy_prepaid_amount,
+    )
     if amount > payment_unallocated_before:
         raise HTTPException(
             status_code=409,
@@ -4799,6 +4845,7 @@ def _build_payment_allocation_preview(
         account_credit_before=account_credit_before,
         receivable_before=receivable_before,
         funding_position_at=funding_position_at,
+        released_legacy_prepaid_amount=released_legacy_prepaid_amount,
     )
     return PaymentAllocationPreview(
         payment_id=payment.id,
@@ -5004,6 +5051,96 @@ class PaymentAllocations(ListResponseMixin):
         return max(
             Decimal("0.00"),
             min(payment_available, round_money(account_available)),
+        )
+
+    @staticmethod
+    def available_amount_for_reviewed_legacy_debit_replacement(
+        db: Session,
+        payment_id: str,
+        *,
+        expected_reversal_credit: Decimal,
+    ) -> Decimal:
+        """Preview selected-payment room after one exact debit reversal.
+
+        The legacy renewal repair has not mutated during preview, so the active
+        direct debit still suppresses account credit.  This payment-owner query
+        projects only the explicitly supplied same-currency reversal credit;
+        the repair owner separately proves that the selected ledger debit is
+        exactly that amount and rechecks everything under lock before writing.
+        """
+
+        payment = get_by_id(db, Payment, payment_id)
+        projected_credit = round_money(expected_reversal_credit)
+        if (
+            projected_credit <= Decimal("0.00")
+            or payment is None
+            or not payment.is_active
+            or payment.account_id is None
+            or payment.status != PaymentStatus.succeeded
+            or payment.settlement is None
+            or payment.refunds
+            or payment.reversal is not None
+            or payment.reserved_for_purchase_id is not None
+        ):
+            return Decimal("0.00")
+        payment_available = _payment_unallocated_credit_remaining(
+            db,
+            payment,
+            released_legacy_prepaid_amount=projected_credit,
+        )
+        account_available = get_account_credit_balance(
+            db,
+            str(payment.account_id),
+            currency=payment.currency,
+        )
+        return max(
+            Decimal("0.00"),
+            min(
+                payment_available,
+                round_money(account_available + projected_credit),
+            ),
+        )
+
+    @staticmethod
+    def available_amount_after_reviewed_adjustment_reversal(
+        db: Session,
+        payment_id: str,
+        *,
+        expected_reversal_credit: Decimal,
+    ) -> Decimal:
+        """Project reviewed-document capacity after one adjustment reversal.
+
+        Unlike a payment-linked legacy debit, an AccountAdjustment has not
+        consumed allocation room on the selected payment. Only the exact
+        same-currency account-credit restoration is projected here.
+        """
+
+        payment = get_by_id(db, Payment, payment_id)
+        projected_credit = round_money(expected_reversal_credit)
+        if (
+            projected_credit <= Decimal("0.00")
+            or payment is None
+            or not payment.is_active
+            or payment.account_id is None
+            or payment.status != PaymentStatus.succeeded
+            or payment.settlement is None
+            or payment.refunds
+            or payment.reversal is not None
+            or payment.reserved_for_purchase_id is not None
+        ):
+            return Decimal("0.00")
+        payment_available = _payment_unallocated_credit_remaining(db, payment)
+        account_available = get_account_credit_balance(
+            db,
+            str(payment.account_id),
+            currency=payment.currency,
+        )
+        return max(
+            Decimal("0.00"),
+            min(
+                payment_available,
+                round_money(account_available + projected_credit),
+            ),
         )
 
     @staticmethod
@@ -5318,6 +5455,20 @@ class PaymentAllocations(ListResponseMixin):
             db,
             payload,
             reserve_prepaid_funding=False,
+        )
+
+    @staticmethod
+    def preview_legacy_prepaid_debit_replacement_for_owner(
+        db: Session,
+        payload: PaymentAllocationPreviewRequest,
+    ) -> PaymentAllocationPreview:
+        """Preview replacement of one already-consumed legacy prepaid debit."""
+
+        return _build_payment_allocation_preview(
+            db,
+            payload,
+            reserve_prepaid_funding=False,
+            released_legacy_prepaid_amount=round_money(payload.amount),
         )
 
     @staticmethod
@@ -5641,6 +5792,23 @@ class PaymentAllocations(ListResponseMixin):
         )
 
     @staticmethod
+    def stage_confirm_legacy_prepaid_debit_replacement_for_owner(
+        db: Session,
+        payload: PaymentAllocationConfirm,
+    ) -> PaymentAllocationResult:
+        """Replace one reviewed legacy prepaid consumption with allocation evidence."""
+
+        return PaymentAllocations._confirm(
+            db,
+            payload,
+            complete_transaction=False,
+            finalization_mode=(
+                PaymentAllocationFinalizationMode.legacy_prepaid_debit_replacement
+            ),
+            released_legacy_prepaid_amount=round_money(payload.amount),
+        )
+
+    @staticmethod
     def stage_confirm_issuance_reserved_credit_for_owner(
         db: Session,
         payload: PaymentAllocationConfirm,
@@ -5680,6 +5848,7 @@ class PaymentAllocations(ListResponseMixin):
         complete_transaction: bool,
         finalization_mode: PaymentAllocationFinalizationMode,
         funding_position_at: datetime | None = None,
+        released_legacy_prepaid_amount: Decimal = Decimal("0.00"),
     ) -> PaymentAllocationResult:
         key = _normalize_payment_allocation_key(payload.idempotency_key)
         replay = PaymentAllocations._replay(
@@ -5719,6 +5888,7 @@ class PaymentAllocations(ListResponseMixin):
             reserve_prepaid_funding=(
                 resolved_finalization_mode is PaymentAllocationFinalizationMode.standard
             ),
+            released_legacy_prepaid_amount=released_legacy_prepaid_amount,
         )
         if preview.fingerprint != payload.preview_fingerprint:
             raise HTTPException(
@@ -5774,9 +5944,10 @@ class PaymentAllocations(ListResponseMixin):
             # the parent to ensure the next sync page includes it.
             payment.updated_at = datetime.now(UTC)
             reservation.ref_id = str(allocation.id)
-            if resolved_finalization_mode is (
-                PaymentAllocationFinalizationMode.reviewed_document_correction
-            ):
+            if resolved_finalization_mode in {
+                PaymentAllocationFinalizationMode.reviewed_document_correction,
+                PaymentAllocationFinalizationMode.legacy_prepaid_debit_replacement,
+            }:
                 _finalize_reviewed_document_payment_effects(db, invoice)
             elif resolved_finalization_mode is (
                 PaymentAllocationFinalizationMode.historical_debt
@@ -5817,7 +5988,10 @@ class PaymentAllocations(ListResponseMixin):
                         "access_consequence": (
                             "unchanged_reviewed_document_correction"
                             if resolved_finalization_mode
-                            is PaymentAllocationFinalizationMode.reviewed_document_correction
+                            in {
+                                PaymentAllocationFinalizationMode.reviewed_document_correction,
+                                PaymentAllocationFinalizationMode.legacy_prepaid_debit_replacement,
+                            }
                             else (
                                 "historical_debt_settlement_only"
                                 if resolved_finalization_mode
@@ -5838,6 +6012,7 @@ class PaymentAllocations(ListResponseMixin):
             # emit a second payment observation.
             if resolved_finalization_mode not in {
                 PaymentAllocationFinalizationMode.reviewed_document_correction,
+                PaymentAllocationFinalizationMode.legacy_prepaid_debit_replacement,
                 PaymentAllocationFinalizationMode.historical_debt,
             }:
                 emit_event(

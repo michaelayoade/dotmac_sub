@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum, StrEnum
 from typing import TYPE_CHECKING, NoReturn, cast
@@ -734,6 +734,8 @@ class MissingPaidPrepaidInvoiceRepairQuery:
     next_billing_on: date
     expected_total: Decimal
     expected_remaining_credit: Decimal
+    calendar: ReviewedPrepaidCalendarSelection = ReviewedPrepaidCalendarSelection()
+    documentary_entitlement_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -4348,6 +4350,9 @@ def _build_missing_paid_invoice_preview(
         "next_billing_on": query.next_billing_on,
         "expected_total": round_money(query.expected_total),
         "expected_remaining_credit": round_money(query.expected_remaining_credit),
+        "calendar_basis": query.calendar.basis,
+        "expected_initial_anchor_at": query.calendar.expected_initial_anchor_at,
+        "documentary_entitlement_id": query.documentary_entitlement_id,
         "issued_at": issued_at,
         "paid_at": paid_at,
         "due_at": due_at,
@@ -4426,6 +4431,16 @@ def _existing_missing_paid_invoice_repair(
             == str(round_money(query.expected_total))
             and str(metadata.get("expected_remaining_credit"))
             == str(round_money(query.expected_remaining_credit))
+            and str(metadata.get("calendar_basis") or "business_midnight")
+            == query.calendar.basis.value
+            and str(metadata.get("expected_initial_anchor_at") or "")
+            == (
+                query.calendar.expected_initial_anchor_at.isoformat()
+                if query.calendar.expected_initial_anchor_at is not None
+                else ""
+            )
+            and str(metadata.get("documentary_entitlement_id") or "")
+            == str(query.documentary_entitlement_id or "")
         ):
             fingerprint = str(metadata.get("preview_fingerprint") or "")
             if fingerprint:
@@ -4509,11 +4524,77 @@ def preview_missing_paid_prepaid_invoice_repair(
 
     expected_total = round_money(query.expected_total)
     expected_remaining = round_money(query.expected_remaining_credit)
-    period_start = _business_midnight(query.issued_on)
-    period_end = _business_midnight(query.next_billing_on)
-    due_at = _business_midnight(query.due_on)
+    documentary_entitlement = None
+    calendar_error: str | None = None
+    if query.calendar.basis is ReviewedPrepaidCalendarBasis.documented_anniversary:
+        expected_anchor = query.calendar.expected_initial_anchor_at
+        documentary_entitlement = (
+            db.get(ServiceEntitlement, query.documentary_entitlement_id)
+            if query.documentary_entitlement_id is not None
+            else None
+        )
+        if (
+            expected_anchor is None
+            or expected_anchor.tzinfo is None
+            or expected_anchor.utcoffset() is None
+            or documentary_entitlement is None
+            or documentary_entitlement.account_id != query.account_id
+            or documentary_entitlement.subscription_id != query.subscription_id
+            or documentary_entitlement.status is not ServiceEntitlementStatus.active
+            or documentary_entitlement.starts_at.tzinfo is None
+            or documentary_entitlement.ends_at.tzinfo is None
+            or documentary_entitlement.starts_at.utcoffset() is None
+            or documentary_entitlement.ends_at.utcoffset() is None
+            or documentary_entitlement.starts_at.utcoffset() != timedelta(0)
+            or documentary_entitlement.ends_at.utcoffset() != timedelta(0)
+            or _utc(documentary_entitlement.ends_at)
+            <= _utc(documentary_entitlement.starts_at)
+        ):
+            calendar_error = "documentary anniversary evidence is missing or mismatched"
+    elif (
+        query.calendar.basis is not ReviewedPrepaidCalendarBasis.business_midnight
+        or query.calendar.expected_initial_anchor_at is not None
+        or query.documentary_entitlement_id is not None
+    ):
+        calendar_error = (
+            "business-midnight repair rejects documentary calendar evidence"
+        )
+
+    try:
+        from app.services.prepaid_service_renewals import (
+            PrepaidServiceRenewalError,
+            resolve_reviewed_prepaid_service_period,
+        )
+
+        resolved_period = resolve_reviewed_prepaid_service_period(
+            ReviewedPrepaidServicePeriodQuery(
+                starts_on=query.issued_on,
+                ends_on=query.next_billing_on,
+                basis=query.calendar.basis,
+                documented_period=(
+                    DocumentedPrepaidServicePeriod(
+                        starts_at=_utc(documentary_entitlement.starts_at),
+                        ends_at=_utc(documentary_entitlement.ends_at),
+                    )
+                    if documentary_entitlement is not None
+                    else None
+                ),
+            )
+        )
+        period_start = resolved_period.starts_at
+        period_end = resolved_period.ends_at
+    except PrepaidServiceRenewalError:
+        period_start = _business_midnight(query.issued_on)
+        period_end = _business_midnight(query.next_billing_on)
+        calendar_error = calendar_error or "reviewed calendar evidence is invalid"
+    due_at = (
+        period_end
+        if query.calendar.basis is ReviewedPrepaidCalendarBasis.documented_anniversary
+        else _business_midnight(query.due_on)
+    )
     if (
-        expected_total <= Decimal("0.00")
+        calendar_error is not None
+        or expected_total <= Decimal("0.00")
         or expected_remaining < Decimal("0.00")
         or period_end <= period_start
         or query.due_on != query.next_billing_on
@@ -4521,7 +4602,8 @@ def preview_missing_paid_prepaid_invoice_repair(
         return _build_missing_paid_invoice_preview(
             query=query,
             disposition=MissingPaidPrepaidInvoiceRepairDisposition.manual_review,
-            reason="reviewed dates or expected monetary values are invalid",
+            reason=calendar_error
+            or "reviewed dates or expected monetary values are invalid",
             due_at=due_at,
             period_start=period_start,
             period_end=period_end,
@@ -4552,6 +4634,36 @@ def preview_missing_paid_prepaid_invoice_repair(
         if subscription.next_billing_at is not None
         else None
     )
+    if query.calendar.basis is ReviewedPrepaidCalendarBasis.documented_anniversary:
+        expected_initial_anchor = query.calendar.expected_initial_anchor_at
+        expected_anchor = (
+            _utc(expected_initial_anchor)
+            if expected_initial_anchor is not None
+            else None
+        )
+        reference_end = (
+            _utc(documentary_entitlement.ends_at)
+            if documentary_entitlement is not None
+            else None
+        )
+        if (
+            current_anchor is None
+            or current_anchor != expected_anchor
+            or reference_end != current_anchor
+            or period_start != current_anchor
+        ):
+            return _build_missing_paid_invoice_preview(
+                query=query,
+                disposition=MissingPaidPrepaidInvoiceRepairDisposition.manual_review,
+                reason="documentary entitlement, approved anchor, and period start disagree",
+                due_at=due_at,
+                period_start=period_start,
+                period_end=period_end,
+                evidence={
+                    "current_next_billing_at": current_anchor,
+                    "reference_entitlement_end": reference_end,
+                },
+            )
     if current_anchor is not None and current_anchor > period_start:
         return _build_missing_paid_invoice_preview(
             query=query,
@@ -4619,6 +4731,23 @@ def preview_missing_paid_prepaid_invoice_repair(
         subscription,
         payment_paid_at,
     )
+    if (
+        charge is not None
+        and query.calendar.basis is ReviewedPrepaidCalendarBasis.documented_anniversary
+    ):
+        from app.services.billing_automation import _period_end
+
+        if _utc(_period_end(period_start, charge.billing_cycle)) != period_end:
+            return _build_missing_paid_invoice_preview(
+                query=query,
+                disposition=MissingPaidPrepaidInvoiceRepairDisposition.manual_review,
+                reason="documentary period end is not the canonical next cadence boundary",
+                issued_at=payment_paid_at,
+                paid_at=payment_paid_at,
+                due_at=due_at,
+                period_start=period_start,
+                period_end=period_end,
+            )
     if (
         charge is None
         or charge.total != expected_total
@@ -4743,6 +4872,8 @@ def preview_missing_paid_prepaid_invoice_repair(
             "settlement_unallocated_amount": settlement.unallocated_amount,
             "tax_rate_id": charge.tax_rate_id,
             "tax_application": charge.tax_application,
+            "calendar_basis": query.calendar.basis,
+            "documentary_entitlement_id": query.documentary_entitlement_id,
         },
     )
 
@@ -6392,6 +6523,14 @@ def _missing_paid_invoice_result(
         or subscription.next_billing_at is None
         or _utc(subscription.next_billing_at) != _utc(invoice.billing_period_end)
         or remaining_credit != round_money(query.expected_remaining_credit)
+        or (
+            query.calendar.basis is ReviewedPrepaidCalendarBasis.documented_anniversary
+            and (
+                query.calendar.expected_initial_anchor_at is None
+                or _utc(invoice.billing_period_start)
+                != _utc(query.calendar.expected_initial_anchor_at)
+            )
+        )
     ):
         _error(
             "incomplete_repair",
@@ -6434,8 +6573,22 @@ def create_reviewed_paid_prepaid_invoice(
             str(command.query.subscription_id),
         )
         locked_payment = lock_for_update(db, Payment, str(command.query.payment_id))
+        locked_documentary_entitlement = (
+            lock_for_update(
+                db,
+                ServiceEntitlement,
+                str(command.query.documentary_entitlement_id),
+            )
+            if command.query.documentary_entitlement_id is not None
+            else None
+        )
         if locked_subscription is None or locked_payment is None:
             _error("not_actionable", "Reviewed subscription or payment was not found.")
+        if (
+            command.query.documentary_entitlement_id is not None
+            and locked_documentary_entitlement is None
+        ):
+            _error("not_actionable", "Documentary entitlement was not found.")
         db.refresh(locked_subscription)
         db.refresh(locked_payment)
 
@@ -6580,8 +6733,9 @@ def create_reviewed_paid_prepaid_invoice(
                     },
                     billing_line_key=(
                         "missing-prepaid-repair:"
-                        f"{locked_subscription.id}:{command.query.issued_on}:"
-                        f"{command.query.next_billing_on}"
+                        f"{locked_subscription.id}:"
+                        f"{current.billing_period_start.isoformat()}:"
+                        f"{current.billing_period_end.isoformat()}"
                     ),
                 ),
                 reason="reviewed_missing_prepaid_paid_invoice",
@@ -6655,6 +6809,17 @@ def create_reviewed_paid_prepaid_invoice(
             "expected_remaining_credit": str(
                 round_money(command.query.expected_remaining_credit)
             ),
+            "calendar_basis": command.query.calendar.basis.value,
+            "expected_initial_anchor_at": (
+                command.query.calendar.expected_initial_anchor_at.isoformat()
+                if command.query.calendar.expected_initial_anchor_at is not None
+                else None
+            ),
+            "documentary_entitlement_id": (
+                str(command.query.documentary_entitlement_id)
+                if command.query.documentary_entitlement_id is not None
+                else None
+            ),
             "preview_fingerprint": current.fingerprint,
             "command_id": str(command.context.command_id),
             "actor": command.context.actor,
@@ -6678,6 +6843,12 @@ def create_reviewed_paid_prepaid_invoice(
                     "issued_on": command.query.issued_on.isoformat(),
                     "due_on": command.query.due_on.isoformat(),
                     "next_billing_on": command.query.next_billing_on.isoformat(),
+                    "calendar_basis": command.query.calendar.basis.value,
+                    "documentary_entitlement_id": (
+                        str(command.query.documentary_entitlement_id)
+                        if command.query.documentary_entitlement_id is not None
+                        else None
+                    ),
                 },
             ),
         )

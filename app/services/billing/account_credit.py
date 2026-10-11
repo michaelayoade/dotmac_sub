@@ -835,6 +835,43 @@ class AccountCreditApplications:
     ) -> AccountCreditApplicationResult:
         """Fund one invoice from one explicitly reviewed native payment."""
 
+        return AccountCreditApplications._apply_invoice_from_selected_payment_fully(
+            db,
+            invoice,
+            payment_id=payment_id,
+            expected_amount=expected_amount,
+            replace_legacy_prepaid_debit=False,
+        )
+
+    @staticmethod
+    def apply_invoice_from_legacy_prepaid_debit_fully(
+        db: Session,
+        invoice: Invoice,
+        *,
+        payment_id: UUID,
+        expected_amount: Decimal,
+    ) -> AccountCreditApplicationResult:
+        """Replace one reviewed prepaid debit with canonical invoice allocation."""
+
+        return AccountCreditApplications._apply_invoice_from_selected_payment_fully(
+            db,
+            invoice,
+            payment_id=payment_id,
+            expected_amount=expected_amount,
+            replace_legacy_prepaid_debit=True,
+        )
+
+    @staticmethod
+    def _apply_invoice_from_selected_payment_fully(
+        db: Session,
+        invoice: Invoice,
+        *,
+        payment_id: UUID,
+        expected_amount: Decimal,
+        replace_legacy_prepaid_debit: bool,
+    ) -> AccountCreditApplicationResult:
+        """Shared selected-payment application with an explicit evidence mode."""
+
         lock_account(db, str(invoice.account_id))
         db.refresh(invoice)
         invoice_remaining = round_money(to_decimal(invoice.balance_due))
@@ -857,15 +894,22 @@ class AccountCreditApplications:
                 currency=currency,
             )
         )
-        payment_available = (
-            round_money(
+        if payment is None:
+            payment_available = Decimal("0.00")
+        elif replace_legacy_prepaid_debit:
+            payment_available = round_money(
+                PaymentAllocations.available_amount_for_reviewed_legacy_debit_replacement(
+                    db,
+                    str(payment_id),
+                    expected_reversal_credit=expected,
+                )
+            )
+        else:
+            payment_available = round_money(
                 PaymentAllocations.available_amount_for_reviewed_document_correction(
                     db, str(payment_id)
                 )
             )
-            if payment is not None
-            else Decimal("0.00")
-        )
         if (
             invoice_remaining <= Decimal("0.00")
             or invoice_remaining != expected
@@ -898,13 +942,11 @@ class AccountCreditApplications:
             amount=expected,
         )
         try:
-            allocation_preview = (
-                PaymentAllocations.preview_reviewed_document_correction_for_owner(
+            if replace_legacy_prepaid_debit:
+                allocation_preview = PaymentAllocations.preview_legacy_prepaid_debit_replacement_for_owner(
                     db, request
                 )
-            )
-            confirmation = (
-                PaymentAllocations.stage_confirm_reviewed_document_correction(
+                confirmation = PaymentAllocations.stage_confirm_legacy_prepaid_debit_replacement_for_owner(
                     db,
                     PaymentAllocationConfirm(
                         **request.model_dump(),
@@ -912,7 +954,22 @@ class AccountCreditApplications:
                         idempotency_key=_allocation_key(payment, invoice),
                     ),
                 )
-            )
+            else:
+                allocation_preview = (
+                    PaymentAllocations.preview_reviewed_document_correction_for_owner(
+                        db, request
+                    )
+                )
+                confirmation = (
+                    PaymentAllocations.stage_confirm_reviewed_document_correction(
+                        db,
+                        PaymentAllocationConfirm(
+                            **request.model_dump(),
+                            preview_fingerprint=allocation_preview.fingerprint,
+                            idempotency_key=_allocation_key(payment, invoice),
+                        ),
+                    )
+                )
         except HTTPException as exc:
             raise AccountCreditApplicationError(
                 code="financial.account_credit_applications.allocation_rejected",
