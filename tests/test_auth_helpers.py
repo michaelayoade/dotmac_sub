@@ -201,7 +201,9 @@ def test_mfa_get_delete_errors(db_session):
     with pytest.raises(HTTPException):
         auth_service.mfa_methods.get(db_session, str(uuid.uuid4()))
     with pytest.raises(HTTPException):
-        auth_service.mfa_methods.delete(db_session, str(uuid.uuid4()))
+        auth_service.mfa_methods.delete(
+            db_session, str(uuid.uuid4()), actor_id="admin-test"
+        )
 
 
 def test_mfa_list_delete(db_session, person):
@@ -229,7 +231,7 @@ def test_mfa_list_delete(db_session, person):
     )
     assert method in listed
 
-    auth_service.mfa_methods.delete(db_session, str(method.id))
+    auth_service.mfa_methods.delete(db_session, str(method.id), actor_id="admin-test")
     db_session.refresh(method)
     assert method.is_active is False
 
