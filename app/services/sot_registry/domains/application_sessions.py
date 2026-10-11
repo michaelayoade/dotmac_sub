@@ -11,6 +11,7 @@ from app.services.sot_manifest import (
     EventContract,
     MigrationContract,
     OwnerRole,
+    ProjectionContract,
     ServiceContract,
     SOTService,
     TransactionContract,
@@ -35,11 +36,139 @@ DOMAIN = DomainSOT(
             name="app_sessions.customer_portal",
             module="app.services.customer_portal_session",
             owns=(
-                "customer portal session creation",
-                "customer portal session refresh/revoke",
+                "customer portal Redis session delivery",
+                "customer portal Redis projection refresh/revoke",
+                "customer portal database session standing",
                 "impersonation/read-only portal session policy",
             ),
-            depends_on=("app_sessions.store", "customer.identity_scope"),
+            depends_on=(
+                "app_sessions.store",
+                "customer.identity_scope",
+                "auth.password_authentication",
+                "app_sessions.auth",
+                "control.settings_spec",
+            ),
+            notes=(
+                "Redis transports customer identity only after committed database "
+                "standing; password_authentication owns the AuthSession decision, "
+                "insert, audit and compensating revoke. No impersonation flag bypass."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer portal Redis session delivery",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=(
+                            "committed authentication session",
+                            "typed customer session identity",
+                            "portal lifetime policy",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="customer portal Redis projection refresh/revoke",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=(
+                            "committed authentication session",
+                            "serialized Redis projection",
+                            "portal lifetime policy",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="customer portal database session standing",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "committed authentication session",
+                            "typed customer session identity",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="impersonation/read-only portal session policy",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "typed customer session identity",
+                            "committed authentication session",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="committed authentication session",
+                        owner="auth.password_authentication",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="AuthSession id, subscriber, active status, revoked_at and expires_at; issuance and revocation are owned database transitions",
+                    ),
+                    AuthorityInput(
+                        name="typed customer session identity",
+                        owner="customer.identity_scope",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="CreateCustomerPortalSession and CustomerSessionStandingQuery bind UUID subscriber/account and optional subscription; existing caller owns impersonation authorization and actor audit",
+                    ),
+                    AuthorityInput(
+                        name="serialized Redis projection",
+                        owner="app_sessions.store",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Redis or explicitly enabled test memory transport: auth_session_id, subscriber/account, expiry and revocation epoch; never independent authentication proof",
+                    ),
+                    AuthorityInput(
+                        name="portal lifetime policy",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="customer session/remember TTL and absolute TTL settings; database standing expires at issuance TTL even if Redis slides",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="This transport/query owns no database writes or commits. AuthSession issuance, audit and compensation execute in password_authentication before Redis delivery. The standing query returns an immutable result.",
+                    locking="Standing is one fresh PK read with populate_existing. Password owner locks principal before source and stages session/audit atomically; Redis operations follow commit.",
+                    idempotency="Each delivery generates a new opaque token; repeating delivery never grants standing absent the same active database row. Invalid projections are deleted.",
+                    retries="Redis delivery failure yields 503 and best-effort owner compensation; lock_timeout preserves Retry-After 5. No stale-success fallback.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="app.services.web_customer_auth and existing authorized impersonation adapters",
+                    fail_closed_on=(
+                        "missing/malformed/inactive/revoked/expired/wrong-subscriber AuthSession",
+                        "legacy unbound Redis payload including forged impersonation flag",
+                        "Redis delivery failure",
+                        "subscription does not belong to the bound subscriber",
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="customer portal Redis session",
+                        input_names=(
+                            "committed authentication session",
+                            "typed customer session identity",
+                            "portal lifetime policy",
+                        ),
+                        writer="app_sessions.store",
+                        freshness="Written after database commit; database standing reloaded every authenticated request and refresh.",
+                        stale_behavior="Deny and invalidate missing/revoked/expired/unbound projections; impersonation has no exception.",
+                        drift_signal="Redis payload absent/malformed or auth_session_id standing mismatch; failed postcommit delivery is reported with no successful cookie.",
+                        rebuild_operation="Require fresh authorized password/MFA or impersonation issuance; never reconstruct standing from Redis or username.",
+                        repair_owner="app_sessions.customer_portal",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="Redis-only customer session authentication and adapter-owned password/MFA success",
+                    new_owner="app_sessions.customer_portal",
+                    verification="Typed creation/standing tests, lifecycle refresh tests, impersonation regressions and PostgreSQL T16/T17/T18 credential/source races.",
+                    cutover_gate="Every production customer session creation is AuthSession backed; get_current_customer and refresh require database standing.",
+                    fallback_retirement="Legacy ordinary/impersonation Redis sessions require re-login. The compatibility facade only converts cache identifiers to typed commands/queries; there is no flag or username fallback.",
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_web_customer_auth.py",
+                    "tests/test_portal_session_lifecycle.py",
+                    "tests/architecture/test_password_authentication_boundary.py",
+                    "tests/integration/test_password_auth_credential_race.py",
+                ),
+            ),
         ),
         SOTService(
             name="app_sessions.auth",

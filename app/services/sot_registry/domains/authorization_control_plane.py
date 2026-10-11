@@ -1585,6 +1585,7 @@ DOMAIN = DomainSOT(
                 "MFA challenge completion",
                 "authentication failure counters",
                 "authenticated password change",
+                "portal authentication source snapshots",
             ),
             depends_on=(
                 "auth.token_signing",
@@ -1608,7 +1609,9 @@ DOMAIN = DomainSOT(
                 "AccessCredential verification uses verify_service_secret and "
                 "retains its existing bcrypt refusal. Reversible user material "
                 "remains compatible until the recovery route and audited "
-                "refusal setting are delivered and approved for cutover."
+                "refusal setting are delivered and approved for cutover. "
+                "Customer portal local password and MFA use the same owner; "
+                "Redis carries auth_session_id and database standing controls every request."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -1645,6 +1648,11 @@ DOMAIN = DomainSOT(
                         canonical_writer="auth.password_authentication",
                     ),
                     ConcernContract(
+                        name="portal authentication source snapshots",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("credential standing record",),
+                    ),
+                    ConcernContract(
                         name="authenticated password change",
                         role=OwnerRole.COMMAND_WRITER,
                         input_names=(
@@ -1677,7 +1685,9 @@ DOMAIN = DomainSOT(
                             "is_active, provider, must_change_password, lock "
                             "window and failure counter; mfa_methods and "
                             "mfa_recovery_codes rows; access_credentials "
-                            "active flag and update marker for PPPoE sources"
+                            "active flag and update marker for PPPoE sources; "
+                            "radius_users and linked access_credentials active flags, "
+                            "subscriber/linkage and strict updated_at markers"
                         ),
                     ),
                     AuthorityInput(
@@ -1687,7 +1697,7 @@ DOMAIN = DomainSOT(
                         source=(
                             "active subscriber, reseller user or Party-bound "
                             "staff principal re-read inside the gate "
-                            "transaction without a principal lock"
+                            "transaction after the principal key-share lock"
                         ),
                     ),
                     AuthorityInput(
@@ -1722,7 +1732,7 @@ DOMAIN = DomainSOT(
                         "their own small owner transaction."
                     ),
                     locking=(
-                        "No SELECT FOR UPDATE and no lock while hashing. A "
+                        "No lock while hashing. A "
                         "session-minting command first takes FOR KEY SHARE on "
                         "the principal row (the lock its session foreign key "
                         "needs anyway), so its order matches reset: principal, "
@@ -1731,6 +1741,11 @@ DOMAIN = DomainSOT(
                         "reset and PostgreSQL re-evaluates the predicate on the "
                         "new row version. Order: principal (key share), "
                         "credential, recovery codes, MFA method, sessions. "
+                        "RADIUS sources then lock access_credentials followed by "
+                        "radius_users, matching access-owner projection sync order. "
+                        "Portal sessions expire at the initial portal TTL; Redis "
+                        "refresh cannot extend database standing. Redis delivery "
+                        "failure invokes best-effort compensating revocation. "
                         "lock_timeout is 5s and maps to a retryable refusal."
                     ),
                     idempotency=(
@@ -1809,21 +1824,27 @@ DOMAIN = DomainSOT(
                     cutover_gate=(
                         "AuthFlow login, MFA and password change call only the "
                         "owner for credential success, failure counters and "
-                        "password writes; customer-portal parity is a follow-up."
+                        "password writes. Customer local password/MFA use the same "
+                        "owner and legacy unbound Redis sessions require re-login."
                     ),
                     fallback_retirement=(
                         "The read-modify-write failure counters, the "
                         "SELECT-then-update recovery-code spend and the "
-                        "unbound MFA challenge are removed from AuthFlow."
+                        "unbound MFA challenge are removed from AuthFlow and the "
+                        "customer portal. Impersonation keeps existing authorization "
+                        "and actor audit and now receives database standing; actor "
+                        "session revocation propagation remains a separate follow-up."
                     ),
                 ),
                 steward="platform security",
                 design_refs=(
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/adr/0002-owner-command-transaction-boundary.md",
+                    "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
                 ),
                 test_refs=(
                     "tests/test_password_authentication.py",
+                    "tests/test_web_customer_auth.py",
                     "tests/architecture/test_password_authentication_boundary.py",
                     "tests/integration/test_password_auth_credential_race.py",
                 ),

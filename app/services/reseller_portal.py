@@ -2381,6 +2381,8 @@ def create_customer_impersonation_session(
     reseller_id: str,
     account_id: str,
     return_to: str,
+    *,
+    request: Request | None = None,
 ) -> str:
     account = _get_customer_account(db, reseller_id, account_id)
     if not account:
@@ -2421,6 +2423,8 @@ def create_customer_impersonation_session(
         subscriber_id=account.id,
         subscription_id=selected_subscription_id,
         is_impersonation=True,
+        db=db,
+        request=request,
         # Reseller "view as customer" uses the same customer portal capabilities
         # as the customer. The impersonation marker remains for attribution and
         # the Exit View banner.

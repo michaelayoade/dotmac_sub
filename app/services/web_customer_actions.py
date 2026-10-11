@@ -2678,6 +2678,8 @@ def create_impersonation_session(
         subscriber_id=selected_account.id,
         subscription_id=selected_subscription_id,
         is_impersonation=True,
+        db=db,
+        request=request,
         return_to=(
             f"/admin/customers/business/{selected_account.id}"
             if selected_account.category == SubscriberCategory.business

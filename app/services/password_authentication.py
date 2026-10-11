@@ -34,9 +34,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from jose import JWTError
@@ -53,6 +53,7 @@ from app.models.auth import (
 )
 from app.models.auth import Session as AuthSession
 from app.models.catalog import AccessCredential
+from app.models.radius import RadiusUser
 from app.services import staff_party_authentication
 from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
@@ -65,6 +66,8 @@ from app.services.owner_commands import (
 if TYPE_CHECKING:
     from fastapi import Request
     from sqlalchemy.orm import InstrumentedAttribute
+
+    from app.services.auth_flow import StagedSession
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +98,21 @@ _CHANGE_COMMAND = OwnerCommandDefinition(
     owner=OWNER, concern=CONCERN_CHANGE, name="change_password"
 )
 
+_IMPERSONATION_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=CONCERN_PASSWORD_STEP,
+    name="establish_customer_impersonation_session",
+)
+_REVOKE_DELIVERY_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=CONCERN_PASSWORD_STEP,
+    name="revoke_undelivered_customer_session",
+)
+
 SRC_USER_CREDENTIAL = "user_credential"
 SRC_ACCESS_CREDENTIAL = "access_credential"
-#: ``radius_user`` (customer-portal RADIUS path without a UserCredential) is a
-#: separate follow-up; a challenge claiming it is refused (fail closed).
-_SOURCES = frozenset({SRC_USER_CREDENTIAL, SRC_ACCESS_CREDENTIAL})
+SRC_RADIUS_USER = "radius_user"
+_SOURCES = frozenset({SRC_USER_CREDENTIAL, SRC_ACCESS_CREDENTIAL, SRC_RADIUS_USER})
 _PRINCIPAL_TYPES = frozenset({"subscriber", "system_user", "reseller_user"})
 _AUDIENCES = frozenset({"general", "admin"})
 CHALLENGE_VERSION = 2
@@ -164,6 +177,8 @@ class VerifiedCredential:
     #: ``updated_at`` of the PPPoE credential at verification; becomes the
     #: ``acu`` claim of an MFA challenge so a changed secret voids it.
     access_credential_updated_at: datetime | None = None
+    radius_user_id: UUID | None = None
+    radius_user_updated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +195,8 @@ class Challenge:
     credential_version: int | None
     access_credential_id: UUID | None
     access_credential_updated_us: int | None
+    radius_user_id: UUID | None = None
+    radius_user_updated_us: int | None = None
 
 
 @dataclass(frozen=True)
@@ -188,13 +205,86 @@ class FailurePolicy:
     lock_minutes: int
 
 
+@dataclass(frozen=True, slots=True)
+class PortalAuthenticationSourceQuery:
+    identifier: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PortalRadiusSnapshot:
+    id: UUID
+    updated_at: datetime | None
+    access_credential_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class PortalAccessSnapshot:
+    id: UUID
+    updated_at: datetime | None
+    secret_hash: str | None = field(repr=False)
+    subscriber_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class PortalAuthenticationSources:
+    radius: PortalRadiusSnapshot | None
+    access: PortalAccessSnapshot | None
+
+
+def resolve_portal_authentication_sources(
+    db: Session,
+    query: PortalAuthenticationSourceQuery,
+) -> PortalAuthenticationSources:
+    """Read-only canonical source snapshots before external verification.
+
+    A linked access record belongs to the RADIUS source; username fallback is
+    resolved only when no active RADIUS source exists, preserving source policy.
+    No session or ORM row crosses this query boundary.
+    """
+    radius = db.scalar(
+        select(RadiusUser)
+        .where(
+            RadiusUser.username == query.identifier,
+            RadiusUser.is_active.is_(True),
+        )
+        .limit(1)
+    )
+    if radius is not None:
+        access = (
+            db.get(AccessCredential, radius.access_credential_id)
+            if radius.access_credential_id
+            else None
+        )
+    else:
+        access = db.scalar(
+            select(AccessCredential)
+            .where(
+                AccessCredential.username == query.identifier,
+                AccessCredential.is_active.is_(True),
+            )
+            .limit(1)
+        )
+    return PortalAuthenticationSources(
+        radius=PortalRadiusSnapshot(
+            radius.id, radius.updated_at, radius.access_credential_id
+        )
+        if radius is not None
+        else None,
+        access=PortalAccessSnapshot(
+            access.id, access.updated_at, access.secret_hash, access.subscriber_id
+        )
+        if access is not None
+        else None,
+    )
+
+
 @dataclass(frozen=True)
 class PasswordStepOutcome:
     """``kind`` is ``session`` | ``mfa_challenge`` | ``enrollment_challenge``."""
 
     kind: str
     credential_version: int | None
-    staged_session: Any = None
+    staged_session: StagedSession | None = None
     challenge_token: str | None = None
 
 
@@ -371,6 +461,9 @@ def _challenge_payload(
     else:
         payload["acid"] = str(verified.access_credential_id)
         payload["acu"] = access_credential_marker(verified.access_credential_updated_at)
+    if verified.src == SRC_RADIUS_USER:
+        payload["rid"] = str(verified.radius_user_id)
+        payload["ru"] = access_credential_marker(verified.radius_user_updated_at)
     return payload
 
 
@@ -439,6 +532,10 @@ def decode_challenge(db: Session | None, token: str, *, expected_typ: str) -> Ch
             raise _invalid_challenge()
         access_id = _uuid_claim(payload, "acid")
         access_us = _int_claim(payload, "acu")
+    radius_id = radius_us = None
+    if src == SRC_RADIUS_USER:
+        radius_id = _uuid_claim(payload, "rid")
+        radius_us = _int_claim(payload, "ru")
     return Challenge(
         typ=expected_typ,
         principal_id=principal_id,
@@ -450,6 +547,8 @@ def decode_challenge(db: Session | None, token: str, *, expected_typ: str) -> Ch
         credential_version=credential_version,
         access_credential_id=access_id,
         access_credential_updated_us=access_us,
+        radius_user_id=radius_id,
+        radius_user_updated_us=radius_us,
     )
 
 
@@ -629,15 +728,29 @@ def _classify_gate_miss(
 def _gate_password_step(
     db: Session, verified: VerifiedCredential, now: datetime
 ) -> int | None:
+    if verified.src == SRC_RADIUS_USER:
+        _gate_radius_standing(
+            db,
+            principal_id=verified.principal_id,
+            access_id=verified.access_credential_id,
+            access_us=access_credential_marker(verified.access_credential_updated_at),
+            radius_id=verified.radius_user_id,
+            radius_us=access_credential_marker(verified.radius_user_updated_at),
+        )
+        return None
     if verified.src == SRC_ACCESS_CREDENTIAL:
         # R8: PPPoE secret authentication never touches user_credentials. Only
         # confirm the secret that was verified is still the live one.
         access_row = db.execute(
-            select(AccessCredential.id).where(
+            select(AccessCredential.id)
+            .where(
                 AccessCredential.id == verified.access_credential_id,
+                AccessCredential.subscriber_id == UUID(verified.principal_id),
                 AccessCredential.is_active.is_(True),
                 AccessCredential.secret_hash == verified.verified_hash,
+                AccessCredential.updated_at == verified.access_credential_updated_at,
             )
+            .with_for_update()
         ).first()
         if access_row is None:
             raise PasswordAuthenticationError(
@@ -675,16 +788,24 @@ def complete_password_step(
     verified: VerifiedCredential,
     *,
     request: Request,
+    session_sink: Literal["auth", "customer_portal"] = "auth",
+    expires_at: datetime | None = None,
 ) -> PasswordStepOutcome:
     """Phase B of the password step: gate, then session OR challenge, + audit."""
 
     af = _auth_flow()
+    if session_sink == "customer_portal" and (
+        verified.principal_type != "subscriber" or expires_at is None
+    ):
+        raise ValueError("Customer portal sessions require subscriber and expiry")
     release_read_transaction(db)
 
     def operation() -> PasswordStepOutcome:
         _set_lock_timeout(db)
         now = _now()
-        if not (verified.mfa_required or verified.enrollment_required):
+        if verified.src != SRC_USER_CREDENTIAL or not (
+            verified.mfa_required or verified.enrollment_required
+        ):
             _lock_principal_key_share(
                 db,
                 principal_type=verified.principal_type,
@@ -745,6 +866,7 @@ def complete_password_step(
             principal_id=verified.principal_id,
             request=request,
             staff_binding=verified.staff_binding,
+            expires_at=expires_at,
         )
         _stage_audit(
             db,
@@ -775,9 +897,59 @@ def complete_password_step(
 # ---------------------------------------------------------------------------
 
 
+def _gate_radius_standing(
+    db: Session,
+    *,
+    principal_id: str,
+    access_id: UUID | None,
+    access_us: int | None,
+    radius_id: UUID | None,
+    radius_us: int | None,
+) -> None:
+    # Access owner syncs its RadiusUser projection after changing AccessCredential.
+    # Match that access -> radius order, under the principal key-share lock.
+    access = db.execute(
+        select(AccessCredential.id)
+        .where(
+            AccessCredential.id == access_id,
+            AccessCredential.subscriber_id == UUID(principal_id),
+            AccessCredential.is_active.is_(True),
+            AccessCredential.updated_at == _from_epoch_us(access_us or 0),
+        )
+        .with_for_update()
+    ).first()
+    radius = (
+        db.execute(
+            select(RadiusUser.id)
+            .where(
+                RadiusUser.id == radius_id,
+                RadiusUser.subscriber_id == UUID(principal_id),
+                RadiusUser.access_credential_id == access_id,
+                RadiusUser.is_active.is_(True),
+                RadiusUser.updated_at == _from_epoch_us(radius_us or 0),
+            )
+            .with_for_update()
+        ).first()
+        if access
+        else None
+    )
+    if radius is None:
+        raise _invalid_challenge()
+
+
 def _gate_challenge_standing(db: Session, challenge: Challenge, now: datetime) -> None:
     """The credential gate for a challenge. Nothing is consumed on a miss."""
 
+    if challenge.src == SRC_RADIUS_USER:
+        _gate_radius_standing(
+            db,
+            principal_id=challenge.principal_id,
+            access_id=challenge.access_credential_id,
+            access_us=challenge.access_credential_updated_us,
+            radius_id=challenge.radius_user_id,
+            radius_us=challenge.radius_user_updated_us,
+        )
+        return
     if challenge.src == SRC_USER_CREDENTIAL:
         # No password-lock predicate on purpose: third-party wrong guesses must
         # not abort a user who already proved the password.
@@ -795,12 +967,15 @@ def _gate_challenge_standing(db: Session, challenge: Challenge, now: datetime) -
         ).first()
     else:
         row = db.execute(
-            select(AccessCredential.id).where(
+            select(AccessCredential.id)
+            .where(
                 AccessCredential.id == challenge.access_credential_id,
+                AccessCredential.subscriber_id == UUID(challenge.principal_id),
                 AccessCredential.is_active.is_(True),
                 AccessCredential.updated_at
                 == _from_epoch_us(challenge.access_credential_updated_us or 0),
             )
+            .with_for_update()
         ).first()
     if row is None:
         raise _invalid_challenge()
@@ -829,7 +1004,9 @@ def complete_mfa(
     totp_ok: bool,
     recovery_code_hash: str | None,
     failure_policy: FailurePolicy,
-):
+    session_sink: Literal["auth", "customer_portal"] = "auth",
+    expires_at: datetime | None = None,
+) -> StagedSession:
     """Phase B of MFA completion; returns the ``StagedSession`` (committed).
 
     Lock order: credential -> mfa_recovery_codes -> mfa_methods -> sessions.
@@ -838,10 +1015,14 @@ def complete_mfa(
     """
 
     af = _auth_flow()
+    if session_sink == "customer_portal" and (
+        challenge.principal_type != "subscriber" or expires_at is None
+    ):
+        raise ValueError("Customer portal sessions require subscriber and expiry")
     release_read_transaction(db)
     binding = _challenge_binding(challenge)
 
-    def operation():
+    def operation() -> StagedSession:
         _set_lock_timeout(db)
         now = _now()
         _lock_principal_key_share(
@@ -907,6 +1088,7 @@ def complete_mfa(
             principal_id=challenge.principal_id,
             request=request,
             staff_binding=binding,
+            expires_at=expires_at,
         )
         _stage_audit(
             db,
@@ -1270,3 +1452,89 @@ def replace_password_representation(
     if postgres:
         db.execute(text("SELECT set_config('app.credential_change_kind', '', true)"))
     return row is not None
+
+
+def revoke_undelivered_customer_session(
+    db: Session, *, session_id: UUID, subscriber_id: UUID
+) -> None:
+    """Compensate a committed issuance whose Redis delivery failed."""
+    release_read_transaction(db)
+
+    def operation() -> None:
+        _set_lock_timeout(db)
+        db.execute(
+            update(AuthSession)
+            .where(
+                AuthSession.id == session_id,
+                AuthSession.subscriber_id == subscriber_id,
+                AuthSession.status == SessionStatus.active,
+            )
+            .values(status=SessionStatus.revoked, revoked_at=_now())
+        )
+
+    _run(
+        db,
+        _REVOKE_DELIVERY_COMMAND,
+        _context("subscriber", str(subscriber_id), "Revoke undelivered portal session"),
+        operation,
+    )
+
+
+def establish_customer_impersonation_session(
+    db: Session,
+    *,
+    subscriber_id: UUID,
+    request: Request,
+    expires_at: datetime,
+) -> StagedSession:
+    """Issue standing for an already-authorized impersonation adapter.
+
+    Caller retains its existing staff/reseller authorization and actor audit.
+    This session has the same reset and expiry authority as ordinary portal login.
+    """
+    release_read_transaction(db)
+
+    def operation() -> StagedSession:
+        _set_lock_timeout(db)
+        _lock_principal_key_share(
+            db, principal_type="subscriber", principal_id=str(subscriber_id)
+        )
+        _check_eligibility(
+            db,
+            principal_type="subscriber",
+            principal_id=str(subscriber_id),
+            staff_binding=None,
+            audience="general",
+            staff_refusal_kind="account_disabled",
+        )
+        staged = _auth_flow().stage_session_issue(
+            db,
+            principal_type="subscriber",
+            principal_id=str(subscriber_id),
+            request=request,
+            expires_at=expires_at,
+        )
+        _stage_audit(
+            db,
+            action="auth.login_succeeded",
+            principal_type="subscriber",
+            principal_id=str(subscriber_id),
+            staff_binding=None,
+            metadata={
+                "session_id": staged.session_id,
+                "src": "impersonation",
+                "mfa": False,
+            },
+        )
+        return staged
+
+    return _run(
+        db,
+        _IMPERSONATION_COMMAND,
+        _context(
+            "subscriber",
+            str(subscriber_id),
+            "Establish authorized customer impersonation",
+        ),
+        operation,
+    )

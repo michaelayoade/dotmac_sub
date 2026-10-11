@@ -818,3 +818,317 @@ def test_t13_migration_670_upgrade_and_downgrade_on_a_668_clone(
         assert connection.execute(
             "SELECT count(*) FROM user_credentials"
         ).fetchone() == (3,)
+
+
+# T16: customer portal parity. Redis epochs are deliberately disabled when
+# checking reset so only the database-authoritative session can invalidate it.
+def _portal_login(factory, account):
+    from app.services import web_customer_auth
+    from tests.test_web_customer_auth import _request
+
+    with factory() as session:
+        return web_customer_auth.customer_login_submit(
+            _request(), session, account.username, CORRECT, False, None
+        )
+
+
+def test_t16_portal_reset_between_verify_and_gate(monkeypatch, factory, account):
+    from app.services import web_customer_auth
+
+    pause = _Pause()
+    real = web_customer_auth.verify_user_password
+
+    def verifier(password, password_hash):
+        valid = real(password, password_hash)
+        if valid:
+            pause.hit()
+        return valid
+
+    monkeypatch.setattr(web_customer_auth, "verify_user_password", verifier)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(_portal_login, factory, account)
+        try:
+            assert pause.reached.wait(WAIT)
+            _reset(factory, account)
+        finally:
+            pause.resume.set()
+        response = pending.result(timeout=WAIT)
+    assert response.status_code == 401
+    assert _session_count(factory, account) == 0
+    assert _credential_row(factory, account).last_login_at is None
+    assert _audit_count(factory, account, "auth.login_succeeded") == 0
+
+
+def test_t16_portal_mfa_reset_rejects_challenge(factory, account):
+    from app.services import web_customer_auth
+    from tests.test_web_customer_auth import _request, _response_cookies
+
+    secret, method_id, _ = _enable_mfa(factory, account)
+    response = _portal_login(factory, account)
+    cookies = _response_cookies(response)
+    assert "customer_mfa_pending" in cookies
+    with factory() as session:
+        before = session.get(MFAMethod, method_id).last_used_at
+    _reset(factory, account)
+    with factory() as session:
+        denied = web_customer_auth.customer_mfa_submit(
+            _request(cookies), session, pyotp.TOTP(secret).now()
+        )
+        assert denied.status_code == 401
+        assert session.get(MFAMethod, method_id).last_used_at == before
+    assert _session_count(factory, account) == 0
+
+
+def test_t16_portal_reset_synchronously_revokes_before_epoch(
+    monkeypatch, factory, account
+):
+    from app.services import customer_portal_session
+    from tests.test_web_customer_auth import _response_cookies
+
+    response = _portal_login(factory, account)
+    token = _response_cookies(response)[customer_portal_session.SESSION_COOKIE_NAME]
+    monkeypatch.setattr(
+        customer_portal_session, "_customer_session_revoked", lambda _payload: False
+    )
+    with factory() as session:
+        assert customer_portal_session.get_current_customer(token, session) is not None
+        # Keep the pre-reset session identity map alive as another request
+        # would: populate_existing must still see the newly committed revoke.
+        _reset(factory, account)
+        assert customer_portal_session.get_current_customer(token, session) is None
+
+
+@pytest.fixture
+def external_standing(factory, account):
+    from app.models.catalog import AccessCredential
+    from app.models.radius import RadiusUser
+
+    with factory() as setup:
+        other = Subscriber(
+            first_name="External",
+            last_name="Standing",
+            email=f"other-{uuid.uuid4()}@example.test",
+            reseller_id=_default_reseller_id(setup),
+        )
+        setup.add(other)
+        access = AccessCredential(
+            subscriber_id=account.subscriber_id,
+            username=f"access-{uuid.uuid4()}",
+            secret_hash="plain:secret",
+            is_active=True,
+        )
+        setup.add(access)
+        setup.flush()
+        radius = RadiusUser(
+            subscriber_id=account.subscriber_id,
+            access_credential_id=access.id,
+            username=access.username,
+            secret_hash=access.secret_hash,
+            is_active=True,
+        )
+        setup.add(radius)
+        setup.commit()
+        verified = pa.VerifiedCredential(
+            src=pa.SRC_ACCESS_CREDENTIAL,
+            principal_type="subscriber",
+            principal_id=str(account.subscriber_id),
+            audience="general",
+            staff_binding=None,
+            mfa_required=False,
+            enrollment_required=False,
+            verified_hash=access.secret_hash,
+            access_credential_id=access.id,
+            access_credential_updated_at=access.updated_at,
+            radius_user_id=radius.id,
+            radius_user_updated_at=radius.updated_at,
+        )
+        other_id, access_id, radius_id = other.id, access.id, radius.id
+    try:
+        yield SimpleNamespace(
+            verified=verified,
+            other_id=other_id,
+            access_id=access_id,
+            radius_id=radius_id,
+        )
+    finally:
+        with factory() as cleanup:
+            cleanup.execute(delete(RadiusUser).where(RadiusUser.id == radius_id))
+            cleanup.execute(
+                delete(AccessCredential).where(AccessCredential.id == access_id)
+            )
+            cleanup.execute(delete(Subscriber).where(Subscriber.id == other_id))
+            cleanup.commit()
+
+
+def _external_portal_step(factory, verified):
+    from datetime import UTC, datetime, timedelta
+
+    with factory() as session:
+        return pa.complete_password_step(
+            session,
+            verified,
+            request=_make_request(),
+            session_sink="customer_portal",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+
+def _external_portal_mfa_step(factory, verified, method_id):
+    from datetime import UTC, datetime, timedelta
+
+    challenge = pa.Challenge(
+        typ="mfa",
+        principal_id=verified.principal_id,
+        principal_type="subscriber",
+        party_id=None,
+        audience="general",
+        src=verified.src,
+        credential_id=None,
+        credential_version=None,
+        access_credential_id=verified.access_credential_id,
+        access_credential_updated_us=pa.access_credential_marker(
+            verified.access_credential_updated_at
+        ),
+        radius_user_id=verified.radius_user_id,
+        radius_user_updated_us=pa.access_credential_marker(
+            verified.radius_user_updated_at
+        ),
+    )
+    with factory() as session:
+        staged = pa.complete_mfa(
+            session,
+            challenge,
+            request=_make_request(),
+            method_id=uuid.UUID(str(method_id)),
+            totp_ok=True,
+            recovery_code_hash=None,
+            failure_policy=pa.FailurePolicy(5, 15),
+            session_sink="customer_portal",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        return pa.PasswordStepOutcome(
+            kind="session", credential_version=None, staged_session=staged
+        )
+
+
+@pytest.mark.parametrize("completion", ["password", "mfa"])
+@pytest.mark.parametrize("source", [pa.SRC_ACCESS_CREDENTIAL, pa.SRC_RADIUS_USER])
+@pytest.mark.parametrize("mutation", ["secret", "disable", "rebind"])
+def test_t17_external_source_mutation_before_gate_denies(
+    factory, account, external_standing, source, mutation, completion
+):
+    from dataclasses import replace
+
+    from app.models.catalog import AccessCredential
+
+    standing = external_standing
+    method_id = _enable_mfa(factory, account)[1] if completion == "mfa" else None
+    with factory() as mutator:
+        values = (
+            {"secret_hash": "plain:changed"}
+            if mutation == "secret"
+            else (
+                {"is_active": False}
+                if mutation == "disable"
+                else {"subscriber_id": standing.other_id}
+            )
+        )
+        mutator.execute(
+            update(AccessCredential)
+            .where(AccessCredential.id == standing.access_id)
+            .values(**values)
+        )
+        mutator.commit()
+    with pytest.raises(pa.PasswordAuthenticationError):
+        if completion == "mfa":
+            _external_portal_mfa_step(
+                factory, replace(standing.verified, src=source), method_id
+            )
+        else:
+            _external_portal_step(factory, replace(standing.verified, src=source))
+    assert _session_count(factory, account) == 0
+    assert _audit_count(factory, account, "auth.login_succeeded") == 0
+
+
+@pytest.mark.parametrize("completion", ["password", "mfa"])
+@pytest.mark.parametrize(
+    "source,target",
+    [
+        (pa.SRC_ACCESS_CREDENTIAL, "access"),
+        (pa.SRC_RADIUS_USER, "access"),
+        (pa.SRC_RADIUS_USER, "radius"),
+    ],
+)
+def test_t18_external_gate_holds_source_lock_until_session_commit(
+    engine, factory, account, external_standing, source, target, completion, monkeypatch
+):
+    from dataclasses import replace
+
+    from app.models.catalog import AccessCredential
+    from app.models.radius import RadiusUser
+
+    standing = external_standing
+    method_id = _enable_mfa(factory, account)[1] if completion == "mfa" else None
+    pause = _Pause()
+    _pause_inside_gate(monkeypatch, pause, "external-gate")
+    pid_ready = threading.Event()
+    backend = {}
+
+    model = AccessCredential if target == "access" else RadiusUser
+    row_id = standing.access_id if target == "access" else standing.radius_id
+
+    def mutate():
+        with factory() as mutator:
+            backend["pid"] = mutator.scalar(text("SELECT pg_backend_pid()"))
+            pid_ready.set()
+            mutator.execute(
+                update(model)
+                .where(model.id == row_id)
+                .values(secret_hash="plain:changed")
+            )
+            mutator.commit()
+
+    with (
+        ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="external-gate"
+        ) as login_pool,
+        ThreadPoolExecutor(max_workers=1) as mutation_pool,
+    ):
+        if completion == "mfa":
+            login = login_pool.submit(
+                _external_portal_mfa_step,
+                factory,
+                replace(standing.verified, src=source),
+                method_id,
+            )
+        else:
+            login = login_pool.submit(
+                _external_portal_step, factory, replace(standing.verified, src=source)
+            )
+        try:
+            assert pause.reached.wait(WAIT)
+            changed = mutation_pool.submit(mutate)
+            assert pid_ready.wait(WAIT)
+            deadline = time.monotonic() + 10
+            with engine.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as observer:
+                while time.monotonic() < deadline:
+                    state = observer.scalar(
+                        text(
+                            "SELECT wait_event_type FROM pg_stat_activity WHERE pid=:pid"
+                        ),
+                        {"pid": backend["pid"]},
+                    )
+                    if state == "Lock":
+                        break
+                    time.sleep(0.05)
+                else:
+                    pytest.fail(
+                        "exact source-mutator backend never waited on the gate lock"
+                    )
+        finally:
+            pause.resume.set()
+        assert login.result(timeout=WAIT).kind == "session"
+        changed.result(timeout=WAIT)
+    assert _session_count(factory, account) == 1

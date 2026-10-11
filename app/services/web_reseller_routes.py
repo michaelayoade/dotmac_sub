@@ -321,6 +321,7 @@ def reseller_account_view(
 
     session_token = reseller_portal.create_customer_impersonation_session(
         db=db,
+        request=request,
         reseller_id=str(context["reseller"].id),
         account_id=account_id,
         return_to="/reseller/accounts",
