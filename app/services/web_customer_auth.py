@@ -29,7 +29,7 @@ from app.services import (
     radius_auth,
 )
 from app.services import module_manager as module_manager_service
-from app.services.auth_flow import verify_password
+from app.services.auth_flow import verify_user_password
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
@@ -440,7 +440,7 @@ def customer_login_submit(
                         "Account locked", locked_until=locked_until
                     )
                 )
-            if not verify_password(password, local_credential.password_hash):
+            if not verify_user_password(password, local_credential.password_hash):
                 local_password_failed = True
             else:
                 if local_credential.must_change_password:

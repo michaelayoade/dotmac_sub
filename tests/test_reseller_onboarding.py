@@ -544,7 +544,9 @@ def test_exact_reset_supports_first_class_reseller_user(
         .one()
     )
     assert credential.must_change_password is False
-    assert auth_flow.verify_password("ReplacementSecret123!", credential.password_hash)
+    assert auth_flow.verify_user_password(
+        "ReplacementSecret123!", credential.password_hash
+    )
 
 
 def test_first_class_role_assignment_fails_closed(

@@ -269,8 +269,8 @@ def test_load_rbac_claims_none():
     assert permissions == []
 
 
-def test_verify_password_none():
-    assert auth_flow_service.verify_password("secret", None) is False
+def test_verify_user_password_none():
+    assert auth_flow_service.verify_user_password("secret", None) is False
 
 
 def test_refresh_and_logout_responses_missing_token(monkeypatch):

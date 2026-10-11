@@ -19,7 +19,7 @@ from sqlalchemy import MetaData, Table, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider, UserCredential
-from app.services.auth_flow import verify_password
+from app.services.auth_flow import verify_user_password
 
 MAX_ROWS = 500
 DEFAULT_ROWS = 100
@@ -126,7 +126,7 @@ def _verify_local_password(db: Session, *, principal_id: str, password: str) -> 
         .where(UserCredential.is_active.is_(True))
         .order_by(UserCredential.created_at.desc())
     ).first()
-    if credential and verify_password(password, credential.password_hash):
+    if credential and verify_user_password(password, credential.password_hash):
         return True
 
     credential = db.scalars(
@@ -136,7 +136,7 @@ def _verify_local_password(db: Session, *, principal_id: str, password: str) -> 
         .where(UserCredential.is_active.is_(True))
         .order_by(UserCredential.created_at.desc())
     ).first()
-    return bool(credential and verify_password(password, credential.password_hash))
+    return bool(credential and verify_user_password(password, credential.password_hash))
 
 
 def issue_confirmation_token(*, principal_id: str) -> str:

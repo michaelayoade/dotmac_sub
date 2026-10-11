@@ -213,7 +213,7 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
         .one()
     )
     original_hash = credential.secret_hash
-    assert auth_flow_service.verify_password("InitialPass123", original_hash)
+    assert auth_flow_service.verify_service_secret("InitialPass123", original_hash)
 
     web_catalog_subscriptions_service.update_subscription_with_audit(
         db_session,
@@ -229,7 +229,9 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
     db_session.refresh(credential)
     assert credential.username == "10004167"
     assert credential.secret_hash == original_hash
-    assert auth_flow_service.verify_password("InitialPass123", credential.secret_hash)
+    assert auth_flow_service.verify_service_secret(
+        "InitialPass123", credential.secret_hash
+    )
 
 
 def test_generic_edit_preserves_lifecycle_and_commercial_facts(
@@ -321,7 +323,7 @@ def test_upsert_access_credential_prefers_active_matching_username(
     db_session.refresh(inactive_newer_credential)
     assert active_credential.username == "100015322"
     assert active_credential.is_active is True
-    assert auth_flow_service.verify_password(
+    assert auth_flow_service.verify_service_secret(
         "NewPass123", active_credential.secret_hash
     )
     assert inactive_newer_credential.username == "100015322_1"
@@ -379,7 +381,9 @@ def test_upsert_access_credential_stores_service_password_in_reversible_format(
     )
 
     assert credential.secret_hash.startswith(("plain:", "enc:"))
-    assert auth_flow_service.verify_password("InitialPass123", credential.secret_hash)
+    assert auth_flow_service.verify_service_secret(
+        "InitialPass123", credential.secret_hash
+    )
 
 
 def test_subscription_form_context_exposes_current_service_password(
