@@ -2274,12 +2274,6 @@ def seed_auth_policy_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("AUTH_DEFAULT_AUTH_PROVIDER", "local"),
     )
-    auth_settings.ensure_by_key(
-        db,
-        key="default_session_status",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("AUTH_DEFAULT_SESSION_STATUS", "active"),
-    )
 
 
 def seed_provisioning_settings(db: Session) -> None:
