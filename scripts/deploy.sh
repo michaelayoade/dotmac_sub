@@ -1465,17 +1465,42 @@ APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
   "${COMPOSE[@]}" run --rm --no-deps app \
   python -m scripts.migration.retire_legacy_service_team_sources --check
 
-log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
-set_env_value APP_IMAGE "${IMAGE}"
-set_env_value GIT_SHA "${FULL_SHA}"
+# --- Pre-swap pin and migration ---------------------------------------------
+# The compose one-off migration container reads APP_IMAGE/GIT_SHA from .env, so
+# the candidate pin must be written first. The OLD app and workers keep serving
+# throughout (PRIMARY_REPLACED=0, no candidate started). If the migration fails
+# here nothing new ever served and alembic ran in one transaction, so it rolled
+# back. That is NOT a rollback: restore_prev (payment-email floor guard) is
+# deliberately not invoked and not bypassed. We only put the .env pin back to
+# the value that matches the containers still running, so a later recreate
+# cannot start the new image against the un-migrated schema.
+pin_and_migrate() {
+  log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
+  set_env_value APP_IMAGE "${IMAGE}" || return 1
+  set_env_value GIT_SHA "${FULL_SHA}" || return 1
 
-# Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
-# merged heads), so use `heads` (plural), never `head`.
-log "Applying migrations (alembic upgrade heads)"
-if [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
-  log "Skipping migrations under verified post-migration resume evidence"
-else
-  run_migrations
+  # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
+  # merged heads), so use `heads` (plural), never `head`.
+  log "Applying migrations (alembic upgrade heads)"
+  if [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
+    log "Skipping migrations under verified post-migration resume evidence"
+    return 0
+  fi
+  if run_migrations; then
+    return 0
+  fi
+  echo "DEPLOY MIGRATION FAILED before any new container served traffic." >&2
+  if repin_prev; then
+    echo "Restored .env pin to the running image ${PREV_IMAGE:-<unset>} (GIT_SHA ${PREV_GIT_SHA:-<unset>}); no container was restarted or recreated and no rollback path was used. Migration ran in one transaction and was rolled back (alembic head unchanged). Repair forward and redeploy." >&2
+  else
+    echo "DEPLOY PIN RESTORE FAILED: .env may still pin ${IMAGE}; set APP_IMAGE=${PREV_IMAGE:-<unset>} GIT_SHA=${PREV_GIT_SHA:-<unset>} by hand before any container is recreated." >&2
+  fi
+  return 1
+}
+# --- End pre-swap pin and migration -------------------------------------------
+if ! pin_and_migrate; then
+  trap - ERR
+  exit 1
 fi
 
 log "Verifying database schema contracts"
