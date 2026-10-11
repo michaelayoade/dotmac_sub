@@ -106,49 +106,6 @@ from app.services.whatsapp_notification_templates import (
     provider_template_from_template,
 )
 
-
-@dataclass(frozen=True, slots=True)
-class UpdateCustomerProfileCommand:
-    """Closed customer-portal profile update boundary."""
-
-    subscriber_id: UUID
-    first_name: str
-    last_name: str
-    email: str
-    billing_notifications: bool
-    sms_updates: bool
-    display_name: str | None = None
-    phone: str | None = None
-    nin: str | None = None
-    date_of_birth: str | None = None
-    gender: str | None = None
-    preferred_contact_method: str | None = None
-    address_line1: str | None = None
-    address_line2: str | None = None
-    city: str | None = None
-    region: str | None = None
-    lga: str | None = None
-    postal_code: str | None = None
-    country_code: str | None = None
-    push_notifications: bool = True
-    service_notifications: bool = True
-    account_notifications: bool = True
-    usage_notifications: bool = True
-    general_notifications: bool = True
-    locale: str | None = None
-    enforce_biodata: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class CustomerProfileUpdateOutcome:
-    subscriber_record: Subscriber
-    email_changed: bool
-
-    @property
-    def subscriber(self) -> Subscriber:
-        return self.subscriber_record
-
-
 CUSTOMER_INVOICE_PAYMENT_METHOD_PAYSTACK = "paystack"
 CUSTOMER_INVOICE_PAYMENT_METHOD_TRANSFER = "transfer"
 CUSTOMER_INVOICE_PAYMENT_METHOD_PAYSTACK_VALUES = frozenset(
@@ -1541,7 +1498,6 @@ def _evaluate_bulk_message_domain(
     db: Session, *, spec: BulkMessageSpec
 ) -> BulkMessageEvaluation:
     """Translate legacy helper failures at its typed collaborator boundary."""
-    from app.services.domain_errors import DomainError
 
     try:
         return _evaluate_bulk_message(db=db, spec=spec)
@@ -1566,7 +1522,6 @@ def queue_bulk_message_from_payload(
         materialize_immediate,
     )
     from app.services.db_session_adapter import db_session_adapter
-    from app.services.domain_errors import DomainError
     from app.services.owner_commands import CommandContext
 
     try:
@@ -3466,66 +3421,6 @@ def delete_customer_contact(db: Session, *, contact_id: str) -> None:
     if channel:
         db.delete(channel)
         db.commit()
-
-
-def update_customer_profile(
-    db: Session,
-    *,
-    command: UpdateCustomerProfileCommand,
-) -> CustomerProfileUpdateOutcome | None:
-    """Compatibility adapter for the customer portal profile command owner."""
-    from app.services import customer_portal_profile_commands as owner
-
-    db_session_adapter.release_read_transaction(db)
-    try:
-        outcome = owner.update_customer_profile(
-            db,
-            command=owner.UpdateCustomerProfileCommand(
-                context=CommandContext.system(
-                    actor="customer_portal_legacy_adapter",
-                    scope=owner.PORTAL_PROFILE_WRITE_SCOPE,
-                    reason="legacy customer profile service adapter",
-                ),
-                subscriber_id=UUID(str(command.subscriber_id)),
-                first_name=command.first_name,
-                last_name=command.last_name,
-                display_name=command.display_name,
-                email=command.email,
-                phone=command.phone,
-                nin=command.nin,
-                date_of_birth=command.date_of_birth,
-                gender=command.gender,
-                preferred_contact_method=command.preferred_contact_method,
-                address_line1=command.address_line1,
-                address_line2=command.address_line2,
-                city=command.city,
-                region=command.region,
-                lga=command.lga,
-                postal_code=command.postal_code,
-                country_code=command.country_code,
-                billing_notifications=command.billing_notifications,
-                sms_updates=command.sms_updates,
-                push_notifications=command.push_notifications,
-                service_notifications=command.service_notifications,
-                account_notifications=command.account_notifications,
-                usage_notifications=command.usage_notifications,
-                general_notifications=command.general_notifications,
-                locale=command.locale,
-                enforce_biodata=command.enforce_biodata,
-            ),
-        )
-    except DomainError as exc:
-        if exc.code.endswith("subscriber_not_found"):
-            return None
-        raise ValueError(exc.message) from exc
-
-    subscriber = db.get(Subscriber, outcome.subscriber_id)
-    if subscriber is None:
-        return None
-    return CustomerProfileUpdateOutcome(
-        subscriber_record=subscriber,
-        email_changed=outcome.email_changed,
-    )
 
 
 def approve_subscriber_name_correction(

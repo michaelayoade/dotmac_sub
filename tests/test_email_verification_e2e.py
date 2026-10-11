@@ -12,7 +12,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.services import auth_flow as auth_flow_service
-from app.services import web_customer_actions
+from app.services import customer_portal_profile_commands as profile_commands
+from app.services.audit_adapter import AuditActor
+from tests.customer_profile_owner_support import (
+    profile_command_context,
+    profile_owner_session,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -112,26 +117,38 @@ def test_profile_email_change_rearms_verification(
     db_session.commit()
 
     new_email = f"changed-{uuid.uuid4().hex[:8]}@example.com"
-    outcome = web_customer_actions.update_customer_profile(
-        db_session,
-        command=web_customer_actions.UpdateCustomerProfileCommand(
-            subscriber_id=subscriber.id,
-            first_name="Test",
-            last_name="User",
-            email=new_email,
-            phone=None,
-            billing_notifications=False,
-            sms_updates=False,
-        ),
-    )
+    with profile_owner_session(db_session) as owner_db:
+        outcome = profile_commands.update_customer_profile(
+            owner_db,
+            command=profile_commands.UpdateCustomerProfileCommand(
+                context=profile_command_context(actor_id=subscriber.id),
+                actor=AuditActor.user(str(subscriber.id)),
+                subscriber_id=subscriber.id,
+                first_name="Test",
+                last_name="User",
+                email=new_email,
+                phone=None,
+                billing_notifications=False,
+                sms_updates=False,
+            ),
+        )
+    db_session.refresh(subscriber)
     assert outcome is not None
-    updated = outcome.subscriber
+    updated = subscriber
     assert updated.email == new_email
     assert updated.email_verified is False
 
-    # A fresh verification email went to the new address.
-    assert len(_capture_email) == 1
-    assert _capture_email[0]["to_email"] == new_email
+    # The profile transaction stages a delivery; it does not call SMTP.
+    from sqlalchemy import select
+
+    from app.models.notification import Notification
+
+    assert _capture_email == []
+    notification = db_session.scalars(
+        select(Notification).where(Notification.event_type == "auth.email_verification")
+    ).one()
+    assert notification.recipient == new_email
+    assert notification.body is None
 
 
 def test_profile_same_email_does_not_resend(
@@ -141,20 +158,24 @@ def test_profile_same_email_does_not_resend(
     subscriber.email_verified = True
     db_session.commit()
 
-    outcome = web_customer_actions.update_customer_profile(
-        db_session,
-        command=web_customer_actions.UpdateCustomerProfileCommand(
-            subscriber_id=subscriber.id,
-            first_name="Test",
-            last_name="User",
-            email=subscriber.email,
-            phone=None,
-            billing_notifications=False,
-            sms_updates=False,
-        ),
-    )
+    with profile_owner_session(db_session) as owner_db:
+        outcome = profile_commands.update_customer_profile(
+            owner_db,
+            command=profile_commands.UpdateCustomerProfileCommand(
+                context=profile_command_context(actor_id=subscriber.id),
+                actor=AuditActor.user(str(subscriber.id)),
+                subscriber_id=subscriber.id,
+                first_name="Test",
+                last_name="User",
+                email=subscriber.email,
+                phone=None,
+                billing_notifications=False,
+                sms_updates=False,
+            ),
+        )
+    db_session.refresh(subscriber)
     assert outcome is not None
-    updated = outcome.subscriber
+    updated = subscriber
     assert updated.email_verified is True
     assert _capture_email == []
 

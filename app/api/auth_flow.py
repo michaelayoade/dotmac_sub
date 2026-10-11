@@ -551,6 +551,15 @@ def resend_verification_email_endpoint(
     """
     from app.services.rate_limiter_adapter import allow_operation
 
+    if auth.get("principal_type") != "subscriber":
+        # Verification is a Subscriber-account field. UUIDs for staff and
+        # first-class reseller users do not identify Subscriber records.
+        return ResendVerificationEmailResponse(sent=False)
+    if auth.get("impersonated_by") or auth.get("is_impersonation"):
+        raise HTTPException(
+            status_code=403,
+            detail="Email verification is unavailable during impersonation.",
+        )
     principal_id = auth["principal_id"]
     decision = allow_operation(
         f"auth:resend-verification:{principal_id}",
@@ -562,5 +571,34 @@ def resend_verification_email_endpoint(
             status_code=429,
             detail="Too many verification email requests. Please try again later.",
         )
-    sent = auth_flow_service.send_email_verification(db, principal_id)
+    from uuid import UUID
+
+    from app.services import email_verification
+    from app.services.audit_adapter import AuditActor
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.owner_commands import CommandContext
+
+    # Derive the authenticated target before opening the independent owner session.
+    target_id = UUID(str(principal_id))
+    try:
+        with db_session_adapter.owner_command_session() as owner_db:
+            outcome = email_verification.request_email_verification(
+                owner_db,
+                command=email_verification.RequestEmailVerificationCommand(
+                    context=CommandContext.system(
+                        actor=f"subscriber:{target_id}",
+                        scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                        reason="Authenticated email verification resend",
+                    ),
+                    subscriber_id=target_id,
+                    actor=AuditActor.user(str(target_id)),
+                ),
+            )
+            sent = outcome.queued
+    except email_verification.EmailVerificationError as exc:
+        if exc.code == "auth.email_verification.lock_timeout":
+            raise HTTPException(
+                status_code=503, detail=exc.message, headers={"Retry-After": "5"}
+            ) from exc
+        raise HTTPException(status_code=409, detail=exc.message) from exc
     return ResendVerificationEmailResponse(sent=sent)

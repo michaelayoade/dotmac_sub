@@ -130,7 +130,13 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +2 from tests/test_credential_administration.py: independent read/write
 #: sessions prove retained ORM objects are refreshed by locked owner admission.
 #: Production preparation uses app.db.SessionLocal, adding no construction debt.
-TEST_FIXTURE_BASELINE_TOTAL = 191
+#: +1 from tests/integration/test_email_verification_intents_pg.py: independent
+#: migrated PostgreSQL sessions prove exact Subscriber locking, request replay,
+#: and the existing dedupe unique constraint. No production site is added.
+#: +1 from tests/customer_profile_owner_support.py: canonical profile tests use
+#: a fresh Session within fixture isolation, preserving the caller Session.
+#: This is fast-unit evidence only; no production construction site is added.
+TEST_FIXTURE_BASELINE_TOTAL = 193
 
 
 def _baseline() -> dict[str, int]:

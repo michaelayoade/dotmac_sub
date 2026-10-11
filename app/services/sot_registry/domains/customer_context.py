@@ -984,6 +984,7 @@ DOMAIN = DomainSOT(
             ),
             depends_on=(
                 "control.settings_spec",
+                "auth.email_verification",
                 "customer.accounts",
                 "customer.identity_scope",
                 "events.dispatcher",
@@ -1038,14 +1039,14 @@ DOMAIN = DomainSOT(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
                         "execute_owner_command commits profile, identity index, "
-                        "event, and audit evidence atomically; geocoding is a "
+                        "event, audit and verification intent evidence atomically; geocoding is a "
                         "best-effort spatial consequence."
                     ),
                     locking="The target Subscriber is selected FOR UPDATE before validation and mutation.",
                     idempotency=(
                         "Applying the same typed profile values converges to the "
-                        "same Subscriber state; verification dispatch occurs only "
-                        "after the command transaction commits."
+                        "same Subscriber state; verification is staged in the "
+                        "same transaction only on email change."
                     ),
                     retries="Retry the complete owner command after rollback using the same command context.",
                 ),
@@ -1089,16 +1090,16 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 migration=MigrationContract(
-                    state=AuthorityMigrationState.CUTOVER_READY,
-                    old_owner="customer.profile_commands portal update helper",
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="customer.profile_commands (web_customer_actions.update_customer_profile)",
                     new_owner="customer.portal_profile_commands",
                     verification=(
                         "tests/test_customer_profile_location.py and "
-                        "tests/test_customer_portal_gaps.py"
+                        "tests/test_customer_portal_gaps.py and the legacy-writer absence guard"
                     ),
                     cutover_gate="The profile POST route calls the typed owner directly.",
                     fallback_retirement=(
-                        "The legacy profile helper no longer handles portal writes."
+                        "The unused compatibility profile writer and orphaned command/outcome conversion types are removed. Product adapters and migrated tests call the canonical typed owner with explicit actual actor provenance on a fresh session."
                     ),
                 ),
                 steward="customer operations",

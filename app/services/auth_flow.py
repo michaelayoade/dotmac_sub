@@ -2673,6 +2673,9 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
 
 def send_email_verification(db: Session, subscriber_id: str) -> bool:
     """
+    Legacy mobile-profile compatibility path, pending a partial-profile owner.
+    New request adapters must call email_verification.request_email_verification.
+
     Mint an email-verification token and send the verification email to the
     subscriber's address. No-op (returns False) when the subscriber is missing,
     has no email, or is already verified.

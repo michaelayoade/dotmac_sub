@@ -176,6 +176,135 @@ DOMAIN = DomainSOT(
     authentication_mechanisms=("local", "oidc"),
     setting_domains=("auth",),
     services=(
+        SOTService(
+            name="identity.capability_recipient",
+            module="app.services.capability_recipient",
+            owns=("exact authorized capability email recipient",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="exact authorized capability email recipient",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("canonical capability contact field",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical capability contact field",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Contact email field supplied by the exact principal owner; parser must yield exactly one deliverable address.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="Pure recipient resolution; no database mutation or transaction completion.",
+                    locking="The calling principal owner supplies locked current contact state when requesting a capability.",
+                    idempotency="Same contact value resolves the same one address or same refusal.",
+                    retries="Malformed or multiple addresses require canonical contact correction before retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "identity.capability_recipient.no_deliverable_address",
+                        "identity.capability_recipient.ambiguous_address",
+                    ),
+                    mapping_owner="Calling capability owner and authenticated adapters",
+                    fail_closed_on=(
+                        "no deliverable address",
+                        "multiple deliverable addresses",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="identity.capability_recipient",
+                ),
+                steward="platform security",
+                design_refs=("docs/EMAIL_VERIFICATION_EPHEMERAL_DELIVERY.md",),
+                test_refs=("tests/test_capability_recipient.py",),
+            ),
+        ),
+        SOTService(
+            name="auth.email_verification",
+            module="app.services.email_verification",
+            owns=("email verification delivery request",),
+            depends_on=(
+                "customer.accounts",
+                "identity.capability_recipient",
+                "auth.token_signing",
+                "communications.intents",
+                "communications.ephemeral_actions",
+                "observability.audit_log",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="email verification delivery request",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("exact Subscriber verification request",),
+                        canonical_writer="auth.email_verification",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="exact Subscriber verification request",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed request context with trusted actual AuditActor and exact locked/reloaded Subscriber email, verified and active state; configured bounded TTL.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="Public request enters execute_owner_command once; flush-only stage_email_verification participates only in this owner or customer.portal_profile_commands. Audit and communication intent/outbox commit or roll back together.",
+                    locking="Public requests set PostgreSQL transaction-local lock_timeout5s before exact Subscriber UUID FOR UPDATE with populate_existing; caller writes are never rolled back. Profile flush precedes participant reload.",
+                    idempotency="Stable request key uses the existing unique intent dedupe constraint. Email-digest/Subscriber/TTL/purpose fingerprint mismatch fails closed; same evidence replays one intent.",
+                    retries="Retry complete request after rollback with unchanged context; unique constraint arbitrates cross-Subscriber key races, which fail without delivery.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "auth.email_verification"
+                    )
+                    + (
+                        "auth.email_verification.invalid_command",
+                        "auth.email_verification.invalid_scope",
+                        "auth.email_verification.invalid_participant",
+                        "auth.email_verification.lock_timeout",
+                        "auth.email_verification.idempotency_conflict",
+                    ),
+                    mapping_owner="Authenticated API/customer/reseller resend adapters: lock_timeout maps to 503 Retry-After5; impersonation without actual actor is refused403",
+                    retryable_codes=("auth.email_verification.lock_timeout",),
+                    fail_closed_on=(
+                        "changed recipient or verified/inactive account",
+                        "malformed purpose/audience/context",
+                        "audit or intent queue failure",
+                        "request fingerprint conflict",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("auth.email_verification",),
+                    schema_version=1,
+                    delivery_owner="communications.intents",
+                    compatibility="Intent and Notification bodies are null. Allowlisted descriptor stores UUID, email digest, bounded TTL and purpose; request audit carries safe request IDs and outcome only.",
+                    replay="Worker revalidates exact current address and unverified state before minting and rendering solely in memory. Existing worker owns sensitive transport/outcomes.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner="auth_flow.send_email_verification",
+                    new_owner="auth.email_verification",
+                    verification="Focused atomicity, replay, materialization and adapter isolation tests; PostgreSQL lock/unique tests require hosted migrated-schema gate.",
+                    cutover_gate="API and portal/reseller resend plus portal profile changes use intent owner.",
+                    fallback_retirement="Legacy mobile /me still calls set_subscriber_email and direct compatibility wrapper; retire only with reviewed partial-profile coordinator. S7 remains open; query-token URL remains until browser bridge is implemented.",
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/EMAIL_VERIFICATION_EPHEMERAL_DELIVERY.md",
+                    "docs/adr/0002-owner-command-transaction-boundary.md",
+                ),
+                test_refs=(
+                    "tests/test_email_verification_intents.py",
+                    "tests/integration/test_email_verification_intents_pg.py",
+                ),
+            ),
+        ),
         *CREDENTIAL_ADMINISTRATION_SERVICES,
         SOTService(
             name="auth.permission_gate",
