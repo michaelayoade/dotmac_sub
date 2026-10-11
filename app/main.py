@@ -37,7 +37,11 @@ from app.csrf import (
 )
 from app.errors import register_error_handlers
 from app.logging import configure_logging
-from app.metrics import APPLICATION_READINESS, WORKER_STARTUP_DURATION
+from app.metrics import (
+    APPLICATION_READINESS,
+    AUDIT_SETTINGS_FALLBACKS,
+    WORKER_STARTUP_DURATION,
+)
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Subscriber
 from app.monitoring import setup_monitoring
@@ -854,6 +858,7 @@ async def audit_middleware(request: Request, call_next):
             try:
                 audit_settings = _load_audit_settings(db)
             except SQLAlchemyError:
+                AUDIT_SETTINGS_FALLBACKS.inc()
                 logger.warning(
                     "audit_settings_refresh_failed",
                     exc_info=True,
@@ -863,7 +868,6 @@ async def audit_middleware(request: Request, call_next):
                     },
                 )
                 audit_settings = _default_audit_settings()
-                audit_settings["enabled"] = False
             finally:
                 db.close()
     if not audit_settings["enabled"]:
