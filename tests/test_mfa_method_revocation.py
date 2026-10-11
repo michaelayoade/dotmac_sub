@@ -189,3 +189,69 @@ def test_service_refuses_blank_actor(db_session, subscriber):
     with pytest.raises(HTTPException) as exc:
         auth_service.mfa_methods.delete(db_session, str(method.id), actor_id=" ")
     assert exc.value.status_code == 403
+
+
+def test_disable_clears_seed_and_revokes_principal_sessions_with_event(
+    db_session, subscriber
+):
+    from datetime import UTC, datetime
+
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
+    from app.models.event_store import EventStore
+
+    method = _method(db_session, subscriber)
+    db_session.add(
+        AuthSession(
+            subscriber_id=subscriber.id,
+            token_hash="mfa-revoke-session",
+            expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    mid = method.id
+    auth_service.mfa_methods.delete(db_session, str(mid), actor_id="admin")
+    db_session.expire_all()
+    assert db_session.get(MFAMethod, mid).secret is None
+    session = db_session.query(AuthSession).one()
+    assert session.status == SessionStatus.revoked
+    payload = db_session.query(EventStore).one().payload
+    assert payload["invalidate_sessions"] is True
+    assert payload["principal_type"] == "subscriber"
+    assert payload["sessions_revoked"] == 1
+    assert "unit-fixture-secret" not in repr(payload)
+
+
+def test_stolen_seed_cannot_reconfirm_disabled_method_nor_demote_new_primary(
+    monkeypatch, db_session, subscriber
+):
+    import pyotp
+
+    from app.services import auth_flow
+
+    monkeypatch.setattr(auth_flow, "_decrypt_secret", lambda db, value: value)
+    seed = pyotp.random_base32()
+    old = _method(db_session, subscriber)
+    old_id, sub_id = old.id, str(subscriber.id)
+    auth_service.mfa_methods.delete(db_session, str(old_id), actor_id="admin")
+    # Worst case: a pre-existing disabled row that still carries its seed.
+    db_session.get(MFAMethod, old_id).secret = seed
+    db_session.commit()
+    fresh = MFAMethod(
+        subscriber_id=subscriber.id,
+        method_type=MFAMethodType.totp,
+        secret="fresh-secret",
+        is_primary=True,
+        enabled=True,
+    )
+    db_session.add(fresh)
+    db_session.commit()
+    fresh_id = fresh.id
+    with pytest.raises(HTTPException) as exc:
+        auth_flow.auth_flow.mfa_confirm(
+            db_session, str(old_id), pyotp.TOTP(seed).now(), sub_id
+        )
+    assert exc.value.status_code == 403
+    db_session.expire_all()
+    assert db_session.get(MFAMethod, old_id).enabled is False
+    assert db_session.get(MFAMethod, fresh_id).is_primary is True

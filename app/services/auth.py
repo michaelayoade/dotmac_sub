@@ -3,6 +3,7 @@ import hmac
 import logging
 import secrets
 import time
+import uuid
 from datetime import UTC, datetime
 from typing import cast
 
@@ -278,26 +279,41 @@ class MFAMethods(ListResponseMixin):
 
         if not actor_id or not actor_id.strip():
             raise HTTPException(status_code=403, detail="Administrator is required")
+        from app.models.auth import Session as _AuthSession
+        from app.services.credential_administration import (
+            PrincipalType,
+            _lock_principal,
+        )
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        def principal_of(row: MFAMethod) -> tuple[PrincipalType, uuid.UUID]:
+            for kind, value in (
+                (PrincipalType.subscriber, row.subscriber_id),
+                (PrincipalType.system_user, row.system_user_id),
+                (PrincipalType.reseller_user, row.reseller_user_id),
+            ):
+                if value is not None:
+                    return kind, value
+            raise HTTPException(status_code=404, detail="MFA method not found")
+
         try:
+            probe = db.get(MFAMethod, coerce_uuid(method_id))
+            if not probe:
+                raise HTTPException(status_code=404, detail="MFA method not found")
+            kind, principal_id = principal_of(probe)
+            # Lock order matches login/complete_mfa: principal, then method,
+            # then recovery codes. State is re-read after the locks.
+            _lock_principal(db, kind, principal_id)
             method = db.scalar(
                 select(MFAMethod)
-                .where(MFAMethod.id == coerce_uuid(method_id))
+                .where(MFAMethod.id == probe.id)
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
-            if not method:
+            if not method or principal_of(method) != (kind, principal_id):
                 raise HTTPException(status_code=404, detail="MFA method not found")
-            principal_type, principal_id = next(
-                (name, value)
-                for name, value in (
-                    ("subscriber", method.subscriber_id),
-                    ("system_user", method.system_user_id),
-                    ("reseller_user", method.reseller_user_id),
-                )
-                if value is not None
-            )
-            changed = bool(method.is_active or method.enabled or method.is_primary)
-            if changed:
+            if method.is_active or method.enabled or method.is_primary:
                 codes_deactivated = (
                     db.query(MFARecoveryCode)
                     .filter(
@@ -309,19 +325,51 @@ class MFAMethods(ListResponseMixin):
                 method.is_active = False
                 method.enabled = False
                 method.is_primary = False
+                # Drop the seed so a holder of the old secret cannot re-confirm.
+                method.secret = None
+                sessions_revoked = (
+                    db.query(_AuthSession)
+                    .filter(
+                        getattr(_AuthSession, f"{kind.value}_id") == principal_id,
+                        _AuthSession.status == SessionStatus.active,
+                    )
+                    .update(
+                        {
+                            "status": SessionStatus.revoked,
+                            "revoked_at": datetime.now(UTC),
+                        },
+                        synchronize_session=False,
+                    )
+                )
                 db.flush()
+                evidence: dict[str, object] = {
+                    "principal_type": kind.value,
+                    "principal_id": str(principal_id),
+                    "method_type": method.method_type.value,
+                    "recovery_codes_deactivated": int(codes_deactivated),
+                    "sessions_revoked": int(sessions_revoked),
+                }
                 stage_audit_event(
                     db,
                     action="auth.mfa_method.disabled",
                     entity_type="mfa_method",
                     entity_id=str(method.id),
                     actor=AuditActor.user(actor_id.strip()),
-                    metadata={
-                        "principal_type": principal_type,
-                        "principal_id": str(principal_id),
-                        "method_type": method.method_type.value,
-                        "recovery_codes_deactivated": int(codes_deactivated),
+                    metadata=evidence,
+                )
+                emit_event(
+                    db,
+                    EventType.credential_administration_completed,
+                    {
+                        **evidence,
+                        "schema_version": 1,
+                        "aggregate_type": "mfa_method",
+                        "aggregate_id": str(method.id),
+                        "transition": "mfa_method_disabled",
+                        "invalidate_sessions": True,
                     },
+                    actor=actor_id.strip(),
+                    subscriber_id=method.subscriber_id,
                 )
             db.commit()
         except BaseException:

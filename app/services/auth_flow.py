@@ -1158,6 +1158,17 @@ def password_policy_violations(password: str, minimum: int) -> tuple[str, ...]:
     return tuple(violations)
 
 
+def _refuse_revoked_mfa_method(method: MFAMethod) -> None:
+    """Confirm flows activate only pending setup rows, never revoked factors.
+
+    An administratively disabled method (inactive, secret cleared) must not be
+    revived by whoever still holds its old seed.
+    """
+
+    if not method.is_active or not method.secret:
+        raise HTTPException(status_code=403, detail="MFA method not allowed")
+
+
 def ensure_mfa_not_locked(method: MFAMethod) -> None:
     locked_until = _as_utc(method.locked_until)
     if locked_until and locked_until > _now():
@@ -1684,6 +1695,7 @@ class AuthFlow(ListResponseMixin):
         if method.method_type != MFAMethodType.totp:
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
 
+        _refuse_revoked_mfa_method(method)
         ensure_mfa_not_locked(method)
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
@@ -1773,6 +1785,7 @@ class AuthFlow(ListResponseMixin):
         if method.method_type != MFAMethodType.totp:
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
 
+        _refuse_revoked_mfa_method(method)
         ensure_mfa_not_locked(method)
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
@@ -1858,6 +1871,7 @@ class AuthFlow(ListResponseMixin):
         if method.method_type != MFAMethodType.totp:
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
 
+        _refuse_revoked_mfa_method(method)
         ensure_mfa_not_locked(method)
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
