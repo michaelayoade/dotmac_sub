@@ -93,6 +93,7 @@ def test_expire_subscriptions_keeps_prepaid_service_with_paid_coverage(
     db_session, subscriber_account, subscription
 ):
     _prepaid_due(subscription)
+    subscription.end_at = NOW - timedelta(days=1)
     db_session.add(
         ServiceEntitlement(
             account_id=subscriber_account.id,
@@ -120,6 +121,7 @@ def test_expire_subscriptions_keeps_prepaid_service_with_outage_extension(
     db_session, subscriber_account, subscription
 ):
     _prepaid_due(subscription)
+    subscription.end_at = NOW - timedelta(days=1)
     extension = ServiceExtension(
         reason="verified outage compensation",
         window_start=NOW - timedelta(days=3),
