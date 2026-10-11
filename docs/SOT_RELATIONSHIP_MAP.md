@@ -21,6 +21,16 @@ The manifest has one canonical graph. Domain, capability/module, and journey
 hierarchies are derived navigation views; they do not own parallel dependency
 lists or service declarations.
 
+## Expired services and account deletion
+
+`access.subscription_lifecycle` derives `blocked` when a customer has only
+terminal service history and no explicit account-deletion override. This keeps
+portal sign-in available for recovery. Only the explicit account-deletion
+transition may project the account as `canceled`. Behavior and architecture
+guards live in `tests/test_account_lifecycle.py`,
+`tests/test_account_deletion.py`, and
+`tests/architecture/test_expired_service_does_not_cancel_account.py`.
+
 ## Regional report physical index ownership
 
 `ui.regional_performance_report` remains the read-only report projection owner.

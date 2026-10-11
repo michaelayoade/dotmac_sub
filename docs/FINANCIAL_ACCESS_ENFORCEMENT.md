@@ -490,6 +490,12 @@ the same transaction after flushing lock changes. Delivery begins only after
 commit. A rollback therefore cannot send a suspension/restoration event for
 state that never existed.
 
+Expired or canceled service history alone does not mean the customer deleted
+their account. When no non-terminal service remains, the lifecycle projection
+uses the login-capable `blocked` status. The account can become `canceled` only
+through an explicit account-deletion transition, which records the deletion
+request and intentionally prevents portal login.
+
 Enforcement handlers attempt the owned local and external consequences. A
 failed RADIUS projection, access-state projection, session-cleanup enqueue, or
 financial restoration is raised to the durable dispatcher. The handler remains

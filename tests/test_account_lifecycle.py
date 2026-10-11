@@ -123,7 +123,8 @@ def test_last_subscription_expiry_clears_prepaid_timers(db_session: Session) -> 
 
     expire_subscription(db_session, str(subscription.id), emit=False)
 
-    assert subscriber.status == SubscriberStatus.canceled
+    assert subscriber.status == SubscriberStatus.blocked
+    assert subscriber.is_active is True
     assert subscriber.prepaid_low_balance_at is None
     assert subscriber.prepaid_deactivation_at is None
 
@@ -767,7 +768,7 @@ class TestComputeAccountStatus:
         assert status == SubscriberStatus.new
 
     def test_all_expired(self, db_session):
-        """All subscriptions expired → canceled."""
+        """Expired service history keeps the customer account login-capable."""
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)
         sub = _make_subscription(db_session, subscriber, offer)
@@ -775,7 +776,8 @@ class TestComputeAccountStatus:
         expire_subscription(db_session, str(sub.id), emit=False)
 
         status = compute_account_status(db_session, str(subscriber.id))
-        assert status == SubscriberStatus.canceled
+        assert status == SubscriberStatus.blocked
+        assert subscriber.is_active is True
 
     def test_pending_only(self, db_session):
         """Only pending subscriptions → new."""
