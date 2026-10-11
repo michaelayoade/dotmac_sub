@@ -30,15 +30,11 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.subscriber import (
-    AccountStatus,
-    CustomerConnectionType,
-    Subscriber,
-    SubscriberCategory,
-)
+from app.models.subscriber import AccountStatus, Subscriber, SubscriberCategory
 from app.schemas.status_presentation import StatusTone
 from app.services import billing as billing_service
 from app.services import crm_reporting as crm_reporting_service
+from app.services import customer_connection_types as customer_connection_types_service
 from app.services import subscriber as subscriber_service
 from app.services import subscriber_growth
 from app.services import usage_summary as usage_summary_service
@@ -125,6 +121,19 @@ class RegionalReportMoney:
 
 
 @dataclass(frozen=True, slots=True)
+class RegionalConnectionTypeColumn:
+    code: str
+    name: str
+    is_active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RegionalConnectionTypeCount:
+    code: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
 class RegionalReportRow:
     """One bounded report row for a configured region or unassigned customers."""
 
@@ -140,8 +149,7 @@ class RegionalReportRow:
     canceled_customers: int
     blocked_customers: int
     other_customers: int
-    wireless_customers: int
-    wired_customers: int
+    connection_type_counts: tuple[RegionalConnectionTypeCount, ...]
     unspecified_customers: int
     money: tuple[RegionalReportMoney, ...]
 
@@ -153,6 +161,7 @@ class RegionalReportData:
     rows: tuple[RegionalReportRow, ...]
     currency_totals: tuple[RegionalReportMoney, ...]
     region_options: tuple[RegionOption, ...]
+    connection_type_columns: tuple[RegionalConnectionTypeColumn, ...]
     date_from: str
     date_to: str
     selected_region_id: str | None
@@ -633,6 +642,16 @@ def get_regional_report_data(
         date_from=date_from, date_to=date_to
     )
     regions = list_regions(db, include_inactive=False)
+    connection_type_definitions = customer_connection_types_service.list_definitions(db)
+    connection_type_columns = tuple(
+        RegionalConnectionTypeColumn(
+            code=definition.code,
+            name=definition.name,
+            is_active=definition.is_active,
+        )
+        for definition in connection_type_definitions
+    )
+    connection_type_codes = {item.code for item in connection_type_columns}
     region_options = tuple(
         RegionOption(id=region.id, name=region.name, color=region.color)
         for region in regions
@@ -662,7 +681,8 @@ def get_regional_report_data(
         for key in region_keys
     }
     connection_counts: dict[UUID | None, dict[str, int]] = {
-        key: {"wireless": 0, "wired": 0, "unspecified": 0} for key in region_keys
+        key: {**dict.fromkeys(connection_type_codes, 0), "unspecified": 0}
+        for key in region_keys
     }
     active_services: dict[UUID | None, int] = dict.fromkeys(region_keys, 0)
     money: dict[UUID | None, dict[str, list[Decimal]]] = {
@@ -823,10 +843,7 @@ def get_regional_report_data(
                 status_key = "other"
             status_counts[assigned_region][status_key] += int(metric_row.value_one or 0)
             connection_key = metric_row.dimension_b or "unspecified"
-            if connection_key not in {
-                CustomerConnectionType.wireless.value,
-                CustomerConnectionType.wired.value,
-            }:
+            if connection_key not in connection_type_codes:
                 connection_key = "unspecified"
             connection_counts[assigned_region][connection_key] += int(
                 metric_row.value_one or 0
@@ -865,8 +882,13 @@ def get_regional_report_data(
                 canceled_customers=counts.get("canceled", 0),
                 blocked_customers=counts.get("blocked", 0),
                 other_customers=counts.get("other", 0),
-                wireless_customers=connection_breakdown.get("wireless", 0),
-                wired_customers=connection_breakdown.get("wired", 0),
+                connection_type_counts=tuple(
+                    RegionalConnectionTypeCount(
+                        code=column.code,
+                        count=connection_breakdown.get(column.code, 0),
+                    )
+                    for column in connection_type_columns
+                ),
                 unspecified_customers=connection_breakdown.get("unspecified", 0),
                 money=tuple(
                     RegionalReportMoney(
@@ -897,8 +919,13 @@ def get_regional_report_data(
                 canceled_customers=unassigned_counts.get("canceled", 0),
                 blocked_customers=unassigned_counts.get("blocked", 0),
                 other_customers=unassigned_counts.get("other", 0),
-                wireless_customers=unassigned_connection_breakdown.get("wireless", 0),
-                wired_customers=unassigned_connection_breakdown.get("wired", 0),
+                connection_type_counts=tuple(
+                    RegionalConnectionTypeCount(
+                        code=column.code,
+                        count=unassigned_connection_breakdown.get(column.code, 0),
+                    )
+                    for column in connection_type_columns
+                ),
                 unspecified_customers=unassigned_connection_breakdown.get(
                     "unspecified", 0
                 ),
@@ -947,6 +974,7 @@ def get_regional_report_data(
         rows=tuple(rows),
         currency_totals=currency_totals,
         region_options=region_options,
+        connection_type_columns=connection_type_columns,
         date_from=effective_from,
         date_to=effective_to,
         selected_region_id=str(region_id) if region_id else None,
@@ -981,12 +1009,14 @@ def build_regional_report_csv(data: RegionalReportData) -> str:
             "canceled_customers",
             "blocked_customers",
             "other_customers",
-            "wireless_customers",
-            "wired_customers",
+            *(f"{column.code}_customers" for column in data.connection_type_columns),
             "unspecified_customers",
         ]
     )
     for row in data.rows:
+        connection_counts = {
+            item.code: item.count for item in row.connection_type_counts
+        }
         money_rows = row.money or (
             RegionalReportMoney(
                 currency="",
@@ -1011,8 +1041,10 @@ def build_regional_report_csv(data: RegionalReportData) -> str:
                     row.canceled_customers,
                     row.blocked_customers,
                     row.other_customers,
-                    row.wireless_customers,
-                    row.wired_customers,
+                    *(
+                        connection_counts.get(column.code, 0)
+                        for column in data.connection_type_columns
+                    ),
                     row.unspecified_customers,
                 ]
             )

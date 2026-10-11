@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from app.services.web_reports import (
+    RegionalConnectionTypeColumn,
+    RegionalConnectionTypeCount,
     RegionalReportData,
     RegionalReportMoney,
     RegionalReportRow,
@@ -48,8 +50,11 @@ def test_regional_report_csv_preserves_status_and_connection_dimensions():
         canceled_customers=0,
         blocked_customers=1,
         other_customers=1,
-        wireless_customers=2,
-        wired_customers=2,
+        connection_type_counts=(
+            RegionalConnectionTypeCount(code="wireless", count=2),
+            RegionalConnectionTypeCount(code="wired", count=2),
+            RegionalConnectionTypeCount(code="both", count=0),
+        ),
         unspecified_customers=1,
         money=(
             RegionalReportMoney(
@@ -66,6 +71,15 @@ def test_regional_report_csv_preserves_status_and_connection_dimensions():
             rows=(row,),
             currency_totals=row.money,
             region_options=(),
+            connection_type_columns=(
+                RegionalConnectionTypeColumn(
+                    code="wireless", name="Wireless", is_active=True
+                ),
+                RegionalConnectionTypeColumn(
+                    code="wired", name="Wired", is_active=True
+                ),
+                RegionalConnectionTypeColumn(code="both", name="Both", is_active=True),
+            ),
             date_from="2026-06-28",
             date_to="2026-08-28",
             selected_region_id=row.region_id,
@@ -80,7 +94,8 @@ def test_regional_report_csv_preserves_status_and_connection_dimensions():
 
     assert "other_customers" in csv_text.splitlines()[0]
     assert "wireless_customers" in csv_text.splitlines()[0]
-    assert "Gudu,NGN,1000,800,200,5,3,2,1,0,0,1,1,2,2,1" in csv_text
+    assert "both_customers" in csv_text.splitlines()[0]
+    assert "Gudu,NGN,1000,800,200,5,3,2,1,0,0,1,1,2,2,0,1" in csv_text
 
 
 def test_regional_report_links_supported_customer_drilldowns_only():
