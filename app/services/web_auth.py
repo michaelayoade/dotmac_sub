@@ -784,8 +784,9 @@ def logout(request: Request, db: Session):
     if refresh_token:
         try:
             auth_flow_service.auth_flow.logout(db, refresh_token)
-        except Exception:
-            logger.debug("Logout failed while clearing refresh token", exc_info=True)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
     response = RedirectResponse(url="/auth/login", status_code=303)
     response.delete_cookie("session_token")
     response.delete_cookie("mfa_pending")

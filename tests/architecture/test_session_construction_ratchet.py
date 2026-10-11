@@ -155,7 +155,13 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: one disposable Engine and one engine-bound Session per test; the external
 #: root refusal regression adds one Connection-bound Session. These fixtures
 #: exercise real root completion without bypassing the production entry guard.
-TEST_FIXTURE_BASELINE_TOTAL = 220
+#: +2 from tests/test_tx_trace.py: explicit helper Session counterexamples
+#: reject independent state/audit root attribution.
+#: +10 from atomic session-revocation proofs: eight independent PostgreSQL
+#: Session sites force exact lock interleavings; two SQLite Session sites prove
+#: caller-flushed-write preservation and independent committed observation.
+#: Test-only additions; production construction allowance is unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 232
 
 
 def _baseline() -> dict[str, int]:

@@ -4,7 +4,7 @@ import logging
 import secrets
 import time
 from datetime import UTC, datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import redis
 from fastapi import HTTPException, Request
@@ -29,15 +29,19 @@ from app.schemas.auth import (
     ApiKeyGenerateRequest,
     ApiKeyUpdate,
 )
-from app.services import auth_cache
+from app.services.audit_adapter import AuditActor
 from app.services.common import (
     apply_ordering,
     apply_pagination,
     coerce_uuid,
     validate_enum,
 )
+from app.services.owner_commands import CommandContext
 from app.services.redis_client import get_redis
 from app.services.response import ListResponseMixin
+
+if TYPE_CHECKING:
+    from app.services.session_manager import SessionRevocationOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -315,19 +319,23 @@ class Sessions(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def delete(db: Session, session_id: str):
-        session = db.get(AuthSession, coerce_uuid(session_id))
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        principal_type = "system_user" if session.system_user_id else "subscriber"
-        principal_id = str(session.system_user_id or session.subscriber_id)
-        session.status = SessionStatus.revoked
-        session.revoked_at = datetime.now(UTC)
-        db.commit()
-        auth_cache.invalidate_session_context(
-            str(session.id),
-            principal_type=principal_type,
-            principal_id=principal_id,
+    def delete(
+        db: Session, session_id: str, *, actor: AuditActor
+    ) -> "SessionRevocationOutcome":
+        from app.services import session_manager
+
+        return session_manager.revoke_authentication_sessions(
+            db,
+            session_manager.RevokeSessionsCommand(
+                context=CommandContext.system(
+                    actor=actor.actor_id or "system",
+                    scope="administrative_sessions",
+                    reason="administrative_session_revocation",
+                ),
+                intent=session_manager.RevocationIntent.ADMIN,
+                actor=actor,
+                session_id=session_manager.target_session_uuid(session_id),
+            ),
         )
 
 

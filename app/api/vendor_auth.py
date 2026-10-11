@@ -93,12 +93,13 @@ def _discard_refused_session(db: Session, refresh_token: str | None) -> None:
     if not refresh_token:
         return
     try:
-        auth_flow_service.auth_flow.logout(db=db, refresh_token=refresh_token)
-    except HTTPException:
-        logger.warning(
-            "could not revoke the session minted for a refused vendor login",
-            exc_info=True,
+        auth_flow_service.auth_flow.logout(
+            db=db, refresh_token=refresh_token, compensation=True
         )
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        logger.warning("refused vendor login session was already unavailable")
 
 
 def _vendor_id_or_refuse(

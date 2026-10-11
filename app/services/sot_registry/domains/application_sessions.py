@@ -176,8 +176,104 @@ DOMAIN = DomainSOT(
             owns=(
                 "database auth-session listing",
                 "database auth-session revocation",
+                "exact revoked-session cache projection and repair",
             ),
-            depends_on=("app_sessions.store",),
+            depends_on=("app_sessions.store", "events.store", "events.dispatcher"),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="database auth-session listing",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("database session standing",),
+                    ),
+                    ConcernContract(
+                        name="database auth-session revocation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "database session standing",
+                            "authenticated revocation authority",
+                        ),
+                        canonical_writer="app_sessions.auth",
+                    ),
+                    ConcernContract(
+                        name="exact revoked-session cache projection and repair",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=("database session standing",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="database session standing",
+                        owner="app_sessions.auth",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="sessions exact principal foreign keys, status, revocation and refresh-token binding",
+                    ),
+                    AuthorityInput(
+                        name="authenticated revocation authority",
+                        owner="external:auth_client",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="current refresh bearer, authenticated user session, administrative actor or vendor admission compensation",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="revoke_authentication_sessions executes once on a fresh adapter session; canonical audit INSERT, revocation and exact-target outbox commit atomically",
+                    locking="principal FOR UPDATE before stable UUID ordered session FOR UPDATE; refreshed exact binding; bulk locks exclude concurrent issuance",
+                    idempotency="Revoked rows retain their original timestamp; missing or wrong current session cannot revoke others; logout matches current token hash only",
+                    retries="55P03 is HTTP 503 Retry-After 5; durable exact-ID cache cleanup retries independently",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "app_sessions.auth.not_found",
+                        "app_sessions.auth.invalid_principal",
+                        "app_sessions.auth.invalid_actor",
+                        "app_sessions.auth.invalid_current_session",
+                        *owner_command_boundary_error_codes("app_sessions.auth"),
+                    ),
+                    mapping_owner="authentication API and web adapters",
+                    retryable_codes=(),
+                    fail_closed_on=(
+                        "ambiguous principal binding",
+                        "missing authenticated current session",
+                        "cross-principal target",
+                        "audit or commit failure",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("authentication_sessions.revoked",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility="Version 1 contains exact UUID targets and no bearer, token hash or cache key",
+                    replay="SessionRevocationProjectionHandler rechecks revoked database standing and strictly deletes only listed cache session contexts; failures remain retryable",
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="exact revoked authentication session cache",
+                        input_names=("database session standing",),
+                        writer="app_sessions.auth",
+                        freshness="SessionRevocationProjectionHandler consumes the committed exact UUID outbox intent asynchronously; auth requests always recheck database standing",
+                        stale_behavior="Database revocation denies access; Redis outage propagates and never restores active standing",
+                        drift_signal="Failed SessionRevocationProjectionHandler delivery remains visible in the durable dispatcher handler attempts",
+                        rebuild_operation="Replay authentication_sessions.revoked after rechecking exact principal binding and revoked standing for each listed UUID; never invalidate a broad principal epoch",
+                        repair_owner="app_sessions.auth",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner="AuthFlow.logout, Sessions.delete and session_manager direct commits",
+                    new_owner="app_sessions.auth",
+                    verification="focused transaction, actor, exact-binding and projection tests",
+                    cutover_gate="ordinary bearer logout, self single/others, administrative DELETE and vendor compensation use one atomic owner command",
+                    fallback_retirement="Portal logout, portal signout-others and impersonation remain explicitly outside this slice",
+                ),
+                steward="platform security",
+                design_refs=("docs/designs/AUTH_SESSION_REVOCATION.md",),
+                test_refs=(
+                    "tests/test_atomic_session_revocation.py",
+                    "tests/integration/test_atomic_session_revocation_concurrency.py",
+                    "tests/architecture/test_session_revocation_boundary.py",
+                ),
+            ),
         ),
         SOTService(
             name="app_sessions.refresh",

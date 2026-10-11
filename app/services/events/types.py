@@ -30,6 +30,8 @@ class EventType(enum.Enum):
     field_attachment_deleted = "field.attachment_deleted"
     field_job_location_corrected = "field.job_location_corrected"
 
+    authentication_sessions_revoked = "authentication_sessions.revoked"
+
     # Authentication-session security events
     authentication_session_rotated = "authentication_session.rotated"
     authentication_session_refresh_refused = "authentication_session.refresh_refused"

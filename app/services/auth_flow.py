@@ -2550,27 +2550,45 @@ class AuthFlow(ListResponseMixin):
         )
 
     @staticmethod
-    def logout(db: Session, refresh_token: str):
-        token_hash = _hash_token(refresh_token)
-        session = (
-            db.query(AuthSession)
-            .filter(AuthSession.token_hash == token_hash)
-            .filter(AuthSession.revoked_at.is_(None))
-            .first()
+    def logout(db: Session, refresh_token: str, *, compensation: bool = False):
+        from app.services import session_manager
+        from app.services.db_session_adapter import db_session_adapter
+
+        intent = (
+            session_manager.RevocationIntent.COMPENSATE
+            if compensation
+            else session_manager.RevocationIntent.LOGOUT
         )
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        principal_type = "system_user" if session.system_user_id else "subscriber"
-        principal_id = str(session.system_user_id or session.subscriber_id)
-        session.status = SessionStatus.revoked
-        session.revoked_at = _now()
-        db.commit()
-        auth_cache.invalidate_session_context(
-            str(session.id),
-            principal_type=principal_type,
-            principal_id=principal_id,
-        )
-        return {"revoked_at": session.revoked_at}
+        with db_session_adapter.owner_command_session() as command_db:
+            try:
+                outcome = session_manager.revoke_authentication_sessions(
+                    command_db,
+                    session_manager.RevokeSessionsCommand(
+                        context=CommandContext.system(
+                            actor="vendor_admission"
+                            if compensation
+                            else "refresh_bearer",
+                            scope="authentication_session",
+                            reason=intent.value,
+                        ),
+                        intent=intent,
+                        refresh_token=refresh_token,
+                    ),
+                )
+            except session_manager.SessionRevocationError as exc:
+                raise HTTPException(status_code=404, detail=exc.message) from exc
+            except OperationalError as exc:
+                if (
+                    getattr(exc.orig, "sqlstate", None) == "55P03"
+                    or getattr(exc.orig, "pgcode", None) == "55P03"
+                ):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Session revocation busy",
+                        headers={"Retry-After": "5"},
+                    ) from exc
+                raise
+        return {"revoked_at": outcome.revoked_at}
 
     @staticmethod
     def logout_response(db: Session, refresh_token: str | None, request: Request):
