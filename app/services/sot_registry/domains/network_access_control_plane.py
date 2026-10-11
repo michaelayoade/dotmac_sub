@@ -81,7 +81,7 @@ DOMAIN = DomainSOT(
                 "projections stay in the same lifecycle transaction. "
                 "When service history is terminal without an explicit account "
                 "deletion, the derived account status remains login-capable "
-                "(blocked); only the explicit account-deletion transition may "
+                "(suspended); only the explicit account-deletion transition may "
                 "project the account as canceled. "
                 "That non-key projection uses a PostgreSQL NO KEY UPDATE lock: "
                 "competing anchor writers serialize without blocking KEY SHARE "

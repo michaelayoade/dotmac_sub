@@ -492,7 +492,7 @@ state that never existed.
 
 Expired or canceled service history alone does not mean the customer deleted
 their account. When no non-terminal service remains, the lifecycle projection
-uses the login-capable `blocked` status. The account can become `canceled` only
+uses the login-capable `suspended` status. The account can become `canceled` only
 through an explicit account-deletion transition, which records the deletion
 request and intentionally prevents portal login.
 

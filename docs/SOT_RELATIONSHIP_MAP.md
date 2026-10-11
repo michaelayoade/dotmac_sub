@@ -23,7 +23,7 @@ lists or service declarations.
 
 ## Expired services and account deletion
 
-`access.subscription_lifecycle` derives `blocked` when a customer has only
+`access.subscription_lifecycle` derives `suspended` when a customer has only
 terminal service history and no explicit account-deletion override. This keeps
 portal sign-in available for recovery. Only the explicit account-deletion
 transition may project the account as `canceled`. Behavior and architecture

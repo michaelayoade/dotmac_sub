@@ -2668,9 +2668,10 @@ def derive_account_status_without_override(
     if all(s.status == SubscriptionStatus.disabled for s in subs):
         return SubscriberStatus.disabled
     # Service expiry or cancellation is not an account deletion. Keep the
-    # customer account available for portal sign-in and recovery; the explicit
-    # account-deletion transition owns SubscriberStatus.canceled.
-    return SubscriberStatus.blocked
+    # customer account available for portal sign-in and recovery while marking
+    # the account suspended; only the explicit account-deletion transition
+    # owns SubscriberStatus.canceled.
+    return SubscriberStatus.suspended
 
 
 def derive_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
@@ -2816,7 +2817,7 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
       3. Any subscription blocked/stopped → blocked
       4. Any subscription pending → new
       5. All remaining subscriptions disabled → disabled
-      6. Other terminal-only service histories → blocked (login-capable)
+      6. Other terminal-only service histories → suspended (login-capable)
       7. No subscriptions → new
 
     ``delinquent`` is only reachable from the active branch by design: once a
