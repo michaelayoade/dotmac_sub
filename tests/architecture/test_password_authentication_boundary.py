@@ -80,7 +80,7 @@ def test_session_staging_never_commits() -> None:
 
 def test_login_and_mfa_adapters_do_not_commit_or_issue_legacy_sessions() -> None:
     tree = _tree(AUTH_FLOW)
-    for name in ("login", "mfa_verify", "establish_enrolled_session"):
+    for name in ("login", "mfa_verify", "confirm_mfa_enrollment"):
         function = _function(tree, name)
         assert "commit" not in _attr_calls(function), name
         assert "_issue_tokens" not in _attr_calls(function), name
