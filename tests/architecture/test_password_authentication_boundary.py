@@ -77,6 +77,13 @@ def test_owner_commits_only_through_the_owner_command_boundary() -> None:
 def test_session_staging_never_commits() -> None:
     staged = _function(_tree(AUTH_FLOW), "stage_session_issue")
     assert not {"commit", "rollback"} & _attr_calls(staged)
+    participant = _function(
+        _tree(PROJECT_ROOT / "app/services/auth_session_staging.py"),
+        "stage_session_issue",
+    )
+    assert not {"commit", "rollback", "execute_owner_command"} & (
+        _attr_calls(participant) | _name_calls(participant)
+    )
 
 
 def test_login_and_mfa_adapters_do_not_commit_or_issue_legacy_sessions() -> None:

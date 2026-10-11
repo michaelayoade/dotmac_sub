@@ -147,7 +147,15 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: independent sessionmaker sites prove implicit FK blocking, incumbent lock
 #: inversion, tuple arbitration and stale principal-reference refusal. These
 #: are reviewed test fixtures; the production construction baseline is unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 207
+#: +10 from tests/integration/test_oidc_atomic_session_concurrency.py: one
+#: migrated test-engine factory and nine explicitly isolated Session sites
+#: pin backend identities while testing admission/reset serialization, binding
+#: drift, ceremony replay and device supersession. No runtime allowance grows.
+#: +3 from the OIDC commit-capable unit lane: tests/oidc_atomic_unit.py owns
+#: one disposable Engine and one engine-bound Session per test; the external
+#: root refusal regression adds one Connection-bound Session. These fixtures
+#: exercise real root completion without bypassing the production entry guard.
+TEST_FIXTURE_BASELINE_TOTAL = 220
 
 
 def _baseline() -> dict[str, int]:

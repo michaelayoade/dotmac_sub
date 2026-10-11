@@ -14,7 +14,7 @@ from __future__ import annotations
 import time
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from starlette.requests import Request
@@ -30,6 +30,7 @@ from app.services.oidc_mobile_config import (
     require_federation_config,
 )
 from app.services.owner_commands import CommandContext
+from tests import oidc_atomic_unit
 from tests.oidc_mobile_fixtures import (
     AUDIENCE,
     CLIENT_ID,
@@ -45,6 +46,10 @@ from tests.oidc_mobile_fixtures import (
     sign_without_kid,
     unsigned_assertion,
 )
+
+# File-local independent roots; no savepoint-backed application guard bypass.
+db_session = oidc_atomic_unit.db_session
+oidc_unit_engine = oidc_atomic_unit.oidc_unit_engine
 
 
 @pytest.fixture()
@@ -560,22 +565,10 @@ def test_a_ceremony_cannot_be_replayed(db_session, signing_key, transport):
     assert _refusal(exc) == "ceremony_already_used"
 
 
-def test_a_failure_at_session_issuance_leaves_the_ceremony_burned(
+def test_a_failure_after_session_staging_rolls_back_admission(
     db_session, signing_key, transport, monkeypatch
 ):
-    """Break the second transaction and see what the first one left behind.
-
-    Admission and issuance are two commits in that order. The claim that falls
-    out — if minting fails the ceremony is still burned, so the failure mode is
-    "log in again" and never "the assertion is still redeemable" — is a claim
-    about what SURVIVES a failure, and only a failure can show it. Asserting
-    the ordering statically would pass just as happily if the burn were rolled
-    back together with the mint.
-
-    So the failure is injected where it actually matters: inside the one
-    issuance owner, after the admission command has committed.
-    """
-
+    """A real inserted session and all successful admission evidence roll back."""
     from app.models.auth import Session as AuthSession
     from app.services import auth_flow as auth_flow_service
 
@@ -583,47 +576,38 @@ def test_a_failure_at_session_issuance_leaves_the_ceremony_burned(
     binding = install_oidc_binding(db_session)
     bind_field_technician(db_session, binding)
     db_session.commit()
-
     started = _start(db_session)
     token = signing_key.sign(assertion_claims(started.nonce))
-    original_issue_tokens = auth_flow_service.AuthFlow._issue_tokens
+    original_stage = auth_flow_service.stage_session_issue
 
-    def _issuance_fails(*_args, **_kwargs):
+    def staging_fails(*args, **kwargs):
+        original_stage(*args, **kwargs)
         raise RuntimeError("session store unavailable")
 
-    monkeypatch.setattr(
-        auth_flow_service.AuthFlow,
-        "_issue_tokens",
-        staticmethod(_issuance_fails),
-    )
-
+    monkeypatch.setattr(auth_flow_service, "stage_session_issue", staging_fails)
     with pytest.raises(RuntimeError):
         _exchange(db_session, started.ceremony_id, token)
-
-    db_session.rollback()
     db_session.expire_all()
     row = db_session.get(OidcMobileCeremony, started.ceremony_id)
-    assert row is not None
-    assert row.consumed_at is not None
-    assert row.outcome == OidcCeremonyOutcome.completed.value
-    # Nothing was half-issued: the burn is what committed, not a session.
+    assert row.consumed_at is None
     assert db_session.query(AuthSession).count() == 0
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "auth.oidc_mobile_assertion_admitted")
+        .count()
+        == 0
+    )
+    credential = (
+        db_session.query(UserCredential)
+        .filter(UserCredential.provider != AuthProvider.local)
+        .one()
+    )
+    assert credential.last_login_at is None
     db_session.commit()
 
-    # The device cannot retry with the assertion it already spent.
-    with pytest.raises(federation.OidcFederationRefused) as exc:
-        _exchange(db_session, started.ceremony_id, token)
-    assert _refusal(exc) == "ceremony_already_used"
-
-    # And the intended failure mode really is available: run a fresh ceremony.
-    monkeypatch.setattr(
-        auth_flow_service.AuthFlow,
-        "_issue_tokens",
-        staticmethod(original_issue_tokens),
-    )
-    fresh = _start(db_session)
-    fresh_token = signing_key.sign(assertion_claims(fresh.nonce))
-    assert _exchange(db_session, fresh.ceremony_id, fresh_token).access_token
+    # Storage failure did not spend the assertion; one complete retry can win.
+    monkeypatch.setattr(auth_flow_service, "stage_session_issue", original_stage)
+    assert _exchange(db_session, started.ceremony_id, token).access_token
 
 
 def test_a_refused_exchange_still_burns_the_ceremony(
@@ -1182,3 +1166,499 @@ def test_the_configuration_is_read_only_from_the_deployment(db_session, transpor
     assert config.client_id == CLIENT_ID
     assert config.redirect_uri == REDIRECT_URI
     assert config.audience == AUDIENCE
+
+
+# Atomic admission and session issuance: these are fast owner-boundary proofs;
+# migrated PostgreSQL provides the independent-connection lock evidence.
+def test_admission_session_audit_event_and_presence_share_one_commit(
+    db_session, signing_key, transport, monkeypatch
+):
+    from sqlalchemy import event
+
+    from app.models.auth import Session as AuthSession
+    from app.models.event_store import EventStore
+    from app.models.team_inbox import InboxAgentPresence
+    from app.services import auth_flow
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    user, person, credential = bind_field_technician(db_session, binding)
+    user_id, party_id, credential_id = user.id, person.id, credential.id
+    db_session.commit()
+    started = _start(db_session)
+    commits = []
+
+    def observe_commit(db):
+        # Inspect real flushed rows while the owner still holds its transaction.
+        db.flush()
+        session = db.query(AuthSession).one()
+        ceremony = db.get(OidcMobileCeremony, started.ceremony_id)
+        current = db.get(UserCredential, credential_id)
+        audit = (
+            db.query(AuditEvent)
+            .filter_by(action="auth.oidc_mobile_assertion_admitted")
+            .one()
+        )
+        emitted = (
+            db.query(EventStore)
+            .filter_by(event_type="oidc_mobile_assertion.admitted")
+            .one()
+        )
+        presence = db.query(InboxAgentPresence).filter_by(person_id=user_id).one()
+        assert session.system_user_id == user_id and session.party_id == party_id
+        assert ceremony.outcome == OidcCeremonyOutcome.completed.value
+        assert current.last_login_at.replace(
+            tzinfo=UTC
+        ) == ceremony.consumed_at.replace(tzinfo=UTC)
+        assert current.failed_login_attempts == 0 and current.locked_until is None
+        assert audit.entity_id == str(ceremony.id)
+        assert emitted.payload["ceremony_id"] == str(ceremony.id)
+        assert presence.status == "online"
+        commits.append(session.id)
+
+    original_encode = auth_flow.tokens_for_staged_session
+
+    def encode_after_commit(staged):
+        assert commits == [UUID(staged.session_id)]
+        assert not db_session.in_transaction()
+        result = original_encode(staged)
+        assert not db_session.in_transaction(), "encoding opened a read transaction"
+        return result
+
+    event.listen(db_session, "before_commit", observe_commit)
+    monkeypatch.setattr(auth_flow, "tokens_for_staged_session", encode_after_commit)
+    try:
+        issued = _exchange(
+            db_session,
+            started.ceremony_id,
+            signing_key.sign(assertion_claims(started.nonce)),
+        )
+    finally:
+        event.remove(db_session, "before_commit", observe_commit)
+    assert issued.access_token and len(commits) == 1
+    assert not db_session.in_transaction()
+
+
+@pytest.mark.parametrize("failure_at", ["audit", "event", "presence", "commit"])
+def test_each_admission_storage_failure_restores_prior_device_session(
+    db_session, signing_key, transport, monkeypatch, failure_at
+):
+    from sqlalchemy import event
+
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
+    from app.models.event_store import EventStore
+    from app.models.team_inbox import InboxAgentPresence, InboxAgentPresenceEvent
+    from app.services import auth_flow, team_inbox_assignment
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    bind_field_technician(db_session, binding)
+    first = _start(db_session)
+    token = signing_key.sign(assertion_claims(first.nonce))
+    _exchange(db_session, first.ceremony_id, token)
+    prior = db_session.query(AuthSession).one()
+    prior.device_id = "atomic-device"
+    prior_id = prior.id
+    presence_before = db_session.query(InboxAgentPresenceEvent).count()
+    current = (
+        db_session.query(UserCredential).filter_by(provider=AuthProvider.sso).one()
+    )
+    previous_login = current.last_login_at
+    current.failed_login_attempts = 4
+    current.locked_until = datetime.now(UTC) + timedelta(minutes=10)
+    previous_lock = current.locked_until
+    credential_id = current.id
+    db_session.commit()
+    started = _start(db_session)
+    original_stage = auth_flow.stage_session_issue
+
+    def stage_on_same_device(db, **kwargs):
+        kwargs["request"] = _request("atomic-device")
+        return original_stage(db, **kwargs)
+
+    monkeypatch.setattr(auth_flow, "stage_session_issue", stage_on_same_device)
+
+    def fail_after_real(call):
+        def failing(*args, **kwargs):
+            call(*args, **kwargs)
+            raise RuntimeError(f"injected {failure_at} persistence failure")
+
+        return failing
+
+    commit_hook = None
+    if failure_at == "audit":
+        monkeypatch.setattr(
+            federation,
+            "stage_audit_event",
+            fail_after_real(federation.stage_audit_event),
+        )
+    elif failure_at == "event":
+        monkeypatch.setattr(
+            federation, "emit_event", fail_after_real(federation.emit_event)
+        )
+    elif failure_at == "presence":
+        monkeypatch.setattr(
+            team_inbox_assignment,
+            "record_agent_signed_in_presence",
+            fail_after_real(team_inbox_assignment.record_agent_signed_in_presence),
+        )
+    else:
+
+        def commit_hook(db):
+            db.flush()
+            assert db.query(AuthSession).count() == 2
+            raise RuntimeError("injected commit persistence failure")
+
+        event.listen(db_session, "before_commit", commit_hook)
+    try:
+        with pytest.raises(RuntimeError, match="injected"):
+            _exchange(
+                db_session,
+                started.ceremony_id,
+                signing_key.sign(assertion_claims(started.nonce)),
+            )
+    finally:
+        if commit_hook is not None:
+            event.remove(db_session, "before_commit", commit_hook)
+    db_session.expire_all()
+    ceremony = db_session.get(OidcMobileCeremony, started.ceremony_id)
+    assert ceremony.consumed_at is None
+    assert db_session.query(AuthSession).count() == 1
+    prior = db_session.get(AuthSession, prior_id)
+    assert prior.status is SessionStatus.active and prior.revoked_at is None
+    assert (
+        db_session.query(AuditEvent)
+        .filter_by(action="auth.oidc_mobile_assertion_admitted")
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter_by(event_type="oidc_mobile_assertion.admitted")
+        .count()
+        == 1
+    )
+    assert db_session.query(InboxAgentPresence).one().status == "online"
+    assert db_session.query(InboxAgentPresenceEvent).count() == presence_before
+    current = db_session.get(UserCredential, credential_id)
+    assert current.last_login_at.replace(tzinfo=UTC) == previous_login.replace(
+        tzinfo=UTC
+    )
+    assert current.failed_login_attempts == 4
+    assert current.locked_until.replace(tzinfo=UTC) == previous_lock.replace(tzinfo=UTC)
+
+
+def test_encoding_failure_keeps_committed_session_and_burn(
+    db_session, signing_key, transport, monkeypatch
+):
+    from app.models.auth import Session as AuthSession
+    from app.models.event_store import EventStore
+    from app.services import auth_flow
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    bind_field_technician(db_session, binding)
+    started = _start(db_session)
+    token = signing_key.sign(assertion_claims(started.nonce))
+    original = auth_flow.tokens_for_staged_session
+
+    def fail_encoding(staged):
+        assert not db_session.in_transaction()
+        raise RuntimeError("injected token encoding failure")
+
+    monkeypatch.setattr(auth_flow, "tokens_for_staged_session", fail_encoding)
+    with pytest.raises(RuntimeError, match="encoding failure"):
+        _exchange(db_session, started.ceremony_id, token)
+    row = db_session.get(OidcMobileCeremony, started.ceremony_id)
+    assert row.outcome == OidcCeremonyOutcome.completed.value and row.consumed_at
+    assert db_session.query(AuthSession).count() == 1
+    assert (
+        db_session.query(EventStore)
+        .filter_by(event_type="oidc_mobile_assertion.admitted")
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(AuditEvent)
+        .filter_by(action="auth.oidc_mobile_assertion_admitted")
+        .count()
+        == 1
+    )
+    db_session.commit()
+    monkeypatch.setattr(auth_flow, "tokens_for_staged_session", original)
+    with pytest.raises(federation.OidcFederationRefused) as refused:
+        _exchange(db_session, started.ceremony_id, token)
+    assert refused.value.reason == "ceremony_already_used"
+
+
+@pytest.mark.parametrize("stale", ["principal", "credential", "projection", "binding"])
+def test_retained_orm_state_cannot_admit_retired_identity(
+    db_session, signing_key, transport, stale
+):
+    from sqlalchemy import update
+
+    from app.models.auth import AuthenticationBinding
+    from app.models.auth import Session as AuthSession
+    from app.models.system_user import SystemUser
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    user, person, credential = bind_field_technician(db_session, binding)
+    party_id = person.id
+    db_session.expire_on_commit = False
+    # Retain the rows strongly: SQLAlchemy's identity map uses weak references.
+    user = db_session.get(SystemUser, user.id)
+    credential = db_session.get(UserCredential, credential.id)
+    verifier_binding = db_session.get(AuthenticationBinding, binding.binding_id)
+    db_session.commit()
+    started = _start(db_session)
+    if stale == "principal":
+        statement = (
+            update(SystemUser).where(SystemUser.id == user.id).values(is_active=False)
+        )
+    elif stale == "credential":
+        statement = (
+            update(UserCredential)
+            .where(UserCredential.id == credential.id)
+            .values(is_active=False)
+        )
+    elif stale == "binding":
+        statement = (
+            update(AuthenticationBinding)
+            .where(AuthenticationBinding.id == binding.binding_id)
+            .values(is_active=False)
+        )
+    else:
+        statement = (
+            update(UserCredential)
+            .where(UserCredential.id == credential.id)
+            .values(
+                party_id=None,
+                authentication_binding_id=None,
+                tenant_id=None,
+                party_bound_at=None,
+                party_binding_source=None,
+                party_binding_reason=None,
+            )
+        )
+    db_session.execute(statement.execution_options(synchronize_session=False))
+    db_session.commit()
+    assert user.is_active and credential.is_active and verifier_binding.is_active
+    assert credential.party_id == party_id
+    with pytest.raises(federation.OidcFederationRefused):
+        _exchange(
+            db_session,
+            started.ceremony_id,
+            signing_key.sign(assertion_claims(started.nonce)),
+        )
+    assert db_session.query(AuthSession).count() == 0
+
+
+def test_flushed_caller_work_is_preserved_when_exchange_is_refused(
+    db_session, signing_key, transport
+):
+    from app.models.auth import Session as AuthSession
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    user, _, _ = bind_field_technician(db_session, binding)
+    user_id = user.id
+    db_session.commit()
+    started = _start(db_session)
+    from app.models.system_user import SystemUser
+
+    user = db_session.get(SystemUser, user_id)
+    user.first_name = "Caller owned flushed work"
+    db_session.flush()
+    with pytest.raises(federation.OidcFederationUnavailable) as refused:
+        _exchange(
+            db_session,
+            started.ceremony_id,
+            signing_key.sign(assertion_claims(started.nonce)),
+        )
+    assert refused.value.code.endswith(".active_caller_transaction")
+    assert db_session.in_transaction()
+    db_session.expire(user)
+    assert user.first_name == "Caller owned flushed work"
+    assert db_session.get(OidcMobileCeremony, started.ceremony_id).consumed_at is None
+    assert db_session.query(AuthSession).count() == 0
+    db_session.rollback()
+
+
+def test_retained_credential_version_is_refreshed_before_success_stamps(
+    db_session, signing_key, transport
+):
+    from sqlalchemy import update
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    _, _, credential = bind_field_technician(db_session, binding)
+    db_session.expire_on_commit = False
+    credential = db_session.get(UserCredential, credential.id)
+    version = credential.credential_version
+    db_session.commit()
+    started = _start(db_session)
+    db_session.execute(
+        update(UserCredential)
+        .where(UserCredential.id == credential.id)
+        .values(credential_version=version + 1, failed_login_attempts=3)
+        .execution_options(synchronize_session=False)
+    )
+    db_session.commit()
+    assert credential.credential_version == version
+    assert _exchange(
+        db_session,
+        started.ceremony_id,
+        signing_key.sign(assertion_claims(started.nonce)),
+    ).access_token
+    assert credential.credential_version == version + 1
+    assert (
+        credential.last_login_at is not None and credential.failed_login_attempts == 0
+    )
+    assert not db_session.in_transaction()
+
+
+def test_external_connection_root_is_refused_without_touching_caller_work(
+    db_session, oidc_unit_engine, signing_key, transport, monkeypatch
+):
+    from sqlalchemy import select, update
+    from sqlalchemy.orm import Session
+
+    from app.models.auth import Session as AuthSession
+    from app.models.system_user import SystemUser
+    from app.services import auth_flow
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    user, _, _ = bind_field_technician(db_session, binding)
+    user_id, prior_name = user.id, user.first_name
+    db_session.commit()
+    started = _start(db_session)
+
+    def forbid_tokens(staged):
+        raise AssertionError("an externally owned root cannot authorize tokens")
+
+    monkeypatch.setattr(auth_flow, "tokens_for_staged_session", forbid_tokens)
+    with oidc_unit_engine.connect() as connection:
+        root = connection.begin()
+        connection.execute(
+            update(SystemUser)
+            .where(SystemUser.id == user_id)
+            .values(first_name="Uncommitted external caller work")
+        )
+        # This fresh Session has no own transaction despite the active root.
+        with Session(connection, join_transaction_mode="create_savepoint") as external:
+            assert not external.in_transaction() and connection.in_transaction()
+            with pytest.raises(federation.OidcFederationUnavailable) as refused:
+                _exchange(
+                    external,
+                    started.ceremony_id,
+                    signing_key.sign(assertion_claims(started.nonce)),
+                )
+            assert refused.value.code.endswith(".active_caller_transaction")
+            assert not external.in_transaction()
+            assert root.is_active and connection.in_transaction()
+            assert (
+                connection.scalar(
+                    select(SystemUser.first_name).where(SystemUser.id == user_id)
+                )
+                == "Uncommitted external caller work"
+            )
+            assert (
+                connection.scalar(
+                    select(OidcMobileCeremony.consumed_at).where(
+                        OidcMobileCeremony.id == started.ceremony_id
+                    )
+                )
+                is None
+            )
+        # A genuinely separate connection sees neither an accidental commit nor
+        # a new session; the root remains entirely under its caller's control.
+        with oidc_unit_engine.connect() as observer:
+            assert (
+                observer.scalar(
+                    select(SystemUser.first_name).where(SystemUser.id == user_id)
+                )
+                == prior_name
+            )
+            assert observer.execute(select(AuthSession.id)).first() is None
+        assert root.is_active
+        root.rollback()
+    db_session.expire_all()
+    assert db_session.get(SystemUser, user_id).first_name == prior_name
+
+
+@pytest.mark.parametrize("surface", ["owner", "api"])
+def test_lock_timeout_after_real_staging_rolls_back_and_reports_unavailable(
+    db_session, signing_key, transport, monkeypatch, surface
+):
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+
+    from app.api import oidc_mobile
+    from app.models.auth import Session as AuthSession
+    from app.models.event_store import EventStore
+    from app.models.team_inbox import InboxAgentPresence
+    from app.schemas.oidc_mobile import OidcMobileExchangeRequest
+    from app.services import auth_flow
+
+    class SyntheticLockTimeout(Exception):
+        sqlstate = "55P03"
+
+    configure_federation(db_session)
+    binding = install_oidc_binding(db_session)
+    bind_field_technician(db_session, binding)
+    started = _start(db_session)
+    token = signing_key.sign(assertion_claims(started.nonce))
+    original = auth_flow.stage_session_issue
+
+    def lock_timeout_after_stage(*args, **kwargs):
+        original(*args, **kwargs)
+        raise OperationalError("test-injected lock wait", {}, SyntheticLockTimeout())
+
+    monkeypatch.setattr(auth_flow, "stage_session_issue", lock_timeout_after_stage)
+    if surface == "owner":
+        with pytest.raises(federation.OidcFederationUnavailable) as unavailable:
+            _exchange(db_session, started.ceremony_id, token)
+        assert unavailable.value.code.endswith(".lock_timeout")
+        assert unavailable.value.retryable
+    else:
+        with pytest.raises(HTTPException) as unavailable:
+            oidc_mobile.exchange_assertion(
+                payload=OidcMobileExchangeRequest(
+                    ceremony_id=started.ceremony_id,
+                    id_token=token,
+                    client_id=CLIENT_ID,
+                    redirect_uri=REDIRECT_URI,
+                ),
+                request=_request(),
+                db=db_session,
+            )
+        assert unavailable.value.status_code == 503
+        assert unavailable.value.headers == {"Retry-After": "5"}
+        assert unavailable.value.detail == {
+            "code": "auth.oidc_mobile_federation.lock_timeout",
+            "reason": "temporarily_unavailable",
+        }
+    assert not db_session.in_transaction()
+    db_session.expire_all()
+    assert db_session.get(OidcMobileCeremony, started.ceremony_id).consumed_at is None
+    assert db_session.query(AuthSession).count() == 0
+    assert db_session.query(InboxAgentPresence).count() == 0
+    assert (
+        db_session.query(AuditEvent)
+        .filter_by(action="auth.oidc_mobile_assertion_admitted")
+        .count()
+        == 0
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter_by(event_type="oidc_mobile_assertion.admitted")
+        .count()
+        == 0
+    )
+    credential = (
+        db_session.query(UserCredential).filter_by(provider=AuthProvider.sso).one()
+    )
+    assert credential.last_login_at is None

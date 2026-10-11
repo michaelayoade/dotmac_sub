@@ -1578,6 +1578,130 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="auth.session_staging",
+            module="app.services.auth_session_staging",
+            owns=(
+                "authentication session issuance staging",
+                "committed authentication session token encoding",
+            ),
+            depends_on=(
+                "auth.token_signing",
+                "control.settings_spec",
+                "party.staff_authentication_reader",
+                "communications.team_inbox_routing",
+                "observability.audit_log",
+            ),
+            notes=(
+                "The typed flush-only participant inserts sessions, supersedes the same "
+                "device and delegates staff presence inside the authenticating owner's "
+                "transaction. It does not authenticate or complete transactions. "
+                "Memory-only encoding consumes the committed signing snapshot; bearer "
+                "and signing fields are excluded from repr and never enter evidence. "
+                "AuthFlow retains thin observation adapters and legacy test compatibility "
+                "issuance wrappers; their existence is not a whole-AuthFlow cutover or "
+                "a claim that those wrappers stage caller audit. New product calls are "
+                "restricted to password and OIDC coordinators by source inventory."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="authentication session issuance staging",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authenticated session issuance decision",
+                            "canonical staff session context",
+                            "session signing policy",
+                            "session refresh lifetime",
+                        ),
+                        canonical_writer="auth.session_staging",
+                    ),
+                    ConcernContract(
+                        name="committed authentication session token encoding",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=("committed session signing snapshot",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authenticated session issuance decision",
+                        owner="external:auth_session_coordinator",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Typed exact principal UUID, optional staff Party/context pair, normalized client observations and expiry; calling password or OIDC owner retains current standing locks.",
+                    ),
+                    AuthorityInput(
+                        name="canonical staff session context",
+                        owner="party.staff_authentication_reader",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Party-led principal resolution rechecks the supplied staff context before any session mutation.",
+                    ),
+                    AuthorityInput(
+                        name="session signing policy",
+                        owner="auth.token_signing",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Existing AuthFlow policy adapters resolve process-held signing material, algorithm and access lifetime while the caller transaction is open; their legacy HTTP configuration-error wrapper remains explicit debt.",
+                    ),
+                    AuthorityInput(
+                        name="session refresh lifetime",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Existing refresh lifetime resolver or the caller's explicit expiry.",
+                    ),
+                    AuthorityInput(
+                        name="committed session signing snapshot",
+                        owner="auth.session_staging",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Immutable in-memory StagedSession returned before owner completion and encoded only after the caller has committed.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Flush-only session insertion, same-device supersession and delegated staff presence participate in the calling owner transaction. Token encoding performs no database read or transaction completion.",
+                    locking="Calling coordinators hold principal and credential standing locks before insertion; staff session foreign keys also acquire Party KEY SHARE. The participant does not release those locks or start another owner.",
+                    idempotency="The caller owns command arbitration. Session insertion generates one fresh refresh credential; an aborted attempt rolls back insertion and device supersession together.",
+                    retries="Only the caller retries the whole transition. Never retry insertion or encoding as an independent session owner.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.session_staging.invalid_command",
+                        "staff_projection_missing",
+                        "staff_party_has_no_principal",
+                        "staff_party_owns_multiple_principals",
+                        "staff_projection_conflict",
+                    ),
+                    mapping_owner="Password and OIDC calling owners and their adapters; staff discriminators are StaffProjectionError.refusal.value, not a fabricated code attribute.",
+                    fail_closed_on=(
+                        "invalid canonical session command",
+                        "missing or conflicting staff Party/context pair",
+                        "configuration, database or delegated presence failure",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "auth.login_succeeded",
+                        "auth.oidc_mobile_assertion_admitted",
+                    ),
+                    schema_version=1,
+                    delivery_owner="observability.audit_log",
+                    compatibility="These are actual caller-staged AuditEvent actions, not emissions by the participant. The password and OIDC coordinators stage their success evidence atomically with the session. The OIDC outbox event remains OIDC-owned. Legacy test wrappers provide no caller-audit guarantee.",
+                    replay="Audit rows are durable evidence, not dispatcher delivery. Calling owners own retries and idempotency; a rolled-back transition leaves no successful session or success audit.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="auth.session_staging",
+                    verification="Focused session, password and OIDC regression tests plus source caller inventory; migrated PostgreSQL acceptance remains required.",
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/designs/OIDC_MOBILE_FEDERATION.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_oidc_mobile_federation.py",
+                    "tests/architecture/test_oidc_mobile_federation_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="auth.password_authentication",
             module="app.services.password_authentication",
             owns=(
@@ -1588,6 +1712,7 @@ DOMAIN = DomainSOT(
                 "portal authentication source snapshots",
             ),
             depends_on=(
+                "auth.session_staging",
                 "auth.token_signing",
                 "app_sessions.auth",
                 "party.staff_session_projection",
@@ -3023,6 +3148,7 @@ DOMAIN = DomainSOT(
                 "field mobile OIDC assertion admission",
             ),
             depends_on=(
+                "auth.session_staging",
                 "control.feature_registry",
                 "control.settings_spec",
                 "events.dispatcher",
@@ -3036,9 +3162,9 @@ DOMAIN = DomainSOT(
                 "a subject. External roles, groups and authorization scopes "
                 "have no effect: they are not read, stored or projected, so "
                 "there is no path from a token claim to an access decision. "
-                "This owner never mints a session itself — admission and "
-                "session issuance are two commits, in that order, and "
-                "AuthFlow stays the single issuance owner. It never "
+                "This owner coordinates admission and session staging in one "
+                "atomic transaction through auth.session_staging; tokens are "
+                "encoded from the committed snapshot. It never "
                 "provisions: an unbound subject is refused, there is no "
                 "match-by-email and no just-in-time party creation."
             ),
@@ -3064,6 +3190,7 @@ DOMAIN = DomainSOT(
                             "verified identity provider assertion",
                             "installed OIDC verifier binding",
                             "eligible staff principal",
+                            "authentication session staging participant",
                         ),
                         canonical_writer="auth.oidc_mobile_federation",
                     ),
@@ -3131,40 +3258,19 @@ DOMAIN = DomainSOT(
                             "compared as the Sub-owned context assertion"
                         ),
                     ),
+                    AuthorityInput(
+                        name="authentication session staging participant",
+                        owner="auth.session_staging",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed flush-only session insertion, same-device supersession and staff presence, returning an immutable signing snapshot for post-commit encoding.",
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
-                    boundary=(
-                        "Each endpoint enters execute_owner_command once on a "
-                        "transaction-free session. Admission burns the "
-                        "ceremony, stamps the credential, stages audit "
-                        "evidence and emits its event in that one "
-                        "transaction; the Sub session is minted AFTERWARDS by "
-                        "AuthFlow, which owns its own commit. A refusal is "
-                        "returned as a value rather than raised, so the burn "
-                        "commits and the ceremony cannot be redeemed again."
-                    ),
-                    locking=(
-                        "The ceremony row is selected FOR UPDATE and its "
-                        "unused/unexpired state re-read under that lock; the "
-                        "matching credential is selected FOR UPDATE in the "
-                        "same transaction. A unique index on the nonce hash "
-                        "and a partial unique index on (binding, subject) "
-                        "arbitrate what the locks cannot."
-                    ),
-                    idempotency=(
-                        "A ceremony is single use by column: a second "
-                        "exchange for the same ceremony finds consumed_at set "
-                        "and is refused as a replay. A repeated start "
-                        "supersedes that device's outstanding ceremony rather "
-                        "than stacking a second redeemable row."
-                    ),
-                    retries=(
-                        "A refused exchange is not retryable — the ceremony "
-                        "is burned and the device must run a fresh one. A "
-                        "bounded JWKS refresh failure is retryable after the "
-                        "configured minimum interval."
-                    ),
+                    boundary="Each endpoint enters execute_owner_command once on a transaction-free session. Successful exchange commits ceremony completion, credential bookkeeping, canonical AuditEvent, admitted outbox event, session, device supersession and staff presence together. Expected admission refusals return values so failed ceremony burns commit without a session. Storage or commit failure rolls back the success transition. Encoding occurs only after commit and cannot undo committed state.",
+                    locking="Ceremony FOR UPDATE precedes immutable candidate discovery. Party-led principal resolution identifies the exact context, then fresh principal, credential, Party FK KEY SHARE and authentication-binding locks follow the reviewed identity dependency order. Exact version, provider, subject, projection and binding timestamp evidence are rechecked; drift is refused without selecting another identity. PostgreSQL lock_timeout is transaction-local five seconds per acquisition, not a total request deadline.",
+                    idempotency="Single-use ceremony consumption serializes concurrent redemption. Expected denials commit a failed burn. A storage rollback leaves the ceremony retryable; a post-commit encoding failure leaves it consumed and requires a fresh ceremony. Same-device replacement participates in the session transaction.",
+                    retries="Lock timeout returns a typed operational error after rollback. Retry requires a fresh request and complete revalidation; no nested session or audit retry. Authentication refusals and consumed ceremonies are not retried.",
                 ),
                 errors=ErrorContract(
                     domain_codes=(
@@ -3175,7 +3281,9 @@ DOMAIN = DomainSOT(
                         "auth.oidc_mobile_federation.nested_owner_command",
                         "auth.oidc_mobile_federation.nested_transaction_completion",
                         "auth.oidc_mobile_federation.refused",
+                        "auth.oidc_mobile_federation.lock_timeout",
                     ),
+                    retryable_codes=("auth.oidc_mobile_federation.lock_timeout",),
                     mapping_owner="app.api.oidc_mobile",
                     fail_closed_on=(
                         "a disabled or unconfigured federation",
