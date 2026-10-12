@@ -175,7 +175,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: tests/test_admin_system_route_guards.py: fresh owner-command Sessions prove
 #: logout and administrative session revocation commit independently of the
 #: adapter's request Session. These are test-only transaction-boundary fixtures.
-TEST_FIXTURE_BASELINE_TOTAL = 245
+#: Five isolated PostgreSQL Session constructions in
+#: test_api_key_revocation_concurrency.py exercise administrative key revocation
+#: locking and rollback. Production construction allowances are unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 250
 
 
 def _baseline() -> dict[str, int]:

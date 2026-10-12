@@ -407,6 +407,74 @@ DOMAIN = DomainSOT(
                 ),
             ),
         ),
+        SOTService(
+            name="auth.api_key_administration",
+            module="app.services.api_key_administration",
+            owns=("administrative JSON API-key revocation",),
+            depends_on=("observability.audit_log",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="administrative JSON API-key revocation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("authorized revocation and ApiKey",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authorized revocation and ApiKey",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Immutable UUID target, trusted administrative AuditActor and matching CommandContext; refreshed locked ApiKey row.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="revoke enters execute_owner_command once on a fresh session; ApiKey state and canonical AuditEvent commit or roll back together. No external effects.",
+                    locking="ApiKey FOR UPDATE with populate_existing; PostgreSQL transaction-local five-second lock timeout.",
+                    idempotency="Each successful invocation stamps revoked_at and writes audit, including already-revoked keys. No durable replay claim.",
+                    retries="No automatic retry; lock timeout maps to 503 Retry-After 5 after rollback. Inspect state after unknown commit outcome.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "auth.api_key_administration"
+                    )
+                    + (
+                        "auth.api_key_administration.invalid_actor",
+                        "auth.api_key_administration.not_found",
+                    ),
+                    mapping_owner="app.api.auth DELETE /api-keys/{key_id}",
+                    fail_closed_on=(
+                        "missing trusted actor",
+                        "active caller transaction",
+                        "canonical audit failure",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("auth.api_key.revoked",),
+                    schema_version=1,
+                    delivery_owner="observability.audit_log",
+                    compatibility="Canonical AuditEvent only: target/actor identifiers, old/new active/revoked state and command/correlation identifiers. No external event or secret payload.",
+                    replay="Audit records are evidence, not delivery commands; no external dispatch or automatic replay. Database immutability is outside this slice.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    new_owner="auth.api_key_administration",
+                    old_owner="auth.ApiKeys.delete/revoke for JSON API revocation only",
+                    verification="Focused typed behavior, transaction trace and architecture tests; migrated PostgreSQL locking acceptance is hosted-only.",
+                    cutover_gate="JSON DELETE uses this owner with a fresh command session and route-local admin guard.",
+                    fallback_retirement="Both legacy delete and revoke methods removed after repository-wide consumer search. Other API-key writers remain outside this slice.",
+                ),
+                steward="platform security",
+                design_refs=("docs/designs/API_KEY_REVOCATION.md",),
+                test_refs=(
+                    "tests/test_api_key_administration.py",
+                    "tests/integration/test_api_key_revocation_concurrency.py",
+                    "tests/architecture/test_api_key_administration_boundary.py",
+                ),
+            ),
+        ),
         *CREDENTIAL_ADMINISTRATION_SERVICES,
         SOTService(
             name="auth.credential_security_inventory",

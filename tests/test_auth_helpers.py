@@ -261,8 +261,12 @@ def test_sessions_get_delete_errors(db_session):
 def test_api_keys_get_delete_errors(db_session):
     with pytest.raises(HTTPException):
         auth_service.api_keys.get(db_session, str(uuid.uuid4()))
-    with pytest.raises(HTTPException):
-        auth_service.api_keys.delete(db_session, str(uuid.uuid4()))
+    from app.services import api_key_administration
+    from tests.test_api_key_administration import command
+
+    db_session.commit()
+    with pytest.raises(api_key_administration.ApiKeyRevocationError):
+        api_key_administration.revoke(db_session, command=command(uuid.uuid4()))
 
 
 def test_api_key_list_filters(db_session, person):

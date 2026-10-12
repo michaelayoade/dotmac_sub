@@ -448,7 +448,12 @@ def test_api_key_update_and_revoke(db_session, person):
     )
     assert updated.key_hash == auth_service.hash_api_key("new-key")
 
-    auth_service.api_keys.revoke(db_session, str(created.id))
+    from app.services import api_key_administration
+    from tests.test_api_key_administration import command
+
+    key_id = created.id
+    db_session.commit()
+    api_key_administration.revoke(db_session, command=command(key_id))
     db_session.refresh(created)
     assert created.is_active is False
     assert created.revoked_at is not None
