@@ -1797,6 +1797,52 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(router_backup_hours * 3600, 3600),
         )
+        # Router health reconciler (network.router_health). Both controls ship
+        # OFF; the tasks re-check their control at run time. Findings are
+        # shadow-mode (visible, non-notifying) until router_health_alert_mode
+        # is set to "alert" through the audited settings path.
+        router_health_posture_hours = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "router_health_posture_interval_hours",
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_health_posture",
+            task_name="app.tasks.router_health.reconcile_router_posture",
+            enabled=control_registry.is_enabled(
+                session, "network.router_health_posture"
+            ),
+            interval_seconds=max(router_health_posture_hours * 3600, 3600),
+        )
+        router_health_service_minutes = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "router_health_service_path_interval_minutes",
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_health_service_path",
+            task_name="app.tasks.router_health.reconcile_service_path",
+            enabled=control_registry.is_enabled(
+                session, "network.router_health_posture"
+            ),
+            interval_seconds=max(router_health_service_minutes * 60, 900),
+        )
+        router_health_canary_hours = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "router_health_coa_canary_interval_hours",
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_health_coa_canary",
+            task_name="app.tasks.router_health.run_coa_canary",
+            enabled=control_registry.is_enabled(
+                session, "network.router_health_coa_canary"
+            ),
+            interval_seconds=max(router_health_canary_hours * 3600, 12 * 3600),
+        )
         # NAS config backup orchestrator. The task itself honors each device's
         # backup_enabled + backup_schedule, so this just needs to run often
         # enough to catch due devices (hourly).

@@ -854,6 +854,39 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Periodic observation refresh; expiring facts are recomputed and a later "
         "beat run repairs a missed or failed collection.",
     ),
+    "app.tasks.router_health.reconcile_router_posture": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only snapshot posture projection into admin alerts; findings are "
+        "recomputed from stored snapshots, so a later run repairs a missed one.",
+    ),
+    "app.tasks.router_health.reconcile_service_path": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Recomputes CoA outcome and enforcement-path findings from counters; a "
+        "later run repairs a missed one.",
+    ),
+    "app.tasks.router_health.run_coa_canary": _c(
+        "network",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Sends no-op CoA probes to production NAS: audited before sending, "
+        "single-flight by advisory lock and rate-limited per NAS, so it is "
+        "never blindly retried; the next daily run re-attempts.",
+    ),
+    "app.tasks.router_health.reprobe_coa_canary": _c(
+        "network",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "One follow-up probe after a canary timeout; not retried, the next "
+        "daily canary re-attempts.",
+    ),
     "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

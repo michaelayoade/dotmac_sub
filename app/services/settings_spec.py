@@ -28,8 +28,10 @@ from app.services.channel_health_contracts import (
 )
 from app.services.operator_tenant import operator_tenant_id
 from app.services.response import ListResponseMixin
+from app.services.router_health.policy import router_health_policy_error
 from app.services.settings_specs.integration import build_integration_specs
 from app.services.settings_specs.provisioning import build_provisioning_specs
+from app.services.settings_specs.router_health import build_router_health_specs
 from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
@@ -4500,6 +4502,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
     *build_provisioning_specs(SettingSpec),
     # ============== Integration Domain (DotMac ERP edge) ==============
     *build_integration_specs(SettingSpec),
+    # ============== Router health reconciler (network.router_health) ==============
+    *build_router_health_specs(SettingSpec),
     SettingSpec(
         domain=SettingDomain.snmp,
         key="interface_walk_interval_seconds",
@@ -5941,6 +5945,10 @@ TYPED_JSON_SETTING_VALIDATORS: dict[
         SettingDomain.radius,
         "walled_garden_allowed_resources",
     ): walled_garden_allowed_resources_error,
+    (
+        SettingDomain.network,
+        "router_health_policy",
+    ): router_health_policy_error,
 }
 
 

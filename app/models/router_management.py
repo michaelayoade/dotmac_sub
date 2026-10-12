@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -217,7 +218,14 @@ class RouterInterface(Base):
 
 class RouterConfigSnapshot(Base):
     __tablename__ = "router_config_snapshots"
-    __table_args__ = (Index("ix_router_config_snapshots_router_id", "router_id"),)
+    __table_args__ = (
+        Index("ix_router_config_snapshots_router_id", "router_id"),
+        Index(
+            "ix_router_config_snapshots_router_created",
+            "router_id",
+            text("created_at DESC"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
