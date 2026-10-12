@@ -189,10 +189,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: independent atomicity and uniqueness observers; production is unchanged.
 #: JSON API-key PATCH adds five migrated-PostgreSQL Session sites for exact-key
 #: locking, null/constraint rollback and independent observers; production is unchanged.
-#: +2 from tests/services/router_health/test_coa_evidence.py: a private SQLite
-#: engine and sessionmaker prove the CoA outcome writer's out-of-band session
-#: (ADR 0018) survives the caller's rollback. Test-only fixtures.
-TEST_FIXTURE_BASELINE_TOTAL = 271
+#: Web API-key rotation/rollback tests add three migrated-PostgreSQL Session
+#: sites (worker, lock blocker and audit rollback); production is unchanged.
+#: Accepted router-health test helpers add a private SQLite engine and
+#: sessionmaker for out-of-band evidence rollback tests (ADR 0018).
+TEST_FIXTURE_BASELINE_TOTAL = 274
 
 
 def _baseline() -> dict[str, int]:
