@@ -193,7 +193,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: sites (worker, lock blocker and audit rollback); production is unchanged.
 #: Accepted router-health test helpers add a private SQLite engine and
 #: sessionmaker for out-of-band evidence rollback tests (ADR 0018).
-TEST_FIXTURE_BASELINE_TOTAL = 274
+#: Staff deletion adds fourteen migrated-PostgreSQL Session sites for pinned
+#: workers, FK/lock blockers and independent rollback observers; production is unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 288
 
 
 def _baseline() -> dict[str, int]:

@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -21,7 +21,10 @@ from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
+    current_command_context,
+    current_command_definition,
     execute_owner_command,
+    owner_command_active,
 )
 
 OWNER = "auth.api_key_administration"
@@ -860,3 +863,83 @@ def web_mutate(db: Session, *, command: WebMutateApiKeyCommand) -> WebApiKeyOutc
         )
     except SQLAlchemyError as exc:
         raise _web_storage_error(exc) from None
+
+
+@dataclass(frozen=True, slots=True)
+class StaffKeyDeletionCommand:
+    context: CommandContext = field(repr=False)
+    actor: AuditActor = field(repr=False)
+    system_user_ids: tuple[UUID, ...]
+    provenance: AdministrationProvenance = field(
+        default=AdministrationProvenance.AUTHENTICATED_ADMINISTRATOR, init=False
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StaffKeyDeletionOutcome:
+    deleted_key_ids: tuple[UUID, ...]
+
+
+def stage_staff_key_deletion(
+    db: Session, *, command: StaffKeyDeletionCommand
+) -> StaffKeyDeletionOutcome:
+    """Named flush-only participant of inactive staff deletion, never a public command."""
+    if (
+        not isinstance(command, StaffKeyDeletionCommand)
+        or command.provenance
+        is not AdministrationProvenance.AUTHENTICATED_ADMINISTRATOR
+        or not isinstance(command.context, CommandContext)
+        or not isinstance(command.actor, AuditActor)
+        or not isinstance(command.system_user_ids, tuple)
+        or any(not isinstance(value, UUID) for value in command.system_user_ids)
+        or not owner_command_active(db, owner="auth.staff_provisioning")
+        or current_command_definition(db).concern != "inactive staff account deletion"
+        or current_command_definition(db).name
+        not in {"delete_staff_account", "bulk_delete_staff_accounts"}
+        or current_command_context(db) != command.context
+        or command.context.scope != "rbac:assign"
+        or command.actor.actor_type not in {AuditActorType.user, AuditActorType.api_key}
+        or command.context.actor
+        != f"{command.actor.actor_type.value}:{command.actor.actor_id}"
+    ):
+        raise DomainError(
+            code=f"{OWNER}.invalid_participant",
+            message="Trusted staff deletion participant context required.",
+        )
+    key_ids = tuple(
+        db.scalars(
+            select(ApiKey.id)
+            .where(ApiKey.system_user_id.in_(command.system_user_ids))
+            .order_by(ApiKey.id)
+            .with_for_update()
+        )
+    )
+    actual = (
+        tuple(
+            sorted(
+                db.scalars(
+                    delete(ApiKey).where(ApiKey.id.in_(key_ids)).returning(ApiKey.id)
+                ),
+                key=str,
+            )
+        )
+        if key_ids
+        else ()
+    )
+    for key_id in actual:
+        stage_audit_event(
+            db,
+            action="auth.api_key.deleted",
+            entity_type="api_key",
+            entity_id=str(key_id),
+            actor=AuditActor(command.actor.actor_type, command.actor.actor_id),
+            details={
+                "schema_version": 1,
+                "scope": "rbac:assign",
+                "reason": "inactive_staff_account_deletion",
+                "command_id": str(command.context.command_id),
+                "correlation_id": str(command.context.correlation_id),
+            },
+        )
+    db.flush()
+    return StaffKeyDeletionOutcome(actual)

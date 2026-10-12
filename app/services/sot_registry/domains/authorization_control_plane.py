@@ -475,6 +475,9 @@ DOMAIN = DomainSOT(
                 "administrative web API-key creation revocation and rotation",
             ),
             depends_on=("observability.audit_log",),
+            notes=(
+                "Named stage_staff_key_deletion is a typed flush-only participant of auth.staff_provisioning inactive deletion. It requires the active parent owner and exact actor/context, locks keys in UUID order and audits only actually deleted IDs; never executes or completes a transaction. Public API-key commands retain owner-managed mode."
+            ),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
@@ -532,7 +535,7 @@ DOMAIN = DomainSOT(
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
-                    boundary="create/generate/update/revoke/web_create/web_mutate each enter execute_owner_command once on a fresh session; ApiKey and canonical AuditEvent commit or roll back together. Generation rate admission precedes the command. No external effects.",
+                    boundary="create/generate/update/revoke/web_create/web_mutate each enter execute_owner_command once on a fresh session; ApiKey and canonical AuditEvent commit or roll back together. Generation rate admission precedes the command. No external effects. Named stage_staff_key_deletion joins only the active auth.staff_provisioning deletion transaction and flushes API-key deletion plus per-key canonical audit; it does not enter the executor.",
                     locking="Revocation and PATCH: ApiKey FOR UPDATE/populate_existing and PostgreSQL five-second lock timeout. Issuance: new row INSERT, unique hash and subscriber FK backstops; no existing-key lock. Web create: plain subscriber existence lookup and FK backstop; legacy cached cap checks are best-effort and race across concurrent creators or JSON updates. No cap lock or global cap guarantee. Web mutation: exact refreshed key FOR UPDATE, no principal/FK change.",
                     idempotency="Revocation stamps fresh state/audit each invocation. Issuance creates a new key; generated material is returned once after commit. PATCH applies supplied fields and audits every successful invocation, including empty/no-op payloads. Web creation creates a new key; rotation replaces the secret once after commit, repeated revocation stamps again. Missing/out-of-scope targets and inactive/revoked rotation return unchanged outcomes without audit. No durable replay or retry claim.",
                     retries="No automatic retry; lock timeout maps to 503 Retry-After 5 after rollback. Inspect state after unknown commit outcome.",
@@ -542,6 +545,7 @@ DOMAIN = DomainSOT(
                         "auth.api_key_administration"
                     )
                     + (
+                        "auth.api_key_administration.invalid_participant",
                         "auth.api_key_administration.invalid_actor",
                         "auth.api_key_administration.not_found",
                         "auth.api_key_administration.invalid_command",
@@ -566,6 +570,7 @@ DOMAIN = DomainSOT(
                         "auth.api_key.generated",
                         "auth.api_key.updated",
                         "auth.api_key.rotated",
+                        "auth.api_key.deleted",
                     ),
                     schema_version=1,
                     delivery_owner="observability.audit_log",
@@ -578,11 +583,13 @@ DOMAIN = DomainSOT(
                     old_owner="auth.ApiKeys JSON writers and web_system_api_key_forms/create and web_system_api_key_mutations",
                     verification="Focused typed behavior, transaction trace and architecture tests; migrated PostgreSQL locking acceptance is hosted-only.",
                     cutover_gate="JSON POST create/generate, PATCH and DELETE use fresh owner command sessions and existing route-local admin guards. Generation preserves Redis admission ordering. Web POST create/revoke/rotate retain inherited admin and route settings-write guards, typed trusted actor context, caller scope and one-time POST rendering.",
-                    fallback_retirement="Legacy issuance/update/revocation writers removed after repository-wide consumer search; limiter retained as admission-only helper. Web writer helpers retired after all consumers migrated; customer/system deletion and telemetry remain outside this slice.",
+                    fallback_retirement="Legacy issuance/update/revocation writers removed after repository-wide consumer search; limiter retained as admission-only helper. Web writer helpers retired after all consumers migrated; Inactive staff key deletion now delegates to the named participant; customer deletion and telemetry remain outside this slice.",
                 ),
                 steward="platform security",
                 design_refs=("docs/designs/API_KEY_REVOCATION.md",),
                 test_refs=(
+                    "tests/test_staff_account_deletion.py",
+                    "tests/integration/test_staff_account_deletion_pg.py",
                     "tests/test_api_key_administration.py",
                     "tests/test_api_key_issuance.py",
                     "tests/test_api_key_update.py",
@@ -1325,7 +1332,7 @@ DOMAIN = DomainSOT(
                         "commit or roll back together. Audit actor enrichment reads "
                         "the canonical staff Party binding in that transaction. "
                         "Collaborator methods "
-                        "flush but never complete a coordinator transaction."
+                        "flush but never complete a coordinator transaction. Named remove_all_for_system_user requires typed removal input and exact active auth.staff_provisioning context; it preserves the final-active-admin guard and flushes grant cleanup only."
                     ),
                     locking=(
                         "The target principal and existing grants are selected "
@@ -2846,6 +2853,7 @@ DOMAIN = DomainSOT(
             module="app.services.staff_provisioning",
             owns=(
                 "staff account provisioning",
+                "inactive staff account deletion",
                 "staff identity bootstrap",
                 "staff identity maintenance",
                 "staff display identity resolution",
@@ -2853,6 +2861,7 @@ DOMAIN = DomainSOT(
                 "staff field technician profile binding",
             ),
             depends_on=(
+                "auth.api_key_administration",
                 "auth.rbac_catalog",
                 "auth.system_user_assignments",
                 "auth.permission_gate",
@@ -2883,6 +2892,11 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="inactive staff account deletion",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=("authorized inactive staff deletion request",),
+                    ),
                     ConcernContract(
                         name="staff account provisioning",
                         role=OwnerRole.APPLICATION_COORDINATOR,
@@ -2936,6 +2950,12 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="authorized inactive staff deletion request",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Frozen single/bulk UUID command, trusted administrative actor and matching RBAC context; refreshed locked SystemUser inactive standing and existing linked-record FK blockers.",
+                    ),
                     AuthorityInput(
                         name="ERP HR staff lifecycle request",
                         owner="external:dotmac_erp",
@@ -3011,7 +3031,7 @@ DOMAIN = DomainSOT(
                         "credentials, profile and login-identity changes, RBAC "
                         "grants, session revocation, audit, "
                         "Person Party identity, and the outbox event commit "
-                        "together before return."
+                        "together before return. Inactive staff single/bulk deletion atomically deletes auth dependents, delegates API-key and RBAC cleanup to named flush-only participants, deletes principals and stages canonical audit; no deletion outbox/external effect."
                     ),
                     locking=(
                         "A PostgreSQL advisory transaction lock serializes "
@@ -3019,7 +3039,7 @@ DOMAIN = DomainSOT(
                         "email in sorted old/new order; existing principals and "
                         "their local credentials "
                         "are selected FOR UPDATE, and database unique constraints "
-                        "arbitrate identity and grant keys."
+                        "arbitrate identity and grant keys. Deletion locks all unique selected principals sorted UUID FOR UPDATE NOWAIT before credentials, MFA, sessions and API keys sorted UUID, then RBAC cleanup with one deletion-only admin Role NOWAIT query. Principal/Role contention refuses immediately to avoid in-flight grantor FK cycles; other child/key waits retain PostgreSQL five-second lock_timeout. No Subscriber, Party or email advisory lock."
                     ),
                     idempotency=(
                         "Email is the provision natural key; managed roles, active "
@@ -3030,7 +3050,7 @@ DOMAIN = DomainSOT(
                         "Party external-reference provenance so an exact replay "
                         "returns the created principal without mutating it. Invite "
                         "expansion deduplicates on the immutable provisioning event "
-                        "id."
+                        "id. Deletion has no replay/retry guarantee: single missing is not found, active is blocked; bulk active/missing/duplicate occurrences are skipped and any late blocker rolls back the entire batch."
                     ),
                     retries=(
                         "Adapters may retry a failed request with the same "
@@ -3043,6 +3063,10 @@ DOMAIN = DomainSOT(
                 errors=ErrorContract(
                     domain_codes=(
                         "auth.staff_provisioning.invalid_command",
+                        "auth.staff_provisioning.active_staff_deletion",
+                        "auth.staff_provisioning.linked_records",
+                        "auth.staff_provisioning.deletion_busy",
+                        "auth.staff_provisioning.deletion_unavailable",
                         "auth.staff_provisioning.unknown_roles",
                         "auth.staff_provisioning.staff_account_not_found",
                         "auth.staff_provisioning.identity_conflict",
@@ -3090,7 +3114,7 @@ DOMAIN = DomainSOT(
                     delivery_owner="events.dispatcher",
                     compatibility=(
                         "Version 1 is additive and PII-safe; breaking payload "
-                        "changes require a new schema version."
+                        "changes require a new schema version. Hard deletion emits canonical AuditEvent only: principal/key IDs and command correlation, never email, display name or credential material. No external deletion dispatch."
                     ),
                     replay=(
                         "State events are immutable evidence. Staff invitation "
@@ -3114,16 +3138,17 @@ DOMAIN = DomainSOT(
                     cutover_gate=(
                         "All staff-sync, administrative identity, self-profile, "
                         "activation, invitation, and password-recovery routes call "
-                        "only typed owner commands for staff identity state."
+                        "only typed owner commands for staff identity state. Inactive single/bulk deletion uses fresh owner sessions with inherited admin and route RBAC assignment guards."
                     ),
                     fallback_retirement=(
                         "Staff sync no longer calls web_system_user_mutations or "
                         "synchronous email delivery; web adapters no longer mutate "
-                        "staff profile or local credential identity directly."
+                        "staff profile or local credential identity directly. Both legacy staff delete helpers and single route post-commit PII audit are retired; customer deletion remains a separate owner migration."
                     ),
                 ),
                 steward="platform security",
                 design_refs=(
+                    "docs/designs/STAFF_ACCOUNT_DELETION.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/designs/ERP_WORKFORCE_ACCOUNT_PROVISIONING.md",
                     "docs/designs/STAFF_LOGIN_IDENTITY_RECONCILIATION.md",
@@ -3131,6 +3156,8 @@ DOMAIN = DomainSOT(
                     "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
                 ),
                 test_refs=(
+                    "tests/test_staff_account_deletion.py",
+                    "tests/integration/test_staff_account_deletion_pg.py",
                     "tests/test_api_staff_sync.py",
                     "tests/test_staff_provisioning_owner.py",
                     "tests/test_staff_login_identity_admin.py",

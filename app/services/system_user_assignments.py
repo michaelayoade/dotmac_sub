@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -30,7 +30,10 @@ from app.services.events.types import EventType
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
+    current_command_context,
+    current_command_definition,
     execute_owner_command,
+    owner_command_active,
 )
 from app.services.session_hooks import run_after_commit
 
@@ -151,11 +154,11 @@ def _active_roles_by_ids(
     return tuple(by_id[role_id] for role_id in ids)
 
 
-def _locked_admin_role(db: Session) -> Role | None:
+def _locked_admin_role(db: Session, *, nowait: bool = False) -> Role | None:
     return db.execute(
         select(Role)
         .where(func.lower(Role.name) == "admin", Role.is_active.is_(True))
-        .with_for_update()
+        .with_for_update(nowait=nowait)
     ).scalar_one_or_none()
 
 
@@ -435,10 +438,12 @@ def ensure_source_role_by_id(
     )
 
 
-def ensure_can_deactivate_system_user(db: Session, user_id: UUID) -> None:
+def ensure_can_deactivate_system_user(
+    db: Session, user_id: UUID, *, nowait: bool = False
+) -> None:
     """Fail closed before deactivating the final active admin principal."""
 
-    admin_role = _locked_admin_role(db)
+    admin_role = _locked_admin_role(db, nowait=nowait)
     if admin_role is None or not _has_role(db, user_id, admin_role.id):
         return
     user = db.get(SystemUser, user_id)
@@ -452,17 +457,42 @@ def ensure_can_deactivate_system_user(db: Session, user_id: UUID) -> None:
         )
 
 
-def remove_all_for_system_user(db: Session, user_id: UUID) -> None:
-    """Remove assignment dependents inside the principal deletion transaction."""
+@dataclass(frozen=True)
+class RemoveSystemUserAssignmentsCommand:
+    context: CommandContext = field(repr=False)
+    user_id: UUID
 
-    ensure_can_deactivate_system_user(db, user_id)
-    db.query(SystemUserRole).filter(SystemUserRole.system_user_id == user_id).delete(
-        synchronize_session=False
-    )
+
+@dataclass(frozen=True)
+class RemovedSystemUserAssignments:
+    user_id: UUID
+
+
+def remove_all_for_system_user(
+    db: Session, *, command: RemoveSystemUserAssignmentsCommand
+) -> RemovedSystemUserAssignments:
+    """Typed flush-only collaborator of inactive staff deletion."""
+    if (
+        not isinstance(command, RemoveSystemUserAssignmentsCommand)
+        or not isinstance(command.user_id, UUID)
+        or not isinstance(command.context, CommandContext)
+        or not owner_command_active(db, owner="auth.staff_provisioning")
+        or current_command_definition(db).concern != "inactive staff account deletion"
+        or current_command_definition(db).name
+        not in {"delete_staff_account", "bulk_delete_staff_accounts"}
+        or current_command_context(db) != command.context
+    ):
+        raise _error("invalid_command", "Trusted staff deletion context required.")
+    _validate_context(command.context)
+    ensure_can_deactivate_system_user(db, command.user_id, nowait=True)
+    db.query(SystemUserRole).filter(
+        SystemUserRole.system_user_id == command.user_id
+    ).delete(synchronize_session=False)
     db.query(SystemUserPermission).filter(
-        SystemUserPermission.system_user_id == user_id
+        SystemUserPermission.system_user_id == command.user_id
     ).delete(synchronize_session=False)
     db.flush()
+    return RemovedSystemUserAssignments(command.user_id)
 
 
 def _validate_context(context: CommandContext) -> tuple[AuditActorType, str]:

@@ -186,6 +186,19 @@ Keep branding minimal until operations are stable. Invoice identity, contact det
 - TOTP issuer name configurable (default: `dotmac_sm`)
 - Admin can disable MFA for a locked-out user via User Management
 
+### Deleting inactive staff accounts
+
+Deactivate a staff account first, then use Delete with `rbac:assign` permission.
+Successful deletion removes its local credentials, MFA factors, sessions, grants
+and staff-bound API keys together and records audit evidence. Linked recovery
+codes, technician records or other history can block deletion; a blocked request
+leaves the account and keys unchanged. Native Party identity history is retained.
+
+Bulk Delete skips active or missing users and repeated selections. The deleted
+count reports distinct accounts. If any selected inactive account has a blocker,
+the entire batch stays unchanged. Review the blocker before retrying; after an
+uncertain response, inspect current state and audit evidence first.
+
 ### API Keys
 
 Open `/admin/system/api-keys` with administrative access. Creation, rotation and
