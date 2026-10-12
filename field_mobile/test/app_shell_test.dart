@@ -3,7 +3,6 @@ import 'support/field_capability_fixtures.dart';
 
 import 'package:dotmac_field/app/app.dart';
 import 'package:dotmac_field/core/api/token_store.dart';
-import 'package:dotmac_field/core/location/map_coordinates.dart';
 import 'package:dotmac_field/core/location/location_source.dart';
 import 'package:dotmac_field/core/offline/database.dart';
 import 'package:dotmac_field/features/attendance/attendance_models.dart';
@@ -265,9 +264,8 @@ void main() {
         controller: _VendorController.new,
         capabilities: const FieldExecutionCapabilities(),
         extra: [
-          vendorNearbyPlantProvider.overrideWith(
-            (ref) async =>
-                const VendorMapData(center: defaultMapCenter, assets: []),
+          vendorJobMapProvider.overrideWith(
+            (ref) async => const VendorMapData(destinations: []),
           ),
         ],
       ),
@@ -277,7 +275,7 @@ void main() {
     expect(find.byType(NavigationBar), findsOneWidget);
     expect(find.text('Hello, Chidi'), findsOneWidget);
     expect(find.text('Today'), findsOneWidget);
-    expect(find.text('Map'), findsOneWidget); // vendor-scoped nearby-plant map
+    expect(find.text('Map'), findsOneWidget); // current assigned-job map
     expect(find.text('Schedule'), findsOneWidget);
     expect(find.text('Materials'), findsNothing);
     expect(find.text('Expenses'), findsNothing);
@@ -285,7 +283,7 @@ void main() {
 
     await tester.tap(find.text('Map'));
     await tester.pumpAndSettle();
-    expect(find.text('Nearby plant'), findsOneWidget);
+    expect(find.text('Assigned job locations'), findsOneWidget);
 
     expect(find.text('Projects'), findsNothing);
     expect(find.text('Customers'), findsNothing);

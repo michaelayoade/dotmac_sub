@@ -31,7 +31,12 @@ from app.services.field.work_order_access import (
     require_work_order,
     resolve_field_actor,
 )
-from app.services.file_storage import FileValidationError, file_uploads
+from app.services.file_storage import (
+    FileRetentionQuery,
+    FileValidationError,
+    file_uploads,
+    lock_file_for_retention,
+)
 from app.services.object_storage import ObjectNotFoundError, StreamResult
 from app.services.owner_commands import (
     OwnerCommandDefinition,
@@ -395,10 +400,14 @@ class FieldAttachments:
                 work_order_mirror_id=attachment.work_order_mirror_id,
                 lock=True,
             )
+            # Retained immutable submissions prevent reference removal too.
+            stored = lock_file_for_retention(
+                db, query=FileRetentionQuery(attachment.stored_file_id)
+            )
+            db.refresh(attachment, with_for_update=True)
             if not attachment.is_active:
                 return FieldAttachmentDeletionOutcome(attachment.id, replayed=True)
             attachment.is_active = False
-            stored = db.get(StoredFile, attachment.stored_file_id)
             if stored is not None and not stored.is_deleted:
                 file_uploads.stage_soft_delete(db=db, file=stored)
             db.flush()

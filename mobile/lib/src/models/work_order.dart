@@ -3,15 +3,17 @@
 import 'status_presentation.dart';
 
 class WorkOrderSelfCareAction {
-  const WorkOrderSelfCareAction({required this.key, required this.allowed});
+  const WorkOrderSelfCareAction({required this.key, required this.allowed, this.label});
 
   final String key;
   final bool allowed;
+  final String? label;
 
   factory WorkOrderSelfCareAction.fromJson(Map<String, dynamic> json) =>
       WorkOrderSelfCareAction(
         key: (json['key'] ?? '').toString(),
         allowed: json['allowed'] as bool? ?? false,
+        label: json['label'] as String?,
       );
 }
 
@@ -68,6 +70,19 @@ class WorkOrderItem {
   bool get canTrackTechnician => actions.any(
         (action) => action.key == 'track_technician' && action.allowed,
       );
+
+  bool get canChatTechnician => actions.any(
+        (action) => action.key == 'chat_technician' && action.allowed,
+      );
+
+  String get chatActionLabel {
+    for (final action in actions) {
+      if (action.key == 'chat_technician' && action.allowed) {
+        return action.label ?? 'Message technician';
+      }
+    }
+    return 'Message technician';
+  }
 
   bool get canRateTechnician => actions.any(
         (action) => action.key == 'rate_technician' && action.allowed,

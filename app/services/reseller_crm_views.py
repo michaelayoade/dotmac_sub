@@ -107,7 +107,8 @@ def projects_for_reseller(db: Session, reseller_id: str) -> dict:
     items = []
     for subscriber_id, account_name in names.items():
         response = customer_experience_lifecycle.projects_for_subscriber(
-            db, str(subscriber_id)
+            db,
+            query=customer_experience_lifecycle.CustomerLifecycleQuery(subscriber_id),
         )
         for project in response.projects:
             payload = project.model_dump(mode="json")
@@ -132,7 +133,8 @@ def work_orders_for_reseller(db: Session, reseller_id: str) -> dict:
     upcoming = 0
     for subscriber_id, account_name in names.items():
         response = customer_experience_lifecycle.work_orders_for_subscriber(
-            db, str(subscriber_id)
+            db,
+            query=customer_experience_lifecycle.CustomerLifecycleQuery(subscriber_id),
         )
         upcoming += response.upcoming
         for work_order in response.work_orders:

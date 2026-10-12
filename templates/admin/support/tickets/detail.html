@@ -28,6 +28,9 @@
         status=ticket_status_badge(status_presentations.get(ticket.display_status))
     ) %}
         {{ ticket_priority_badge(ticket.priority) }}
+        {% if can(request, 'support:ticket:update') %}
+        <a href="/admin/support/tickets/{{ ticket.id }}/resolution-confirmation" class="inline-flex items-center rounded-xl border border-amber-300 px-4 py-2.5 text-sm font-semibold">Customer confirmation</a>
+        {% endif %}
         {% if can(request, 'support:ticket:update') and can(request, 'operations:dispatch:write') %}
             {% if issue_work_order_action.allowed %}
             <a href="#field-work-orders" class="inline-flex items-center rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700">Create Work Order</a>
@@ -380,6 +383,7 @@
             {% endif %}
 
             {% call support_card(title='Related Outage / Links', subtitle='Ticket relationships and outage references.') %}
+            <a href="/admin/support/tickets/{{ ticket.id }}/incident-link" class="mb-3 inline-block text-sm font-semibold text-primary-600 hover:underline">Review incident correlation</a>
             {% if ticket_links %}
             <div class="mb-3 space-y-2">
                 {% for link in ticket_links %}

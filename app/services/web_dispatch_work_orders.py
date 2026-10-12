@@ -47,6 +47,8 @@ from app.services.ui_contracts import Action, Kpi, StateValue
 from app.services.work_order_assignment_contracts import (
     AssignmentTarget,
     TechnicianAssignmentTarget,
+    VendorAssignmentCandidates,
+    VendorAssignmentCandidatesQuery,
     VendorAssignmentTarget,
     WorkOrderAssignmentCommand,
     WorkOrderAssignmentEligibilityQuery,
@@ -740,10 +742,17 @@ class WorkOrderAssignmentFormInput(BaseModel):
     model_config = ConfigDict(frozen=True)
     target_selection: str = Field(min_length=1, max_length=80)
     reason: str | None = Field(default=None, max_length=2000)
+    vendor_user_id: UUID | None = None
+    expected_revision: datetime | None = None
+    expected_assignment_generation: UUID | None = None
 
     @model_validator(mode="after")
     def _valid_target(self) -> WorkOrderAssignmentFormInput:
         _target = self.assignment_target
+        if isinstance(_target, TechnicianAssignmentTarget) and self.vendor_user_id:
+            raise ValueError(
+                "A vendor technician cannot be selected for an internal technician assignment"
+            )
         return self
 
     @property
@@ -753,7 +762,7 @@ class WorkOrderAssignmentFormInput(BaseModel):
             raise ValueError("Select a technician or vendor")
         identity = UUID(raw_id)
         return (
-            VendorAssignmentTarget(identity)
+            VendorAssignmentTarget(identity, self.vendor_user_id)
             if kind == "vendor"
             else TechnicianAssignmentTarget(identity)
         )
@@ -770,6 +779,22 @@ def preview_assignment_from_form(
         query=WorkOrderAssignmentQuery(
             work_order_public_id=work_order_id,
             target=selection.assignment_target,
+            expected_revision=selection.expected_revision,
+            expected_assignment_generation=selection.expected_assignment_generation,
+        ),
+    )
+
+
+def vendor_candidates_from_form(
+    db: Session, *, work_order_id: str, selection: WorkOrderAssignmentFormInput
+) -> VendorAssignmentCandidates:
+    target = selection.assignment_target
+    if not isinstance(target, VendorAssignmentTarget):
+        raise ValueError("Select a vendor before choosing its attending technician")
+    return work_order_commands.vendor_assignment_candidates(
+        db,
+        query=VendorAssignmentCandidatesQuery(
+            work_order_public_id=work_order_id, vendor_id=target.vendor_id
         ),
     )
 

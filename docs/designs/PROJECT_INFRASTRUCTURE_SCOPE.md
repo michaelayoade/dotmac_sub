@@ -14,7 +14,15 @@ New selections must have the requested role
 and be active where that inventory has an active flag. Historical labels remain
 readable after archival. Catalogue results contain labels and context only.
 
-Cable Rerun permits a customer, infrastructure, both, or neither while planning.
+The Project owner permits infrastructure for exactly six physical project types:
+Cable Rerun, Fiber Optics Relocation, Air Fiber Relocation, Fiber Optics
+Installation, Air Fiber Installation and Cross Connect. Its typed immutable
+`PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES` policy owns this eligibility; forms
+consume its serialized values. Unknown or absent types cannot retain an
+infrastructure selection. New enum members require explicit policy review.
+
+Each supported type permits a customer, infrastructure, both, or neither while
+planning.
 With a vendor-enabled template and either customer or infrastructure, the project
 owner calls the existing `operations.installation_scope` flush-only participant
 using `EnsureProjectScope`; that participant returns `ProjectScopeOutcome`.
@@ -32,7 +40,7 @@ scope cannot lose its last customer/infrastructure/buildout referent.
 
 ## Page contract
 
-Service-delivery staff select what a cable rerun is for on project create/edit.
+Service-delivery staff select the native target of physical work on project create/edit.
 The optional section sits before customer context, with type then typeahead.
 It searches after two characters, returns at most 20 results, preserves submitted
 selection on validation errors, and supports clearing and keyboard selection.
@@ -67,3 +75,23 @@ bulk, dashboard, chart and network-device operation controls are N/A. Scope edit
 emit typed `project.infrastructure_changed` evidence with old/new references
 and the owner command ID; scope creation emits one
 `installation_scope.created` event in the same transaction.
+
+## Planned fiber, radio and rollout entry
+
+Customer fiber/radio installations and relocations use the same typed Project
+create/edit command as infrastructure-only work. Select the appropriate physical
+project type and an exact native target, then author the fiber/radio engineering
+plan and explicit approval policy. A customerless rollout phase can anchor its
+reviewed scope to an existing native Location/site or inventory asset and a
+surveyed destination; no customer is fabricated. Mixed-technology projects keep
+explicit technology on each plan rather than inferring it from the project type.
+
+Selection does not commission a future asset, provision service or approve a
+payment. Engineering approval and issuance preserve the exact native binding,
+inventory locks, target freshness and independent-review policy. Customer-only
+planning remains valid without a target; infrastructure issuance requires one.
+This extension changes no schema and backfills no project types or relationships.
+
+After new physical projects have been admitted, reintroducing the old cable-only
+restriction would strand their edits and completion. Retain their evidence and
+use a forward fix rather than removing the eligibility policy.

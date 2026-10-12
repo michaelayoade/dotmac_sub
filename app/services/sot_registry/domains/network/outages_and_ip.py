@@ -578,10 +578,16 @@ SERVICES: tuple[SOTService, ...] = (
             "outage incident lifecycle",
             "immutable incident scope and audience revision history",
             "incident ticket link composition",
+            "reviewed customer complaint incident correlation",
+            "explicit legacy complaint correlation adoption",
+            "reviewed complaint incident candidate projection",
             "typed outage lifecycle output emission",
             "committed outage output consumption",
         ),
         depends_on=(
+            "auth.permission_gate",
+            "access.subscription_lifecycle",
+            "observability.audit_log",
             "network.outage_impact",
             "events.dispatcher",
             "events.owner_outputs",
@@ -606,6 +612,38 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="explicit legacy complaint correlation adoption",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "recorded outage incidents",
+                        "support ticket identities",
+                        "exact complaint subscription binding",
+                        "current complaint staff permissions",
+                    ),
+                    canonical_writer="network.outage_lifecycle",
+                ),
+                ConcernContract(
+                    name="reviewed complaint incident candidate projection",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "recorded outage incidents",
+                        "support ticket identities",
+                        "exact complaint subscription binding",
+                        "current complaint staff permissions",
+                    ),
+                ),
+                ConcernContract(
+                    name="reviewed customer complaint incident correlation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "recorded outage incidents",
+                        "support ticket identities",
+                        "exact complaint subscription binding",
+                        "current complaint staff permissions",
+                    ),
+                    canonical_writer="network.outage_lifecycle",
+                ),
                 ConcernContract(
                     name="persisted outage incident status vocabulary",
                     role=OwnerRole.EVENT_POLICY,
@@ -657,6 +695,18 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             authoritative_inputs=(
                 AuthorityInput(
+                    name="exact complaint subscription binding",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Selected Subscription.subscriber_id matches the one unambiguous native Subscriber identity on the locked Ticket; selected Subscription row is locked until association commit.",
+                ),
+                AuthorityInput(
+                    name="current complaint staff permissions",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Fresh support ticket read/update and monitoring read/write admissions for the same active staff Person, excluding vendor/customer/service principals and active leave writes.",
+                ),
+                AuthorityInput(
                     name="recorded outage incidents",
                     owner="network.outage_lifecycle",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -690,7 +740,7 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "support_tickets row identities for the one "
                         "canonical infrastructure link and the "
-                        "deduplicated complaint links; ticket "
+                        "deduplicated complaint links; complaint correlation reads only Ticket id/number/title/is_active/status/merged_into_ticket_id and subscriber_id/customer_account_id/customer_person_id. Ticket lifecycle facts are protected reads and never written here; ticket "
                         "transitions stay with the Support owner"
                     ),
                 ),
@@ -712,16 +762,16 @@ SERVICES: tuple[SOTService, ...] = (
                     "consume_outage_activation and "
                     "consume_outage_termination each enter "
                     "execute_owner_command once on a transaction-free "
-                    "session."
+                    "session. Reviewed complaint linking enters execute_owner_command once, stages link, receipt, restricted audit and record-only typed evidence atomically; it invokes no consequences."
                 ),
                 locking=(
-                    "Transitions operate on the loaded incident row inside "
+                    "Complaint linking and scope revision writers share an incident row lock. Complaint lock order is incident, Ticket, selected Subscription FOR UPDATE with fresh binding and staff checks after waits; no Subscriber/account lock is acquired. This agrees with Ticket SLA automation Ticket-before-Subscription order. Transitions operate on the loaded incident row inside "
                     "the reconcile scan's advisory-locked pass or the "
                     "operator adapter's transaction; consumers reload the "
                     "incident before applying consequences."
                 ),
                 idempotency=(
-                    "Escalation participants are idempotent per trigger; "
+                    "Complaint intents use immutable native OutageComplaintCorrelationReceipt unique incident/intent UUID, exact fingerprint/link/service/original reviewed revision/actor/reason and explicit reviewed_adoption provenance; v2 ref is compatibility only, generic IdempotencyKey is retired. Changed input conflicts. Escalation participants are idempotent per trigger; "
                     "consumer receipts make redelivery an exact no-op, and "
                     "a terminal incident skips fresh planning."
                 ),
@@ -733,6 +783,20 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             errors=ErrorContract(
                 domain_codes=(
+                    "auth.staff_permission_admission.denied",
+                    "outage.complaint.denied",
+                    "outage.complaint.not_found",
+                    "outage.complaint.invalid_request",
+                    "outage.complaint.ticket_ineligible",
+                    "outage.complaint.customer_ambiguous",
+                    "outage.complaint.scope_mismatch",
+                    "outage.complaint.role_collision",
+                    "outage.complaint.stale_revision",
+                    "outage.complaint.incident_ineligible",
+                    "outage.complaint.idempotency_conflict",
+                    "outage.complaint.receipt_invalid",
+                    "outage.complaint.provenance_unavailable",
+                    "outage.complaint.provenance_conflict",
                     "network.outage_lifecycle.active_caller_transaction",
                     "network.outage_lifecycle.command_contract_violation",
                     "network.outage_lifecycle.invalid_command_context",
@@ -756,6 +820,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "outage.rerooted",
                     "outage.discarded",
                     "outage.resolved",
+                    "outage.complaint_linked.v1",
+                    "outage.complaint_reviewed.v1",
                 ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
@@ -770,6 +836,23 @@ SERVICES: tuple[SOTService, ...] = (
                     "Incident rows and EventStore evidence reconstruct "
                     "each transition; consumer receipts make redelivered "
                     "consequences exact no-ops."
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="reviewed complaint incident candidate projection",
+                    input_names=(
+                        "recorded outage incidents",
+                        "support ticket identities",
+                        "exact complaint subscription binding",
+                        "current complaint staff permissions",
+                    ),
+                    writer="network.outage_lifecycle",
+                    freshness="Fresh persisted latest revision/member rows, exact Ticket/Subscription identities and current staff RBAC/leave on every query; no live topology recomputation.",
+                    stale_behavior="A changed revision or membership token refuses new intent with explicit reload; exact authorized receipt replay returns immutable original provenance.",
+                    drift_signal="Expected immutable revision UUID and membership token differ from the latest revision under the shared incident lock.",
+                    rebuild_operation="Re-run complaint_incident_candidates from persisted owner facts; no repair writes are performed by the page.",
+                    repair_owner="network.outage_lifecycle",
                 ),
             ),
             migration=MigrationContract(

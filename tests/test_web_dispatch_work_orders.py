@@ -13,6 +13,7 @@ from app.schemas.dispatch import TechnicianProfileCreate
 from app.services import dispatch
 from app.services import web_dispatch_work_orders as web_dispatch
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.work_order_assignment_contracts import WorkOrderAssignmentCommand
 
 
@@ -387,9 +388,16 @@ def test_update_and_queue_from_form(db_session):
             target=selection.assignment_target,
             reason=selection.reason,
             expected_revision=preview.revision,
+            access=PermissionAdmission(
+                tech.system_user_id,
+                "system_user",
+                frozenset({"operations:dispatch:assign"}),
+            ),
         ),
         context=CommandContext.system(
-            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+            actor=str(tech.system_user_id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
         ),
     )
     assert queued.work_order_id == "sub-web-wo-2"

@@ -9,6 +9,7 @@ route still authorizes — this only controls visibility.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 from app.services.auth_dependencies import (
     action_permitted,
@@ -29,7 +30,14 @@ def _action(allowed: bool, permission: str | None = None) -> SimpleNamespace:
 
 def test_admin_effective_keys_collapse_to_wildcard_without_a_query():
     # db is never touched for admin, so None is safe here.
-    keys = effective_permission_keys({"roles": ["admin"], "principal_id": "x"}, None)
+    keys = effective_permission_keys(
+        {
+            "roles": ["admin"],
+            "principal_id": str(uuid4()),
+            "principal_type": "system_user",
+        },
+        None,
+    )
     assert keys == frozenset({"*"})
 
 

@@ -6,6 +6,8 @@ import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/status_chip.dart';
 import 'technician_track_screen.dart';
+import 'technician_profile_screen.dart';
+import 'field_visit_chat_screen.dart';
 
 /// Technician Visits — the customer's field-service work orders (status,
 /// schedule, ETA, technician and native project/task/ticket relationships).
@@ -157,6 +159,30 @@ class _WorkOrderCard extends ConsumerWidget {
                 'Completed',
                 _fmt(workOrder.completedAt),
               ),
+            TextButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => TechnicianProfileScreen(
+                    workOrderId: workOrder.id,
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.badge_outlined),
+              label: const Text('View technician'),
+            ),
+            if (workOrder.canChatTechnician) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        FieldVisitChatScreen(workOrderId: workOrder.publicId),
+                  ),
+                ),
+                icon: const Icon(Icons.chat_outlined, size: 18),
+                label: Text(workOrder.chatActionLabel),
+              ),
+            ],
             if (workOrder.canTrackTechnician ||
                 workOrder.canRateTechnician) ...[
               const SizedBox(height: 8),
@@ -302,7 +328,7 @@ class _RatingDialogState extends State<_RatingDialog> {
           onPressed: _rating == 0
               ? null
               : () =>
-                  Navigator.of(context).pop((_rating, _comment.text.trim())),
+                    Navigator.of(context).pop((_rating, _comment.text.trim())),
           child: const Text('Submit'),
         ),
       ],

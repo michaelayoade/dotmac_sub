@@ -1,3 +1,5 @@
+import 'package:dotmac_field/features/jobs/job_brief_models.dart';
+import 'package:dotmac_field/features/jobs/job_brief_repository.dart';
 import 'package:dotmac_field/app/status_presentation.dart';
 import 'package:dotmac_field/app/theme.dart';
 import 'package:dotmac_field/features/execution/completion_wizard.dart';
@@ -105,6 +107,20 @@ Widget _wrap(
 }) => ProviderScope(
   overrides: [
     fieldCapabilitiesProvider.overrideWithValue(availableFieldCapabilities),
+    jobBriefProvider.overrideWith(
+      (ref, request) async => const JobBrief(
+        publicId: 'wo-1',
+        customers: [],
+        tasks: [],
+        directions: [],
+        signoff: BriefSignoff(
+          evidenceRequired: false,
+          minimumPhotos: 0,
+          customerSignoffRequired: false,
+          asBuiltRequired: false,
+        ),
+      ),
+    ),
     jobDestinationsProvider('wo-1').overrideWith((ref) async => destinations),
     ...overrides,
   ],

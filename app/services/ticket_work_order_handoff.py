@@ -254,6 +254,12 @@ def _issue_work_order(
             "Idempotency-Key is required",
             kind="invalid",
         )
+    from app.services.work_order_assignment_contracts import WorkOrderLinkageFence
+    from app.services.work_order_commands import lock_work_order_linkage
+
+    lock_work_order_linkage(
+        db, query=WorkOrderLinkageFence(ticket_id=command.ticket_id)
+    )
     ticket = (
         db.query(Ticket)
         .filter(Ticket.id == command.ticket_id)

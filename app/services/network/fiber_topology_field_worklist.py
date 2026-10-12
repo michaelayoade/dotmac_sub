@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,6 +22,12 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.fiber_topology_staging import (
     FiberTopologySourceBatch,
     FiberTopologyStagedFeature,
+)
+from app.services.network.fiber_field_verification_job_plan_contracts import (
+    FiberFeatureEvidence,
+    FiberSelectedEvidence,
+    FiberSelectedEvidenceQuery,
+    FiberWorkOrderReference,
 )
 from app.services.network.fiber_topology_field_observations import (
     PROJECTION_STATES,
@@ -318,5 +325,81 @@ __all__ = [
     "FiberTopologyFieldWorklistError",
     "FiberTopologyFieldWorklistReport",
     "ensure_field_worklist_repeatable_snapshot",
+    "select_fiber_field_worklist_evidence",
     "reconcile_fiber_field_worklist",
 ]
+
+
+def select_fiber_field_worklist_evidence(
+    db: Session, *, query: FiberSelectedEvidenceQuery
+) -> FiberSelectedEvidence:
+    """Project exact selected evidence; legacy report JSON stays inside this owner."""
+    report = reconcile_fiber_field_worklist(db)
+    if report.report_sha256 != query.expected_worklist_report_sha256:
+        raise FiberTopologyFieldWorklistError(
+            "field-verification worklist changed; generate a fresh preview"
+        )
+    selected = set(query.staged_feature_ids)
+    rows = tuple(
+        _selected_feature_evidence(row)
+        for row in report.rows
+        if uuid.UUID(str(row["staged_feature_id"])) in selected
+    )
+    if {row.staged_feature_id for row in rows} != selected:
+        raise FiberTopologyFieldWorklistError(
+            "selected staged features are not current worklist rows"
+        )
+    return FiberSelectedEvidence(
+        report.report_sha256,
+        tuple(
+            sorted(
+                rows,
+                key=lambda row: (
+                    row.source_system,
+                    row.asset_type,
+                    str(row.external_id),
+                    row.source_profile,
+                    str(row.staged_feature_id),
+                ),
+            )
+        ),
+    )
+
+
+def _selected_feature_evidence(row: dict[str, object]) -> FiberFeatureEvidence:
+    def optional_text(value: object) -> str | None:
+        return str(value) if value is not None else None
+
+    def references(value: object) -> tuple[FiberWorkOrderReference, ...]:
+        if not isinstance(value, list):
+            raise FiberTopologyFieldWorklistError("invalid work-order evidence")
+        result = []
+        for item in value:
+            if not isinstance(item, dict):
+                raise FiberTopologyFieldWorklistError("invalid work-order evidence")
+            result.append(
+                FiberWorkOrderReference(
+                    uuid.UUID(str(item["work_order_id"])),
+                    str(item["work_order_public_id"]),
+                )
+            )
+        return tuple(result)
+
+    return FiberFeatureEvidence(
+        asset_type=str(row["asset_type"]),
+        content_sha256=str(row["content_sha256"]),
+        current_work_orders=references(row["current_work_orders"]),
+        display_name=optional_text(row["display_name"]),
+        external_id=optional_text(row["external_id"]),
+        geometry_sha256=optional_text(row["geometry_sha256"]),
+        geometry_type=optional_text(row["geometry_type"]),
+        needs_follow_up=bool(row["needs_follow_up"]),
+        priority=str(row["priority"]),
+        row_sha256=str(row["row_sha256"]),
+        source_batch_id=uuid.UUID(str(row["source_batch_id"])),
+        source_profile=str(row["source_profile"]),
+        source_system=str(row["source_system"]),
+        staged_feature_id=uuid.UUID(str(row["staged_feature_id"])),
+        superseded_work_orders=references(row["superseded_work_orders"]),
+        verification_state=str(row["verification_state"]),
+    )

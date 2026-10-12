@@ -29,6 +29,20 @@ authorized admin and portal streaming routes; the storage key is evidence and
 must not replace that identity. Legacy or imported metadata may lack the UUID,
 but every new local upload must preserve it through comment creation.
 
+The bearer-authenticated customer content route
+`GET /api/v1/me/support/tickets/{ticket_id}/attachments/{file_id}` consumes
+`CustomerTicketAttachmentQuery` through the existing support read projection.
+It refreshes and locks the exact Ticket before checking its subscriber owner,
+then reuses the canonical customer-visible attachment resolver against fresh
+comment and active file state. Internal descriptions/comments, unrelated files,
+deleted metadata and missing objects all return the same safe not-found result.
+The owner consumes bytes within the existing 5MiB support-upload limit, closes
+provider resources before returning and revalidates visible/active scope after
+provider I/O. The adapter returns authenticated bytes with attachment disposition,
+`Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`; it never
+returns a storage key, public URL or general file grant. The legacy portal
+stream remains available through the same visibility policy.
+
 Adapters may create/close sessions and map `DomainError` values. They do not
 commit lifecycle changes. Every public mutation enters
 `execute_owner_command` once on a transaction-free session; nested helpers use

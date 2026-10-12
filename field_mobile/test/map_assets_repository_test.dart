@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -83,30 +84,22 @@ void main() {
 
   test('first map asset load fetches the API and warms the cache', () async {
     adapter.on('GET', '/api/v1/field/map-assets', (options) {
-      expect(options.queryParameters['types'], 'olt');
+      expect(options.queryParameters['asset_type'], ['fdh_cabinet']);
       return (
         200,
-        {
-          'items': [
-            {
-              'id': 'olt-1',
-              'type': 'olt',
-              'title': 'OLT Alpha',
-              'subtitle': 'host-1',
-              'latitude': 9.1,
-              'longitude': 7.4,
-              'status': 'active',
-            },
-          ],
-          'count': 1,
-        },
+        jsonDecode(
+          File('test/fixtures/map_assets_page.json').readAsStringSync(),
+        ),
       );
     });
 
-    final assets = await repo().fetchAssets({'olt'});
+    final assets = await repo().fetchAssets({'fdh_cabinet'});
 
-    expect(assets.single.id, 'olt-1');
-    expect((await db.select(db.cachedMapAssets).get()).single.assetId, 'olt-1');
+    expect(assets.single.id, '00000000-0000-4000-8000-000000000001');
+    expect(
+      (await db.select(db.cachedMapAssets).get()).single.assetId,
+      assets.single.id,
+    );
   });
 
   test('map place search reads online street results', () async {
@@ -127,6 +120,8 @@ void main() {
             },
           ],
           'count': 1,
+          'limit': 1000,
+          'offset': 0,
         },
       );
     });
@@ -155,7 +150,7 @@ void main() {
           'items': [
             {
               'id': 'fdh-1',
-              'type': 'fdh',
+              'type': 'fdh_cabinet',
               'title': 'FDH One',
               'subtitle': 'FDH-001',
               'latitude': 9.2,
@@ -164,90 +159,22 @@ void main() {
             },
           ],
           'count': 1,
+          'limit': 1000,
+          'offset': 0,
         },
       );
     });
 
-    expect(await repo().fetchAssets({'fdh'}), hasLength(1));
+    expect(await repo().fetchAssets({'fdh_cabinet'}), hasLength(1));
     expect(calls, 1);
 
-    final cached = await repo().fetchAssets({'fdh'});
+    final cached = await repo().fetchAssets({'fdh_cabinet'});
 
     expect(cached.single.title, 'FDH One');
     expect(calls, 1);
   });
 
-  test(
-    'stale cached map assets refresh with an updated_since cursor',
-    () async {
-      final oldCursor = DateTime.now().toUtc().subtract(
-        const Duration(minutes: 10),
-      );
-      await db
-          .into(db.cachedMapAssets)
-          .insert(
-            CachedMapAssetsCompanion.insert(
-              scopeKey: store.scopeKey,
-              assetType: 'olt',
-              assetId: 'olt-1',
-              title: 'OLT Alpha',
-              latitude: 9.1,
-              longitude: 7.4,
-              cachedAt: DateTime.now().toUtc(),
-            ),
-          );
-      await db
-          .into(db.cachedMapAssetSyncCursors)
-          .insert(
-            CachedMapAssetSyncCursorsCompanion.insert(
-              scopeKey: store.scopeKey,
-              assetType: 'olt',
-              syncedAt: oldCursor,
-            ),
-          );
-
-      adapter.on('GET', '/api/v1/field/map-assets', (options) {
-        expect(options.queryParameters['types'], 'olt');
-        final updatedSince = DateTime.parse(
-          options.queryParameters['updated_since'] as String,
-        );
-        expect(
-          updatedSince.difference(oldCursor).abs(),
-          lessThan(const Duration(seconds: 1)),
-        );
-        return (
-          200,
-          {
-            'items': [
-              {
-                'id': 'olt-2',
-                'type': 'olt',
-                'title': 'OLT Beta',
-                'latitude': 9.3,
-                'longitude': 7.6,
-                'status': 'active',
-                'updated_at': DateTime.now().toUtc().toIso8601String(),
-              },
-            ],
-            'count': 1,
-            'server_time': DateTime.now().toUtc().toIso8601String(),
-          },
-        );
-      });
-
-      final cached = await repo().fetchAssets({'olt'});
-      expect(cached.single.id, 'olt-1');
-
-      var rows = await db.select(db.cachedMapAssets).get();
-      for (var i = 0; i < 20 && rows.length < 2; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 25));
-        rows = await db.select(db.cachedMapAssets).get();
-      }
-      expect(rows.map((row) => row.assetId), containsAll(['olt-1', 'olt-2']));
-    },
-  );
-
-  test('incremental refresh removes deleted cached map assets', () async {
+  test('stale cached map assets refresh with a complete replacement', () async {
     final oldCursor = DateTime.now().toUtc().subtract(
       const Duration(minutes: 10),
     );
@@ -256,7 +183,70 @@ void main() {
         .insert(
           CachedMapAssetsCompanion.insert(
             scopeKey: store.scopeKey,
-            assetType: 'fdh',
+            assetType: 'fdh_cabinet',
+            assetId: 'olt-1',
+            title: 'OLT Alpha',
+            latitude: 9.1,
+            longitude: 7.4,
+            cachedAt: DateTime.now().toUtc(),
+          ),
+        );
+    await db
+        .into(db.cachedMapAssetSyncCursors)
+        .insert(
+          CachedMapAssetSyncCursorsCompanion.insert(
+            scopeKey: store.scopeKey,
+            assetType: 'fdh_cabinet',
+            syncedAt: oldCursor,
+          ),
+        );
+
+    adapter.on('GET', '/api/v1/field/map-assets', (options) {
+      expect(options.queryParameters['asset_type'], ['fdh_cabinet']);
+      expect(options.queryParameters.containsKey('updated_since'), isFalse);
+      return (
+        200,
+        {
+          'items': [
+            {
+              'id': 'olt-2',
+              'type': 'fdh_cabinet',
+              'title': 'OLT Beta',
+              'latitude': 9.3,
+              'longitude': 7.6,
+              'status': 'active',
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            },
+          ],
+          'count': 1,
+          'limit': 1000,
+          'offset': 0,
+          'server_time': DateTime.now().toUtc().toIso8601String(),
+        },
+      );
+    });
+
+    final cached = await repo().fetchAssets({'fdh_cabinet'});
+    expect(cached.single.id, 'olt-1');
+
+    var rows = await db.select(db.cachedMapAssets).get();
+    for (var i = 0; i < 20 && rows.single.assetId != 'olt-2'; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+      rows = await db.select(db.cachedMapAssets).get();
+    }
+    expect(rows.map((row) => row.assetId), ['olt-2']);
+  });
+
+  test('complete refresh removes assets absent from server snapshot', () async {
+    final oldCursor = DateTime.now().toUtc().subtract(
+      const Duration(minutes: 10),
+    );
+    await db
+        .into(db.cachedMapAssets)
+        .insert(
+          CachedMapAssetsCompanion.insert(
+            scopeKey: store.scopeKey,
+            assetType: 'fdh_cabinet',
             assetId: 'fdh-deleted',
             title: 'FDH Deleted',
             latitude: 9.1,
@@ -269,7 +259,7 @@ void main() {
         .insert(
           CachedMapAssetSyncCursorsCompanion.insert(
             scopeKey: store.scopeKey,
-            assetType: 'fdh',
+            assetType: 'fdh_cabinet',
             syncedAt: oldCursor,
           ),
         );
@@ -279,20 +269,15 @@ void main() {
         200,
         {
           'items': [],
-          'deleted': [
-            {
-              'type': 'fdh',
-              'id': 'fdh-deleted',
-              'deleted_at': DateTime.now().toUtc().toIso8601String(),
-            },
-          ],
           'count': 0,
+          'limit': 1000,
+          'offset': 0,
           'server_time': DateTime.now().toUtc().toIso8601String(),
         },
       );
     });
 
-    final cached = await repo().fetchAssets({'fdh'});
+    final cached = await repo().fetchAssets({'fdh_cabinet'});
     expect(cached.single.id, 'fdh-deleted');
 
     var rows = await db.select(db.cachedMapAssets).get();
@@ -301,5 +286,70 @@ void main() {
       rows = await db.select(db.cachedMapAssets).get();
     }
     expect(rows, isEmpty);
+  });
+  test(
+    'pagination reads past a full page including invalid coordinates',
+    () async {
+      adapter.on('GET', '/api/v1/field/map-assets', (options) {
+        final offset = options.queryParameters['offset'] as int;
+        final count = offset == 0 ? 1000 : 1;
+        return (
+          200,
+          {
+            'items': List.generate(
+              count,
+              (i) => {
+                'id': '${offset + i}',
+                'type': 'fdh_cabinet',
+                'title': 'Cabinet',
+                'latitude': offset == 0 && i == 0 ? 91 : 9.1,
+                'longitude': 7.4,
+              },
+            ),
+            'count': count,
+            'limit': 1000,
+            'offset': offset,
+          },
+        );
+      });
+      final assets = await repo().fetchAssets({'fdh_cabinet'});
+      expect(assets, hasLength(1000));
+      expect(assets.last.id, '1000');
+      expect(adapter.requests.map((r) => r.queryParameters['offset']), [
+        0,
+        1000,
+      ]);
+    },
+  );
+
+  test('a later page failure does not cache an incomplete snapshot', () async {
+    adapter.on('GET', '/api/v1/field/map-assets', (options) {
+      final offset = options.queryParameters['offset'] as int;
+      if (offset > 0) return (503, {'detail': 'unavailable'});
+      return (
+        200,
+        {
+          'items': List.generate(
+            1000,
+            (i) => {
+              'id': '$i',
+              'type': 'fdh_cabinet',
+              'title': 'Cabinet',
+              'latitude': 9.1,
+              'longitude': 7.4,
+            },
+          ),
+          'count': 1000,
+          'limit': 1000,
+          'offset': 0,
+        },
+      );
+    });
+    await expectLater(
+      repo().fetchAssets({'fdh_cabinet'}),
+      throwsA(isA<DioException>()),
+    );
+    expect(await db.select(db.cachedMapAssets).get(), isEmpty);
+    expect(await db.select(db.cachedMapAssetSyncCursors).get(), isEmpty);
   });
 }

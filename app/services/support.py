@@ -7,16 +7,16 @@ import os
 import re
 import secrets
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from functools import wraps
-from typing import Any, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar
 from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import false, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
@@ -26,6 +26,11 @@ from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber
 from app.models.support import (
     AutomationTrigger,
+    SupportResolutionAttempt,
+    SupportResolutionBasis,
+    SupportResolutionEffectiveBasis,
+    SupportResolutionReplacementLineage,
+    SupportResolutionRequest,
     Ticket,
     TicketAccessToken,
     TicketAssignee,
@@ -66,6 +71,12 @@ from app.services import (
     ticket_validation,
 )
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services.action_readiness import (
+    ActionableBlocker,
+    ActionReadiness,
+    BlockerEvidence,
+    ReadinessState,
+)
 from app.services.audit_helpers import log_audit_event
 from app.services.common import apply_ordering, apply_pagination
 from app.services.customer_identity_resolution import (
@@ -87,6 +98,7 @@ from app.services.owner_commands import (
     execute_owner_savepoint,
     owner_command_active,
 )
+from app.services.permission_admission import PermissionAdmission
 from app.services.realtime_platform import (
     EventType as RealtimeEventType,
 )
@@ -97,6 +109,16 @@ from app.services.realtime_platform import (
 from app.services.sales import lifecycle as lead_lifecycle
 from app.services.session_hooks import run_after_commit
 from app.services.staff_notifications import queue_staff_email
+from app.services.staff_permission_admission import (
+    AuthorizedStaffPerson,
+    revalidate_staff_admission,
+)
+from app.services.support_resolution_contracts import (
+    SupportResolutionPreview,
+    SupportResolutionPreviewQuery,
+    SupportResolutionRequestCommand,
+    SupportResolutionRequestOutcome,
+)
 from app.services.support_ticket_contracts import (
     AssignTicketServiceTeamFromAutomationCommand,
     InternalOperationalTicketSource,
@@ -104,6 +126,9 @@ from app.services.support_ticket_contracts import (
     SupportTicketCommentRealtimeChange,
     SupportTicketCommentRealtimeHint,
 )
+
+if TYPE_CHECKING:
+    from app.services.field.completion_review_contracts import TicketCompletionBasis
 
 logger = logging.getLogger(__name__)
 
@@ -545,7 +570,7 @@ def active_ticket_status_values() -> tuple[str, ...]:
     )
 
 
-def transition_ticket_status(
+def _write_ticket_status(
     ticket: Ticket,
     new_status: TicketStatus | str,
     *,
@@ -595,6 +620,475 @@ def transition_ticket_status(
         },
     )
     ticket.status = raw
+    return True
+
+
+def _lock_ticket_completion_linkage(db: Session, ticket_id: UUID) -> None:
+    from app.services.topology.outage_completion import lock_complaint_graph
+    from app.services.topology.outage_completion_contracts import (
+        ComplaintGraphLocksQuery,
+    )
+
+    lock_complaint_graph(db, query=ComplaintGraphLocksQuery((ticket_id,)))
+
+
+def _lock_resolution_ticket(db: Session, ticket_id: UUID) -> Ticket | None:
+    _lock_ticket_completion_linkage(db, ticket_id)
+    with db.no_autoflush:
+        return db.scalar(
+            select(Ticket)
+            .where(Ticket.id == ticket_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+
+def _linked_completion_enrollments(db: Session, ticket_id: UUID) -> bool:
+    from app.services.topology.outage_completion import has_complaint_links
+    from app.services.topology.outage_completion_contracts import (
+        ComplaintResolutionScopesQuery,
+    )
+
+    if has_complaint_links(db, query=ComplaintResolutionScopesQuery(ticket_id)):
+        return True
+    from app.services.field.completion_review import linked_enrollments
+    from app.services.field.completion_review_contracts import (
+        LinkedTicketEnrollmentQuery,
+    )
+
+    return bool(
+        linked_enrollments(
+            db, query=LinkedTicketEnrollmentQuery(ticket_id=ticket_id)
+        ).work_order_ids
+    )
+
+
+def transition_ticket_status(
+    ticket: Ticket,
+    new_status: TicketStatus | str,
+    *,
+    source: str,
+    allow_reopen: bool = False,
+) -> bool:
+    """Canonical direct status boundary; enrolled field work needs confirmation."""
+    try:
+        raw = parse_ticket_status(new_status).value
+    except ValueError as exc:
+        raise ValueError(f"Invalid ticket status: {new_status!r}") from exc
+    if (
+        raw == TicketStatus.closed.value
+        and (canonical_ticket_status_value(ticket.status) if ticket.status else None)
+        != raw
+    ):
+        db = object_session(ticket)
+        if db is not None and ticket.id is not None:
+            _lock_ticket_completion_linkage(db, ticket.id)
+            if _linked_completion_enrollments(db, ticket.id):
+                raise _ticket_error(
+                    "resolution_confirmation_required",
+                    "Enrolled field work requires an accepted completion review and a fresh customer resolution confirmation request.",
+                )
+    return _write_ticket_status(
+        ticket, new_status, source=source, allow_reopen=allow_reopen
+    )
+
+
+def _ticket_completion_basis(db: Session, ticket_id: UUID) -> TicketCompletionBasis:
+    from app.services.field.completion_review import stage_ticket_completion_basis
+    from app.services.field.completion_review_contracts import (
+        TicketCompletionBasisQuery,
+    )
+
+    return stage_ticket_completion_basis(
+        db, query=TicketCompletionBasisQuery(ticket_id=ticket_id)
+    )
+
+
+def _resolution_request_fingerprint(
+    *,
+    ticket_id: UUID,
+    actor: str,
+    reason: str,
+    grace_hours: int,
+    basis: TicketCompletionBasis,
+) -> str:
+    from app.services.support_outage_resolution import _material
+
+    payload = (
+        str(ticket_id),
+        actor,
+        reason,
+        grace_hours,
+        tuple(
+            (
+                str(item.work_order_id),
+                str(item.enrollment_id),
+                str(item.criteria_revision_id),
+                str(item.policy_revision_id),
+                str(item.assignment_generation),
+                str(item.completed_event_id),
+                str(item.submission_id),
+                str(item.accepted_decision_id),
+                item.review_generation,
+                str(item.effective_work_order_id)
+                if item.effective_work_order_id
+                else None,
+                str(item.effective_enrollment_id)
+                if item.effective_enrollment_id
+                else None,
+                tuple(str(identity) for identity in item.replacement_decision_ids),
+            )
+            for item in sorted(basis.entries, key=lambda item: item.work_order_id.int)
+        ),
+        _material(basis.shared_incidents),
+    )
+    return hashlib.sha256(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _resolution_request_retry(
+    db: Session, *, ticket: Ticket, basis: TicketCompletionBasis, grace_hours: int
+) -> TicketAccessToken | None:
+    context = current_command_context(db)
+    key = context.idempotency_key or str(context.command_id)
+    native = db.scalar(
+        select(SupportResolutionRequest).where(
+            SupportResolutionRequest.ticket_id == ticket.id,
+            SupportResolutionRequest.intent_key == key,
+        )
+    )
+    if native is None:
+        return None
+    fingerprint = _resolution_request_fingerprint(
+        ticket_id=ticket.id,
+        actor=context.actor,
+        reason=context.reason,
+        grace_hours=grace_hours,
+        basis=basis,
+    )
+    if native.fingerprint != fingerprint:
+        raise _ticket_error(
+            "resolution_idempotency_conflict",
+            "This resolution intent was already used with different request or completion evidence.",
+        )
+    token = db.get(TicketAccessToken, native.token_id)
+    if token is not None:
+        db.refresh(token, with_for_update=True)
+    if (
+        token is None
+        or not token.is_active
+        or token.responded_at is not None
+        or ticket.status != TicketStatus.pending_confirmation.value
+        or (
+            token.expires_at is not None
+            and (_as_utc(token.expires_at) or _now()) < _now()
+        )
+    ):
+        raise _ticket_error(
+            "resolution_confirmation_inactive",
+            "This request was consumed or replaced. A new intent is required.",
+        )
+    _validate_confirmation_basis(db, ticket=ticket, token=token)
+    return token
+
+
+def _persist_resolution_request(
+    db: Session,
+    *,
+    ticket: Ticket,
+    token: TicketAccessToken,
+    basis: TicketCompletionBasis,
+    requested_at: datetime,
+    grace_hours: int,
+    actor_id: str | None,
+) -> SupportResolutionRequest:
+    context = current_command_context(db)
+    row = SupportResolutionRequest(
+        ticket_id=ticket.id,
+        token_id=token.id,
+        command_id=context.command_id,
+        intent_key=context.idempotency_key or str(context.command_id),
+        fingerprint=_resolution_request_fingerprint(
+            ticket_id=ticket.id,
+            actor=context.actor,
+            reason=context.reason,
+            grace_hours=grace_hours,
+            basis=basis,
+        ),
+        requested_at=requested_at,
+        grace_hours=grace_hours,
+        requested_by=actor_id or context.actor,
+    )
+    db.add(row)
+    db.flush()
+    for entry in basis.entries:
+        db.add(
+            SupportResolutionBasis(
+                request_id=row.id,
+                work_order_id=entry.work_order_id,
+                enrollment_id=entry.enrollment_id,
+                criteria_revision_id=entry.criteria_revision_id,
+                policy_revision_id=entry.policy_revision_id,
+                assignment_generation=entry.assignment_generation,
+                completed_event_id=entry.completed_event_id,
+                submission_id=entry.submission_id,
+                accepted_decision_id=entry.accepted_decision_id,
+                review_generation=entry.review_generation,
+            )
+        )
+        if entry.replacement_decision_ids:
+            db.flush()
+            db.add(
+                SupportResolutionEffectiveBasis(
+                    request_id=row.id,
+                    work_order_id=entry.work_order_id,
+                    effective_work_order_id=entry.effective_work_order_id,
+                    effective_enrollment_id=entry.effective_enrollment_id,
+                )
+            )
+            db.flush()
+            for position, decision_id in enumerate(entry.replacement_decision_ids):
+                db.add(
+                    SupportResolutionReplacementLineage(
+                        request_id=row.id,
+                        work_order_id=entry.work_order_id,
+                        position=position,
+                        decision_id=decision_id,
+                    )
+                )
+    from app.services.support_outage_resolution import _persist
+
+    _persist(db, request_id=row.id, scopes=basis.shared_incidents)
+    return row
+
+
+def _require_resolution_capability(
+    db: Session, *, ticket: Ticket, token: TicketAccessToken, for_grace: bool = False
+) -> None:
+    current_native_token = db.scalar(
+        select(SupportResolutionRequest.token_id)
+        .join(
+            TicketAccessToken, TicketAccessToken.id == SupportResolutionRequest.token_id
+        )
+        .where(
+            SupportResolutionRequest.ticket_id == ticket.id,
+            TicketAccessToken.is_active.is_(True),
+        )
+    )
+    if (
+        token.ticket_id != ticket.id
+        or token.purpose != "resolution_confirm"
+        or not token.is_active
+        or token.responded_at is not None
+        or ticket.status != TicketStatus.pending_confirmation.value
+        or (current_native_token is not None and current_native_token != token.id)
+        or (
+            not for_grace
+            and token.expires_at is not None
+            and (_as_utc(token.expires_at) or _now()) < _now()
+        )
+    ):
+        raise _ticket_error(
+            "resolution_confirmation_inactive",
+            "The resolution confirmation capability is no longer current.",
+        )
+
+
+def _validate_confirmation_basis(
+    db: Session,
+    *,
+    ticket: Ticket,
+    token: TicketAccessToken | None,
+    for_grace: bool = False,
+) -> SupportResolutionRequest | None:
+    current = _ticket_completion_basis(db, ticket.id)
+    request = (
+        db.scalar(
+            select(SupportResolutionRequest).where(
+                SupportResolutionRequest.token_id == token.id
+            )
+        )
+        if token
+        else None
+    )
+    if request is None:
+        if current.entries or current.shared_incidents:
+            raise _ticket_error(
+                "resolution_basis_changed",
+                "A fresh resolution confirmation request is required for the current enrolled field work.",
+            )
+        return None
+    from app.services.support_outage_resolution import _matches
+
+    if not _matches(db, request_id=request.id, scopes=current.shared_incidents):
+        raise _ticket_error(
+            "resolution_basis_changed",
+            "Shared incident restoration or exact issued scope changed. A fresh confirmation request is required.",
+        )
+    stored = db.scalars(
+        select(SupportResolutionBasis)
+        .where(SupportResolutionBasis.request_id == request.id)
+        .order_by(SupportResolutionBasis.work_order_id)
+    ).all()
+    from app.services.field.completion_review_contracts import (
+        TicketCompletionBasisEntry,
+    )
+
+    endpoints = {
+        item.work_order_id: item
+        for item in db.scalars(
+            select(SupportResolutionEffectiveBasis).where(
+                SupportResolutionEffectiveBasis.request_id == request.id
+            )
+        ).all()
+    }
+    lineage_rows = db.scalars(
+        select(SupportResolutionReplacementLineage)
+        .where(SupportResolutionReplacementLineage.request_id == request.id)
+        .order_by(
+            SupportResolutionReplacementLineage.work_order_id,
+            SupportResolutionReplacementLineage.position,
+        )
+    ).all()
+    recorded = tuple(
+        TicketCompletionBasisEntry(
+            work_order_id=row.work_order_id,
+            enrollment_id=row.enrollment_id,
+            criteria_revision_id=row.criteria_revision_id,
+            policy_revision_id=row.policy_revision_id,
+            assignment_generation=row.assignment_generation,
+            completed_event_id=row.completed_event_id,
+            submission_id=row.submission_id,
+            accepted_decision_id=row.accepted_decision_id,
+            review_generation=row.review_generation,
+            effective_work_order_id=endpoints[row.work_order_id].effective_work_order_id
+            if row.work_order_id in endpoints
+            else None,
+            effective_enrollment_id=endpoints[row.work_order_id].effective_enrollment_id
+            if row.work_order_id in endpoints
+            else None,
+            replacement_decision_ids=tuple(
+                item.decision_id
+                for item in lineage_rows
+                if item.work_order_id == row.work_order_id
+            ),
+        )
+        for row in stored
+    )
+    if recorded != tuple(
+        sorted(current.entries, key=lambda entry: entry.work_order_id.int)
+    ):
+        raise _ticket_error(
+            "resolution_basis_changed",
+            "Completion evidence changed. Request customer confirmation again after current acceptance.",
+        )
+    if (
+        ticket.status != TicketStatus.pending_confirmation.value
+        or token is None
+        or not token.is_active
+        or token.responded_at is not None
+        or (
+            not for_grace
+            and token.expires_at is not None
+            and (_as_utc(token.expires_at) or _now()) < _now()
+        )
+    ):
+        raise _ticket_error(
+            "resolution_confirmation_inactive",
+            "The pinned resolution confirmation request is no longer active.",
+        )
+    return request
+
+
+def _record_resolution_attempt(
+    db: Session,
+    *,
+    ticket: Ticket,
+    token: TicketAccessToken | None,
+    outcome: Literal["confirmed", "blocked_completion_basis"],
+    source: Literal["customer", "grace"],
+    reason: str,
+) -> None:
+    request_id = (
+        db.scalar(
+            select(SupportResolutionRequest.id).where(
+                SupportResolutionRequest.token_id == token.id
+            )
+        )
+        if token
+        else None
+    )
+    db.add(
+        SupportResolutionAttempt(
+            ticket_id=ticket.id,
+            request_id=request_id,
+            command_id=current_command_context(db).command_id,
+            outcome=outcome,
+            source=source,
+            reason=reason[:255],
+        )
+    )
+    log_audit_event(
+        db=db,
+        request=None,
+        action="resolution_completion_gate",
+        entity_type="support_ticket",
+        entity_id=str(ticket.id),
+        actor_id=None,
+        metadata={
+            "request_id": str(request_id) if request_id else None,
+            "outcome": outcome,
+            "source": source,
+            "reason": reason[:255],
+        },
+    )
+
+
+def _resolution_deadline(
+    db: Session, ticket: Ticket, *, default_grace_hours: int = 24
+) -> datetime | None:
+    request = db.scalar(
+        select(SupportResolutionRequest)
+        .join(
+            TicketAccessToken, TicketAccessToken.id == SupportResolutionRequest.token_id
+        )
+        .where(
+            SupportResolutionRequest.ticket_id == ticket.id,
+            TicketAccessToken.is_active.is_(True),
+        )
+        .order_by(SupportResolutionRequest.requested_at.desc())
+        .limit(1)
+    )
+    if request is not None:
+        requested_at = _as_utc(request.requested_at)
+        return (
+            requested_at + timedelta(hours=request.grace_hours)
+            if requested_at
+            else None
+        )
+    confirmation = dict((ticket.metadata_ or {}).get("resolution_confirmation") or {})
+    resolved_at = _as_utc(ticket.resolved_at)
+    raw_grace = confirmation.get("grace_hours")
+    grace = int(raw_grace) if raw_grace is not None else int(default_grace_hours or 24)
+    return resolved_at + timedelta(hours=grace) if resolved_at else None
+
+
+def _auto_confirmation_basis_allowed(
+    db: Session, *, ticket: Ticket, token: TicketAccessToken | None
+) -> bool:
+    try:
+        _validate_confirmation_basis(db, ticket=ticket, token=token, for_grace=True)
+    except DomainError as error:
+        _record_resolution_attempt(
+            db,
+            ticket=ticket,
+            token=token,
+            outcome="blocked_completion_basis",
+            source="grace",
+            reason=error.code,
+        )
+        return False
     return True
 
 
@@ -2648,6 +3142,13 @@ class Tickets:
 
         db.add(ticket)
         db.flush()
+        if ticket.status == TicketStatus.closed.value:
+            _lock_ticket_completion_linkage(db, ticket.id)
+            if _linked_completion_enrollments(db, ticket.id):
+                raise _ticket_error(
+                    "resolution_confirmation_required",
+                    "Enrolled work requires customer confirmation.",
+                )
 
         assignee_ids = payload.assignee_person_ids or []
         if assignee_ids:
@@ -2907,6 +3408,7 @@ class Tickets:
         command: AssignTicketServiceTeamFromAutomationCommand,
     ) -> Ticket:
         """Apply one declared automation assignment through the Ticket owner."""
+        _lock_ticket_completion_linkage(db, command.ticket_id)
 
         active_team = db.scalar(
             select(ServiceTeam)
@@ -2963,6 +3465,7 @@ class Tickets:
         command: SetTicketPriorityFromAutomationCommand,
     ) -> Ticket:
         """Set priority through Ticket lifecycle with stable step provenance."""
+        _lock_ticket_completion_linkage(db, command.ticket_id)
 
         from app.services.audit_adapter import AuditActor, stage_audit_event
 
@@ -3121,10 +3624,39 @@ class Tickets:
         *,
         actor_id: str | None = None,
         grace_hours: int = 24,
-        request=None,
+        request: object | None = None,
+        command: SupportResolutionRequestCommand | None = None,
     ) -> tuple[Ticket, TicketAccessToken]:
-        ticket = Tickets.get(db, ticket_id)
+        if command is not None:
+            if (
+                str(command.ticket_id) != str(ticket_id)
+                or command.context.scope
+                != "support.ticket:request_resolution_confirmation"
+            ):
+                raise _ticket_error(
+                    "invalid_command_scope",
+                    "Resolution request scope does not match the ticket.",
+                )
+            actor_id = str(command.actor_id) if command.actor_id else None
+            grace_hours = command.grace_hours
+        uid = _coerce_uuid(ticket_id)
+        ticket = _lock_resolution_ticket(db, uid) if uid else None
+        if ticket is None:
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
+        basis = _ticket_completion_basis(db, ticket.id)
+        from app.services.support_outage_resolution import _validate_reviews
+
+        _validate_reviews(
+            scopes=basis.shared_incidents,
+            reviews=command.reviewed_shared_scopes if command else (),
+        )
+        _validate_resolution_grace(grace_hours)
+        retry = _resolution_request_retry(
+            db, ticket=ticket, basis=basis, grace_hours=grace_hours
+        )
+        if retry is not None:
+            return ticket, retry
         if ticket.status in _TICKET_TERMINAL_STATUSES:
             raise _ticket_error(
                 "resolution_confirmation_not_eligible",
@@ -3166,12 +3698,27 @@ class Tickets:
             schedule_timer,
         )
 
+        token_row = ticket_access_tokens.mint(
+            db,
+            ticket,
+            purpose="resolution_confirm",
+            ttl_days=max(1, int(grace_hours // 24) or 1),
+        )
+        resolution_request = _persist_resolution_request(
+            db,
+            ticket=ticket,
+            token=token_row,
+            basis=basis,
+            requested_at=now,
+            grace_hours=grace_hours,
+            actor_id=actor_id,
+        )
         schedule_timer(
             db,
             ScheduleTimerCommand(
                 owner="support.ticket_lifecycle",
-                entity_kind="support_ticket",
-                entity_id=ticket.id,
+                entity_kind="support_resolution_request",
+                entity_id=resolution_request.id,
                 purpose="resolution_confirmation_due",
                 due_at=now + timedelta(hours=int(grace_hours)),
                 output_event_type="support.resolution_confirmation_due",
@@ -3190,6 +3737,10 @@ class Tickets:
             EventType.ticket_resolution_requested,
             {
                 "ticket_id": str(ticket.id),
+                "resolution_request_id": str(resolution_request.id),
+                "completion_work_order_ids": [
+                    str(entry.work_order_id) for entry in basis.entries
+                ],
                 "grace_hours": int(grace_hours),
                 "requested_by": actor_id,
                 "requested_at": now.isoformat(),
@@ -3198,12 +3749,6 @@ class Tickets:
             subscriber_id=ticket.subscriber_id,
         )
 
-        token_row = ticket_access_tokens.mint(
-            db,
-            ticket,
-            purpose="resolution_confirm",
-            ttl_days=max(1, int(grace_hours // 24) or 1),
-        )
         Tickets._add_system_comment(
             db,
             ticket,
@@ -3217,7 +3762,12 @@ class Tickets:
             entity_type="support_ticket",
             entity_id=str(ticket.id),
             actor_id=actor_id,
-            metadata={"token_id": str(token_row.id), "grace_hours": int(grace_hours)},
+            metadata={
+                "token_id": str(token_row.id),
+                "grace_hours": int(grace_hours),
+                "resolution_request_id": str(resolution_request.id),
+                "completion_basis_count": len(basis.entries),
+            },
         )
         Tickets._queue_resolution_confirmation_notifications(db, ticket, token_row)
         db.flush()
@@ -3233,7 +3783,8 @@ class Tickets:
         *,
         auto: bool = False,
     ) -> Ticket:
-        ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
+        ticket = _lock_resolution_ticket(db, token_row.ticket_id)
+        db.refresh(token_row, with_for_update=True)
         if not ticket or not ticket.is_active:
             raise _ticket_error("ticket_not_found", "Ticket not found")
         if ticket.status == TicketStatus.closed.value:
@@ -3245,6 +3796,10 @@ class Tickets:
                 "Cannot confirm a terminal ticket.",
             )
 
+        _require_resolution_capability(
+            db, ticket=ticket, token=token_row, for_grace=auto
+        )
+        _validate_confirmation_basis(db, ticket=ticket, token=token_row, for_grace=auto)
         now = _now()
         meta = dict(ticket.metadata_ or {})
         confirmation = dict(meta.get("resolution_confirmation") or {})
@@ -3257,7 +3812,7 @@ class Tickets:
         )
         meta["resolution_confirmation"] = confirmation
         ticket.metadata_ = meta
-        transition_ticket_status(
+        _write_ticket_status(
             ticket,
             TicketStatus.closed,
             source="resolution_confirmation_auto" if auto else "resolution_confirmed",
@@ -3305,6 +3860,14 @@ class Tickets:
             force_new_cycle=True,
             resolution_at=ticket.closed_at,
         )
+        _record_resolution_attempt(
+            db,
+            ticket=ticket,
+            token=token_row,
+            outcome="confirmed",
+            source="grace" if auto else "customer",
+            reason="exact_completion_basis_confirmed",
+        )
         db.flush()
         db.refresh(ticket)
         return ticket
@@ -3317,12 +3880,19 @@ class Tickets:
         *,
         confirm: bool,
         reason: str | None = None,
+        expected_subscriber_ids: tuple[UUID, ...],
     ) -> Ticket:
         """Authenticated self-care adapter into the resolution owner.
 
         The public magic link and signed-in clients converge on the same active
         confirmation capability and therefore the same mutation/audit path.
         """
+        locked = _lock_resolution_ticket(db, ticket.id)
+        if locked is None:
+            raise _ticket_error("ticket_not_found", "Ticket not found")
+        if locked.subscriber_id not in expected_subscriber_ids:
+            raise _ticket_error("ticket_not_found", "Ticket not found")
+        ticket = locked
         if ticket.status != TicketStatus.pending_confirmation.value:
             raise _ticket_error(
                 "resolution_confirmation_not_pending",
@@ -3361,7 +3931,8 @@ class Tickets:
         *,
         reason: str | None = None,
     ) -> Ticket:
-        ticket = token_row.ticket or db.get(Ticket, token_row.ticket_id)
+        ticket = _lock_resolution_ticket(db, token_row.ticket_id)
+        db.refresh(token_row, with_for_update=True)
         if not ticket or not ticket.is_active:
             raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
@@ -3371,6 +3942,7 @@ class Tickets:
                 "Cannot dispute a terminal ticket.",
             )
 
+        _require_resolution_capability(db, ticket=ticket, token=token_row)
         now = _now()
         clean_reason = (reason or "").strip() or None
         meta = dict(ticket.metadata_ or {})
@@ -3445,18 +4017,36 @@ class Tickets:
             .filter(Ticket.status == TicketStatus.pending_confirmation.value)
             .all()
         )
+        from app.services.topology.outage_completion import lock_complaint_graph
+        from app.services.topology.outage_completion_contracts import (
+            ComplaintGraphLocksQuery,
+        )
+
+        lock_complaint_graph(
+            db,
+            query=ComplaintGraphLocksQuery(tuple(ticket.id for ticket in candidates)),
+        )
         confirmed = 0
-        for ticket in candidates:
+        for candidate in sorted(candidates, key=lambda row: row.id.int):
+            ticket = _lock_resolution_ticket(db, candidate.id)
+            if (
+                ticket is None
+                or ticket.status != TicketStatus.pending_confirmation.value
+            ):
+                continue
+            # Enrolled work uses one request-bound timer transaction per Ticket.
+            # A multi-ticket sweep must not accumulate engineering root locks.
+            if _linked_completion_enrollments(db, ticket.id):
+                continue
             meta = dict(ticket.metadata_ or {})
             confirmation = dict(meta.get("resolution_confirmation") or {})
             grace_hours = int(
                 confirmation.get("grace_hours") or default_grace_hours or 24
             )
-            resolved_at = _as_utc(ticket.resolved_at)
-            if (
-                resolved_at is None
-                or resolved_at + timedelta(hours=grace_hours) > clock
-            ):
+            deadline = _resolution_deadline(
+                db, ticket, default_grace_hours=default_grace_hours
+            )
+            if deadline is None or deadline > clock:
                 continue
             token_row = (
                 db.query(TicketAccessToken)
@@ -3466,6 +4056,8 @@ class Tickets:
                 .order_by(TicketAccessToken.created_at.desc())
                 .first()
             )
+            if not _auto_confirmation_basis_allowed(db, ticket=ticket, token=token_row):
+                continue
             if token_row is None:
                 token_row = ticket_access_tokens.mint(
                     db,
@@ -3493,8 +4085,11 @@ class Tickets:
         db: Session,
         *,
         ticket_id: str,
-        event_id,
-        context,
+        event_id: UUID,
+        context: CommandContext,
+        timer_id: UUID | None = None,
+        timer_generation: int | None = None,
+        resolution_request_id: UUID | None = None,
     ) -> str:
         """Receipt one fired grace timer into an auto-confirmation.
 
@@ -3505,20 +4100,85 @@ class Tickets:
         from app.services.events.owner_outputs import consume_owner_output
 
         def _effect() -> str:
-            uid = _coerce_uuid(str(ticket_id))
-            ticket = db.get(Ticket, uid) if uid is not None else None
+            native_request = (
+                db.get(SupportResolutionRequest, resolution_request_id)
+                if resolution_request_id is not None
+                else None
+            )
+            uid = (
+                native_request.ticket_id
+                if native_request
+                else _coerce_uuid(str(ticket_id))
+            )
+            ticket = _lock_resolution_ticket(db, uid) if uid is not None else None
             if ticket is None or not ticket.is_active:
                 return "skipped_missing"
             if ticket.status != TicketStatus.pending_confirmation.value:
                 return "skipped_state"
+            if resolution_request_id is not None and native_request is None:
+                return "skipped_stale_request"
+            current_request = db.scalar(
+                select(SupportResolutionRequest)
+                .join(
+                    TicketAccessToken,
+                    TicketAccessToken.id == SupportResolutionRequest.token_id,
+                )
+                .where(
+                    SupportResolutionRequest.ticket_id == ticket.id,
+                    TicketAccessToken.is_active.is_(True),
+                )
+            )
+            if current_request is not None and (
+                native_request is None or native_request.id != current_request.id
+            ):
+                return "skipped_stale_request"
+            if native_request is not None and current_request is None:
+                return "skipped_stale_request"
+            if (
+                timer_id is not None
+                or timer_generation is not None
+                or native_request is not None
+            ):
+                from app.models.durable_timer import DurableTimer, TimerStatus
+
+                timer = db.get(DurableTimer, timer_id) if timer_id is not None else None
+                entity_kind = (
+                    "support_resolution_request" if native_request else "support_ticket"
+                )
+                entity_id = native_request.id if native_request else ticket.id
+                latest_generation = db.scalar(
+                    select(func.max(DurableTimer.generation)).where(
+                        DurableTimer.owner == "support.ticket_lifecycle",
+                        DurableTimer.entity_kind == entity_kind,
+                        DurableTimer.entity_id == entity_id,
+                        DurableTimer.purpose == "resolution_confirmation_due",
+                    )
+                )
+                if (
+                    timer is None
+                    or timer.owner != "support.ticket_lifecycle"
+                    or timer.entity_kind != entity_kind
+                    or timer.entity_id != entity_id
+                    or timer.purpose != "resolution_confirmation_due"
+                    or timer.output_event_type != "support.resolution_confirmation_due"
+                    or timer.status != TimerStatus.fired
+                    or timer.fired_event_id != event_id
+                    or timer.generation != timer_generation
+                    or latest_generation != timer_generation
+                    or (
+                        native_request is not None
+                        and _as_utc(timer.due_at)
+                        != (_as_utc(native_request.requested_at) or _now())
+                        + timedelta(hours=native_request.grace_hours)
+                    )
+                ):
+                    return "skipped_stale_timer"
             meta = dict(ticket.metadata_ or {})
             confirmation = dict(meta.get("resolution_confirmation") or {})
             grace_raw = confirmation.get("grace_hours")
             grace_hours = int(grace_raw) if grace_raw is not None else 24
-            resolved_at = _as_utc(ticket.resolved_at)
-            if resolved_at is None or (
-                resolved_at + timedelta(hours=grace_hours) > _now()
-            ):
+            deadline = _resolution_deadline(db, ticket)
+            if deadline is None or deadline > _now():
                 return "skipped_not_due"
             token_row = (
                 db.query(TicketAccessToken)
@@ -3528,6 +4188,8 @@ class Tickets:
                 .order_by(TicketAccessToken.created_at.desc())
                 .first()
             )
+            if not _auto_confirmation_basis_allowed(db, ticket=ticket, token=token_row):
+                return "blocked_completion_basis"
             if token_row is None:
                 token_row = ticket_access_tokens.mint(
                     db,
@@ -3895,7 +4557,10 @@ class Tickets:
         actor_id: str | None = None,
         request=None,
     ) -> Ticket:
-        ticket = Tickets.get(db, ticket_id)
+        uid = _coerce_uuid(ticket_id)
+        ticket = _lock_resolution_ticket(db, uid) if uid else None
+        if ticket is None:
+            raise _ticket_error("ticket_not_found", "Ticket not found")
         _ensure_not_merged_source(ticket)
         previous_assignment_user_ids = Tickets._assignment_user_ids(db, ticket)
         previous_tags = tuple(str(tag) for tag in (ticket.tags or ()))
@@ -4117,6 +4782,17 @@ class Tickets:
         actor_id: str | None = None,
         request=None,
     ) -> list[Ticket]:
+        from app.services.topology.outage_completion import lock_complaint_graph
+        from app.services.topology.outage_completion_contracts import (
+            ComplaintGraphLocksQuery,
+        )
+
+        lock_complaint_graph(
+            db,
+            query=ComplaintGraphLocksQuery(
+                tuple(sorted({item.ticket_id for item in payload.items}))
+            ),
+        )
         prepared: list[tuple[str, TicketUpdate]] = []
         for item in payload.items:
             ticket = Tickets.get(db, str(item.ticket_id))
@@ -4774,3 +5450,243 @@ tickets = Tickets()
 ticket_access_tokens = TicketAccessTokens()
 ticket_comments = TicketComments()
 ticket_sla_events = TicketSlaEvents()
+
+
+def _validate_resolution_grace(grace_hours: int) -> None:
+    """Keep native integer storage and deadline/token arithmetic representable."""
+    remaining = datetime.max.replace(tzinfo=UTC) - _now()
+    if (
+        isinstance(grace_hours, bool)
+        or not isinstance(grace_hours, int)
+        or not 0 <= grace_hours <= 2**31 - 1
+        or timedelta(hours=grace_hours) > remaining
+        or timedelta(days=max(1, grace_hours // 24)) > remaining
+    ):
+        raise SupportTicketError(
+            code="invalid_grace_hours",
+            message="Confirmation grace exceeds the supported time range.",
+            retryable=False,
+        )
+
+
+def _resolution_staff(
+    db: Session, *, access: PermissionAdmission
+) -> AuthorizedStaffPerson:
+    return revalidate_staff_admission(
+        db, admission=access, permission="support:ticket:update", write=True
+    )
+
+
+def resolution_request_preview(
+    db: Session, *, query: SupportResolutionPreviewQuery
+) -> SupportResolutionPreview:
+    """Fresh WRITE-purpose read; no executor, receipt, token or mutation."""
+    actor = _resolution_staff(db, access=query.access)
+    ticket = _lock_resolution_ticket(db, query.ticket_id)
+    if ticket is None:
+        raise _ticket_error("ticket_not_found", "Ticket not found")
+    shared_scopes = ()
+    blocker: DomainError | None = None
+    if not ticket.is_active:
+        blocker = _ticket_error("ticket_inactive", "An active ticket is required.")
+    elif ticket.merged_into_ticket_id:
+        blocker = _ticket_error(
+            "ticket_merged_source",
+            "Open the canonical merged ticket before requesting confirmation.",
+        )
+    elif ticket.status in _TICKET_TERMINAL_STATUSES:
+        blocker = _ticket_error(
+            "resolution_confirmation_not_eligible",
+            "A terminal ticket cannot request customer confirmation.",
+        )
+    else:
+        from app.services.field.completion_review import preview_ticket_completion_basis
+        from app.services.field.completion_review_contracts import (
+            SupportTicketCompletionPreviewQuery,
+        )
+
+        try:
+            from app.services.topology.outage_completion import (
+                has_complaint_links,
+                preview_complaint_resolution_scopes,
+            )
+            from app.services.topology.outage_completion_contracts import (
+                ComplaintResolutionScopesPreviewQuery,
+                ComplaintResolutionScopesQuery,
+            )
+
+            shared_scopes = (
+                preview_complaint_resolution_scopes(
+                    db,
+                    query=ComplaintResolutionScopesPreviewQuery(
+                        ticket.id, query.access
+                    ),
+                ).incidents
+                if has_complaint_links(
+                    db, query=ComplaintResolutionScopesQuery(ticket.id)
+                )
+                else ()
+            )
+            preview_ticket_completion_basis(
+                db,
+                query=SupportTicketCompletionPreviewQuery(
+                    ticket_id=ticket.id, access=query.access
+                ),
+            )
+        except DomainError as error:
+            if error.code.startswith("auth.") or error.code.endswith(".denied"):
+                raise
+            blocker = error
+    native = (
+        db.scalar(
+            select(SupportResolutionRequest)
+            .join(
+                TicketAccessToken,
+                TicketAccessToken.id == SupportResolutionRequest.token_id,
+            )
+            .where(
+                SupportResolutionRequest.ticket_id == ticket.id,
+                TicketAccessToken.is_active.is_(True),
+                TicketAccessToken.responded_at.is_(None),
+                or_(
+                    TicketAccessToken.expires_at.is_(None),
+                    TicketAccessToken.expires_at >= _now(),
+                ),
+            )
+            .order_by(
+                SupportResolutionRequest.requested_at.desc(),
+                SupportResolutionRequest.id.desc(),
+            )
+            .limit(1)
+        )
+        if ticket.status == TicketStatus.pending_confirmation.value
+        else None
+    )
+    if _resolution_staff(db, access=query.access) != actor:
+        raise _ticket_error("resolution_forbidden", "Current staff admission changed.")
+    owner = "support.ticket_lifecycle"
+    blocker_owner = (
+        "operations.field_completion"
+        if blocker and blocker.code.startswith("operations.field_completion.")
+        else "operations.project_engineering_plans"
+        if blocker and blocker.code.startswith("operations.project_engineering_plans.")
+        else "network.outage_completion_evidence"
+        if blocker and blocker.code.startswith("network.outage_completion_evidence.")
+        else "network.infrastructure_catalogue"
+        if blocker and blocker.code.startswith("network.infrastructure_catalogue.")
+        else owner
+    )
+    readiness = ActionReadiness(
+        action_key="support.request_resolution_confirmation",
+        subject_type="support_ticket",
+        subject_id=str(ticket.id),
+        owner=owner,
+        state=ReadinessState.blocked if blocker else ReadinessState.ready,
+        evaluated_at=_now(),
+        blockers=(
+            ActionableBlocker(
+                code=blocker.code,
+                owner=blocker_owner,
+                customer_message="Resolution confirmation is not available yet.",
+                staff_detail=blocker.message,
+                evidence=BlockerEvidence(summary=blocker.message),
+            ),
+        )
+        if blocker
+        else (),
+    )
+    requested_at = _as_utc(native.requested_at) if native else None
+    return SupportResolutionPreview(
+        ticket_id=ticket.id,
+        number=ticket.number,
+        title=ticket.title,
+        status=ticket.status,
+        readiness=readiness,
+        shared_scopes=shared_scopes,
+        current_request_id=native.id if native else None,
+        requested_at=requested_at,
+        deadline=requested_at + timedelta(hours=native.grace_hours)
+        if requested_at and native
+        else None,
+    )
+
+
+def _resolution_outcome(
+    db: Session, *, ticket: Ticket, token: TicketAccessToken, replayed: bool
+) -> SupportResolutionRequestOutcome:
+    native = db.scalar(
+        select(SupportResolutionRequest).where(
+            SupportResolutionRequest.ticket_id == ticket.id,
+            SupportResolutionRequest.token_id == token.id,
+        )
+    )
+    if native is None or ticket.status != TicketStatus.pending_confirmation.value:
+        raise _ticket_error(
+            "resolution_confirmation_inactive",
+            "The native resolution request is unavailable.",
+        )
+    requested_at = _as_utc(native.requested_at)
+    assert requested_at is not None
+    return SupportResolutionRequestOutcome(
+        request_id=native.id,
+        ticket_id=ticket.id,
+        requested_at=requested_at,
+        deadline=requested_at + timedelta(hours=native.grace_hours),
+        status="pending_confirmation",
+        replayed=replayed,
+        token_expires_at=_as_utc(token.expires_at),
+    )
+
+
+@ticket_owner_command("request_resolution_confirmation")
+def request_resolution(
+    db: Session, *, command: SupportResolutionRequestCommand
+) -> SupportResolutionRequestOutcome:
+    """Canonical protected staff request; returns inert native IDs, never capability bytes."""
+    if command.access is None:
+        raise _ticket_error(
+            "resolution_forbidden", "Current staff admission is required."
+        )
+    actor = _resolution_staff(db, access=command.access)
+    if (
+        command.context.actor != str(actor.system_user_id)
+        or (command.actor_id is not None and command.actor_id != actor.system_user_id)
+        or command.context.scope != "support.ticket:request_resolution_confirmation"
+    ):
+        raise _ticket_error(
+            "resolution_forbidden",
+            "The request actor and purpose must match current staff admission.",
+        )
+    try:
+        UUID(command.context.idempotency_key or "")
+    except ValueError as error:
+        raise _ticket_error(
+            "resolution_intent_required",
+            "A stable UUID resolution request intent is required.",
+        ) from error
+    _validate_resolution_grace(command.grace_hours)
+    ticket = _lock_resolution_ticket(db, command.ticket_id)
+    if ticket is None:
+        raise _ticket_error("ticket_not_found", "Ticket not found")
+    if not ticket.is_active:
+        raise _ticket_error("ticket_inactive", "An active ticket is required.")
+    _ensure_not_merged_source(ticket)
+    basis = _ticket_completion_basis(db, ticket.id)
+    from app.services.support_outage_resolution import _validate_reviews
+
+    _validate_reviews(
+        scopes=basis.shared_incidents, reviews=command.reviewed_shared_scopes
+    )
+    if _resolution_staff(db, access=command.access) != actor:
+        raise _ticket_error("resolution_forbidden", "Current staff admission changed.")
+    replay = _resolution_request_retry(
+        db, ticket=ticket, basis=basis, grace_hours=command.grace_hours
+    )
+    if replay is not None:
+        return _resolution_outcome(db, ticket=ticket, token=replay, replayed=True)
+    ticket, token = Tickets.request_resolution_confirmation(
+        db, str(ticket.id), command=replace(command, actor_id=actor.system_user_id)
+    )
+    if _resolution_staff(db, access=command.access) != actor:
+        raise _ticket_error("resolution_forbidden", "Current staff admission changed.")
+    return _resolution_outcome(db, ticket=ticket, token=token, replayed=False)

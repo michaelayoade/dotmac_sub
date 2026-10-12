@@ -46,6 +46,7 @@ def transition_field_job(
                 public_id=crm_work_order_id,
                 event=FieldEvent(payload.event),
                 client_event_id=payload.client_event_id,
+                assignment_generation=payload.assignment_generation,
                 occurred_at=payload.occurred_at,
                 latitude=payload.latitude,
                 longitude=payload.longitude,

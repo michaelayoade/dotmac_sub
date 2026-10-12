@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
+from dataclasses import dataclass
+from datetime import datetime
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import CheckConstraint, Index
@@ -11,12 +13,15 @@ from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.field_job_event import FieldJobEvent
 from app.models.field_movement import FieldWorkOrderMovement
 from app.models.field_note import FieldWorkOrderNote
+from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.field_worklog import FieldWorkLog
 from app.models.subscriber import Subscriber
+from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
 from app.services.field.manager import field_manager
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.work_order_assignment_contracts import (
     TechnicianAssignmentTarget,
     VendorAssignmentTarget,
@@ -25,6 +30,16 @@ from app.services.work_order_assignment_contracts import (
 )
 from app.services.work_order_commands import work_order_commands
 from app.services.work_order_errors import WorkOrderCommandError
+
+
+@dataclass(frozen=True)
+class AssignmentFixture:
+    public_id: str
+    vendor_id: UUID
+    technician_id: UUID
+    vendor_user_id: UUID
+    access: PermissionAdmission
+    revision: datetime
 
 
 def _fixture(db_session, *, lifecycle_status="in_progress"):
@@ -46,17 +61,42 @@ def _fixture(db_session, *, lifecycle_status="in_progress"):
         status=lifecycle_status,
         is_active=True,
     )
-    db_session.add_all([vendor, technician, row])
+    staff = SystemUser(
+        first_name="Synthetic",
+        last_name="Dispatcher",
+        email=f"{uuid4()}@example.invalid",
+    )
+    member_user = SystemUser(
+        first_name="Synthetic",
+        last_name="Attending person",
+        email=f"{uuid4()}@example.invalid",
+    )
+    db_session.add_all([vendor, technician, row, staff, member_user])
+    db_session.flush()
+    bridge = FieldVendor(name=vendor.name, native_vendor_id=vendor.id)
+    db_session.add(bridge)
+    db_session.flush()
+    member = FieldVendorUser(vendor_id=bridge.id, system_user_id=member_user.id)
+    db_session.add(member)
+    db_session.flush()
+    result = AssignmentFixture(
+        row.public_id,
+        vendor.id,
+        technician.id,
+        member.id,
+        PermissionAdmission(
+            staff.id, "system_user", frozenset({"operations:dispatch:assign"})
+        ),
+        row.updated_at,
+    )
     db_session.commit()
-    ids = (row.public_id, vendor.id, technician.id)
-    db_session.commit()
-    return ids
+    return result
 
 
-def _context():
+def _context(case: AssignmentFixture):
     return CommandContext.system(
-        actor=str(uuid4()),
-        scope="work_order:assignment",
+        actor=str(case.access.principal_id),
+        scope="operations:dispatch:assign",
         reason="Dispatch repair",
         idempotency_key=uuid4().hex,
     )
@@ -69,27 +109,34 @@ def test_vendor_reassignment_preserves_execution_and_revokes_opposing_target(
     lifecycle_status,
     requested_status,
 ):
-    public_id, vendor_id, technician_id = _fixture(
-        db_session, lifecycle_status=lifecycle_status
+    case = _fixture(db_session, lifecycle_status=lifecycle_status)
+    public_id, vendor_id, technician_id = (
+        case.public_id,
+        case.vendor_id,
+        case.technician_id,
     )
     first = work_order_commands.assign(
         db_session,
         command=WorkOrderAssignmentCommand(
+            access=case.access,
             work_order_public_id=public_id,
             target=TechnicianAssignmentTarget(technician_id),
             status=requested_status,
         ),
-        context=_context(),
+        context=_context(case),
     )
     assert first.status == lifecycle_status
     second = work_order_commands.assign(
         db_session,
         command=WorkOrderAssignmentCommand(
+            access=case.access,
             work_order_public_id=public_id,
-            target=VendorAssignmentTarget(vendor_id),
+            target=VendorAssignmentTarget(vendor_id, case.vendor_user_id),
+            expected_revision=first.revision,
+            expected_assignment_generation=first.assignment_generation,
             status=requested_status,
         ),
-        context=_context(),
+        context=_context(case),
     )
     assert first.queue_id == second.queue_id
     row = db_session.query(WorkOrder).filter_by(public_id=public_id).one()
@@ -108,10 +155,18 @@ def test_vendor_reassignment_preserves_execution_and_revokes_opposing_target(
 
 
 def test_assignment_replay_is_immutable_and_content_conflicts_fail_closed(db_session):
-    public_id, vendor_id, technician_id = _fixture(db_session)
-    context = _context()
+    case = _fixture(db_session)
+    public_id, vendor_id, technician_id = (
+        case.public_id,
+        case.vendor_id,
+        case.technician_id,
+    )
+    context = _context(case)
     command = WorkOrderAssignmentCommand(
-        work_order_public_id=public_id, target=VendorAssignmentTarget(vendor_id)
+        access=case.access,
+        work_order_public_id=public_id,
+        target=VendorAssignmentTarget(vendor_id, case.vendor_user_id),
+        expected_revision=case.revision,
     )
     first = work_order_commands.assign(db_session, command=command, context=context)
     replay = work_order_commands.assign(db_session, command=command, context=context)
@@ -120,6 +175,7 @@ def test_assignment_replay_is_immutable_and_content_conflicts_fail_closed(db_ses
         work_order_commands.assign(
             db_session,
             command=WorkOrderAssignmentCommand(
+                access=case.access,
                 work_order_public_id=public_id,
                 target=TechnicianAssignmentTarget(technician_id),
             ),
@@ -128,31 +184,39 @@ def test_assignment_replay_is_immutable_and_content_conflicts_fail_closed(db_ses
 
 
 def test_preview_revision_rejects_stale_assignment(db_session):
-    public_id, vendor_id, technician_id = _fixture(db_session)
+    case = _fixture(db_session)
+    public_id, vendor_id, technician_id = (
+        case.public_id,
+        case.vendor_id,
+        case.technician_id,
+    )
     preview = work_order_commands.preview_assignment(
         db_session,
         query=WorkOrderAssignmentQuery(
-            work_order_public_id=public_id, target=VendorAssignmentTarget(vendor_id)
+            work_order_public_id=public_id,
+            target=VendorAssignmentTarget(vendor_id, case.vendor_user_id),
         ),
     )
     db_session.commit()
     work_order_commands.assign(
         db_session,
         command=WorkOrderAssignmentCommand(
+            access=case.access,
             work_order_public_id=public_id,
             target=TechnicianAssignmentTarget(technician_id),
         ),
-        context=_context(),
+        context=_context(case),
     )
     with pytest.raises(WorkOrderCommandError, match="changed since"):
         work_order_commands.assign(
             db_session,
             command=WorkOrderAssignmentCommand(
+                access=case.access,
                 work_order_public_id=public_id,
-                target=VendorAssignmentTarget(vendor_id),
+                target=VendorAssignmentTarget(vendor_id, case.vendor_user_id),
                 expected_revision=preview.revision,
             ),
-            context=_context(),
+            context=_context(case),
         )
 
 
@@ -184,15 +248,19 @@ def test_vendor_actor_columns_are_explicit_and_not_fabricated_person_ids():
 
 
 def test_vendor_assignment_counts_as_assigned_on_manager_summary(db_session):
-    public_id, vendor_id, _technician_id = _fixture(db_session)
+    case = _fixture(db_session)
+    public_id, vendor_id = case.public_id, case.vendor_id
     before = field_manager.summary(db_session)
     db_session.commit()
     work_order_commands.assign(
         db_session,
         command=WorkOrderAssignmentCommand(
-            work_order_public_id=public_id, target=VendorAssignmentTarget(vendor_id)
+            access=case.access,
+            work_order_public_id=public_id,
+            target=VendorAssignmentTarget(vendor_id, case.vendor_user_id),
+            expected_revision=case.revision,
         ),
-        context=_context(),
+        context=_context(case),
     )
     after = field_manager.summary(db_session)
     assert after["open_jobs"] == before["open_jobs"]

@@ -30,6 +30,7 @@ from app.services.topology.outage import (
     resolve_outage,
     start_clearing,
 )
+from app.services.topology.outage_complaint_contracts import RecordOutageScopeRevision
 
 NOW = datetime(2026, 8, 2, 12, 0, 0, tzinfo=UTC)
 
@@ -222,7 +223,10 @@ def test_mid_incident_audience_entry_starts_at_entry_not_incident_start(
     db_session.flush()
     entry_at = NOW + timedelta(minutes=20)
     record_scope_revision(
-        db_session, incident, reason="audience_drift", effective_at=entry_at
+        db_session,
+        command=RecordOutageScopeRevision(
+            incident_id=incident.id, reason="audience_drift", effective_at=entry_at
+        ),
     )
     reconcile_incident_accrual(db_session, incident, now=NOW + timedelta(minutes=21))
 

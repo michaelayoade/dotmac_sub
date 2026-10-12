@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
@@ -138,6 +139,21 @@ def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
     return row
 
 
+def _select_vendor_member(
+    db: Session, *, order: WorkOrder, member: FieldVendorUser
+) -> None:
+    queue = db.scalar(
+        select(WorkOrderAssignmentQueue).where(
+            WorkOrderAssignmentQueue.work_order_mirror_id == order.id,
+            WorkOrderAssignmentQueue.status == "assigned",
+        )
+    )
+    assert queue is not None
+    assert queue.assigned_vendor_id == member.vendor.native_vendor_id
+    queue.assigned_vendor_user_id = member.id
+    db.flush()
+
+
 def test_field_jobs_scope_by_crm_person_and_assignment_queue(db_session):
     user = _user(db_session)
     profile = _profile(db_session, user, crm_person_id="crm-tech-1")
@@ -197,8 +213,8 @@ def test_field_jobs_scope_by_crm_person_and_assignment_queue(db_session):
 
 
 def test_field_vendor_profile_scopes_jobs_by_native_assignment_ignoring_metadata(
-    db_session,
-):
+    db_session: Session,
+) -> None:
     user = _user(db_session, "Vendor")
     _profile(db_session, user, crm_person_id="crm-vendor-tech")
     membership = _vendor_membership(db_session, user, crm_vendor_id="crm-vendor-1")
@@ -228,7 +244,7 @@ def test_field_vendor_profile_scopes_jobs_by_native_assignment_ignoring_metadata
         assigned_to_crm_person_id=None,
         metadata_={"crm_vendor_id": "crm-vendor-1"},
     )
-    _work_order(
+    rival_order = _work_order(
         db_session,
         subscriber,
         crm_work_order_id="wo-rival-vendor",
@@ -236,6 +252,16 @@ def test_field_vendor_profile_scopes_jobs_by_native_assignment_ignoring_metadata
         assigned_vendor_id=rival_membership.vendor.native_vendor_id,
         metadata_={"assigned_vendor_id": str(rival_membership.vendor_id)},
     )
+    _select_vendor_member(db_session, order=assigned_by_vendor, member=membership)
+    _select_vendor_member(db_session, order=rival_order, member=rival_membership)
+    unselected_user = _user(db_session, "Unselected")
+    unselected_member = FieldVendorUser(
+        vendor_id=membership.vendor_id,
+        system_user_id=unselected_user.id,
+        role="crew",
+        is_active=True,
+    )
+    db_session.add(unselected_member)
     db_session.commit()
 
     jobs = field_jobs.list(
@@ -252,13 +278,23 @@ def test_field_vendor_profile_scopes_jobs_by_native_assignment_ignoring_metadata
         )
     } == {"wo-rival-vendor"}
 
+    assert (
+        field_jobs.list(
+            db=db_session,
+            query=FieldJobsQuery(requester_system_user_id=unselected_user.id),
+        )
+        == []
+    )
 
-def test_field_vendor_profile_can_open_and_transition_vendor_job(db_session):
+
+def test_field_vendor_profile_can_open_and_transition_vendor_job(
+    db_session: Session,
+) -> None:
     user = _user(db_session, "Vendor")
     _profile(db_session, user, crm_person_id="crm-vendor-tech")
     membership = _vendor_membership(db_session, user)
     subscriber = _subscriber(db_session)
-    _work_order(
+    order = _work_order(
         db_session,
         subscriber,
         crm_work_order_id="wo-vendor-transition",
@@ -267,6 +303,7 @@ def test_field_vendor_profile_can_open_and_transition_vendor_job(db_session):
         assigned_vendor_id=membership.vendor.native_vendor_id,
         metadata_={"assigned_vendor": {"id": str(membership.vendor_id)}},
     )
+    _select_vendor_member(db_session, order=order, member=membership)
     db_session.commit()
 
     detail = field_jobs.get_detail(

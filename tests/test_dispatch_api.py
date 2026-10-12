@@ -21,7 +21,12 @@ def _client(db_session) -> TestClient:
     # The per-endpoint operations:dispatch:read/write/assign gates need an
     # authenticated principal; grant an admin principal so these tests exercise
     # endpoint behaviour (auth itself is covered by the RBAC guard suite).
+    staff = _system_user(db_session)
+    principal_id = staff.id
+    db_session.commit()
     app.dependency_overrides[require_user_auth] = lambda: {
+        "principal_type": "system_user",
+        "principal_id": str(principal_id),
         "roles": ["admin"],
         "scopes": [],
     }

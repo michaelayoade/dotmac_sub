@@ -79,6 +79,7 @@ def resolve_field_actor(db: Session, query: ResolveFieldActor) -> FieldActor:
         db.query(FieldVendorUser)
         .populate_existing()
         .filter(FieldVendorUser.system_user_id == user.id)
+        .order_by(FieldVendorUser.id)
     )
     memberships = (
         membership_query.with_for_update() if query.lock else membership_query
@@ -144,6 +145,14 @@ def resolve_field_actor(db: Session, query: ResolveFieldActor) -> FieldActor:
     )
 
 
+def require_technician_map_actor(db: Session, query: ResolveFieldActor) -> FieldActor:
+    """The global field plant surface belongs to the active technician plane."""
+    actor = resolve_field_actor(db, query)
+    if actor.kind != FieldActorKind.technician:
+        raise _denied("Open an assigned work order to view authorized job destinations")
+    return actor
+
+
 def scoped_work_orders(db: Session, actor: FieldActor) -> Query[WorkOrder]:
     assignment = select(WorkOrderAssignmentQueue.work_order_mirror_id).where(
         WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned
@@ -152,7 +161,8 @@ def scoped_work_orders(db: Session, actor: FieldActor) -> Query[WorkOrder]:
         if actor.native_vendor_id is None:
             raise _denied("Native vendor link is unavailable")
         assignment = assignment.where(
-            WorkOrderAssignmentQueue.assigned_vendor_id == actor.native_vendor_id
+            WorkOrderAssignmentQueue.assigned_vendor_id == actor.native_vendor_id,
+            WorkOrderAssignmentQueue.assigned_vendor_user_id == actor.vendor_user_id,
         )
         predicate: ColumnElement[bool] = WorkOrder.id.in_(assignment)
     else:
@@ -172,6 +182,17 @@ def scoped_work_orders(db: Session, actor: FieldActor) -> Query[WorkOrder]:
 
 
 def require_work_order(db: Session, query: FieldWorkOrderScope) -> WorkOrder:
+    # All admissions use user before visit, even callers without an actor lock.
+    # For technicians preserve user -> profile -> visit. Vendor memberships are
+    # locked only after the visit, matching dispatch selection.
+    if query.lock:
+        db.query(SystemUser).populate_existing().filter(
+            SystemUser.id == query.actor.system_user_id
+        ).with_for_update().one_or_none()
+        if query.actor.kind == FieldActorKind.technician:
+            db.query(TechnicianProfile).populate_existing().filter(
+                TechnicianProfile.id == query.actor.technician_id
+            ).with_for_update().one_or_none()
     statement = (
         db.query(WorkOrder)
         .populate_existing()

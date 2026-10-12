@@ -40,6 +40,7 @@ from app.services.field.work_order_access import (
 from app.services.field.work_order_status import WorkOrderStatus
 from app.services.field.worklogs import actor_worklogs
 from app.services.owner_commands import OwnerCommandDefinition, execute_owner_command
+from app.services.work_order_templates import WorkOrderAccessTechnology
 
 _CLOCK_SKEW_FLAG_SECONDS = 15 * 60
 _UNABLE_REASONS = {
@@ -86,6 +87,7 @@ _TRANSITION_ALLOWED_FROM: dict[str, set[str]] = {
 def serialize_event(event: FieldJobEvent) -> dict:
     return {
         "id": event.id,
+        "assignment_generation": event.assignment_generation,
         "crm_work_order_id": event.work_order_mirror.public_id,
         "event": event.event,
         "previous_status": event.previous_status,
@@ -174,6 +176,11 @@ def _apply_transition(
         json.dumps(
             {
                 "public_id": command.public_id,
+                **(
+                    {"assignment_generation": str(command.assignment_generation)}
+                    if command.assignment_generation
+                    else {}
+                ),
                 "actor": str(profile.system_user_id),
                 "event": event_value,
                 "occurred_at": occurred_at.isoformat() if occurred_at else None,
@@ -202,9 +209,35 @@ def _apply_transition(
                 retryable=False,
             )
         return FieldTransitionResponse(
-            job=_summary(row),
+            job=_summary(row, db=db),
             event=FieldJobEventRead.model_validate(serialize_event(existing)),
             replayed=True,
+        )
+    from app.services.work_order_assignment_contracts import (
+        CurrentWorkOrderAssignmentQuery,
+    )
+    from app.services.work_order_commands import work_order_commands
+
+    assignment = work_order_commands.current_assignment(
+        db, query=CurrentWorkOrderAssignmentQuery(row.id)
+    )
+    if (
+        assignment is not None
+        and assignment.generation is not None
+        and command.assignment_generation != assignment.generation
+    ):
+        raise FieldAccessError(
+            code="operations.field_completion.assignment_generation_mismatch",
+            message="Refresh the job before recording an event for this assignment",
+            retryable=False,
+        )
+    if command.assignment_generation is not None and (
+        assignment is None or command.assignment_generation != assignment.generation
+    ):
+        raise FieldAccessError(
+            code="operations.field_completion.assignment_generation_mismatch",
+            message="The event belongs to a superseded assignment",
+            retryable=False,
         )
     if row.status not in _TRANSITION_ALLOWED_FROM[event_value]:
         raise FieldAccessError(
@@ -251,6 +284,7 @@ def _apply_transition(
 
     _mark_sub_authoritative(row, event_value, client_uuid, occurred)
     event_row = FieldJobEvent(
+        assignment_generation=command.assignment_generation,
         work_order_mirror_id=row.id,
         author_technician_id=profile.technician_id,
         author_vendor_user_id=profile.vendor_user_id,
@@ -347,7 +381,7 @@ def _apply_transition(
             )
     db.flush()
     return FieldTransitionResponse(
-        job=_summary(row),
+        job=_summary(row, db=db),
         event=FieldJobEventRead.model_validate(serialize_event(event_row)),
         replayed=False,
     )
@@ -422,6 +456,8 @@ class FieldFiberAsBuiltEvidence:
     The requirement applies only to work orders that both declare
     ``requires_as_built_evidence`` and belong to a native project — the same
     population whose vendor deliverables are gated by project verification.
+    Explicit radio classification excludes this fiber-specific requirement only;
+    legacy unclassified and unknown technology retain the conservative gate.
     """
 
     required: bool
@@ -442,7 +478,11 @@ def resolve_fiber_as_built_evidence(
     db: Session, row: WorkOrder
 ) -> FieldFiberAsBuiltEvidence:
     """Count the fiber evidence records naming this exact work order."""
-    required = bool(row.requires_as_built_evidence and row.project_id is not None)
+    required = bool(
+        row.requires_as_built_evidence
+        and row.project_id is not None
+        and row.access_technology != WorkOrderAccessTechnology.RADIO
+    )
     if not required:
         return FieldFiberAsBuiltEvidence(
             required=False,

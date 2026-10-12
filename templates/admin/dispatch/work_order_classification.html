@@ -1,0 +1,44 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import card, detail_header %}
+{% block title %}Classify work - {{ page.snapshot.public_id }}{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+{{ detail_header(title='Classify work', subtitle=page.snapshot.public_id ~ ' · ' ~ page.snapshot.title, back_href='/admin/dispatch/work-orders/' ~ page.snapshot.public_id, color='cyan', color2='emerald') }}
+{% if page.error %}<div role="alert" class="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{{ page.error }}{% if page.stale %}<p class="mt-2">Your submitted choices are preserved below. Reload the current work order before saving.</p>{% endif %}</div>{% endif %}
+{% call card('Planning scope', color='cyan') %}
+<dl class="mb-5 grid gap-4 sm:grid-cols-3"><div><dt class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-300">Work kind</dt><dd class="mt-1">{{ page.snapshot.kind.value|replace('_', ' ')|title }}</dd></div><div><dt class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-300">Status</dt><dd class="mt-1">{{ page.snapshot.status.value|replace('_', ' ')|title }}</dd></div><div><dt class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-300">Current classification</dt><dd class="mt-1">{% if page.snapshot.classification %}{{ page.snapshot.classification.purpose.value|replace('_', ' ')|title }} · {{ page.snapshot.classification.access_technology.value|title }}{% else %}Unclassified{% endif %}</dd></div></dl>
+<p class="mb-5 text-sm text-slate-600 dark:text-slate-300">Select the purpose and access technology for this visit. This records planning recommendations. Supervisor dispatch, field evidence, service acceptance and ticket resolution remain separate steps.</p>
+{% if page.snapshot.blocked_reason %}<p class="mb-5 rounded-lg bg-amber-50 p-4 text-sm text-amber-800">{{ page.snapshot.blocked_reason }}</p>{% endif %}
+<form method="post" action="/admin/dispatch/work-orders/{{ page.snapshot.work_order_id }}/classification" class="space-y-5">
+{% include "components/forms/csrf_input.html" %}
+<input type="hidden" name="command_id" value="{{ page.form.command_id }}">
+<input type="hidden" name="expected_revision" value="{{ page.form.expected_revision }}">
+<label class="block text-sm font-semibold" for="classification-purpose">Purpose <span class="text-rose-600" aria-hidden="true">*</span></label>
+<select id="classification-purpose" name="purpose" required aria-describedby="purpose-help{% if page.error_field and page.error_field.value == 'purpose' %} purpose-error{% endif %}" {% if page.error_field and page.error_field.value == 'purpose' %}aria-invalid="true"{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900">
+<option value="">Select purpose</option>
+{% set purpose_values = page.snapshot.purpose_options|map(attribute='value')|list %}
+{% if page.form.purpose and page.form.purpose not in purpose_values %}<option value="{{ page.form.purpose }}" selected>Submitted value: {{ page.form.purpose }}</option>{% endif %}
+{% for option in page.snapshot.purpose_options %}<option value="{{ option.value }}" {% if option.value == page.form.purpose %}selected{% endif %}>{{ option.value|replace('_', ' ')|title }}</option>{% endfor %}
+</select>
+<p id="purpose-help" class="text-xs text-slate-500 dark:text-slate-300">The available purposes come from the approved catalog for this work kind.</p>
+{% if page.error_field and page.error_field.value == 'purpose' %}<p id="purpose-error" class="text-sm text-rose-700">{{ page.error }}</p>{% endif %}
+<label class="block text-sm font-semibold" for="classification-technology">Access technology <span class="text-rose-600" aria-hidden="true">*</span></label>
+<select id="classification-technology" name="access_technology" required aria-describedby="technology-help{% if page.error_field and page.error_field.value == 'access_technology' %} technology-error{% endif %}" {% if page.error_field and page.error_field.value == 'access_technology' %}aria-invalid="true"{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900">
+<option value="">Select technology</option>
+{% set technology_values = page.snapshot.technology_options|map(attribute='value')|list %}
+{% if page.form.access_technology and page.form.access_technology not in technology_values %}<option value="{{ page.form.access_technology }}" selected>Submitted value: {{ page.form.access_technology }}</option>{% endif %}
+{% for option in page.snapshot.technology_options %}<option value="{{ option.value }}" {% if option.value == page.form.access_technology %}selected{% endif %}>{{ option.value|title }}</option>{% endfor %}
+</select>
+<p id="technology-help" class="text-xs text-slate-500 dark:text-slate-300">Fiber and radio use different field evidence. Unknown supports repair or maintenance diagnosis only.</p>
+{% if page.error_field and page.error_field.value == 'access_technology' %}<p id="technology-error" class="text-sm text-rose-700">{{ page.error }}</p>{% endif %}
+<label class="block text-sm font-semibold" for="classification-reason">Reason <span class="text-rose-600" aria-hidden="true">*</span></label>
+<textarea id="classification-reason" name="reason" required maxlength="1000" rows="3" {% if page.error_field and page.error_field.value == 'reason' %}aria-invalid="true" aria-describedby="reason-error"{% endif %} class="w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900">{{ page.form.reason }}</textarea>
+{% if page.error_field and page.error_field.value == 'reason' %}<p id="reason-error" class="text-sm text-rose-700">{{ page.error }}</p>{% endif %}
+<div class="flex flex-wrap justify-end gap-3 border-t border-slate-200 pt-4"><a href="/admin/dispatch/work-orders/{{ page.snapshot.work_order_id }}/classification" class="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold">Reload current work order</a><button type="submit" {% if page.snapshot.eligibility.value != 'allowed' or page.stale %}disabled{% endif %} class="rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Save classification</button></div>
+</form>
+{% endcall %}
+{% call card('Current planning recommendations', color='emerald') %}
+{% if page.snapshot.recommendation %}<p class="mb-4 text-sm text-slate-600 dark:text-slate-300">Approved catalog version {{ page.snapshot.recommendation.identity.version }} · Recommendations only; these items do not prove completed work or accepted assets.</p><ul class="space-y-4">{% for requirement in page.snapshot.recommendation.requirements %}<li><h3 class="text-sm font-semibold">{{ requirement.code.value|replace('_', ' ')|title }} <span class="font-normal text-slate-500 dark:text-slate-300">· {{ requirement.gate.value|replace('_', ' ')|title }}</span></h3><p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ requirement.evidence }}</p></li>{% endfor %}</ul>{% else %}<p class="text-sm text-slate-500 dark:text-slate-300">This work order has no explicit classification. Save a purpose and technology to record its recommended planning scope.</p>{% endif %}
+{% endcall %}
+</div>
+{% endblock %}

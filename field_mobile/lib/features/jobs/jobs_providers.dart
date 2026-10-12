@@ -277,7 +277,12 @@ class JobsRepository {
   }
 }
 
-final jobsRepositoryProvider = Provider<JobsRepository>(JobsRepository.new);
+final jobsRepositoryProvider = Provider<JobsRepository>((ref) {
+  // Job futures belong to the active principal's store. Rebuild them after
+  // logout, login, or account switching, including a failed unbound-store load.
+  ref.watch(sessionStoreProvider);
+  return JobsRepository(ref);
+});
 
 final meProvider = FutureProvider<MeSummary>((ref) {
   final auth = ref.watch(authControllerProvider);

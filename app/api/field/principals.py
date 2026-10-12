@@ -57,3 +57,19 @@ def require_field_principal(
         status_code=403,
         detail="Field technician or vendor access required",
     )
+
+
+def require_technician_map_principal(
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Global plant inventory is available only to active technician actors."""
+    from app.services.field.work_order_access import (
+        ResolveFieldActor,
+        require_technician_map_actor,
+    )
+
+    require_technician_map_actor(
+        db, query=ResolveFieldActor(field_system_user_id(auth))
+    )
+    return auth

@@ -38,7 +38,10 @@ from app.services.field.note_commands import (
 from app.services.field.transitions import field_transitions
 from app.services.field.worklogs import field_worklogs
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.subscriber import _default_reseller_id
+from app.services.work_order_assignment_contracts import CurrentWorkOrderAssignmentQuery
+from app.services.work_order_commands import work_order_commands
 
 
 def _user(db) -> SystemUser:
@@ -133,11 +136,21 @@ def test_work_order_lifecycle_native(db_session):
             status="assigned",
         ),
         context=CommandContext.system(
-            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+            actor=str(user.id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
+        ),
+        access=PermissionAdmission(
+            user.id, "system_user", frozenset({"operations:dispatch:assign"})
         ),
     )
     assert queue.work_order_mirror_id == row.id
     assert queue.crm_work_order_id == row.public_id
+    current_assignment = work_order_commands.current_assignment(
+        db_session, query=CurrentWorkOrderAssignmentQuery(row.id)
+    )
+    assert current_assignment is not None
+    assignment_generation = current_assignment.generation
 
     # 3. Start — transition engine keyed on public_id; the job event lands
     # FK-linked to the work order.
@@ -147,6 +160,7 @@ def test_work_order_lifecycle_native(db_session):
             requester_system_user_id=user.id,
             public_id=row.public_id,
             event=FieldEvent("start"),
+            assignment_generation=assignment_generation,
             client_event_id=uuid4(),
             context=CommandContext.system(
                 actor=f"user:{user.id}",
@@ -232,6 +246,7 @@ def test_work_order_lifecycle_native(db_session):
             requester_system_user_id=user.id,
             public_id=row.public_id,
             event=FieldEvent("complete"),
+            assignment_generation=assignment_generation,
             client_event_id=uuid4(),
             occurred_at=completed_at,
             context=CommandContext.system(

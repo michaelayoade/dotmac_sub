@@ -50,12 +50,14 @@ from app.services.field.worklogs import field_worklogs
 from app.services.file_storage import UnifiedFileUploadService
 from app.services.object_storage import StreamResult
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.subscriber import _default_reseller_id
 from app.services.work_order_assignment_contracts import (
     VendorAssignmentTarget,
     WorkOrderAssignmentCommand,
 )
 from app.services.work_order_commands import work_order_commands
+from app.services.work_order_errors import WorkOrderCommandError
 from scripts.ci.migrated_test_database import install_migration_graph_environment
 from scripts.ci.template_database import bootstrap_database_local_prerequisites
 
@@ -148,7 +150,7 @@ def fresh_migration_database(
             )
 
 
-def _context(actor="test-operator"):
+def _context(actor: str):
     identity = uuid4()
     return CommandContext.system(
         actor=actor,
@@ -156,6 +158,21 @@ def _context(actor="test-operator"):
         reason="Labelled vendor work-order integration test",
         command_id=identity,
         idempotency_key=str(identity),
+    )
+
+
+def _staff(db: Session) -> PermissionAdmission:
+    staff = SystemUser(
+        first_name="QA",
+        last_name="Dispatcher",
+        email=f"qa-staff-{uuid4()}@dotmac.test",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db.add(staff)
+    db.flush()
+    return PermissionAdmission(
+        staff.id, "system_user", frozenset({"operations:dispatch:assign"})
     )
 
 
@@ -195,6 +212,7 @@ def test_vendor_journey_and_revoked_evidence_access(db_session, monkeypatch):
 
     uploads = _FakeUploads()
     monkeypatch.setattr(attachment_module, "file_uploads", uploads)
+    access = _staff(db_session)
     user_id, member_id, vendor_id = _vendor(db_session)
     other_id, _, other_vendor_id = _vendor(db_session)
     job = WorkOrder(
@@ -208,11 +226,17 @@ def test_vendor_journey_and_revoked_evidence_access(db_session, monkeypatch):
     db_session.flush()
     public_id = job.public_id
     job_id = job.id
+    revision = job.updated_at
     db_session.commit()
     assignment = WorkOrderAssignmentCommand(
-        work_order_public_id=public_id, target=VendorAssignmentTarget(vendor_id)
+        work_order_public_id=public_id,
+        target=VendorAssignmentTarget(vendor_id, member_id),
+        access=access,
+        expected_revision=revision,
     )
-    work_order_commands.assign(db_session, command=assignment, context=_context())
+    assigned = work_order_commands.assign(
+        db_session, command=assignment, context=_context(str(access.principal_id))
+    )
     assert [j.id for j in field_jobs.list(db_session, FieldJobsQuery(user_id))] == [
         public_id
     ]
@@ -220,7 +244,12 @@ def test_vendor_journey_and_revoked_evidence_access(db_session, monkeypatch):
         field_jobs.get_detail(db_session, FieldJobQuery(other_id, public_id))
     db_session.rollback()
     start = ApplyFieldTransition(
-        _context(str(user_id)), user_id, public_id, FieldEvent.start, uuid4()
+        _context(str(user_id)),
+        user_id,
+        public_id,
+        FieldEvent.start,
+        uuid4(),
+        assignment_generation=assigned.assignment_generation,
     )
     assert field_transitions.apply(db_session, start).job.status == "in_progress"
     assert field_transitions.apply(db_session, start).replayed
@@ -374,8 +403,9 @@ def test_competing_assignments_keep_exactly_one_current_target(cloned_database):
     url = cloned_database("heads")
     engine = create_engine(url)
     with Session(engine, expire_on_commit=False) as db:
-        _, _, vendor_one = _vendor(db)
-        _, _, vendor_two = _vendor(db)
+        access = _staff(db)
+        _, member_one, vendor_one = _vendor(db)
+        _, member_two, vendor_two = _vendor(db)
         job = WorkOrder(
             public_id=f"qa-race-{uuid4()}",
             title="QA concurrent dispatch",
@@ -386,25 +416,39 @@ def test_competing_assignments_keep_exactly_one_current_target(cloned_database):
         db.flush()
         public_id = job.public_id
         job_id = job.id
+        revision = job.updated_at
         db.commit()
     barrier = Barrier(2)
 
-    def assign(vendor_id):
+    def assign(target: VendorAssignmentTarget):
         with Session(engine) as db:
             db.execute(text("SET statement_timeout='15s'"))
             db.commit()
             barrier.wait(timeout=10)
-            return work_order_commands.assign(
-                db,
-                command=WorkOrderAssignmentCommand(
-                    work_order_public_id=public_id,
-                    target=VendorAssignmentTarget(vendor_id),
-                ),
-                context=_context(),
-            )
+            try:
+                return work_order_commands.assign(
+                    db,
+                    command=WorkOrderAssignmentCommand(
+                        work_order_public_id=public_id,
+                        target=target,
+                        access=access,
+                        expected_revision=revision,
+                    ),
+                    context=_context(str(access.principal_id)),
+                )
+            except WorkOrderCommandError as exc:
+                return exc
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        outcomes = list(pool.map(assign, (vendor_one, vendor_two)))
+        outcomes = list(
+            pool.map(
+                assign,
+                (
+                    VendorAssignmentTarget(vendor_one, member_one),
+                    VendorAssignmentTarget(vendor_two, member_two),
+                ),
+            )
+        )
     with Session(engine) as db:
         current = (
             db.query(WorkOrderAssignmentQueue)
@@ -416,7 +460,19 @@ def test_competing_assignments_keep_exactly_one_current_target(cloned_database):
             vendor_two,
         }
         assert len(outcomes) == 2
-        assert {o.queue_id for o in outcomes} == {current[0].id}
+        successes = [
+            outcome
+            for outcome in outcomes
+            if not isinstance(outcome, WorkOrderCommandError)
+        ]
+        failures = [
+            outcome
+            for outcome in outcomes
+            if isinstance(outcome, WorkOrderCommandError)
+        ]
+        assert len(successes) == len(failures) == 1
+        assert failures[0].code == "stale_assignment"
+        assert {outcome.queue_id for outcome in successes} == {current[0].id}
     engine.dispose()
 
 
@@ -477,11 +533,13 @@ def test_concurrent_members_with_reversed_history_and_shared_vendor(cloned_datab
                 WorkOrderAssignmentQueue(
                     work_order_mirror_id=jobs[0].id,
                     assigned_vendor_id=vendor_one,
+                    assigned_vendor_user_id=member_one,
                     status="assigned",
                 ),
                 WorkOrderAssignmentQueue(
                     work_order_mirror_id=jobs[1].id,
                     assigned_vendor_id=vendor_two,
+                    assigned_vendor_user_id=member_two,
                     status="assigned",
                 ),
             ]
@@ -518,6 +576,17 @@ def test_concurrent_members_with_reversed_history_and_shared_vendor(cloned_datab
         ),
     )
     assert all(result.job.status == "in_progress" for result in results)
+
+    def unselected_location(db):
+        with pytest.raises(FieldAccessError):
+            field_jobs.update_location(
+                db,
+                UpdateFieldJobLocation(
+                    _context(str(third_id)), third_id, public_one, 9.0765, 7.3986
+                ),
+            )
+        return "unselected_denied"
+
     results = _concurrent(
         engine,
         lambda db: field_transitions.apply(
@@ -526,15 +595,10 @@ def test_concurrent_members_with_reversed_history_and_shared_vendor(cloned_datab
                 _context(str(user_one)), user_one, public_one, FieldEvent.pause, uuid4()
             ),
         ),
-        lambda db: field_jobs.update_location(
-            db,
-            UpdateFieldJobLocation(
-                _context(str(third_id)), third_id, public_one, 9.0765, 7.3986
-            ),
-        ),
+        unselected_location,
     )
     assert results[0].job.status == "paused"
-    assert results[1].latitude == 9.0765
+    assert results[1] == "unselected_denied"
     engine.dispose()
 
 
@@ -544,6 +608,7 @@ def test_public_revocation_races_execution_and_closes_replay(cloned_database):
     url = cloned_database("heads")
     engine = create_engine(url)
     with Session(engine, expire_on_commit=False) as db:
+        access = _staff(db)
         user_id, member_id, vendor_id = _vendor(db)
         job = WorkOrder(
             public_id=f"qa-revoke-{uuid4()}",
@@ -558,6 +623,7 @@ def test_public_revocation_races_execution_and_closes_replay(cloned_database):
             WorkOrderAssignmentQueue(
                 work_order_mirror_id=job.id,
                 assigned_vendor_id=vendor_id,
+                assigned_vendor_user_id=member_id,
                 status="assigned",
             )
         )
@@ -574,7 +640,7 @@ def test_public_revocation_races_execution_and_closes_replay(cloned_database):
 
     def revoke(db):
         return vendor_user_provisioning.revoke_committed(
-            db, member_id, context=_context()
+            db, member_id, context=_context(str(access.principal_id))
         )
 
     result, _ = _concurrent(engine, execute, revoke)

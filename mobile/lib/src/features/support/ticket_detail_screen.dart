@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -37,8 +39,17 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
 
   Future<void> _send() async {
     final body = _reply.text.trim();
-    // A reply needs either text or at least one attachment.
-    if (body.isEmpty && _attachments.isEmpty) return;
+    if (body.isEmpty) {
+      if (_attachments.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content:
+                Text('Add a message or caption before sending your photo.'),
+          ),
+        );
+      }
+      return;
+    }
     setState(() => _sending = true);
     try {
       await ref.read(supportRepositoryProvider).addComment(
@@ -252,7 +263,8 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                               Text(t.description!),
                               if (t.attachments.isNotEmpty) ...[
                                 const SizedBox(height: 12),
-                                _AttachmentStrip(attachments: t.attachments),
+                                _AttachmentStrip(
+                                    ticketId: t.id, attachments: t.attachments),
                               ],
                             ],
                           ),
@@ -345,8 +357,11 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                           controller: _reply,
                           minLines: 1,
                           maxLines: 4,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             hintText: 'Write a reply…',
+                            helperText: _attachments.isEmpty
+                                ? null
+                                : 'Add a message or caption with your photo.',
                             isDense: true,
                           ),
                         ),
@@ -595,7 +610,8 @@ class _TicketCommentBubble extends StatelessWidget {
           ],
           if (comment.attachments.isNotEmpty) ...[
             const SizedBox(height: 8),
-            _AttachmentStrip(attachments: comment.attachments),
+            _AttachmentStrip(
+                ticketId: comment.ticketId, attachments: comment.attachments),
           ],
           const SizedBox(height: 4),
           Text(
@@ -636,16 +652,92 @@ class _TicketCommentBubble extends StatelessWidget {
 /// Renders uploaded attachments as a horizontal row of thumbnails (images) /
 /// file chips (PDFs/other). Tapping an image opens it full-screen; tapping a
 /// file chip opens it in the device's default viewer/browser.
-class _AttachmentStrip extends StatelessWidget {
-  const _AttachmentStrip({required this.attachments});
+class _TicketAttachmentPreview extends ConsumerStatefulWidget {
+  const _TicketAttachmentPreview(
+      {required this.ticketId, required this.attachment});
 
+  final String ticketId;
+  final TicketAttachment attachment;
+
+  @override
+  ConsumerState<_TicketAttachmentPreview> createState() =>
+      _TicketAttachmentPreviewState();
+}
+
+class _TicketAttachmentPreviewState
+    extends ConsumerState<_TicketAttachmentPreview> {
+  late Future<Uint8List> _bytes;
+
+  Future<Uint8List> _load() =>
+      ref.read(supportRepositoryProvider).attachmentImage(
+            ticketId: widget.ticketId,
+            fileId: widget.attachment.storedFileId!,
+          );
+
+  @override
+  void initState() {
+    super.initState();
+    _bytes = _load();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: Text(widget.attachment.filename)),
+        body: Center(
+            child: FutureBuilder<Uint8List>(
+          future: _bytes,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Column(mainAxisSize: MainAxisSize.min, children: [
+                const Text('Could not load this photo. Please try again.'),
+                TextButton(
+                    onPressed: () => setState(() {
+                          _bytes = _load();
+                        }),
+                    child: const Text('Retry')),
+              ]);
+            }
+            final bytes = snapshot.data;
+            if (bytes == null) return const CircularProgressIndicator();
+            return InteractiveViewer(
+                child: Image.memory(
+              bytes,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) =>
+                  const Text('This photo could not be displayed.'),
+            ));
+          },
+        )),
+      );
+}
+
+class _AttachmentStrip extends StatelessWidget {
+  const _AttachmentStrip({required this.ticketId, required this.attachments});
+
+  final String ticketId;
   final List<TicketAttachment> attachments;
 
+  // Only retain explicitly public legacy links. Private API-relative links
+  // must never be handed to a browser or loaded without authentication.
+  Uri? _publicLegacyUri(TicketAttachment a) {
+    if (a.storedFileId != null) return null;
+    final uri = Uri.tryParse(a.url ?? '');
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.isEmpty ||
+        uri.host == Uri.parse(Env.apiBaseUrl).host ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return null;
+    }
+    return uri;
+  }
+
   Future<void> _openExternal(BuildContext context, TicketAttachment a) async {
-    final raw = a.url;
-    if (raw == null) return;
+    final uri = _publicLegacyUri(a);
+    if (uri == null) return;
     final messenger = ScaffoldMessenger.of(context);
-    final uri = Uri.parse(Env.resolveUrl(raw));
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok) {
       messenger.showSnackBar(
@@ -655,7 +747,14 @@ class _AttachmentStrip extends StatelessWidget {
   }
 
   void _openImage(BuildContext context, TicketAttachment a) {
-    final url = a.url;
+    if (a.storedFileId != null) {
+      Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) =>
+            _TicketAttachmentPreview(ticketId: ticketId, attachment: a),
+      ));
+      return;
+    }
+    final url = _publicLegacyUri(a)?.toString();
     if (url == null) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -692,14 +791,14 @@ class _AttachmentStrip extends StatelessWidget {
       runSpacing: 8,
       children: [
         for (final a in attachments)
-          if (a.isImage && a.url != null)
+          if (a.isImage && _publicLegacyUri(a) != null)
             InkWell(
               onTap: () => _openImage(context, a),
               borderRadius: BorderRadius.circular(8),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: Image.network(
-                  Env.resolveUrl(a.url!),
+                  _publicLegacyUri(a)!.toString(),
                   width: 72,
                   height: 72,
                   fit: BoxFit.cover,
@@ -721,7 +820,11 @@ class _AttachmentStrip extends StatelessWidget {
                 size: 18,
               ),
               label: Text(a.filename, overflow: TextOverflow.ellipsis),
-              onPressed: a.url == null ? null : () => _openExternal(context, a),
+              onPressed: a.isImage && a.storedFileId != null
+                  ? () => _openImage(context, a)
+                  : _publicLegacyUri(a) == null
+                      ? null
+                      : () => _openExternal(context, a),
             ),
       ],
     );

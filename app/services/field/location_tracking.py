@@ -6,22 +6,27 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.dispatch import DispatchQueueStatus, WorkOrderAssignmentQueue
+from app.models.dispatch import TechnicianProfile
 from app.models.field_location import (
     FIELD_PRESENCE_STATUSES,
     FieldTechLocationPing,
     FieldTechPresence,
 )
 from app.models.work_order import WorkOrder
-from app.services.field.jobs import _profile_from_principal
+from app.schemas.field import FieldPresenceRead
+from app.services.domain_errors import DomainError
+from app.services.field.work_order_access import (
+    FieldAccessError,
+    FieldActorKind,
+    ResolveFieldActor,
+    resolve_field_actor,
+)
 from app.services.field.work_order_status import FIELD_OPEN_WORK_ORDER_STATUSES
 from app.services.owner_commands import (
     CommandContext,
@@ -29,6 +34,8 @@ from app.services.owner_commands import (
     execute_owner_command,
     execute_owner_savepoint,
 )
+from app.services.work_order_assignment_contracts import CurrentWorkOrderAssignmentQuery
+from app.services.work_order_commands import work_order_commands
 
 MAX_BATCH_PINGS = 200
 MAX_FUTURE_CLOCK_SKEW = timedelta(minutes=5)
@@ -48,20 +55,49 @@ _SET_SHARING_DEFINITION = OwnerCommandDefinition(
 )
 
 
-def _command_context(principal: dict[str, Any], *, reason: str) -> CommandContext:
-    actor = str(
-        principal.get("principal_id") or principal.get("person_id") or "unknown"
+@dataclass(frozen=True, slots=True)
+class LocationRequester:
+    system_user_id: UUID
+
+
+def _command_context(principal: LocationRequester, *, reason: str) -> CommandContext:
+    return CommandContext.system(
+        actor=str(principal.system_user_id), scope=_OWNER, reason=reason
     )
-    return CommandContext.system(actor=actor, scope=_OWNER, reason=reason)
+
+
+def _profile_from_requester(
+    db: Session, requester: LocationRequester
+) -> TechnicianProfile:
+    actor = resolve_field_actor(db, ResolveFieldActor(requester.system_user_id))
+    profile = (
+        db.get(TechnicianProfile, actor.technician_id)
+        if actor.kind == FieldActorKind.technician and actor.technician_id
+        else None
+    )
+    if profile is None or not profile.is_active:
+        raise FieldAccessError(
+            code="operations.field_work_order_access.denied",
+            message="Location ingest requires an active technician",
+            retryable=False,
+        )
+    return profile
+
+
+@dataclass(frozen=True, slots=True)
+class LocationSharingCommand:
+    enabled: bool
+    status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class LocationPingCommand:
     latitude: float
     longitude: float
+    assignment_generation: UUID | None = None
     accuracy_m: float | None = None
     captured_at: datetime | None = None
-    crm_work_order_id: str | None = None
+    work_order_public_id: str | None = None
     source: str = "mobile"
     status: str | None = None
     client_observation_id: UUID | None = None
@@ -103,9 +139,9 @@ class LocationBatchOutcome:
     replays: tuple[LocationReplayInfo, ...] = ()
 
 
-class LocationPingRejected(Exception):
+class LocationPingRejected(DomainError):
     def __init__(self, code: str, detail: str) -> None:
-        super().__init__(detail)
+        super().__init__(code=code, message=detail, retryable=False)
         self.code = code
         self.detail = detail
 
@@ -125,7 +161,9 @@ def _validate_status(status: str | None) -> str | None:
         return None
     normalized = status.strip().lower()
     if normalized not in FIELD_PRESENCE_STATUSES:
-        raise HTTPException(status_code=422, detail=f"Unsupported status: {status}")
+        raise LocationPingRejected(
+            "invalid_presence_status", f"Unsupported status: {status}"
+        )
     return normalized
 
 
@@ -136,11 +174,19 @@ class FieldLocationTracking:
         *,
         technician_id: UUID,
         crm_work_order_id: str | None,
+        assignment_generation: UUID | None,
     ) -> None:
         if crm_work_order_id is None:
+            if assignment_generation is not None:
+                raise LocationPingRejected(
+                    "assignment_generation_mismatch",
+                    "Assignment provenance requires a work order",
+                )
             return
         work_order = db.scalar(
-            select(WorkOrder).where(WorkOrder.public_id == crm_work_order_id)
+            select(WorkOrder)
+            .where(WorkOrder.public_id == crm_work_order_id)
+            .with_for_update()
         )
         if work_order is None or not work_order.is_active:
             raise LocationPingRejected(
@@ -150,31 +196,27 @@ class FieldLocationTracking:
             raise LocationPingRejected(
                 "work_order_not_trackable", "Tagged work order is not active"
             )
-        assignment = db.scalar(
-            select(WorkOrderAssignmentQueue)
-            .where(WorkOrderAssignmentQueue.work_order_mirror_id == work_order.id)
-            .order_by(
-                WorkOrderAssignmentQueue.updated_at.desc(),
-                WorkOrderAssignmentQueue.created_at.desc(),
-            )
-            .limit(1)
+        assignment = work_order_commands.current_assignment(
+            db, query=CurrentWorkOrderAssignmentQuery(work_order.id)
         )
-        if (
-            assignment is None
-            or assignment.status != DispatchQueueStatus.assigned
-            or assignment.assigned_technician_id != technician_id
-        ):
+        if assignment is None or assignment.technician_id != technician_id:
             raise LocationPingRejected(
                 "technician_not_assigned",
                 "Technician is not assigned to the tagged work order",
             )
 
+        if assignment.generation != assignment_generation:
+            raise LocationPingRejected(
+                "assignment_generation_mismatch",
+                "Refresh the job before recording location for this assignment",
+            )
+
     @staticmethod
-    def get_or_create_presence(
+    def _get_or_create_presence(
         db: Session,
-        principal: dict[str, Any],
+        principal: LocationRequester,
     ) -> FieldTechPresence:
-        profile = _profile_from_principal(db, principal)
+        profile = _profile_from_requester(db, principal)
         presence = (
             db.query(FieldTechPresence)
             .filter(FieldTechPresence.technician_id == profile.id)
@@ -190,24 +232,38 @@ class FieldLocationTracking:
         return presence
 
     @staticmethod
+    def get_or_create_presence(
+        db: Session, principal: LocationRequester
+    ) -> FieldPresenceRead:
+        return execute_owner_command(
+            db,
+            definition=OwnerCommandDefinition(
+                owner=_OWNER, concern=_SHARING_CONCERN, name="get_or_create_presence"
+            ),
+            context=_command_context(principal, reason="initialize_presence"),
+            operation=lambda: FieldPresenceRead.model_validate(
+                FieldLocationTracking._get_or_create_presence(db, principal)
+            ),
+        )
+
+    @staticmethod
     def set_sharing(
         db: Session,
-        principal: dict[str, Any],
+        principal: LocationRequester,
         *,
-        enabled: bool,
-        status: str | None = None,
-    ) -> FieldTechPresence:
-        def _operation() -> FieldTechPresence:
-            presence = FieldLocationTracking.get_or_create_presence(db, principal)
-            presence.location_sharing_enabled = bool(enabled)
-            next_status = _validate_status(status)
+        command: LocationSharingCommand,
+    ) -> FieldPresenceRead:
+        def _operation() -> FieldPresenceRead:
+            presence = FieldLocationTracking._get_or_create_presence(db, principal)
+            presence.location_sharing_enabled = command.enabled
+            next_status = _validate_status(command.status)
             if next_status is not None:
                 presence.status = next_status
-            elif not enabled:
+            elif not command.enabled:
                 presence.status = "off_shift"
             presence.last_seen_at = _now()
             db.flush()
-            return presence
+            return FieldPresenceRead.model_validate(presence)
 
         return execute_owner_command(
             db,
@@ -233,8 +289,8 @@ class FieldLocationTracking:
     @staticmethod
     def _replay_for(
         db: Session,
-        principal: dict[str, Any],
-        client_observation_id: UUID | None,
+        principal: LocationRequester,
+        command: LocationPingCommand,
     ) -> tuple[FieldTechLocationPing, FieldTechPresence, bool] | None:
         """Re-read an already-persisted ping after a race-lost insert.
 
@@ -244,27 +300,38 @@ class FieldLocationTracking:
         returns it as a replay instead of surfacing the conflict.
         """
 
-        if client_observation_id is None:
+        if command.client_observation_id is None:
             return None
-        profile = _profile_from_principal(db, principal)
+        profile = _profile_from_requester(db, principal)
         existing = FieldLocationTracking._find_existing_ping(
             db,
             technician_id=profile.id,
-            client_observation_id=client_observation_id,
+            client_observation_id=command.client_observation_id,
         )
         if existing is None:
             return None
-        presence = FieldLocationTracking.get_or_create_presence(db, principal)
+        if existing.assignment_generation != command.assignment_generation:
+            raise LocationPingRejected(
+                "observation_assignment_conflict",
+                "Observation identity belongs to a different assignment",
+            )
+        presence = db.scalar(
+            select(FieldTechPresence).where(
+                FieldTechPresence.technician_id == profile.id
+            )
+        )
+        if presence is None:
+            return None
         return existing, presence, True
 
     @staticmethod
     def _ingest_ping(
         db: Session,
-        principal: dict[str, Any],
+        principal: LocationRequester,
         *,
         command: LocationPingCommand,
     ) -> tuple[FieldTechLocationPing, FieldTechPresence, bool]:
-        presence = FieldLocationTracking.get_or_create_presence(db, principal)
+        presence = FieldLocationTracking._get_or_create_presence(db, principal)
         if command.client_observation_id is not None:
             # A replay is returned unconditionally, before any of today's
             # validation runs: it is the recorded outcome of an already-
@@ -277,11 +344,17 @@ class FieldLocationTracking:
                 client_observation_id=command.client_observation_id,
             )
             if existing is not None:
+                if existing.assignment_generation != command.assignment_generation:
+                    raise LocationPingRejected(
+                        "observation_assignment_conflict",
+                        "Location observation identity belongs to another assignment",
+                    )
                 return existing, presence, True
         FieldLocationTracking._validate_work_order_tag(
             db,
             technician_id=presence.technician_id,
-            crm_work_order_id=command.crm_work_order_id,
+            crm_work_order_id=command.work_order_public_id,
+            assignment_generation=command.assignment_generation,
         )
         next_status = _validate_status(command.status)
         captured = _as_utc(command.captured_at)
@@ -292,9 +365,10 @@ class FieldLocationTracking:
                 "Location timestamp is too far in the future",
             )
         ping = FieldTechLocationPing(
+            assignment_generation=command.assignment_generation,
             technician_id=presence.technician_id,
             person_id=presence.person_id,
-            crm_work_order_id=command.crm_work_order_id,
+            crm_work_order_id=command.work_order_public_id,
             latitude=float(command.latitude),
             longitude=float(command.longitude),
             accuracy_m=(
@@ -332,20 +406,12 @@ class FieldLocationTracking:
     @staticmethod
     def record_ping(
         db: Session,
-        principal: dict[str, Any],
+        principal: LocationRequester,
         *,
         command: LocationPingCommand,
-        commit: bool = True,
     ) -> tuple[FieldTechLocationPing, FieldTechPresence, bool]:
         def _operation() -> tuple[FieldTechLocationPing, FieldTechPresence, bool]:
             return FieldLocationTracking._ingest_ping(db, principal, command=command)
-
-        if not commit:
-            # Called from inside record_batch's already-open owner command and
-            # per-row savepoint; the batch owns the transaction boundary and
-            # its own IntegrityError recovery (see record_batch below), so
-            # this call is a plain participant, not its own owner command.
-            return _operation()
 
         try:
             return execute_owner_command(
@@ -363,9 +429,7 @@ class FieldLocationTracking:
             # (technician_id, client_observation_id) loses this race; the
             # loser recovers by re-reading the winner's row as a replay
             # instead of surfacing the conflict.
-            replay = FieldLocationTracking._replay_for(
-                db, principal, command.client_observation_id
-            )
+            replay = FieldLocationTracking._replay_for(db, principal, command)
             if replay is None:
                 raise
             return replay
@@ -373,32 +437,31 @@ class FieldLocationTracking:
     @staticmethod
     def record_batch(
         db: Session,
-        principal: dict[str, Any],
+        principal: LocationRequester,
         pings: Sequence[LocationPingCommand],
     ) -> LocationBatchOutcome:
         if len(pings) > MAX_BATCH_PINGS:
-            raise HTTPException(status_code=422, detail="Batch exceeds 200 pings")
+            raise LocationPingRejected("batch_too_large", "Batch exceeds 200 pings")
 
         def _operation() -> tuple[
             int,
             list[LocationIngestIssue],
-            FieldTechPresence | None,
+            FieldTechPresence,
             list[LocationReplayInfo],
+            FieldTechLocationPing | None,
         ]:
             accepted = 0
             errors: list[LocationIngestIssue] = []
             replays: list[LocationReplayInfo] = []
             last_presence: FieldTechPresence | None = None
+            last_ping: FieldTechLocationPing | None = None
             for index, command in enumerate(pings):
 
                 def _ingest_row(
                     command: LocationPingCommand = command,
                 ) -> tuple[FieldTechLocationPing, FieldTechPresence, bool]:
-                    return FieldLocationTracking.record_ping(
-                        db,
-                        principal,
-                        command=command,
-                        commit=False,
+                    return FieldLocationTracking._ingest_ping(
+                        db, principal, command=command
                     )
 
                 try:
@@ -406,18 +469,13 @@ class FieldLocationTracking:
                         db, _ingest_row
                     )
                     accepted += 1
+                    last_ping = ping
                     if replayed:
                         replays.append(LocationReplayInfo(index=index, ping_id=ping.id))
                 except LocationPingRejected as exc:
                     errors.append(
                         LocationIngestIssue(
                             index=index, code=exc.code, detail=exc.detail
-                        )
-                    )
-                except HTTPException as exc:
-                    errors.append(
-                        LocationIngestIssue(
-                            index=index, code="invalid_ping", detail=str(exc.detail)
                         )
                     )
                 except (TypeError, ValueError) as exc:
@@ -437,12 +495,11 @@ class FieldLocationTracking:
                     # the savepoint rolled back, not the batch transaction)
                     # and count it as an accepted replay, exactly like a
                     # non-racing duplicate already would be.
-                    replay = FieldLocationTracking._replay_for(
-                        db, principal, command.client_observation_id
-                    )
+                    replay = FieldLocationTracking._replay_for(db, principal, command)
                     if replay is not None:
                         ping, last_presence, _ = replay
                         accepted += 1
+                        last_ping = ping
                         replays.append(LocationReplayInfo(index=index, ping_id=ping.id))
                     else:
                         errors.append(
@@ -452,19 +509,19 @@ class FieldLocationTracking:
                                 detail="Ping conflicted with an existing record",
                             )
                         )
-            return accepted, errors, last_presence, replays
+            if last_presence is None:
+                last_presence = FieldLocationTracking._get_or_create_presence(
+                    db, principal
+                )
+            return accepted, errors, last_presence, replays, last_ping
 
-        accepted, errors, last_presence, replays = execute_owner_command(
+        accepted, errors, last_presence, replays, last_ping = execute_owner_command(
             db,
             definition=_RECORD_BATCH_DEFINITION,
             context=_command_context(principal, reason="record_batch"),
             operation=_operation,
         )
-        presence = (
-            last_presence
-            if last_presence is not None
-            else FieldLocationTracking.get_or_create_presence(db, principal)
-        )
+        presence = last_presence
 
         # Geofence auto-status is a deliberately separate follow-up operation,
         # not a participant of the owner command above. field_transitions.apply
@@ -478,7 +535,9 @@ class FieldLocationTracking:
         # keeps ping ingest and geofence auto-start as two independently
         # failing operations: a geofence failure never unwinds ingested pings.
         transitions: list[LocationTransition] = []
-        if presence.last_latitude is not None and presence.last_longitude is not None:
+        if last_ping is not None and timedelta(0) <= _now() - _as_utc(
+            last_ping.captured_at
+        ) <= timedelta(minutes=2):
             try:
                 from app.services.field import geofence
 
@@ -491,14 +550,11 @@ class FieldLocationTracking:
                     for item in geofence.evaluate(
                         db,
                         geofence.GeofenceQuery(
-                            system_user_id=UUID(
-                                str(
-                                    principal.get("principal_id")
-                                    or principal.get("person_id")
-                                )
-                            ),
-                            latitude=presence.last_latitude,
-                            longitude=presence.last_longitude,
+                            system_user_id=principal.system_user_id,
+                            latitude=last_ping.latitude,
+                            longitude=last_ping.longitude,
+                            work_order_public_id=last_ping.crm_work_order_id,
+                            assignment_generation=last_ping.assignment_generation,
                         ),
                     )
                 ]

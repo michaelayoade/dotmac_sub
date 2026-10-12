@@ -6,6 +6,16 @@ from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
+from app.services.work_order_classification_contracts import (
+    WorkOrderClassificationOutcome,
+)
+from app.services.work_order_templates import (
+    ClassificationSource,
+    ExplicitWorkOrderClassification,
+    WorkOrderAccessTechnology,
+    WorkOrderPurpose,
+)
+
 
 class SkillBase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
@@ -335,6 +345,10 @@ class WorkOrderHeaderRead(WorkOrderHeaderBase):
 
     id: UUID
     public_id: str
+    purpose: WorkOrderPurpose | None = None
+    access_technology: WorkOrderAccessTechnology | None = None
+    template_version: int | None = None
+    classification_source: ClassificationSource | None = None
     # Native support provenance is read-only at generic dispatch boundaries.
     # Only the ticket handoff owner can establish this relationship.
     origin_ticket_id: UUID | None = None
@@ -346,6 +360,8 @@ class WorkOrderHeaderRead(WorkOrderHeaderBase):
 
 
 class WorkOrderAssignmentQueueCreate(BaseModel):
+    expected_revision: datetime | None = None
+    expected_assignment_generation: UUID | None = None
     work_order_mirror_id: UUID | None = None
     crm_work_order_id: str | None = Field(default=None, max_length=64)
     status: str = Field(default="queued", max_length=20)
@@ -353,20 +369,30 @@ class WorkOrderAssignmentQueueCreate(BaseModel):
     dispatch_rule_id: UUID | None = None
     assigned_technician_id: UUID | None = None
     assigned_vendor_id: UUID | None = None
+    assigned_vendor_user_id: UUID | None = None
 
     @model_validator(mode="after")
     def _require_work_order_ref(self) -> WorkOrderAssignmentQueueCreate:
+        if self.assigned_vendor_user_id is not None and (
+            self.assigned_vendor_id is None or self.assigned_technician_id is not None
+        ):
+            raise ValueError(
+                "assigned_vendor_user_id requires a vendor target without a technician"
+            )
         if self.work_order_mirror_id is None and not self.crm_work_order_id:
             raise ValueError("work_order_mirror_id or crm_work_order_id is required")
         return self
 
 
 class WorkOrderAssignmentQueueUpdate(BaseModel):
+    expected_revision: datetime | None = None
+    expected_assignment_generation: UUID | None = None
     status: str | None = Field(default=None, max_length=20)
     reason: str | None = None
     dispatch_rule_id: UUID | None = None
     assigned_technician_id: UUID | None = None
     assigned_vendor_id: UUID | None = None
+    assigned_vendor_user_id: UUID | None = None
 
 
 class WorkOrderAssignmentQueueRead(BaseModel):
@@ -380,19 +406,25 @@ class WorkOrderAssignmentQueueRead(BaseModel):
     dispatch_rule_id: UUID | None = None
     assigned_technician_id: UUID | None = None
     assigned_vendor_id: UUID | None = None
+    assigned_vendor_user_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class WorkOrderAssignmentPreviewRequest(BaseModel):
+    expected_revision: datetime | None = None
+    expected_assignment_generation: UUID | None = None
     technician_id: UUID | None = None
     vendor_id: UUID | None = None
+    vendor_user_id: UUID | None = None
     scheduled_start: datetime | None = None
     scheduled_end: datetime | None = None
     status: str = Field(default="dispatched", max_length=20)
 
     @model_validator(mode="after")
     def _valid_schedule(self) -> WorkOrderAssignmentPreviewRequest:
+        if self.vendor_user_id is not None and self.vendor_id is None:
+            raise ValueError("vendor_user_id requires vendor_id")
         if (self.technician_id is None) == (self.vendor_id is None):
             raise ValueError("Exactly one technician_id or vendor_id is required")
         if (
@@ -405,25 +437,31 @@ class WorkOrderAssignmentPreviewRequest(BaseModel):
 
 
 class WorkOrderAssignmentRequest(WorkOrderAssignmentPreviewRequest):
+    operation: Literal["assign", "reschedule"] = "assign"
     command_id: UUID
     expected_revision: datetime
+    expected_assignment_generation: UUID | None = None
     reason: str | None = Field(default=None, max_length=2000)
     dispatch_rule_id: UUID | None = None
 
 
 class WorkOrderAssignmentOutcomeRead(BaseModel):
+    assignment_generation: UUID | None = None
     queue_id: UUID
     work_order_id: str
     technician_id: UUID | None = None
     vendor_id: UUID | None = None
+    vendor_user_id: UUID | None = None
     status: str
     revision: datetime
     replayed: bool
 
 
 class WorkOrderAssignmentPreviewState(BaseModel):
+    vendor_user_name: str | None = None
     status: str
     vendor_id: UUID | None = None
+    vendor_user_id: UUID | None = None
     vendor_name: str | None = None
     technician_id: UUID | None = None
     person_id: UUID | None = None
@@ -437,6 +475,7 @@ class WorkOrderAssignmentPreviewRead(BaseModel):
     revision: datetime
     previous: WorkOrderAssignmentPreviewState
     result: WorkOrderAssignmentPreviewState
+    assignment_generation: UUID | None = None
 
 
 class FiberFieldVerificationJobPlanRequest(BaseModel):
@@ -451,11 +490,21 @@ class FiberFieldVerificationJobPlanRequest(BaseModel):
     scheduled_end: datetime | None = None
     assigned_technician_id: UUID | None = None
     assigned_vendor_id: UUID | None = None
+    assigned_vendor_user_id: UUID | None = None
     assignment_reason: str | None = Field(default=None, max_length=2000)
     idempotency_key: str = Field(min_length=16, max_length=160)
 
     @model_validator(mode="after")
     def _valid_plan(self) -> FiberFieldVerificationJobPlanRequest:
+        if (
+            self.assigned_vendor_id is not None
+            and self.assigned_technician_id is not None
+        ):
+            raise ValueError("Choose a technician or a vendor, not both")
+        if self.assigned_vendor_user_id is not None and self.assigned_vendor_id is None:
+            raise ValueError("assigned_vendor_user_id requires assigned_vendor_id")
+        if self.assigned_vendor_id is not None and self.assigned_vendor_user_id is None:
+            raise ValueError("Choose the attending vendor person")
         if len(set(self.staged_feature_ids)) != len(self.staged_feature_ids):
             raise ValueError("staged_feature_ids contains duplicates")
         if (
@@ -475,6 +524,7 @@ class FiberFieldVerificationJobPlanCommandRead(BaseModel):
     address: str | None = None
     assigned_technician_id: UUID | None = None
     assigned_vendor_id: UUID | None = None
+    assigned_vendor_user_id: UUID | None = None
     assignment_reason: str | None = None
     description: str | None = None
     idempotency_key: str
@@ -520,3 +570,16 @@ class FiberFieldVerificationJobPlanExecuteRead(BaseModel):
     plan: FiberFieldVerificationJobPlanPreviewRead
     replayed: bool
     work_order: WorkOrderHeaderRead
+
+
+class WorkOrderClassificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: UUID
+    expected_revision: datetime
+    classification: ExplicitWorkOrderClassification
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class WorkOrderClassificationRead(BaseModel):
+    outcome: WorkOrderClassificationOutcome

@@ -432,7 +432,10 @@ void main() {
           poster: (_) async => false,
           store: store,
         )..setShift(ShiftState.onShift);
-        await first.captureOnce(workOrderId: 'wo-1');
+        await first.captureOnce(
+          workOrderId: 'wo-1',
+          assignmentGeneration: '11111111-1111-4111-8111-111111111111',
+        );
         expect(await file.exists(), isTrue);
 
         List<LocationPingPayload>? restored;
@@ -448,6 +451,10 @@ void main() {
         expect(await restarted.restoreBufferedPings(), 1);
         expect(await restarted.flush(), isTrue);
         expect(restored!.single.workOrderId, 'wo-1');
+        expect(
+          restored!.single.assignmentGeneration,
+          '11111111-1111-4111-8111-111111111111',
+        );
         // Accuracy must round-trip through the encrypted on-disk queue, not
         // just serialize once for immediate send.
         expect(restored!.single.accuracyM, 9.5);

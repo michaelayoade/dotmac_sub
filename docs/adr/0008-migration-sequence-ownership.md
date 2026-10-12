@@ -2,6 +2,11 @@
 
 Status: accepted
 
+Narrow extension: [ADR 0030](0030-preserved-field-migration-convergence.md),
+explicitly approved by Michael on 2026-10-12, admits only the declared preserved
+field migration history through the existing sequence owner. Ordinary admission
+remains linear; the historical options below do not activate a general fork waiver.
+
 Date: 2026-08-07
 
 Decision owner: Michael

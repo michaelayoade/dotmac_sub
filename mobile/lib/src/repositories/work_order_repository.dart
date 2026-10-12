@@ -1,7 +1,9 @@
 import 'package:dio/dio.dart';
 
 import '../core/http.dart';
+import '../core/api_exception.dart';
 import '../models/technician_location.dart';
+import '../models/field_visit_chat.dart';
 import '../models/work_order.dart';
 
 /// Wraps the self-scoped field-service endpoint (app/api/me.py,
@@ -24,6 +26,37 @@ class WorkOrderRepository {
       () => dio.get('/me/work-orders/$workOrderId/technician-location'),
     );
     return TechnicianLocation.fromJson(data as Map<String, dynamic>);
+  }
+
+  Future<FieldVisitChat> chat(String workOrderId) async {
+    final data = await guard(
+      () async {
+        final response = await dio.get(
+          '/me/work-orders/${Uri.encodeComponent(workOrderId)}/chat',
+        );
+        if (response.extra['fromCache'] == true) {
+          throw ApiException(
+            'Could not refresh the conversation. Reconnect before sending.',
+          );
+        }
+        return response;
+      },
+    );
+    return FieldVisitChat.fromJson(data as Map<String, dynamic>);
+  }
+
+  Future<FieldVisitMessage> sendChatMessage(
+    String workOrderId, {
+    required String body,
+    String? requestId,
+  }) async {
+    final data = await guard(
+      () => dio.post(
+        '/me/work-orders/${Uri.encodeComponent(workOrderId)}/chat/messages',
+        data: {'body': body, if (requestId != null) 'request_id': requestId},
+      ),
+    );
+    return FieldVisitMessage.fromJson(data as Map<String, dynamic>);
   }
 
   /// POST /me/work-orders/{id}/rate-technician — rate after completion.

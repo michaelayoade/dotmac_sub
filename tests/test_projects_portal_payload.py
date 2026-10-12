@@ -73,7 +73,8 @@ def test_project_projection_traces_task_field_visit_ticket_and_actions(
     project, task, visit, ticket = _lifecycle(db_session, subscriber)
 
     response = customer_experience_lifecycle.projects_for_subscriber(
-        db_session, str(subscriber.id)
+        db_session,
+        query=customer_experience_lifecycle.CustomerLifecycleQuery(subscriber.id),
     )
 
     assert isinstance(response, MyProjectsResponse)
@@ -103,7 +104,8 @@ def test_work_order_projection_uses_native_identity_and_relationships(
     project, task, visit, ticket = _lifecycle(db_session, subscriber)
 
     response = customer_experience_lifecycle.work_orders_for_subscriber(
-        db_session, str(subscriber.id)
+        db_session,
+        query=customer_experience_lifecycle.CustomerLifecycleQuery(subscriber.id),
     )
 
     assert response.total == 1
@@ -134,8 +136,53 @@ def test_projection_is_subscriber_scoped_and_excludes_inactive_projects(
     db_session.commit()
 
     response = customer_experience_lifecycle.projects_for_subscriber(
-        db_session, str(subscriber.id)
+        db_session,
+        query=customer_experience_lifecycle.CustomerLifecycleQuery(subscriber.id),
     )
 
     assert response.projects == []
     assert response.total == 0
+
+
+def test_closed_job_chat_history_action_uses_conversation_owner_result(
+    db_session, monkeypatch
+):
+    from app.services.customer_field_job_chat import (
+        CustomerChatAvailability,
+        CustomerChatAvailabilityReason,
+    )
+
+    subscriber = _subscriber(db_session, "History")
+    row = WorkOrder(
+        subscriber_id=subscriber.id, title="Finished visit", status="completed"
+    )
+    db_session.add(row)
+    db_session.flush()
+    monkeypatch.setattr(
+        customer_experience_lifecycle,
+        "chat_availability",
+        lambda db, *, query: CustomerChatAvailability(
+            True, False, CustomerChatAvailabilityReason.closed
+        ),
+    )
+    result = customer_experience_lifecycle.work_order_reference(row, db=db_session)
+    chat = next(
+        action
+        for action in result.actions
+        if action.key == CustomerActionKey.chat_technician
+    )
+    assert chat.label == "View conversation"
+    assert all(
+        action.key != CustomerActionKey.track_technician for action in result.actions
+    )
+    monkeypatch.setattr(
+        customer_experience_lifecycle,
+        "chat_availability",
+        lambda db, *, query: CustomerChatAvailability(
+            False, False, CustomerChatAvailabilityReason.not_found
+        ),
+    )
+    result = customer_experience_lifecycle.work_order_reference(row, db=db_session)
+    assert all(
+        action.key != CustomerActionKey.chat_technician for action in result.actions
+    )

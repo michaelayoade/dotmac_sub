@@ -936,7 +936,6 @@ DOMAIN = DomainSOT(
             owns=(
                 "comprehensive network map typed projection",
                 "dispatch plant-subset map projection",
-                "vendor route-planning plant projection",
                 "isolated network map V2 parity projection",
                 "customer access-session map presentation",
                 "network map customer drill-down projection",
@@ -984,14 +983,6 @@ DOMAIN = DomainSOT(
                             "canonical network inventory and geometry",
                             "validated fiber route geometry",
                             "binary device operation verdict",
-                        ),
-                    ),
-                    ConcernContract(
-                        name="vendor route-planning plant projection",
-                        role=OwnerRole.RESOLVER,
-                        input_names=(
-                            "canonical network inventory and geometry",
-                            "validated fiber route geometry",
                         ),
                     ),
                     ConcernContract(
@@ -1215,32 +1206,6 @@ DOMAIN = DomainSOT(
                         ),
                         rebuild_operation=(
                             "Recompute on read; the parity projection persists nothing."
-                        ),
-                        repair_owner="ui.network_map_projection",
-                    ),
-                    ProjectionContract(
-                        name="vendor route-planning plant projection",
-                        input_names=(
-                            "canonical network inventory and geometry",
-                            "validated fiber route geometry",
-                        ),
-                        writer="ui.network_map_projection",
-                        freshness=(
-                            "Recomputed for each vendor project read from the same "
-                            "canonical plant projection used by Network Admin."
-                        ),
-                        stale_behavior=(
-                            "Missing coordinates or validated route geometry omit "
-                            "only that feature; no inferred location or line is "
-                            "created."
-                        ),
-                        drift_signal=(
-                            "Typed vendor-safe projection and adapter/frontend "
-                            "boundary tests."
-                        ),
-                        rebuild_operation=(
-                            "Recompute on read from canonical plant state; the "
-                            "projection persists nothing."
                         ),
                         repair_owner="ui.network_map_projection",
                     ),

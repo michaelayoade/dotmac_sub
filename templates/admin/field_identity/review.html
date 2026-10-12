@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Review field identity</title>
+<style>body{font:16px system-ui;max-width:760px;margin:3rem auto;padding:1rem}img{max-width:220px}label{display:block;margin:1rem 0}button{padding:.7rem}textarea{width:100%}</style>
+<h1>Review field identity</h1><p>{{ identity.display_name }} · {{ identity.company_name }}</p>
+<p>Revision {{ identity.outcome.revision }} · {{ identity.outcome.state.value }}</p>
+<img alt="Submitted portrait" src="./files/{{ identity.portrait_file_id }}">
+<p><a href="./files/{{ identity.evidence_file_id }}" target="_blank" rel="noopener">Open restricted verification evidence</a></p>
+<p>Review the submitted evidence and exact portrait. Approval confirms both for customer display. Login alone does not verify identity.</p>
+<form id="review"><label>Decision <select name="decision"><option value="reviewed">Approve identity and portrait</option><option value="rejected">Reject submission</option><option value="revoked">Revoke approval</option></select></label>
+<label>Review reason <textarea name="reason" required maxlength="1000"></textarea></label><button>Record review</button></form><p id="result" role="status"></p>
+<script>document.querySelector('#review').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);const r=await fetch('./review',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':{{ csrf_token|tojson }}},body:JSON.stringify({request_id:{{ request_id|tojson }},revision:{{ identity.outcome.revision }},expected_version:{{ identity.outcome.version }},decision:f.get('decision'),reason:f.get('reason')})});document.querySelector('#result').textContent=r.ok?'Review recorded. Reload to see current state.':'Review refused. Reload and check permissions, revision and decision.';});</script></html>

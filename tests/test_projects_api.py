@@ -4,8 +4,13 @@
 from pathlib import Path
 
 from app.api.projects import router
+from app.services.auth_dependencies import permission_requirement
 
 EXPECTED_ROUTES = {
+    ("GET", "/projects/{project_id}/accepted-field-completion"),
+    ("POST", "/projects/{project_id}/accepted-field-completion"),
+    ("GET", "/projects/{project_id}/tasks/{task_id}/accepted-field-completion"),
+    ("POST", "/projects/{project_id}/tasks/{task_id}/accepted-field-completion"),
     ("POST", "/projects"),
     ("GET", "/projects"),
     ("PATCH", "/projects/{project_id}"),
@@ -27,6 +32,14 @@ EXPECTED_ROUTES = {
 }
 
 EXPECTED_PERMISSIONS = {
+    ("GET", "/projects/{project_id}/accepted-field-completion"): "project:update",
+    ("POST", "/projects/{project_id}/accepted-field-completion"): "project:update",
+    ("GET", "/projects/{project_id}/tasks/{task_id}/accepted-field-completion"): (
+        "project:task:write"
+    ),
+    ("POST", "/projects/{project_id}/tasks/{task_id}/accepted-field-completion"): (
+        "project:task:write"
+    ),
     ("POST", "/projects"): "project:create",
     ("GET", "/projects"): "project:read",
     ("PATCH", "/projects/{project_id}"): "project:update",
@@ -58,21 +71,20 @@ def test_all_expected_routes_registered():
     assert {key for key, _route in _routes()} == EXPECTED_ROUTES
 
 
-def _permission_keys(route) -> set[str]:
-    """Extract the permission strings captured by require_permission closures."""
+def _permission_keys(route, method: str) -> set[str]:
+    """Inspect decorator and endpoint-parameter permission dependencies."""
     keys: set[str] = set()
-    for dep in route.dependencies:
-        fn = dep.dependency
-        for cell in getattr(fn, "__closure__", None) or []:
-            if isinstance(cell.cell_contents, str):
-                keys.add(cell.cell_contents)
+    for dep in route.dependant.dependencies:
+        requirement = permission_requirement(dep.call)
+        if requirement is not None:
+            keys.update(requirement.any_of_for(method))
     return keys
 
 
 def test_every_route_has_expected_permission_guard():
     for key, route in _routes():
         expected = EXPECTED_PERMISSIONS[key]
-        assert expected in _permission_keys(route), (
+        assert {expected} == _permission_keys(route, key[0]), (
             f"{key} missing permission guard {expected!r}"
         )
 

@@ -66,3 +66,19 @@ table, seeds Wireless and Wired, expands `subscribers.connection_type`, removes
 the old two-value check constraint, and installs a foreign key to the stable
 definition code. Existing values are preserved. Re-running the migration is
 idempotent for a fresh baseline created from current model metadata.
+
+Migration `683_field_lifecycle_connection_types_merge` joins this history with
+the field lifecycle revisions without renumbering either branch or changing
+data. Migration `684_customer_connection_type_defaults` then makes the existing
+`sort_order=0` and `is_active=true` server defaults explicit on every installation.
+An earlier metadata bootstrap could create the table without those defaults
+before migration 671 saw the existing table. The ORM declaration now agrees
+with the migration-owned defaults; the connection-type command owner continues
+to validate and audit configured definitions.
+
+The convergence alters column defaults only, without rewriting existing values
+or customer assignments. Its downgrade preserves the defaults because revision
+671 already declares them and the previous installation path cannot be inferred
+from the current schema. Fresh and real predecessor migration rehearsals compare
+the resulting schema, and a native PostgreSQL insert proves omitted values use
+the defaults without depending on ORM insert behavior.

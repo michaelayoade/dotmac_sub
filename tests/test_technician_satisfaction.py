@@ -66,6 +66,7 @@ def _rated_visit(
     rated_at: datetime | None = None,
     status: str = "completed",
 ) -> WorkOrder:
+    queue_id, generation = uuid4(), uuid4()
     metadata = {}
     if rating is not None:
         metadata["technician_rating"] = {
@@ -73,6 +74,9 @@ def _rated_visit(
             "comment": None,
             "rated_at": (rated_at or datetime.now(UTC)).isoformat(),
             "source": "customer_selfcare",
+            "technician_id": str(profile.id),
+            "assignment_queue_id": str(queue_id),
+            "assignment_generation": str(generation),
         }
     row = WorkOrder(
         crm_work_order_id=f"wo-rate-{uuid4().hex[:8]}",
@@ -85,6 +89,8 @@ def _rated_visit(
     db_session.flush()
     db_session.add(
         WorkOrderAssignmentQueue(
+            id=queue_id,
+            assignment_generation=generation,
             work_order_mirror_id=row.id,
             assigned_technician_id=profile.id,
             status=DispatchQueueStatus.assigned,
@@ -211,3 +217,32 @@ def test_an_incomplete_visit_is_not_rated_yet(db_session):
     card = technician_satisfaction.scorecard(db_session, profile.id)
 
     assert card.rated_visits == 0
+
+
+def test_legacy_unattributed_feedback_stays_in_history_not_scorecard(db_session):
+    subscriber = _subscriber(db_session)
+    profile = _technician(db_session, "Legacy")
+    row = _rated_visit(db_session, subscriber, profile, rating=5)
+    row.metadata_ = {"technician_rating": {"rating": 5}}
+    db_session.commit()
+    assert row.technician_rating == 5
+    assert technician_satisfaction.scorecard(db_session, profile.id).rated_visits == 0
+
+
+def test_reassignment_does_not_transfer_recorded_feedback(db_session):
+    subscriber = _subscriber(db_session)
+    original = _technician(db_session, "Original")
+    replacement = _technician(db_session, "Replacement")
+    row = _rated_visit(db_session, subscriber, original, rating=5)
+    queue = (
+        db_session.query(WorkOrderAssignmentQueue)
+        .filter_by(work_order_mirror_id=row.id)
+        .one()
+    )
+    queue.assigned_technician_id = replacement.id
+    queue.assignment_generation = uuid4()
+    db_session.commit()
+    assert technician_satisfaction.scorecard(db_session, original.id).average == 5
+    assert (
+        technician_satisfaction.scorecard(db_session, replacement.id).rated_visits == 0
+    )

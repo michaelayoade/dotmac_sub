@@ -76,6 +76,7 @@ class LocationPingService {
   ShiftState _shift = ShiftState.offShift;
   StreamSubscription<LocationFix>? _backgroundSub;
   String? _activeWorkOrderId;
+  String? _activeAssignmentGeneration;
 
   ShiftState get shift => _shift;
   int get bufferedCount => _buffer.length;
@@ -124,15 +125,24 @@ class LocationPingService {
   Future<void> captureOnce({
     bool hasActiveJob = false,
     String? workOrderId,
+    String? assignmentGeneration,
   }) async {
     if (_shift != ShiftState.onShift) return;
     await restoreBufferedPings();
     final point = await location.current();
     if (point == null) return;
-    await _appendFix(point, workOrderId: workOrderId);
+    await _appendFix(
+      point,
+      workOrderId: workOrderId,
+      assignmentGeneration: assignmentGeneration,
+    );
   }
 
-  Future<void> _appendFix(LocationFix point, {String? workOrderId}) async {
+  Future<void> _appendFix(
+    LocationFix point, {
+    String? workOrderId,
+    String? assignmentGeneration,
+  }) async {
     // The fix's own capture time is authoritative for freshness — a fix
     // buffered late (offline, backgrounded) must not be reported as "now".
     // _clock() is only a fallback for the rare source that genuinely has no
@@ -149,6 +159,7 @@ class LocationPingService {
         capturedAtIsClockDerived: fixTimestamp == null,
         shift: _shift,
         workOrderId: workOrderId,
+        assignmentGeneration: assignmentGeneration,
         // Minted once, right here, at capture/append time — never
         // regenerated on a later retry. A network failure after the server
         // actually wrote the row must replay, not duplicate, on the next
@@ -163,20 +174,31 @@ class LocationPingService {
   }
 
   /// The work order pings should be tagged with while background tracking runs.
-  void setActiveWorkOrder(String? workOrderId) =>
-      _activeWorkOrderId = workOrderId;
+  void setActiveWorkOrder(String? workOrderId, {String? assignmentGeneration}) {
+    _activeWorkOrderId = workOrderId;
+    _activeAssignmentGeneration = assignmentGeneration;
+  }
 
   /// Subscribe to the platform's background-capable position stream so fixes
   /// keep arriving while the app is backgrounded or the screen is locked when
   /// the OS has granted background access. Each fix is buffered and flushed.
   /// Idempotent; off-shift fixes are ignored.
-  void startBackgroundTracking({String? workOrderId}) {
-    _activeWorkOrderId = workOrderId;
+  void startBackgroundTracking({
+    String? workOrderId,
+    String? assignmentGeneration,
+  }) {
+    setActiveWorkOrder(workOrderId, assignmentGeneration: assignmentGeneration);
     if (_backgroundSub != null) return;
     _backgroundSub = location.positions().listen((point) async {
       if (_shift != ShiftState.onShift) return;
+      final workOrderId = _activeWorkOrderId;
+      final assignmentGeneration = _activeAssignmentGeneration;
       await restoreBufferedPings();
-      await _appendFix(point, workOrderId: _activeWorkOrderId);
+      await _appendFix(
+        point,
+        workOrderId: workOrderId,
+        assignmentGeneration: assignmentGeneration,
+      );
       await flush();
     });
   }

@@ -1,6 +1,6 @@
 """Non-authoritative unit evidence for credential administration commands."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from uuid import uuid4
 
 import pytest
@@ -95,8 +95,9 @@ def test_create_hashes_and_emits_only_safe_evidence(db_session, subscriber):
     assert row.password_hash not in evidence
 
 
+@pytest.mark.parametrize("microsecond", [0, 999999])
 def test_password_reset_revokes_all_principal_sessions_preserves_inactive(
-    db_session, subscriber
+    monkeypatch, db_session, subscriber, microsecond
 ):
     result = create(db_session, subscriber)
     row = db_session.get(UserCredential, result.credential.id)
@@ -113,6 +114,14 @@ def test_password_reset_revokes_all_principal_sessions_preserves_inactive(
     db_session.commit()
     identifier = result.credential.id
     db_session.commit()
+    reset_at = datetime(2030, 1, 1, 12, 0, 0, microsecond, tzinfo=UTC)
+
+    class ResetClock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return reset_at.astimezone(tz)
+
+    monkeypatch.setattr(mutation, "datetime", ResetClock)
     out = owner.update_credential(
         db_session,
         command=owner.UpdateCredential(
@@ -127,9 +136,14 @@ def test_password_reset_revokes_all_principal_sessions_preserves_inactive(
     assert out.credential.failed_login_attempts == 0
     assert not out.credential.must_change_password
     assert out.credential.locked_until is None
-    assert int(out.credential.password_updated_at.timestamp()) > int(
-        datetime.now(UTC).timestamp()
+    # Same-second reset capabilities must be older than the whole-second marker.
+    assert out.credential.password_updated_at == datetime(
+        2030, 1, 1, 12, 0, 1, tzinfo=UTC
     )
+    assert int(out.credential.password_updated_at.timestamp()) > int(
+        reset_at.timestamp()
+    )
+    assert out.sessions_revoked == 1
     db_session.expire_all()
     assert db_session.get(AuthSession, session.id).status == SessionStatus.revoked
 

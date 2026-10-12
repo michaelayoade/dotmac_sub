@@ -1,0 +1,27 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import card, detail_header %}
+{% block title %}Choose attending technician - {{ candidates.work_order_id }}{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+{{ detail_header(title='Choose attending technician', subtitle=candidates.work_order_id, back_href='/admin/dispatch/work-orders/' ~ candidates.work_order_id, color='cyan', color2='emerald') }}
+{% call card(candidates.vendor_name, color='cyan') %}
+<p class="mb-5 text-sm text-slate-600 dark:text-slate-300">Choose the person who will attend this visit. Only that person will be able to carry out the assigned work. Their customer profile is shared only after its separate review.</p>
+{% if candidates.candidates %}
+<form method="post" action="/admin/dispatch/work-orders/{{ candidates.work_order_id }}/queue" class="space-y-5">
+{% include "components/forms/csrf_input.html" %}
+<input type="hidden" name="target_selection" value="{{ selection.target_selection }}">
+<input type="hidden" name="expected_revision" value="{{ candidates.revision.isoformat() }}">
+{% if candidates.assignment_generation %}<input type="hidden" name="expected_assignment_generation" value="{{ candidates.assignment_generation }}">{% endif %}
+<input type="hidden" name="command_id" value="{{ command_id }}">
+<label class="block text-sm font-semibold">Attending technician <span class="text-rose-600" aria-hidden="true">*</span>
+<select name="vendor_user_id" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 dark:bg-slate-900"><option value="">Select a technician</option>{% for person in candidates.candidates %}<option value="{{ person.vendor_user_id }}">{{ person.display_name }}</option>{% endfor %}</select></label>
+<label class="block text-sm font-semibold">Reason<textarea name="reason" maxlength="2000" rows="3" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 dark:bg-slate-900">{{ selection.reason or '' }}</textarea></label>
+<div class="flex flex-wrap gap-3"><button type="submit" class="rounded-xl bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white">Review assignment</button><a href="/admin/dispatch/work-orders/{{ candidates.work_order_id }}" class="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-semibold">Cancel</a></div>
+</form>
+{% else %}
+<div role="status" class="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">No eligible technician is available for this vendor. Check their active account and vendor membership before assigning the visit.</div>
+<a href="/admin/dispatch/work-orders/{{ candidates.work_order_id }}" class="mt-5 inline-block rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-semibold">Back to work order</a>
+{% endif %}
+{% endcall %}
+</div>
+{% endblock %}

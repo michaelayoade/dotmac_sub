@@ -51,7 +51,11 @@ from app.web.admin.dashboard import router as dashboard_router
 from app.web.admin.design_system import router as design_system_router
 from app.web.admin.dispatch_work_orders import router as dispatch_work_orders_router
 from app.web.admin.drift import router as drift_router
+from app.web.admin.field_completion_review import (
+    router as field_completion_review_router,
+)
 from app.web.admin.field_maps import router as field_maps_router
+from app.web.admin.field_visit_followups import router as field_visit_followups_router
 from app.web.admin.gis import router as gis_router
 from app.web.admin.help_center import router as help_center_router
 from app.web.admin.inbox import router as inbox_router
@@ -107,6 +111,7 @@ from app.web.admin.network_vendor_capabilities import (
 from app.web.admin.network_weathermap import router as network_weathermap_router
 from app.web.admin.network_zones import router as network_zones_router
 from app.web.admin.notifications import router as notifications_router
+from app.web.admin.outage_complaints import router as outage_complaints_router
 from app.web.admin.payment_configuration_actions import (
     router as payment_configuration_actions_router,
 )
@@ -114,6 +119,7 @@ from app.web.admin.period_purchase_review import router as period_purchase_revie
 from app.web.admin.prepaid_activation_funding import (
     router as prepaid_activation_funding_router,
 )
+from app.web.admin.project_engineering import router as project_engineering_router
 from app.web.admin.projects import router as projects_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
@@ -128,6 +134,7 @@ from app.web.admin.support_assignment_rules import (
     router as support_assignment_rules_router,
 )
 from app.web.admin.support_automation import router as support_automation_router
+from app.web.admin.support_resolution import router as support_resolution_router
 from app.web.admin.support_tickets import router as support_tickets_router
 from app.web.admin.surveys import router as surveys_router
 from app.web.admin.system import router as system_router
@@ -139,6 +146,9 @@ from app.web.admin.vendor_routes import router as vendor_routes_router
 from app.web.admin.vendors import router as vendors_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
+from app.web.admin.work_order_classification import (
+    router as work_order_classification_router,
+)
 from app.web.admin.workqueue import router as workqueue_router
 from app.web.auth.dependencies import require_admin_web_auth
 
@@ -221,7 +231,11 @@ router.include_router(meta_connection_router)
 router.include_router(surveys_router)
 router.include_router(service_change_reconciliation_router)
 router.include_router(design_system_router)
+router.include_router(field_completion_review_router)
+router.include_router(outage_complaints_router)
 router.include_router(dispatch_work_orders_router)
+router.include_router(field_visit_followups_router)
+router.include_router(work_order_classification_router)
 router.include_router(material_requests_router)
 router.include_router(field_maps_router)
 router.include_router(vendor_routes_router)
@@ -486,11 +500,13 @@ router.include_router(
         Depends(module_manager_service.require_module_enabled("notifications"))
     ],
 )
+router.include_router(support_resolution_router)
 router.include_router(support_tickets_router)
 router.include_router(sales_router)
 router.include_router(lead_intake_router)
 router.include_router(support_automation_router)
 router.include_router(support_assignment_rules_router)
+router.include_router(project_engineering_router)
 router.include_router(projects_router)
 router.include_router(vendor_operations_router)
 # Last of the /vendors routers on purpose: this one owns `/vendors/{vendor_id}`,

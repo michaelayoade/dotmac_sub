@@ -14,7 +14,7 @@ in front of them while they can only be at one.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -53,6 +53,26 @@ from app.models.work_order import WorkOrder
 from app.services import customer_field_job_chat, team_inbox_field_job
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.chat import field_job_chat
+from app.services.owner_commands import CommandContext
+
+
+def _customer_send_command(
+    subscriber_id: UUID, public_id: str, body: str
+) -> customer_field_job_chat.SendCustomerChatMessageCommand:
+    request_id = uuid4()
+    return customer_field_job_chat.SendCustomerChatMessageCommand(
+        subscriber_id=subscriber_id,
+        work_order_public_id=public_id,
+        body=body,
+        context=CommandContext(
+            command_id=request_id,
+            correlation_id=request_id,
+            actor=f"subscriber:{subscriber_id}",
+            scope="customer:field-job-chat:write",
+            reason="Customer sends test message",
+            idempotency_key=str(request_id),
+        ),
+    )
 
 
 def _user(db_session, name: str = "Chat") -> SystemUser:
@@ -435,9 +455,9 @@ def test_technician_and_customer_both_appear_in_the_thread(db_session):
     )
     customer_field_job_chat.send_message(
         db_session,
-        str(subscriber.id),
-        "wo-two-sided",
-        body="The gate is locked, use the side entrance",
+        command=_customer_send_command(
+            subscriber.id, "wo-two-sided", "The gate is locked, use the side entrance"
+        ),
     )
 
     thread = field_job_chat.get_thread(db_session, _auth(user), "wo-two-sided")
@@ -531,6 +551,43 @@ def test_chat_scoped_to_assigned_technician(db_session):
 # --- the customer's side -------------------------------------------------
 
 
+def test_typed_customer_chat_availability_retains_closed_history(db_session):
+    user = _user(db_session)
+    profile = _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    stranger = _subscriber(db_session)
+    work_order = _work_order(
+        db_session, subscriber, crm_work_order_id="wo-read-history"
+    )
+    db_session.commit()
+    conversation, _ = _depart(db_session, work_order, profile)
+    conversation.status = InboxConversationStatus.resolved.value
+    work_order.status = "completed"
+    db_session.commit()
+
+    result = customer_field_job_chat.chat_availability(
+        db_session,
+        query=customer_field_job_chat.CustomerChatAvailabilityQuery(
+            subscriber.id, work_order.public_id
+        ),
+    )
+    assert result.available and not result.can_send
+    assert (
+        result.reason == customer_field_job_chat.CustomerChatAvailabilityReason.closed
+    )
+    denied = customer_field_job_chat.chat_availability(
+        db_session,
+        query=customer_field_job_chat.CustomerChatAvailabilityQuery(
+            stranger.id, work_order.public_id
+        ),
+    )
+    assert not denied.available and not denied.can_send
+    assert (
+        denied.reason
+        == customer_field_job_chat.CustomerChatAvailabilityReason.not_found
+    )
+
+
 def test_a_customer_cannot_reach_another_subscribers_visit(db_session):
     user = _user(db_session)
     profile = _profile(db_session, user)
@@ -541,11 +598,17 @@ def test_a_customer_cannot_reach_another_subscribers_visit(db_session):
     _depart(db_session, work_order, profile)
 
     thread = customer_field_job_chat.get_thread(
-        db_session, str(stranger.id), "wo-scoped"
+        db_session,
+        query=customer_field_job_chat.CustomerChatThreadQuery(
+            subscriber_id=stranger.id, work_order_public_id="wo-scoped"
+        ),
     )
 
-    assert thread["available"] is False
-    assert thread["reason"] == "not_found"
+    assert thread.available is False
+    assert (
+        thread.reason
+        == customer_field_job_chat.CustomerChatAvailabilityReason.not_found
+    )
 
 
 def test_the_customer_is_told_the_chat_has_not_opened_yet(db_session):
@@ -556,11 +619,17 @@ def test_the_customer_is_told_the_chat_has_not_opened_yet(db_session):
     db_session.commit()
 
     thread = customer_field_job_chat.get_thread(
-        db_session, str(subscriber.id), "wo-waiting"
+        db_session,
+        query=customer_field_job_chat.CustomerChatThreadQuery(
+            subscriber_id=subscriber.id, work_order_public_id="wo-waiting"
+        ),
     )
 
-    assert thread["available"] is False
-    assert thread["reason"] == "not_departed"
+    assert thread.available is False
+    assert (
+        thread.reason
+        == customer_field_job_chat.CustomerChatAvailabilityReason.not_departed
+    )
 
 
 def test_a_customer_message_lands_as_inbound(db_session):
@@ -572,7 +641,8 @@ def test_a_customer_message_lands_as_inbound(db_session):
     conversation, _ = _depart(db_session, work_order, profile)
 
     customer_field_job_chat.send_message(
-        db_session, str(subscriber.id), "wo-inbound", body="I'm at the back"
+        db_session,
+        command=_customer_send_command(subscriber.id, "wo-inbound", "I'm at the back"),
     )
 
     message = (
@@ -635,7 +705,10 @@ def test_an_unanswered_customer_goes_to_the_queue_instead_of_closing(db_session)
     db_session.commit()
     conversation, _ = _depart(db_session, work_order, profile)
     customer_field_job_chat.send_message(
-        db_session, str(subscriber.id), "wo-unanswered", body="Are you still coming?"
+        db_session,
+        command=_customer_send_command(
+            subscriber.id, "wo-unanswered", "Are you still coming?"
+        ),
     )
 
     team_inbox_field_job.close_for_work_order(
@@ -657,7 +730,8 @@ def test_an_answered_customer_closes_normally(db_session):
     db_session.commit()
     conversation, _ = _depart(db_session, work_order, profile)
     customer_field_job_chat.send_message(
-        db_session, str(subscriber.id), "wo-answered", body="Are you close?"
+        db_session,
+        command=_customer_send_command(subscriber.id, "wo-answered", "Are you close?"),
     )
     field_job_chat.send_message(db_session, _auth(user), "wo-answered", body="Two mins")
 

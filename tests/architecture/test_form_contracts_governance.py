@@ -13,6 +13,8 @@ from __future__ import annotations
 # Importing the flow module executes its register() call — mirrors app import.
 import app.services.billing_mode_transitions  # noqa: F401
 import app.services.customer_portal_flow_changes  # noqa: F401
+import app.services.field_completion_review_projection  # noqa: F401
+import app.services.project_engineering_projection  # noqa: F401
 import app.services.subscription_correction  # noqa: F401
 import app.services.test_connection  # noqa: F401
 import app.services.web_prepaid_draft_reconciliation  # noqa: F401

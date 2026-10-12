@@ -82,10 +82,88 @@ _CUSTOMER_ACTION_FIELD = AutomationConditionField(
     enum_values=("activate", "unsuspend", "suspend", "block", "disable"),
 )
 
+
+CUSTOMER_FIELD_IDENTITY_OWNER = "customer.field_identity"
+CUSTOMER_FIELD_IDENTITY_CONCERN = (
+    "current assignment approved field identity disclosure"
+)
+CUSTOMER_FIELD_IDENTITY_SERVICE = SOTService(
+    name=CUSTOMER_FIELD_IDENTITY_OWNER,
+    module="app.services.customer_field_identity",
+    owns=(CUSTOMER_FIELD_IDENTITY_CONCERN,),
+    depends_on=("operations.work_order_commands", "operations.field_identity"),
+    notes="Subscriber-scoped card and private portrait queries revalidate current assignment generation and actual active SystemUser. Only explicitly selected active native vendor membership bound to an active SystemUser may supply crew identity; vendor ownership is never actual crew identity.",
+    contract=ServiceContract(
+        concerns=(
+            ConcernContract(
+                name=CUSTOMER_FIELD_IDENTITY_CONCERN,
+                role=OwnerRole.RESOLVER,
+                input_names=(
+                    "current native customer assignment",
+                    "reviewed field identity revision",
+                ),
+            ),
+        ),
+        authoritative_inputs=(
+            AuthorityInput(
+                name="current native customer assignment",
+                owner="operations.work_order_commands",
+                kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                source="Customer WorkOrder subscriber UUID, current_assignment typed query, queue generation and active TechnicianProfile.system_user_id or explicit assigned_vendor_user_id whose active unique FieldVendorUser/FieldVendor bridge links the active native Vendor and SystemUser.",
+            ),
+            AuthorityInput(
+                name="reviewed field identity revision",
+                owner="operations.field_identity",
+                kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                source="approved_customer_card and approved_portrait for exact current reviewed revision of active SystemUser.",
+            ),
+        ),
+        transaction=TransactionContract(
+            mode=TransactionMode.READ_ONLY,
+            boundary="Read-only customer query; adapters own session lifecycle. No business writes or commit.",
+            locking="Unlocked candidate discovery followed by shared selected SystemUser, technician profile when applicable, and WorkOrder locks in that order. Refresh/recheck exact assignment and customer ownership after waiting; selected vendor membership/native vendor/bridge are then revalidated under their native locks without acquiring a new principal. Changed candidate or generation fails closed.",
+            idempotency="Queries re-evaluate customer scope, current assignment generation and current approval on every request; no cached authority.",
+            retries="Retry complete read on transient database errors; stale portrait generations and scope failures are refused.",
+        ),
+        errors=ErrorContract(
+            domain_codes=(
+                "customer.field_identity.not_found",
+                "customer.field_identity.denied",
+            ),
+            mapping_owner="app.api.customer_field_identity",
+            fail_closed_on=(
+                "wrong subscriber",
+                "missing generation",
+                "unselected or invalid vendor crew",
+                "inactive/ambiguous vendor membership or vendor bridge",
+                "inactive actual person",
+                "unapproved/revoked/replaced portrait",
+                "changed assignment generation",
+            ),
+        ),
+        migration=MigrationContract(
+            state=AuthorityMigrationState.CUTOVER_READY,
+            new_owner=CUSTOMER_FIELD_IDENTITY_OWNER,
+            old_owner="No prior customer field identity disclosure",
+            verification="Migration 674 plus focused customer technician and selected native vendor member reviewed-identity tests.",
+            cutover_gate="Migrated PostgreSQL assignment and identity validation plus customer tests pass.",
+            fallback_retirement="No vendor-owner portrait, neutral person UUID or public-avatar fallback. Migration 674 performs no inferred backfill; legacy vendor assignments disclose no attending person until explicit active member selection.",
+        ),
+        steward="customer operations",
+        design_refs=("docs/designs/CUSTOMER_FIELD_IDENTITY.md",),
+        test_refs=(
+            "tests/test_customer_field_identity.py",
+            "tests/test_vendor_attending_customer_identity.py",
+            "tests/integration/test_vendor_attending_person_acceptance.py",
+        ),
+    ),
+)
+
 DOMAIN = DomainSOT(
     domain="customer_context",
     setting_domains=("subscriber",),
     services=(
+        CUSTOMER_FIELD_IDENTITY_SERVICE,
         SOTService(
             name="customer.period_purchase_finance_review",
             module="app.services.web_billing_period_reviews",
@@ -3060,35 +3138,424 @@ DOMAIN = DomainSOT(
                 "operations.project_lifecycle",
                 "operations.work_orders",
                 "support.ticket_lifecycle",
+                "operations.service_order_lifecycle",
+                "customer.work_order_tracking",
+                "customer.field_job_chat",
+                "customer.work_order_selfcare",
             ),
-            notes=(
-                "This owner composes native Sub state and never mutates a "
-                "domain root. Customer, reseller, field, web, and mobile "
-                "surfaces consume the typed projection without CRM mirror "
-                "fallbacks or client-side action eligibility decisions."
+            notes="Typed customer lifecycle queries compose native roots and delegate departure-based tracking eligibility to customer.work_order_tracking.",
+            contract=ServiceContract(
+                concerns=tuple(
+                    ConcernContract(
+                        name=name,
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "subscriber scope",
+                            "project state",
+                            "work-order state",
+                            "support state",
+                            "provisioning state",
+                            "tracking eligibility",
+                            "native rating eligibility",
+                            "job conversation availability",
+                        ),
+                    )
+                    for name in (
+                        "read-only Project to ProjectTask to WorkOrder to Ticket composition",
+                        "customer experience-state projection",
+                        "server-owned customer self-care action projection",
+                    )
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="native rating eligibility",
+                        owner="customer.work_order_selfcare",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Typed customer-owned native rating eligibility and bound staff name/phone; vendor organization strings never represent a technician.",
+                    ),
+                    AuthorityInput(
+                        name="subscriber scope",
+                        owner="customer.identity_scope",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="CustomerLifecycleQuery, CustomerProjectQuery or CustomerWorkOrderQuery carries the authenticated/authorized subscriber UUID.",
+                    ),
+                    AuthorityInput(
+                        name="project state",
+                        owner="operations.project_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active native Project and ProjectTask records.",
+                    ),
+                    AuthorityInput(
+                        name="work-order state",
+                        owner="operations.work_orders",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Native active WorkOrder read model and project/task/ticket links.",
+                    ),
+                    AuthorityInput(
+                        name="support state",
+                        owner="support.ticket_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Linked native Ticket state and customer resolution actions.",
+                    ),
+                    AuthorityInput(
+                        name="provisioning state",
+                        owner="operations.service_order_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Linked ServiceOrder readiness decisions and checks.",
+                    ),
+                    AuthorityInput(
+                        name="job conversation availability",
+                        owner="customer.field_job_chat",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Typed availability checks actual owner-controlled conversation existence and open/closed state; completed history never depends on a status guess.",
+                    ),
+                    AuthorityInput(
+                        name="tracking eligibility",
+                        owner="customer.work_order_tracking",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Typed current-assignment departure eligibility, never inferred from dispatched status alone.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Read-only typed queries never complete transactions or mutate domain records.",
+                    locking="Tracking reads hold a shared WorkOrder lock while reading assignment and departure; roots otherwise use database read semantics.",
+                    idempotency="Repeated typed queries rebuild the same projection from current authoritative inputs.",
+                    retries="Retry the read after transient database failures; no write repair occurs here.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="customer/reseller API and web adapters",
+                    fail_closed_on=("missing subscriber scope returns an empty list",),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="customer lifecycle and self-care actions",
+                        input_names=(
+                            "subscriber scope",
+                            "project state",
+                            "work-order state",
+                            "support state",
+                            "provisioning state",
+                            "tracking eligibility",
+                            "native rating eligibility",
+                        ),
+                        writer="customer.experience_lifecycle",
+                        freshness="Recomputed from native roots for every request; no retained customer lifecycle cache.",
+                        stale_behavior="Tracking eligibility requires current-generation departure and all reads remain subscriber scoped.",
+                        drift_signal="Focused lifecycle/action contract tests compare server actions with native evidence.",
+                        rebuild_operation="Repeat the typed lifecycle query after canonical owners update their records.",
+                        repair_owner="customer.experience_lifecycle",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.experience_lifecycle",
+                ),
+                steward="customer experience platform",
+                design_refs=("docs/designs/WORK_ORDER_ASSIGNMENT_CUSTOMER_UPDATES.md",),
+                test_refs=(
+                    "tests/test_projects_portal_payload.py",
+                    "tests/test_customer_work_order_selfcare.py",
+                    "tests/architecture/test_customer_experience_lifecycle_sot.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="customer.work_order_tracking",
+            module="app.services.customer_work_order_selfcare",
+            owns=(
+                "subscriber-scoped live technician-location read",
+                "current-assignment departure tracking eligibility",
+            ),
+            depends_on=(
+                "customer.identity_scope",
+                "operations.work_order_commands",
+                "operations.field_completion",
+                "operations.field_location_ingest",
+            ),
+            notes="Typed read owner requires same-job, same-technician, same-generation departure and fixes; UUID provenance is never reconstructed from timestamps or JSON.",
+            contract=ServiceContract(
+                concerns=tuple(
+                    ConcernContract(
+                        name=name,
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "subscriber scope",
+                            "current assignment",
+                            "departure evidence",
+                            "location evidence",
+                        ),
+                    )
+                    for name in (
+                        "subscriber-scoped live technician-location read",
+                        "current-assignment departure tracking eligibility",
+                    )
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="subscriber scope",
+                        owner="customer.identity_scope",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="TechnicianLocationQuery subscriber UUID and native WorkOrder subscriber binding.",
+                    ),
+                    AuthorityInput(
+                        name="current assignment",
+                        owner="operations.work_order_commands",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed CurrentWorkOrderAssignment query: current target, assignment_generation UUID and effective_at.",
+                    ),
+                    AuthorityInput(
+                        name="departure evidence",
+                        owner="operations.field_completion",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="FieldJobEvent en_route bound to the current technician, job and assignment UUID; terminal WorkOrder status closes eligibility.",
+                    ),
+                    AuthorityInput(
+                        name="location evidence",
+                        owner="operations.field_location_ingest",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="FieldTechPresence sharing grant and same-job same-generation FieldTechLocationPing capture time and coordinates.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Typed tracking queries never write or complete transactions.",
+                    locking="Shared lock on the subscriber-owned WorkOrder precedes current assignment and observation reads; assignment writers lock that same root exclusively.",
+                    idempotency="Read-only projection rebuilt from canonical generation-bound observations.",
+                    retries="Retry complete read after a transient database error; absent evidence fails closed.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="customer/reseller tracking adapters",
+                    fail_closed_on=(
+                        "unowned or terminal work order",
+                        "no current technician departure",
+                        "sharing disabled",
+                        "no current-generation fix",
+                        "fix older than two minutes or captured in the future",
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="private customer technician position",
+                        input_names=(
+                            "subscriber scope",
+                            "current assignment",
+                            "departure evidence",
+                            "location evidence",
+                        ),
+                        writer="customer.work_order_tracking",
+                        freshness="Fix capture time must be within the preceding two minutes; received_at never refreshes an offline fix.",
+                        stale_behavior="Unavailable outcome hides all coordinates. Legacy NULL assignments consume only NULL-generation evidence; any explicit assignment rotates to UUID-required evidence.",
+                        drift_signal="Generation, reassignment, stale, sharing-off, cross-job and terminal-state focused tests.",
+                        rebuild_operation="Admit a matching-generation departure and fresh job-scoped ping, then repeat the typed query.",
+                        repair_owner="operations.field_location_ingest",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="customer.work_order_selfcare",
+                    new_owner="customer.work_order_tracking",
+                    verification="All tracking adapters use TechnicianLocationQuery; old positional read signature removed.",
+                    cutover_gate="Generation matching and private projection tests pass; deployed schema acceptance uses the real migration chain.",
+                    fallback_retirement="No timestamps, presence snapshot or metadata can substitute for matching UUID evidence.",
+                ),
+                steward="customer experience platform",
+                design_refs=("docs/designs/WORK_ORDER_ASSIGNMENT_CUSTOMER_UPDATES.md",),
+                test_refs=(
+                    "tests/test_customer_work_order_selfcare.py",
+                    "tests/test_field_location_tracking.py",
+                    "tests/architecture/test_customer_experience_lifecycle_sot.py",
+                ),
             ),
         ),
         SOTService(
             name="customer.work_order_selfcare",
             module="app.services.customer_work_order_selfcare",
             owns=(
-                "subscriber-scoped live technician-location read",
                 "canonical customer technician rating",
+                "native technician rating eligibility and attribution",
             ),
             depends_on=(
                 "customer.identity_scope",
-                "operations.work_order_commands",
                 "operations.work_orders",
+                "operations.work_order_commands",
+                "auth.staff_provisioning",
                 "observability.audit_log",
+                "events.store",
             ),
-            notes=(
-                "Live technician location derives from the latest native field "
-                "location ping tagged to the requested work order and recorded "
-                "by its currently assigned technician. Customer and reseller "
-                "reads fail closed when sharing is disabled, no job-scoped fix "
-                "exists, or that fix is older than the two-minute freshness "
-                "window; a new accepted job-scoped field location ping is the "
-                "idempotent rebuild path."
+            notes="Typed rating command freezes native attribution. Historical unattributed scores remain readable by their customer, but are never inferred from current assignment.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="canonical customer technician rating",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "subscriber ownership",
+                            "representative account scope",
+                            "current native assignment",
+                            "native technician identity",
+                            "customer feedback",
+                        ),
+                        canonical_writer="customer.work_order_selfcare",
+                    ),
+                    ConcernContract(
+                        name="native technician rating eligibility and attribution",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "subscriber ownership",
+                            "current native assignment",
+                            "native technician identity",
+                            "customer feedback",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="representative account scope",
+                        owner="customer.identity_scope",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Optional typed ResellerRatingScope from canonical reseller authentication; owner locks Subscriber then active Reseller and current active ResellerUser binding before WorkOrder or replay.",
+                    ),
+                    AuthorityInput(
+                        name="subscriber ownership",
+                        owner="operations.work_orders",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active WorkOrder subscriber UUID and public id, checked under root lock.",
+                    ),
+                    AuthorityInput(
+                        name="current native assignment",
+                        owner="operations.work_order_commands",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed current assignment query; vendor and unassigned are not technicians.",
+                    ),
+                    AuthorityInput(
+                        name="native technician identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Active native TechnicianProfile with an actual bound active SystemUser, never vendor display strings or inferred CRM identity.",
+                    ),
+                    AuthorityInput(
+                        name="customer feedback",
+                        owner="customer.work_order_selfcare",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="RateTechnicianCommand and canonical WorkOrder rating metadata with frozen technician, queue and generation provenance.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="rate_technician enters execute_owner_command exactly once; feedback, audit and event commit atomically. Eligibility and recorded attribution are read-only.",
+                    locking="Subscriber-before-WorkOrder locks protect ownership and replay. Representative commands also hold shared Reseller and current ResellerUser binding locks after Subscriber and before WorkOrder; eligibility query holds a shared WorkOrder lock.",
+                    idempotency="First owned rating wins across distinct command ids. Replay returns that score without new audit/event even after assignment changes.",
+                    retries="Retry the entire typed command after rollback; never retry only event or audit staging.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "customer.work_order_selfcare"
+                    )
+                    + tuple(
+                        "customer.work_order_selfcare." + code
+                        for code in (
+                            "work_order_not_found",
+                            "work_order_not_completed",
+                            "native_technician_unavailable",
+                            "invalid_rating",
+                        )
+                    ),
+                    mapping_owner="Customer API and portal rating adapters",
+                    fail_closed_on=(
+                        "foreign or missing subscriber ownership",
+                        "vendor or unassigned visit",
+                        "missing or inactive bound native staff",
+                        "transferred account or revoked representative binding",
+                        "unfinished visit",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("custom:work_order.technician_rated",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility="Native work-order/subscriber/technician/queue/generation identifiers and score; no free-text comment.",
+                    replay="Already-rated replay stages no event or audit.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="customer.work_order_selfcare legacy positional writer",
+                    new_owner="customer.work_order_selfcare",
+                    verification="Typed adapter, native eligibility, rollback and PostgreSQL concurrent submission tests.",
+                    cutover_gate="Only native assignment can receive new technician feedback.",
+                    fallback_retirement="No primitive rating write boundary or inferred legacy score attribution remains; existing scores remain visible in owned customer history.",
+                ),
+                steward="customer experience platform",
+                design_refs=("docs/designs/WORK_ORDER_ASSIGNMENT_CUSTOMER_UPDATES.md",),
+                test_refs=(
+                    "tests/test_customer_work_order_selfcare.py",
+                    "tests/test_customer_technician_rating_api.py",
+                    "tests/integration/test_customer_technician_rating_acceptance.py",
+                    "tests/architecture/test_customer_experience_lifecycle_sot.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="customer.technician_satisfaction",
+            module="app.services.technician_satisfaction",
+            owns=("native attributed technician satisfaction scorecards",),
+            depends_on=("customer.work_order_selfcare", "auth.staff_provisioning"),
+            notes="Read-only scorecards consume rating-time provenance; historical unattributed feedback is excluded rather than assigned to latest technician.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="native attributed technician satisfaction scorecards",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "recorded native technician feedback",
+                            "native technician identity",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="recorded native technician feedback",
+                        owner="customer.work_order_selfcare",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed recorded_rating_attribution and canonical completed WorkOrder score and timestamp.",
+                    ),
+                    AuthorityInput(
+                        name="native technician identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Native technician profiles and staff display names.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Typed scorecard queries never write or complete transactions.",
+                    locking="Database read semantics; assignment does not participate in attribution.",
+                    idempotency="Same canonical feedback and reporting window produce the same scorecard.",
+                    retries="Retry the read after transient database failures.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="Staff scorecard adapters",
+                    fail_closed_on=(
+                        "missing or invalid recorded attribution is excluded",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="latest-assignment scorecard inference",
+                    new_owner="customer.technician_satisfaction",
+                    verification="Legacy unattributed exclusion and reassignment invariance tests.",
+                    cutover_gate="Only recorded native attribution counts.",
+                    fallback_retirement="No backfill or current-assignment inference; unrated score remains None.",
+                ),
+                steward="customer experience platform",
+                design_refs=("docs/designs/WORK_ORDER_ASSIGNMENT_CUSTOMER_UPDATES.md",),
+                test_refs=(
+                    "tests/test_technician_satisfaction.py",
+                    "tests/architecture/test_customer_experience_lifecycle_sot.py",
+                ),
             ),
         ),
         SOTService(
@@ -3098,12 +3565,13 @@ DOMAIN = DomainSOT(
             depends_on=(
                 "customer.identity_scope",
                 "communications.team_inbox_field_job",
+                "communications.team_inbox_commands",
                 "operations.work_orders",
             ),
             notes=(
                 "Portal adapter for the technician chat. It scopes every "
                 "call to the caller's own work order and delegates the "
-                "inbox write to communications.team_inbox_field_job; it "
+                "inbox write to communications.team_inbox_commands; it "
                 "decides nothing about when a chat exists."
             ),
             contract=ServiceContract(
@@ -3151,8 +3619,9 @@ DOMAIN = DomainSOT(
                     ),
                     locking="None: it takes no locks of its own.",
                     idempotency=(
-                        "None: a repeated send is a genuinely new message, as "
-                        "in any chat."
+                        "Typed request UUID and actor survive the facade unchanged. "
+                        "The canonical command replays the same body once; a "
+                        "different body with the same identity fails closed."
                     ),
                     retries=(
                         "A closed or undeparted visit fails closed rather than "
@@ -3162,6 +3631,8 @@ DOMAIN = DomainSOT(
                 errors=ErrorContract(
                     domain_codes=(
                         "customer.field_job_chat.empty_body",
+                        "customer.field_job_chat.invalid_request",
+                        "customer.field_job_chat.idempotency_conflict",
                         "customer.field_job_chat.not_found",
                         "customer.field_job_chat.not_departed",
                         "customer.field_job_chat.closed",
@@ -3182,8 +3653,15 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 steward="customer experience platform",
-                design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
-                test_refs=("tests/test_field_job_chat.py",),
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/CUSTOMER_FIELD_CHAT_ADMISSION.md",
+                ),
+                test_refs=(
+                    "tests/test_field_job_chat.py",
+                    "tests/test_customer_chat_typed_api.py",
+                    "tests/test_customer_field_chat_admission.py",
+                ),
             ),
         ),
         SOTService(

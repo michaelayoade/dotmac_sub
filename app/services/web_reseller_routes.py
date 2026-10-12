@@ -1322,7 +1322,11 @@ def reseller_technician_location(
     if account is None:
         return JSONResponse({"available": False, "reason": "not_found"})
     data = customer_work_order_selfcare.technician_location(
-        db, str(account.id), work_order_id
+        db,
+        query=customer_work_order_selfcare.TechnicianLocationQuery(
+            subscriber_id=account.id,
+            work_order_public_id=work_order_id,
+        ),
     )
     return JSONResponse(data.model_dump(mode="json"))
 
@@ -1343,15 +1347,28 @@ def reseller_rate_technician(
     if account is None:
         status_flag = "error"
     else:
+        command = customer_work_order_selfcare.RateTechnicianCommand(
+            context=CommandContext.system(
+                actor=f"reseller:{context['reseller'].id}:principal:{context['principal_id']}",
+                scope="customer:work_order:rating",
+                reason="Authorized reseller customer feedback",
+            ),
+            representative=customer_work_order_selfcare.ResellerRatingScope(
+                reseller_id=context["reseller"].id,
+                principal_id=UUID(str(context["principal_id"])),
+                principal_kind=customer_work_order_selfcare.RatingRepresentativeKind(
+                    context.get("principal_type", "subscriber")
+                ),
+            ),
+            subscriber_id=account.id,
+            work_order_public_id=work_order_id,
+            rating=max(1, min(5, rating)),
+            comment=(comment or "")[:2000] or None,
+        )
+        db_session_adapter.release_read_transaction(db)
         try:
-            customer_work_order_selfcare.rate_technician(
-                db,
-                str(account.id),
-                work_order_id,
-                rating=max(1, min(5, rating)),
-                comment=(comment or "")[:2000] or None,
-            )
-        except (LookupError, ValueError):
+            customer_work_order_selfcare.rate_technician(db, command=command)
+        except customer_work_order_selfcare.TechnicianRatingError:
             status_flag = "error"
     return RedirectResponse(
         url=f"/reseller/work-orders?rated={status_flag}", status_code=303

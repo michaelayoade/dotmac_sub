@@ -154,6 +154,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.crm_referrals", "router", "api", "user"),
     ("app.api.crm_referrals", "public_router", "api", "none"),
     ("app.api.support", "router", "api", "user"),
+    ("app.api.support_resolution", "router", "api", "user"),
     # Native sales vertical: per-route crm:lead / crm:quote /
     # crm:sales_order permission guards on top of the user-auth base.
     ("app.api.crm_sales", "router", "api", "user"),
@@ -162,6 +163,9 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.sales_orders", "router", "api", "user"),
     # Native projects vertical.
     ("app.api.projects", "router", "api", "user"),
+    ("app.api.project_engineering", "router", "api", "user"),
+    ("app.api.field_completion_review", "router", "api", "user"),
+    ("app.api.field_completion_review", "field_router", "api", "user"),
     # Read FLOOR for the whole router; every mutating route declares its own
     # operations:dispatch:write / :assign guard (app/api/dispatch.py). This is
     # deliberately "readperm:" and NOT "perm:operations:dispatch": the perm:

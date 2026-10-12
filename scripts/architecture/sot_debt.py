@@ -256,7 +256,12 @@ def served_ipv6_projection_writes(
 def declared_owner_modules(domains: Iterable[Any]) -> set[str]:
     """Return every module declared as an owner in the registry."""
 
-    return {service.module for domain in domains for service in domain.services}
+    return {
+        module
+        for domain in domains
+        for service in domain.services
+        for module in service.owner_modules
+    }
 
 
 def undeclared_writer_modules(domains: Iterable[Any]) -> set[str]:

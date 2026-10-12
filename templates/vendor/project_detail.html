@@ -268,109 +268,8 @@
       </div>
       {% else %}
       <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">Tap the map to add route points, or use <strong>Add my location</strong> while walking the proposed route. Purple dashed lines are your saved revisions; green dashed lines are prior as-built context where available.</p>
-      <details id="route-reference-details" class="group mb-3 rounded-md border border-slate-700 bg-slate-900 shadow-sm">
-        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-md px-4 py-3 text-sm font-semibold text-slate-100 marker:hidden hover:bg-slate-800">
-          <span><span class="block">Map layers and reference points</span><span class="mt-0.5 block text-xs font-normal text-slate-400">Search network context or refine what appears on the planning map.</span></span>
-          <span aria-hidden="true" class="text-slate-400 transition-transform group-open:rotate-180">⌄</span>
-        </summary>
-        <div data-route-reference-panel class="border-t border-slate-700 bg-slate-950/40 p-3">
-        <div class="mt-3 grid gap-3 lg:grid-cols-3" id="route-author-filters">
-          <fieldset class="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-            <legend class="sr-only">Layers</legend>
-            <p aria-hidden="true" class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Layers</p>
-            <div class="mt-2 flex gap-2 text-xs">
-              <button type="button" data-route-filter-action="all" data-route-filter-target="layer" class="font-semibold text-emerald-400 transition-colors hover:text-emerald-300" aria-pressed="true">All</button>
-              <button type="button" data-route-filter-action="none" data-route-filter-target="layer" class="font-semibold text-slate-400 transition-colors hover:text-emerald-400" aria-pressed="false">None</button>
-            </div>
-            <div class="mt-2 grid gap-2 text-sm text-slate-700 dark:text-slate-200">
-              {% for layer_filter in vendor_route_authoring_layer_filters %}
-              <label class="flex items-center gap-2"><input type="checkbox" data-route-layer-filter value="{{ layer_filter.value }}" {% if layer_filter.selected_by_default %}checked {% endif %}class="rounded border-slate-300"> {{ layer_filter.label }}</label>
-              {% endfor %}
-            </div>
-          </fieldset>
-          <fieldset class="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-            <legend class="sr-only">Status</legend>
-            <p aria-hidden="true" class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Status</p>
-            <div class="mt-2 flex gap-2 text-xs">
-              <button type="button" data-route-filter-action="all" data-route-filter-target="status" class="font-semibold text-emerald-400 transition-colors hover:text-emerald-300" aria-pressed="true">All</button>
-              <button type="button" data-route-filter-action="none" data-route-filter-target="status" class="font-semibold text-slate-400 transition-colors hover:text-emerald-400" aria-pressed="false">None</button>
-            </div>
-            <div class="mt-2 grid grid-cols-2 gap-2 text-sm text-slate-700 dark:text-slate-200">
-              {% for status_filter in vendor_route_authoring_status_filters %}
-              <label class="flex items-center gap-2"><input type="checkbox" data-route-status-filter value="{{ status_filter.value }}" {% if status_filter.selected_by_default %}checked {% endif %}class="rounded border-slate-300"> {{ status_filter.label }}</label>
-              {% endfor %}
-            </div>
-          </fieldset>
-          <fieldset class="rounded-md border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-            <legend class="sr-only">Points</legend>
-            <p aria-hidden="true" class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Points</p>
-            <div class="mt-2 flex gap-2 text-xs">
-              <button type="button" data-route-filter-action="all" data-route-filter-target="poi" class="font-semibold text-slate-400 transition-colors hover:text-emerald-400" aria-pressed="false">All</button>
-              <button type="button" data-route-filter-action="none" data-route-filter-target="poi" class="font-semibold text-slate-400 transition-colors hover:text-emerald-400" aria-pressed="false">None</button>
-            </div>
-            <div class="mt-2 grid gap-2 text-sm text-slate-700 dark:text-slate-200">
-              {% for poi_filter in vendor_route_authoring_poi_filters %}
-              <label class="flex items-center gap-2"><input type="checkbox" data-route-poi-filter value="{{ poi_filter.value }}" {% if poi_filter.selected_by_default %}checked {% endif %}class="rounded border-slate-300"> {{ poi_filter.label }}</label>
-              {% endfor %}
-            </div>
-            <div class="mt-3 flex flex-wrap items-end gap-2 border-t border-slate-200 pt-3 dark:border-slate-700">
-              <label for="route-author-poi-radius" class="text-xs text-slate-500 dark:text-slate-400">Radius
-                <select id="route-author-poi-radius" class="mt-1 block rounded-md border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-white">
-                  {% for radius_option in vendor_route_authoring_radius_options %}
-                  <option value="{{ radius_option.value_meters }}" {% if radius_option.selected_by_default %}selected{% endif %}>{{ radius_option.label }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-              <button type="button" id="route-author-poi-nearby" class="rounded-md border border-cyan-600 px-3 py-2 text-sm font-semibold text-cyan-700 transition-colors hover:bg-cyan-700 hover:text-white dark:text-cyan-400 dark:hover:bg-cyan-700 dark:hover:text-white" aria-busy="false">Show near me</button>
-              <button type="button" id="route-author-poi-clear" class="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Clear points</button>
-            </div>
-            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Reference plant helps planning; it is not an official project assignment.</p>
-          </fieldset>
-        </div>
-        <div class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
-          <div id="route-author-filter-summary" class="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300" role="status" aria-live="polite">All route layers and selected points are visible.</div>
-          <div class="rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300" aria-label="Map legend">
-            <p class="mb-2 font-semibold uppercase text-slate-500 dark:text-slate-400">Legend</p>
-            <div class="grid gap-2">
-              <span class="inline-flex items-center gap-2"><svg aria-hidden="true" class="h-3 w-8 shrink-0" viewBox="0 0 32 12"><line x1="1" y1="6" x2="31" y2="6" stroke="#9333ea" stroke-width="3" stroke-linecap="round" stroke-dasharray="6 5" /></svg>Proposed route</span>
-              <span class="inline-flex items-center gap-2"><svg aria-hidden="true" class="h-3 w-8 shrink-0" viewBox="0 0 32 12"><line x1="1" y1="6" x2="31" y2="6" stroke="#10b981" stroke-width="3" stroke-linecap="round" stroke-dasharray="6 5" /></svg>As-built route</span>
-              <span class="inline-flex items-center gap-2"><span class="inline-block h-3 w-3 rounded-full bg-amber-500 ring-2 ring-white"></span>Closure proposal</span>
-              <span class="inline-flex items-center gap-2"><span class="inline-block h-3 w-3 rounded-full bg-blue-700 ring-2 ring-white"></span>Reference plant</span>
-              <span class="inline-flex items-center gap-2"><span class="inline-block h-3 w-3 rounded-full bg-primary-600 ring-2 ring-white"></span>Current trace point</span>
-            </div>
-          </div>
-        </div>
-        </div>
-      </details>
-      <div id="route-author-plant-toolbar" class="mb-3 flex flex-wrap items-center gap-2" aria-label="Canonical plant map filters">
-        <button type="button" data-route-plant-filter="fdh_cabinet" aria-pressed="true" class="rounded-full border border-cyan-500 bg-cyan-950/40 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-800">FDH <span data-route-plant-count="fdh_cabinet">0</span></button>
-        <button type="button" data-route-plant-filter="splice_closure" aria-pressed="true" class="rounded-full border border-cyan-500 bg-cyan-950/40 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-800">Closures <span data-route-plant-count="splice_closure">0</span></button>
-        <button type="button" data-route-plant-filter="fiber_access_point" aria-pressed="true" class="rounded-full border border-cyan-500 bg-cyan-950/40 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-800">Access Points <span data-route-plant-count="fiber_access_point">0</span></button>
-        <button type="button" data-route-plant-filter="service_building" aria-pressed="false" class="rounded-full border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-700">Buildings <span data-route-plant-count="service_building">0</span></button>
-        <button type="button" data-route-plant-filter="fiber_segment" aria-pressed="true" class="rounded-full border border-cyan-500 bg-cyan-950/40 px-3 py-1.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-800">Segments <span data-route-plant-count="fiber_segment">0</span></button>
-        <label for="route-author-plant-view" class="ml-auto flex items-center gap-2 text-xs font-semibold text-slate-400">View
-          <select id="route-author-plant-view" class="rounded-md border-slate-700 bg-slate-800 py-1.5 text-sm text-slate-100">
-            <option value="custom">Custom</option>
-            <option value="osp">OSP Nodes</option>
-            <option value="backbone">Backbone</option>
-            <option value="customer_edge">Customer Edge</option>
-            <option value="all">All Layers</option>
-            <option value="none">Hide All</option>
-          </select>
-        </label>
-      </div>
-      <div class="relative mb-2">
-        <div class="absolute right-4 top-3" style="left: 3.75rem; z-index: 500; max-width: 42rem;">
-          <label for="route-author-search" class="sr-only">Search map</label>
-          <div class="flex gap-2">
-            <input id="route-author-search" type="search" autocomplete="off" placeholder="Search cabinets, closures, access points, buildings, or coordinates" class="vendor-map-search-surface min-h-10 flex-1 rounded-md text-sm text-white shadow-lg">
-            <button type="button" id="route-author-search-clear" class="vendor-map-search-surface rounded-md border px-3 py-2 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-700 hover:text-white">Clear</button>
-          </div>
-          <div id="route-author-search-results" class="vendor-map-search-surface mt-2 hidden max-h-56 overflow-auto rounded-md border text-sm shadow-lg" aria-live="polite"></div>
-        </div>
-        <div id="route-author-map" class="h-80 w-full rounded-md border border-slate-200 dark:border-slate-800" role="region" aria-label="Proposed route authoring map"></div>
-      </div>
-      <p id="route-author-search-hint" class="mb-4 text-xs text-slate-500 dark:text-slate-400" role="status" aria-live="polite">Use decimal coordinates like 6.5244, 3.3792 or search selected canonical plant types.</p>
+      <p class="mb-3 text-sm text-slate-500 dark:text-slate-400">This map shows your project route evidence. Open an assigned work order in Field to view and navigate its authorized job locations.</p>
+      <div id="route-author-map" class="mb-4 h-80 w-full rounded-md border border-slate-200 dark:border-slate-800" role="region" aria-label="Proposed route authoring map"></div>
       <form method="post" action="/vendor/projects/{{ project.id }}/quotes/{{ quote.id }}/route-revisions" id="route-author-form" class="space-y-3">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="geojson" id="route-author-geojson">
@@ -618,7 +517,8 @@ window.VendorRouteAuthoring.mount({
   plantFilterSelector: "[data-route-plant-filter]",
   plantViewId: "route-author-plant-view",
   quoteId: {{ quote.id | string | tojson | safe }},
-  networkPlantGeojson: {{ route_planning_map_geojson | tojson | safe }},
+  networkPlantGeojson: {type: "FeatureCollection", features: []},
+  plantLookupEnabled: false,
   contextGeojson: {{ route_geojson | tojson | safe }}
 });
 </script>

@@ -4,6 +4,7 @@ import hashlib
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import event
 from sqlalchemy.dialects import postgresql
 
@@ -71,7 +72,16 @@ def _configure_command(
     )
 
 
-def _stub_side_effects(monkeypatch) -> None:
+class PreparedObjectStorage:
+    """Synthetic prepared objects exist; object transport is outside this test."""
+
+    def exists(self, key: str) -> bool:
+        return True
+
+
+def _stub_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(file_uploads, "storage", PreparedObjectStorage())
+
     def prepare_upload(**kwargs):
         data = kwargs["data"]
         return PreparedFileUpload(

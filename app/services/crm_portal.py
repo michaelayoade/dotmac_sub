@@ -10,6 +10,7 @@ import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from fastapi import Request
 from sqlalchemy.orm import Session
@@ -250,6 +251,7 @@ def handle_ticket_resolution_response(
             ticket,
             confirm=confirm,
             reason=reason,
+            expected_subscriber_ids=tuple(UUID(value) for value in allowed),
         )
     except DomainError as exc:
         return {"success": False, "error": exc.message}
