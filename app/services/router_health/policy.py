@@ -150,6 +150,10 @@ class PolicyDefaults(_Strict):
     input_v6: InputPolicy
     suspension_target_chains: list[str] = Field(min_length=1)
     reverse_proxy_min_ros: str = "7.22"
+    # Walled-garden expectations for the suspension chain (posture checks).
+    suspension_portal_addresses: list[str] = Field(default_factory=list)
+    suspension_exclusion_max_prefix_breadth: int = Field(default=24, ge=8, le=32)
+    suspension_exclusion_max_entries: int = Field(default=50, ge=1, le=5000)
     ops_user: OpsUserPolicy | None = None
     rest_user: RestUserPolicy | None = None
     report_unrestricted_full_users: bool = True
@@ -163,6 +167,13 @@ class PolicyDefaults(_Strict):
                 raise ValueError("snmp_allowed_sources must be CIDRs") from exc
             if network.prefixlen == 0:
                 raise ValueError("snmp_allowed_sources must not allow every address")
+        for portal in self.suspension_portal_addresses:
+            try:
+                ipaddress.ip_address(portal)
+            except ValueError as exc:
+                raise ValueError(
+                    "suspension_portal_addresses must be single IP addresses"
+                ) from exc
         if not re.fullmatch(r"\d+(\.\d+)*", self.reverse_proxy_min_ros):
             raise ValueError("reverse_proxy_min_ros must be a dotted version")
         return self
@@ -344,6 +355,9 @@ class EffectiveRouterPolicy:
     input_v6: EffectiveInput
     suspension_target_chains: frozenset[str]
     reverse_proxy_min_ros: str
+    suspension_portal_addresses: frozenset[str] = frozenset()
+    suspension_exclusion_max_prefix_breadth: int = 24
+    suspension_exclusion_max_entries: int = 50
     exceptions: tuple[ActiveException, ...] = ()
     annotations: dict[str, str] = field(default_factory=dict)
     lapsed: tuple[LapsedException, ...] = ()
@@ -511,6 +525,11 @@ def effective_policy(
         input_v6=input_v6,
         suspension_target_chains=frozenset(defaults.suspension_target_chains),
         reverse_proxy_min_ros=defaults.reverse_proxy_min_ros,
+        suspension_portal_addresses=frozenset(defaults.suspension_portal_addresses),
+        suspension_exclusion_max_prefix_breadth=(
+            defaults.suspension_exclusion_max_prefix_breadth
+        ),
+        suspension_exclusion_max_entries=defaults.suspension_exclusion_max_entries,
         exceptions=tuple(active),
         annotations=annotations,
         lapsed=tuple(lapsed),

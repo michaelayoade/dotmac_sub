@@ -14,7 +14,9 @@ from app.services.router_health.policy import (
 )
 from tests.services.router_health.support import FIXTURE_DIR, TODAY, default_policy
 
-EXAMPLE = FIXTURE_DIR.parents[2] / "docs" / "network" / "router_health_policy.example.json"
+EXAMPLE = (
+    FIXTURE_DIR.parents[2] / "docs" / "network" / "router_health_policy.example.json"
+)
 
 
 def base() -> dict:

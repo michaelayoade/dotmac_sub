@@ -63,6 +63,20 @@ _SHADOW_GUARD_KEYS = (
     "in-interface",
     "in-interface-list",
 )
+_JUMP_ALLOWED_KEYS = _NON_MATCHER_KEYS | frozenset(
+    {"jump-target", "src-address-list", "dst-address-list"}
+)
+_DNS_ALLOWED_KEYS = _NON_MATCHER_KEYS | frozenset(
+    {"protocol", "dst-port", "dst-address"}
+)
+_PORTAL_ALLOWED_KEYS = _NON_MATCHER_KEYS | frozenset(
+    {"protocol", "dst-port", "dst-address"}
+)
+_PORTAL_PORTS = frozenset({"80", "443"})
+_BENIGN_ACTIONS = frozenset(
+    {"log", "passthrough", "add-src-to-address-list", "add-dst-to-address-list"}
+)
+_TERMINAL_ACTIONS = frozenset({"drop", "reject", "tarpit"})
 _COMMENT_MAX = 80
 _QUALIFIER_RE = re.compile(r"[^a-z0-9.-]")
 _ADDRESS_LIST_KEYS = (
@@ -425,6 +439,112 @@ def _has_terminal_block(items: Sequence[ExportItem]) -> bool:
     return False
 
 
+def _is_expected_dns_allow(item: ExportItem) -> bool:
+    return (
+        set(item.props) <= _DNS_ALLOWED_KEYS
+        and item.get("protocol") == "udp"
+        and item.value_list("dst-port") == ("53",)
+    )
+
+
+def _single_host(value: str | None) -> str | None:
+    if not value or "," in value or value.startswith("!"):
+        return None
+    try:
+        network = ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return None
+    if network.num_addresses != 1:
+        return None
+    return str(network.network_address)
+
+
+def _is_expected_portal_allow(item: ExportItem, portals: frozenset[str]) -> bool:
+    if not set(item.props) <= _PORTAL_ALLOWED_KEYS:
+        return False
+    if item.get("protocol") != "tcp":
+        return False
+    ports = item.value_list("dst-port")
+    if not ports or not set(ports) <= _PORTAL_PORTS:
+        return False
+    host = _single_host(item.get("dst-address"))
+    if host is None:
+        return False
+    return not portals or host in portals
+
+
+def _is_generic_terminal(item: ExportItem) -> bool:
+    if item.get("action") not in _TERMINAL_ACTIONS:
+        return False
+    if not set(item.props) <= _TERMINAL_ALLOWED_KEYS:
+        return False
+    dst = [item.get("dst-address"), item.get("dst-address-list")]
+    return not any(value is not None and not value.startswith("!") for value in dst)
+
+
+def _chain_bypass(
+    items: Sequence[ExportItem], portals: frozenset[str]
+) -> ExportItem | None:
+    """First rule that lets a generic suspended packet out before the block.
+
+    Rules are walked in order. A suspended packet that meets an accept/return
+    (other than the narrow DNS and portal allows) leaves the quarantine chain
+    before the terminal reject/drop is reached.
+    """
+    for item in items:
+        action = item.get("action")
+        if _is_generic_terminal(item):
+            return None
+        if action == "accept":
+            if _is_expected_dns_allow(item) or _is_expected_portal_allow(item, portals):
+                continue
+            return item
+        if action in _TERMINAL_ACTIONS or action in _BENIGN_ACTIONS:
+            continue
+        # return, jump, fasttrack-connection, anything not understood.
+        return item
+    return None
+
+
+def _jump_extra_matchers(jump: ExportItem) -> list[str]:
+    extra = sorted(set(jump.props) - _JUMP_ALLOWED_KEYS)
+    dst_list = jump.get("dst-address-list")
+    if dst_list is not None and not dst_list.startswith("!"):
+        extra.append("dst-address-list(positive)")
+    return extra
+
+
+def _exclusion_list_stats(
+    doc: ExportDocument, name: str, max_breadth: int
+) -> tuple[int, int, int]:
+    """Return (entries, broad_entries, widest_prefix_length) for one list."""
+    entries = 0
+    broad = 0
+    widest = 32
+    for item in doc.section("/ip firewall address-list"):
+        if item.verb != "add" or not item.enabled or item.get("list") != name:
+            continue
+        entries += 1
+        value = item.get("address") or ""
+        try:
+            if "-" in value and "/" not in value:
+                lo, hi = (ipaddress.ip_address(part) for part in value.split("-", 1))
+                span = int(hi) - int(lo) + 1
+                prefix = (
+                    lo.max_prefixlen - max(span - 1, 0).bit_length()
+                    if span > 0
+                    else lo.max_prefixlen
+                )
+            else:
+                prefix = ipaddress.ip_network(value, strict=False).prefixlen
+        except ValueError:
+            continue  # a DNS name: counted as an entry, no prefix to judge
+        widest = min(widest, prefix)
+        if prefix < max_breadth:
+            broad += 1
+    return entries, broad, widest
+
+
 def _suspension_jumps(doc: ExportDocument, suspended_list: str) -> list[ExportItem]:
     return [
         item
@@ -485,10 +605,66 @@ def _check_suspension(
                     ),
                 )
             )
+        for jump in jumps:
+            if (jump.get("jump-target") or "") not in allowed:
+                continue
+            extra = _jump_extra_matchers(jump)
+            if extra:
+                findings.append(
+                    PostureFinding(
+                        check=CheckId.suspension_jump,
+                        qualifier="narrowed",
+                        priority=HealthPriority.critical,
+                        title=(
+                            f"{label}: suspension jump is narrowed by extra matchers"
+                        ),
+                        impact=(
+                            "Only part of the suspended traffic reaches the "
+                            "block; the rest keeps internet access."
+                        ),
+                        evidence={
+                            "jump_comment": _comment(jump),
+                            "extra_matchers": ", ".join(extra[:10]),
+                        },
+                        fix=(
+                            "Match only src-address-list=suspended (plus the "
+                            "negated walled-garden dst list) on the jump."
+                        ),
+                    )
+                )
+                break
     if not eff.check_off("suspension-chain"):
         evaluated.add(CheckId.suspension_chain)
         for target in sorted({j.get("jump-target") or "" for j in jumps} & allowed):
             chain_items = _enabled_chain_items(doc, SECTION_FILTER, target)
+            bypass = _chain_bypass(chain_items, eff.suspension_portal_addresses)
+            if bypass is not None:
+                findings.append(
+                    PostureFinding(
+                        check=CheckId.suspension_chain,
+                        qualifier=qualifier_for(f"bypass-{target}"),
+                        priority=HealthPriority.critical,
+                        title=(
+                            f"{label}: suspension chain {target} lets suspended "
+                            "traffic out before the block"
+                        ),
+                        impact=(
+                            "A rule ahead of the final reject/drop accepts or "
+                            "returns suspended traffic."
+                        ),
+                        evidence={
+                            "target_chain": target,
+                            "line": bypass.line,
+                            "action": bypass.get("action") or "",
+                            "comment": _comment(bypass),
+                        },
+                        fix=(
+                            "Keep only the DNS (udp 53) and portal (tcp 80,443) "
+                            "allows ahead of the terminal reject/drop; remove "
+                            "any other accept or return."
+                        ),
+                    )
+                )
             if not _has_terminal_block(chain_items):
                 findings.append(
                     PostureFinding(
@@ -504,6 +680,51 @@ def _check_suspension(
                         fix=(
                             "Add an unconditional drop (or reject) as the last "
                             "rule of the suspension chain."
+                        ),
+                    )
+                )
+        checked_lists: set[str] = set()
+        for jump in [] if eff.check_off("suspension-chain") else jumps:
+            if (jump.get("jump-target") or "") not in allowed:
+                continue
+            raw_list = jump.get("dst-address-list") or ""
+            name = raw_list[1:] if raw_list.startswith("!") else ""
+            if not name or name in checked_lists:
+                continue
+            checked_lists.add(name)
+            entries, broad, widest = _exclusion_list_stats(
+                doc, name, eff.suspension_exclusion_max_prefix_breadth
+            )
+            too_many = entries > eff.suspension_exclusion_max_entries
+            if broad or too_many:
+                findings.append(
+                    PostureFinding(
+                        check=CheckId.suspension_chain,
+                        qualifier=qualifier_for(f"exclusion-{name}"),
+                        priority=(
+                            HealthPriority.critical if broad else HealthPriority.high
+                        ),
+                        title=(
+                            f"{label}: suspension exclusion list {name} is "
+                            + ("too broad" if broad else "too large")
+                        ),
+                        impact=(
+                            "Destinations in the exclusion list skip the "
+                            "suspension block entirely."
+                        ),
+                        evidence={
+                            "address_list": name,
+                            "entries": entries,
+                            "max_entries": eff.suspension_exclusion_max_entries,
+                            "broad_entries": broad,
+                            "widest_prefix_length": widest,
+                            "min_prefix_length": (
+                                eff.suspension_exclusion_max_prefix_breadth
+                            ),
+                        },
+                        fix=(
+                            "Trim the list to the portal and required "
+                            "walled-garden hosts only."
                         ),
                     )
                 )
