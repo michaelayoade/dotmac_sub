@@ -50,7 +50,6 @@ def _run(
     db = db_session_adapter.create_session()
     try:
         if not control_registry.is_enabled(db, control_key):
-            db.rollback()
             return {"skipped": "control_disabled"}
         with postgres_session_advisory_lock(
             _lock_key(task_name), timeout_ms=_LOCK_TIMEOUT_MS

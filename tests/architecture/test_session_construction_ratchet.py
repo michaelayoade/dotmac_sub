@@ -180,7 +180,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: Five isolated PostgreSQL Session constructions in
 #: test_api_key_revocation_concurrency.py exercise administrative key revocation
 #: locking and rollback. Production construction allowances are unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 252
+#: +2 from tests/services/router_health/test_coa_evidence.py: a private SQLite
+#: engine and sessionmaker prove the CoA outcome writer's out-of-band session
+#: (ADR 0018) survives the caller's rollback. Test-only fixtures.
+TEST_FIXTURE_BASELINE_TOTAL = 254
 
 
 def _baseline() -> dict[str, int]:

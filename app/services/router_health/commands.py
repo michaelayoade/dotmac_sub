@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.event_store import EventStatus
 from app.models.router_health import RouterHealthSignal
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.event_store import create_event_record
 from app.services.events.types import Event, EventType
 from app.services.owner_commands import (
@@ -40,6 +40,7 @@ CONCERN_EXPORT_EVIDENCE = "router config export evidence"
 CONCERN_PROJECTION = "router health findings projection"
 CONCERN_CANARY = "CoA canary operation"
 ACTOR = "system:router_health"
+AUDIT_ACTOR = AuditActor(actor_type=AuditActorType.system, actor_id=ACTOR)
 SIGNAL_CONFIG_EXPORT = "config_export"
 SCOPE_ROUTER = "router"
 SAMPLE_LIMIT = 200
@@ -246,8 +247,7 @@ def retire_router_health_findings(
             action=AUDIT_RETIRED,
             entity_type="router_health",
             entity_id=str(command.context.command_id),
-            actor_type=AuditActorType.system,
-            actor_id=ACTOR,
+            actor=AUDIT_ACTOR,
             metadata={"resolved": resolved, "reason": command.context.reason},
         )
         _stage_event(db, command.context, {"kind": "retired", "resolved": resolved})
@@ -287,8 +287,7 @@ def begin_coa_canary_run(db: Session, *, command: BeginCanaryRunCommand) -> UUID
             action=AUDIT_CANARY_STARTED,
             entity_type=AUDIT_ENTITY_CANARY,
             entity_id=str(command.run_id),
-            actor_type=AuditActorType.system,
-            actor_id=ACTOR,
+            actor=AUDIT_ACTOR,
             metadata={
                 "target_count": len(command.targets),
                 "nas_device_ids": [
@@ -331,8 +330,7 @@ def complete_coa_canary_run(
             action=AUDIT_CANARY_COMPLETED,
             entity_type=AUDIT_ENTITY_CANARY,
             entity_id=str(command.run_id),
-            actor_type=AuditActorType.system,
-            actor_id=ACTOR,
+            actor=AUDIT_ACTOR,
             metadata={
                 "reprobe": command.reprobe,
                 "results": {

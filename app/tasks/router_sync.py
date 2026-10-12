@@ -201,14 +201,16 @@ def capture_scheduled_snapshots() -> dict:
 
 
 def _record_export_outcomes(db, outcomes: list[ConfigExportOutcome]) -> None:
-    """Persist typed export outcomes once per run; never fails the snapshot task."""
+    """Persist typed export outcomes once per run; never fails the snapshot task.
+
+    The session is transaction-free here (the last loop step committed or rolled
+    back); the owner command rolls itself back on failure.
+    """
     try:
-        db.rollback()
         router_health_reconciler.record_config_export_outcomes(
             db, outcomes=outcomes, task_name="router_sync.capture_scheduled_snapshots"
         )
     except Exception:
-        db.rollback()
         logger.warning("Failed to record router config export outcomes", exc_info=True)
         return
     try:
@@ -218,8 +220,6 @@ def _record_export_outcomes(db, outcomes: list[ConfigExportOutcome]) -> None:
             reconcile_router_posture.delay()
     except Exception:
         logger.warning("Failed to queue router health posture run", exc_info=True)
-    finally:
-        db.rollback()
 
 
 @celery_app.task(name="router_sync.cleanup_idle_tunnels")
