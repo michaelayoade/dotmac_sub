@@ -15,7 +15,10 @@ from app.db import read_only_snapshot_session
 from app.services.credential_security_inventory import (
     CredentialInventoryQuery,
     CredentialInventoryResult,
+    RecoveryReadinessQuery,
+    RecoveryReadinessResult,
     read_credential_inventory,
+    read_recovery_readiness,
 )
 from app.services.domain_errors import DomainError
 
@@ -34,16 +37,39 @@ def render_inventory(*, result: CredentialInventoryResult) -> str:
     )
 
 
+def render_readiness(*, result: RecoveryReadinessResult) -> str:
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "report": "reversible_credential_recovery_readiness",
+            "observed_at": result.observed_at.isoformat(),
+            "reversible_count": result.reversible_count,
+            "cohorts": [asdict(row) for row in result.cohorts],
+        },
+        sort_keys=True,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("read-only",), required=True)
+    parser.add_argument(
+        "--report", choices=("inventory", "recovery-readiness"), default="inventory"
+    )
     # Reject arguments before session creation, including every write/apply mode.
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
     query = CredentialInventoryQuery(observed_at=datetime.now(UTC))
     try:
         with read_only_snapshot_session() as db:
-            result = read_credential_inventory(db=db, query=query)
-        print(render_inventory(result=result))
+            if args.report == "recovery-readiness":
+                readiness = read_recovery_readiness(
+                    db=db, query=RecoveryReadinessQuery(observed_at=query.observed_at)
+                )
+                output = render_readiness(result=readiness)
+            else:
+                result = read_credential_inventory(db=db, query=query)
+                output = render_inventory(result=result)
+        print(output)
     except (DomainError, SQLAlchemyError):
         # DB exceptions can contain SQL parameters/connection strings; never
         # serialize them or attach traceback/exception messages to this output.

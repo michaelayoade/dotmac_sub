@@ -6,14 +6,146 @@ The caller owns recovery, notices, standing, and any future upgrade transaction.
 
 from __future__ import annotations
 
+import math
 import secrets
-from collections.abc import Callable
+import threading
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 
 from argon2 import Parameters, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError
 from argon2.low_level import ARGON2_VERSION, Type, hash_secret, verify_secret
+
+
+class PasswordAdmissionErrorCode(str, Enum):
+    INVALID_CONFIGURATION = "auth.user_passwords.invalid_admission_configuration"
+    SATURATED = "auth.user_passwords.admission_saturated"
+    TIMED_OUT = "auth.user_passwords.admission_timed_out"
+
+
+class InvalidLimiterConfigurationError(ValueError):
+    code = PasswordAdmissionErrorCode.INVALID_CONFIGURATION
+
+
+class PasswordAdmissionBusyError(RuntimeError):
+    """Expected admission refusal; adapters own mapping and any retry decision."""
+
+    def __init__(self, code: PasswordAdmissionErrorCode) -> None:
+        self.code = code
+        super().__init__(code.value)
+
+
+@dataclass(frozen=True)
+class LimiterConfiguration:
+    """Explicit per-process budget, supplied only after deployment review."""
+
+    k: int
+    maximum_waiters: int
+    admission_timeout: float
+    threadpool_tokens: int
+    reserved_tokens: int
+
+    def __post_init__(self) -> None:
+        counts = (
+            self.k,
+            self.maximum_waiters,
+            self.threadpool_tokens,
+            self.reserved_tokens,
+        )
+        if (
+            any(type(value) is not int or value < 0 for value in counts)
+            or self.k < 1
+            or self.threadpool_tokens < 1
+            or self.k + self.maximum_waiters
+            > self.threadpool_tokens - self.reserved_tokens
+        ):
+            raise InvalidLimiterConfigurationError("Invalid explicit admission budget")
+        try:
+            valid_timeout = (
+                type(self.admission_timeout) in (int, float)
+                and math.isfinite(self.admission_timeout)
+                and self.admission_timeout >= 0
+            )
+        except OverflowError:
+            valid_timeout = False
+        if not valid_timeout:
+            raise InvalidLimiterConfigurationError("Invalid explicit admission timeout")
+
+
+@dataclass(frozen=True)
+class PasswordAdmissionOutcome:
+    """One admitted scope's evidence, containing no identity or password data."""
+
+    queue_wait_seconds: float
+
+
+class NativePasswordAdmission:
+    """Dormant synchronous admission primitive; no native operation is installed.
+
+    Share one explicitly constructed instance within a process after adoption.
+    This does not coordinate processes, resize/enforce a framework threadpool,
+    promise FIFO fairness, or cancel native work. Acquire separately for verify
+    and any later rehash, releasing between operations.
+    """
+
+    def __init__(self, configuration: LimiterConfiguration) -> None:
+        if not isinstance(configuration, LimiterConfiguration):
+            raise InvalidLimiterConfigurationError("Typed admission budget required")
+        self._configuration = configuration
+        self._condition = threading.Condition()
+        self._active = 0
+        self._waiting = 0
+
+    @property
+    def configuration(self) -> LimiterConfiguration:
+        return self._configuration
+
+    @contextmanager
+    def admit(self) -> Iterator[PasswordAdmissionOutcome]:
+        """Admit one scope or raise busy; release even on BaseException.
+
+        A bounded waiter consumes a caller thread. Excess callers are refused
+        immediately after taking the short accounting lock. Never hold this
+        scope across unrelated work, database transactions, or another admit.
+        """
+        started = time.monotonic()
+        admitted = False
+        waiting = False
+        try:
+            with self._condition:
+                try:
+                    if self._active >= self.configuration.k:
+                        if self._waiting >= self.configuration.maximum_waiters:
+                            raise PasswordAdmissionBusyError(
+                                PasswordAdmissionErrorCode.SATURATED
+                            )
+                        self._waiting += 1
+                        waiting = True
+                        while True:
+                            remaining = self.configuration.admission_timeout - (
+                                time.monotonic() - started
+                            )
+                            if remaining <= 0:
+                                raise PasswordAdmissionBusyError(
+                                    PasswordAdmissionErrorCode.TIMED_OUT
+                                )
+                            if self._active < self.configuration.k:
+                                break
+                            self._condition.wait(min(remaining, threading.TIMEOUT_MAX))
+                    self._active += 1
+                    admitted = True
+                finally:
+                    if waiting:
+                        self._waiting -= 1
+            yield PasswordAdmissionOutcome(time.monotonic() - started)
+        finally:
+            if admitted:
+                with self._condition:
+                    self._active -= 1
+                    self._condition.notify_all()
 
 
 class ReversiblePasswordPolicy(str, Enum):

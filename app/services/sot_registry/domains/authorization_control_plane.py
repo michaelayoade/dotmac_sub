@@ -182,9 +182,11 @@ DOMAIN = DomainSOT(
             owns=(
                 "user password representation verification",
                 "explicit Argon2id hash parameters",
+                "explicit native password admission",
             ),
             notes=(
-                "User-only stateless foundation. Existing adapters default COMPAT; REFUSE "
+                "User-only foundation with dormant explicitly configured process-local admission. "
+                "Existing adapters default COMPAT; REFUSE "
                 "is explicit and is not connected to settings. Service-secret compatibility "
                 "remains in auth_flow. No rehash, notices, or persistence."
             ),
@@ -203,6 +205,11 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.POLICY,
                         input_names=("explicit password policy and parameters",),
                     ),
+                    ConcernContract(
+                        name="explicit native password admission",
+                        role=OwnerRole.POLICY,
+                        input_names=("explicit native password admission budget",),
+                    ),
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
@@ -217,21 +224,34 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="ReversiblePasswordPolicy, Argon2idParameters and explicit Argon2idVerificationLimits; absent verification limits deny Argon2, COMPAT adapter default, no production parameter default.",
                     ),
+                    AuthorityInput(
+                        name="explicit native password admission budget",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Immutable LimiterConfiguration explicitly supplies native capacity, bounded waiters, finite admission timeout, threadpool tokens and reserved tokens; no default or installed runtime caller.",
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.NOT_APPLICABLE,
-                    boundary="Stateless verification and hashing; never writes or completes a transaction.",
-                    locking="No database locks; credential standing remains the authentication owner's responsibility.",
+                    boundary="Verification, hashing and process-local admission never write or complete a database transaction.",
+                    locking="No database locks. A per-instance condition protects bounded active and waiting counters; no FIFO guarantee. Credential standing remains the authentication owner's responsibility.",
                     idempotency="Verification repeats the same decision; hashing intentionally generates a fresh random salt.",
                     retries="No automatic retries; compatibility secret-resolution failures retain their existing error boundary.",
                 ),
                 errors=ErrorContract(
-                    domain_codes=("auth.user_passwords.invalid_argon2id_parameters",),
+                    domain_codes=(
+                        "auth.user_passwords.invalid_argon2id_parameters",
+                        "auth.user_passwords.invalid_admission_configuration",
+                        "auth.user_passwords.admission_saturated",
+                        "auth.user_passwords.admission_timed_out",
+                    ),
                     mapping_owner="auth_flow compatibility adapter and future password creation owners",
                     fail_closed_on=(
                         "malformed or unsupported hashes",
                         "REFUSE reversible material before resolution",
                         "bcrypt input above 72 UTF-8 bytes",
+                        "invalid explicit admission budget",
+                        "full waiter budget or expired admission timeout",
                     ),
                 ),
                 migration=MigrationContract(
@@ -242,6 +262,7 @@ DOMAIN = DomainSOT(
                 design_refs=("docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md",),
                 test_refs=(
                     "tests/test_user_password_policy.py",
+                    "tests/test_user_password_admission.py",
                     "tests/test_auth_legacy_bcrypt.py",
                 ),
             ),
@@ -407,18 +428,97 @@ DOMAIN = DomainSOT(
                 ),
             ),
         ),
+        SOTService(
+            name="auth.api_key_administration",
+            module="app.services.api_key_administration",
+            owns=("administrative JSON API-key revocation",),
+            depends_on=("observability.audit_log",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="administrative JSON API-key revocation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("authorized revocation and ApiKey",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authorized revocation and ApiKey",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Immutable UUID target, trusted administrative AuditActor and matching CommandContext; refreshed locked ApiKey row.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="revoke enters execute_owner_command once on a fresh session; ApiKey state and canonical AuditEvent commit or roll back together. No external effects.",
+                    locking="ApiKey FOR UPDATE with populate_existing; PostgreSQL transaction-local five-second lock timeout.",
+                    idempotency="Each successful invocation stamps revoked_at and writes audit, including already-revoked keys. No durable replay claim.",
+                    retries="No automatic retry; lock timeout maps to 503 Retry-After 5 after rollback. Inspect state after unknown commit outcome.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "auth.api_key_administration"
+                    )
+                    + (
+                        "auth.api_key_administration.invalid_actor",
+                        "auth.api_key_administration.not_found",
+                    ),
+                    mapping_owner="app.api.auth DELETE /api-keys/{key_id}",
+                    fail_closed_on=(
+                        "missing trusted actor",
+                        "active caller transaction",
+                        "canonical audit failure",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("auth.api_key.revoked",),
+                    schema_version=1,
+                    delivery_owner="observability.audit_log",
+                    compatibility="Canonical AuditEvent only: target/actor identifiers, old/new active/revoked state and command/correlation identifiers. No external event or secret payload.",
+                    replay="Audit records are evidence, not delivery commands; no external dispatch or automatic replay. Database immutability is outside this slice.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    new_owner="auth.api_key_administration",
+                    old_owner="auth.ApiKeys.delete/revoke for JSON API revocation only",
+                    verification="Focused typed behavior, transaction trace and architecture tests; migrated PostgreSQL locking acceptance is hosted-only.",
+                    cutover_gate="JSON DELETE uses this owner with a fresh command session and route-local admin guard.",
+                    fallback_retirement="Both legacy delete and revoke methods removed after repository-wide consumer search. Other API-key writers remain outside this slice.",
+                ),
+                steward="platform security",
+                design_refs=("docs/designs/API_KEY_REVOCATION.md",),
+                test_refs=(
+                    "tests/test_api_key_administration.py",
+                    "tests/integration/test_api_key_revocation_concurrency.py",
+                    "tests/architecture/test_api_key_administration_boundary.py",
+                ),
+            ),
+        ),
         *CREDENTIAL_ADMINISTRATION_SERVICES,
         SOTService(
             name="auth.credential_security_inventory",
             module="app.services.credential_security_inventory",
-            owns=("credential security aggregate census",),
-            depends_on=("auth.password_authentication",),
+            owns=(
+                "credential security aggregate census",
+                "reversible credential recovery prerequisite aggregate",
+            ),
+            depends_on=("auth.password_authentication", "auth.credential_recovery"),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
                         name="credential security aggregate census",
                         role=OwnerRole.RESOLVER,
                         input_names=("stored user credential security state",),
+                    ),
+                    ConcernContract(
+                        name="reversible credential recovery prerequisite aggregate",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "stored user credential security state",
+                            "exact recovery prerequisite interpretation",
+                        ),
                     ),
                 ),
                 authoritative_inputs=(
@@ -427,6 +527,12 @@ DOMAIN = DomainSOT(
                         owner="auth.password_authentication",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="user_credentials format prefixes, principal links, provider, activity and timestamps",
+                    ),
+                    AuthorityInput(
+                        name="exact recovery prerequisite interpretation",
+                        owner="auth.credential_recovery",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Typed recovery-owned SQL projection of exact local binding, principal activity/cancellation and contact presence; no delivery or support claim.",
                     ),
                 ),
                 transaction=TransactionContract(
@@ -455,6 +561,8 @@ DOMAIN = DomainSOT(
                 design_refs=("docs/runbooks/CREDENTIAL_SECURITY_INVENTORY.md",),
                 test_refs=(
                     "tests/test_credential_security_inventory.py",
+                    "tests/test_credential_recovery_readiness.py",
+                    "tests/integration/test_credential_recovery_readiness_snapshot.py",
                     "tests/architecture/test_credential_security_inventory_boundary.py",
                 ),
             ),
@@ -1465,6 +1573,7 @@ DOMAIN = DomainSOT(
                 "password recovery request and delivery intent",
                 "password reset credential transition",
                 "credential recovery session projection invalidation",
+                "exact recovery prerequisite interpretation",
             ),
             depends_on=(
                 "auth.token_signing",
@@ -1484,6 +1593,11 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="exact recovery prerequisite interpretation",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("canonical recoverable principal state",),
+                    ),
                     ConcernContract(
                         name="password recovery request and delivery intent",
                         role=OwnerRole.COMMAND_WRITER,
@@ -1851,7 +1965,12 @@ DOMAIN = DomainSOT(
                 "carry the credential binding and re-run the gate. PPPoE "
                 "(access credential) authentication never touches "
                 "user_credentials. The hash-representation hook "
-                "replace_password_representation is built but not called by "
+                "replace_password_representation is a dormant non-public participant "
+                "accepting redacted PasswordRepresentationReplacement and returning "
+                "PasswordRepresentationOutcome.REPLACED or CONFLICT. Its exact UUID, "
+                "positive version and hash CAS changes only password_hash, preserves "
+                "password_updated_at and credential_version, and disables autoflush "
+                "throughout the transaction-local marker window. It is not called by "
                 "login. UserCredential verification uses verify_user_password; "
                 "AccessCredential verification uses verify_service_secret and "
                 "retains its existing bcrypt refusal. Reversible user material "
@@ -1988,7 +2107,14 @@ DOMAIN = DomainSOT(
                         "The optional atomic counter update and failed AuditEvent commit "
                         "or roll back together. Session-open, staging, flush, commit, close "
                         "and telemetry failures preserve the original denial; no counter-only fallback. "
-                        "Pending and flushed request writes are never released to record failure."
+                        "Pending and flushed request writes are never released to record failure. "
+                        "The dormant representation replacement is a non-public participant "
+                        "in its caller's transaction, never a command or transaction owner. "
+                        "It performs no flush, commit, rollback or savepoint; pending unrelated "
+                        "ORM writes stay pending until after its marker is cleared. Recoverable "
+                        "client failures attempt marker cleanup with autoflush still disabled. "
+                        "An aborted PostgreSQL transaction can refuse cleanup; the original "
+                        "failure propagates unchanged to the owner for rollback."
                     ),
                     locking=(
                         "No SELECT FOR UPDATE and no lock while hashing. PPPoE "
@@ -2022,7 +2148,10 @@ DOMAIN = DomainSOT(
                     retries=(
                         "A deadlock (40P01) retries the whole phase B once; "
                         "the gate re-evaluates the version so phase A stays "
-                        "valid. Zero gate rows are never retried or re-verified."
+                        "valid. Zero gate rows are never retried or re-verified. "
+                        "Representation CAS loss returns CONFLICT without retry or a "
+                        "secret, hash or version in the outcome. The caller owns all "
+                        "database error rollback and retry."
                     ),
                 ),
                 errors=ErrorContract(
@@ -2112,6 +2241,7 @@ DOMAIN = DomainSOT(
                     "docs/adr/0002-owner-command-transaction-boundary.md",
                     "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
                     "docs/security/AUTHENTICATION_DENIAL_AUDIT.md",
+                    "docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md",
                 ),
                 test_refs=(
                     "tests/test_password_authentication.py",

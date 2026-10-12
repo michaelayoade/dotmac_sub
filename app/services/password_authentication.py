@@ -1798,46 +1798,83 @@ def apply_password_change(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class PasswordRepresentationReplacement:
+    """Exact same-secret CAS evidence; representations never enter reprs."""
+
+    credential_id: UUID
+    expected_version: int
+    expected_hash: str = field(repr=False)
+    new_hash: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.credential_id, UUID):
+            raise TypeError("Representation replacement requires a credential UUID")
+        if type(self.expected_version) is not int or self.expected_version <= 0:
+            raise ValueError("Representation replacement requires a positive version")
+        if not isinstance(self.expected_hash, str) or not self.expected_hash:
+            raise ValueError("Representation replacement requires an expected hash")
+        if not isinstance(self.new_hash, str) or not self.new_hash:
+            raise ValueError("Representation replacement requires a replacement hash")
+
+
+class PasswordRepresentationOutcome(StrEnum):
+    REPLACED = "replaced"
+    CONFLICT = "conflict"
+
+
 def replace_password_representation(
-    db: Session,
-    *,
-    credential_id: UUID,
-    expected_version: int,
-    expected_hash: str,
-    new_hash: str,
-) -> bool:
-    """Swap the hash representation of the SAME secret without a version bump.
+    db: Session, *, replacement: PasswordRepresentationReplacement
+) -> PasswordRepresentationOutcome:
+    """Dormant same-secret participant; the caller owns completion and rollback.
 
-    Runs in the caller's transaction (it is the B-PR4 upgrade hook point after
-    the gate). The transaction-local GUC lets the credential trigger tell a
-    representation-only change from a secret change; it is set immediately
-    before the single UPDATE and cleared right after. This is the only
-    function allowed to name that setting (architecture-tested).
+    The exact hash/version CAS preserves secret version and password_updated_at.
+    No pending ORM write may flush while the transaction-local marker is set.
+    A recoverable client failure clears it; an aborted database transaction may
+    reject cleanup, but that secondary failure must never mask the original.
     """
-
     postgres = _is_postgresql(db)
-    if postgres:
-        db.execute(
-            text(
-                "SELECT set_config('app.credential_change_kind', 'representation', true)"
-            )
-        )
-    row = db.execute(
-        update(UserCredential)
-        .where(
-            UserCredential.id == credential_id,
-            UserCredential.credential_version == expected_version,
-            UserCredential.password_hash == expected_hash,
-        )
-        .values(password_hash=new_hash)
-        .returning(UserCredential.id)
-        .execution_options(synchronize_session=False)
-    ).first()
-    # If the UPDATE raised, the transaction is aborted and the local setting
-    # dies with it; reaching here means the statement ran.
-    if postgres:
-        db.execute(text("SELECT set_config('app.credential_change_kind', '', true)"))
-    return row is not None
+    with db.no_autoflush:
+        try:
+            if postgres:
+                db.execute(
+                    text(
+                        "SELECT set_config('app.credential_change_kind', 'representation', true)"
+                    )
+                )
+            row = db.execute(
+                update(UserCredential)
+                .where(
+                    UserCredential.id == replacement.credential_id,
+                    UserCredential.credential_version == replacement.expected_version,
+                    UserCredential.password_hash == replacement.expected_hash,
+                )
+                .values(password_hash=replacement.new_hash)
+                .returning(UserCredential.id)
+                .execution_options(synchronize_session=False)
+            ).first()
+            if postgres:
+                db.execute(
+                    text("SELECT set_config('app.credential_change_kind', '', true)")
+                )
+        except BaseException:
+            if postgres:
+                try:
+                    db.execute(
+                        text(
+                            "SELECT set_config('app.credential_change_kind', '', true)"
+                        )
+                    )
+                except BaseException:
+                    # The owner rolls back an aborted transaction. Preserve the
+                    # original exception even when PostgreSQL refuses cleanup.
+                    pass
+            raise
+    return (
+        PasswordRepresentationOutcome.REPLACED
+        if row is not None
+        else PasswordRepresentationOutcome.CONFLICT
+    )
 
 
 def revoke_undelivered_customer_session(

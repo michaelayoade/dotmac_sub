@@ -587,19 +587,6 @@ class ApiKeys(ListResponseMixin):
         db.refresh(api_key)
         return api_key
 
-    @staticmethod
-    def delete(db: Session, key_id: str):
-        api_key = db.get(ApiKey, coerce_uuid(key_id))
-        if not api_key:
-            raise HTTPException(status_code=404, detail="API key not found")
-        api_key.is_active = False
-        api_key.revoked_at = datetime.now(UTC)
-        db.commit()
-
-    @staticmethod
-    def revoke(db: Session, key_id: str):
-        ApiKeys.delete(db, key_id)
-
 
 user_credentials = UserCredentials()
 mfa_methods = MFAMethods()

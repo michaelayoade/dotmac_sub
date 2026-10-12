@@ -1,0 +1,87 @@
+name: Argon2id single-operation benchmark
+
+# Synthetic measurements are explicit evidence runs, never ordinary CI or
+# application policy. No deployment or application credentials are inputs.
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: Run the bounded synthetic hashing workload
+        required: true
+        default: false
+        type: boolean
+      samples:
+        description: Measured samples per grid point (1 to 100)
+        required: true
+        default: '10'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: argon2id-single-operation-benchmark
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: Measure synthetic Argon2id on Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHON_VERSION: '3.12.13'
+      POETRY_VERSION: '2.4.1'
+    steps:
+      - name: Require explicit execution from main
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          EXECUTE: ${{ inputs.execute }}
+        run: |
+          set -euo pipefail
+          test "$WORKFLOW_REF" = refs/heads/main
+          test "$EXECUTE" = true
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Install the locked environment
+        env:
+          POETRY_HTTP_BASIC_FORGEJO_USERNAME: ci-reader
+          POETRY_HTTP_BASIC_FORGEJO_PASSWORD: ${{ secrets.FORGEJO_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -L .venv ]; then
+            rm .venv
+          fi
+          poetry install --no-interaction
+
+      - name: Measure the bounded synthetic grid
+        env:
+          SAMPLES: ${{ inputs.samples }}
+        run: |
+          set -euo pipefail
+          # Request validates the sample bound before creating a native hasher.
+          # The external limit can stop a native call after the internal deadline.
+          timeout --signal=TERM --kill-after=5s 130s \
+            poetry run python -m scripts.security.argon2id_benchmark \
+              --mode microbench --execute --samples "$SAMPLES" \
+              --warmups 1 --max-seconds 120 > argon2id-single-op.json
+
+      - name: Preserve complete measurements with exact source provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: argon2id-single-op-${{ github.sha }}-${{ github.run_id }}
+          path: argon2id-single-op.json
+          if-no-files-found: error
+          retention-days: 30

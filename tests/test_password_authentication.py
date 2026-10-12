@@ -601,12 +601,17 @@ def test_representation_rehash_does_not_void_challenge(db_session, person):
     )
     row = _row(db_session, credential.id)
 
-    assert pa.replace_password_representation(
-        db_session,
-        credential_id=credential.id,
-        expected_version=row.credential_version,
-        expected_hash=row.password_hash,
-        new_hash=hash_password("secret"),
+    assert (
+        pa.replace_password_representation(
+            db_session,
+            replacement=pa.PasswordRepresentationReplacement(
+                credential_id=credential.id,
+                expected_version=row.credential_version,
+                expected_hash=row.password_hash,
+                new_hash=hash_password("secret"),
+            ),
+        )
+        is pa.PasswordRepresentationOutcome.REPLACED
     )
     db_session.commit()
     assert _row(db_session, credential.id).credential_version == 1
@@ -619,19 +624,29 @@ def test_representation_rehash_does_not_void_challenge(db_session, person):
 
 def test_representation_hook_refuses_on_drift(db_session, person):
     credential = _credential(db_session, person)
-    assert not pa.replace_password_representation(
-        db_session,
-        credential_id=credential.id,
-        expected_version=7,
-        expected_hash=credential.password_hash,
-        new_hash="x",
+    assert (
+        pa.replace_password_representation(
+            db_session,
+            replacement=pa.PasswordRepresentationReplacement(
+                credential_id=credential.id,
+                expected_version=7,
+                expected_hash=credential.password_hash,
+                new_hash="x",
+            ),
+        )
+        is pa.PasswordRepresentationOutcome.CONFLICT
     )
-    assert not pa.replace_password_representation(
-        db_session,
-        credential_id=credential.id,
-        expected_version=1,
-        expected_hash="not-the-hash",
-        new_hash="x",
+    assert (
+        pa.replace_password_representation(
+            db_session,
+            replacement=pa.PasswordRepresentationReplacement(
+                credential_id=credential.id,
+                expected_version=1,
+                expected_hash="not-the-hash",
+                new_hash="x",
+            ),
+        )
+        is pa.PasswordRepresentationOutcome.CONFLICT
     )
     db_session.commit()
 
@@ -1243,3 +1258,86 @@ def test_web_enroll_confirm_answers_stale_and_wrong_code_identically(
     assert wrong.status_code == stale.status_code == 401
     assert wrong.context["error"] == stale.context["error"]
     assert wrong.context["method_id"] == stale.context["method_id"]
+
+
+@pytest.mark.parametrize("version", [0, -1, True, 1.0])
+def test_representation_contract_refuses_invalid_version(version):
+    from uuid import uuid4
+
+    with pytest.raises(ValueError, match="positive version"):
+        pa.PasswordRepresentationReplacement(
+            credential_id=uuid4(),
+            expected_version=version,
+            expected_hash="synthetic-old",
+            new_hash="synthetic-new",
+        )
+
+
+def test_representation_contract_is_immutable_and_redacted():
+    from dataclasses import FrozenInstanceError
+    from uuid import uuid4
+
+    replacement = pa.PasswordRepresentationReplacement(
+        credential_id=uuid4(),
+        expected_version=1,
+        expected_hash="synthetic-old",
+        new_hash="synthetic-new",
+    )
+    assert "synthetic-old" not in repr(replacement)
+    assert "synthetic-new" not in repr(replacement)
+    with pytest.raises(FrozenInstanceError):
+        replacement.expected_version = 2
+    with pytest.raises(TypeError, match="UUID"):
+        pa.PasswordRepresentationReplacement(
+            credential_id=str(uuid4()),
+            expected_version=1,
+            expected_hash="synthetic-old",
+            new_hash="synthetic-new",
+        )
+
+
+@pytest.mark.parametrize("failure_at", [1, 2, 3, 4])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_representation_failure_preserves_original_and_inhibits_autoflush(
+    db_session, monkeypatch, failure_at, cleanup_fails
+):
+    """Synthetic unit seam only; PostgreSQL transaction proof is hosted."""
+    from unittest.mock import Mock
+    from uuid import uuid4
+
+    from sqlalchemy.exc import DBAPIError
+
+    original = DBAPIError("synthetic", None, RuntimeError("client failure"))
+    calls: list[str] = []
+    monkeypatch.setattr(db_session, "autoflush", True)
+    monkeypatch.setattr(pa, "_is_postgresql", lambda _db: True)
+
+    def execute(statement):
+        assert db_session.autoflush is False
+        calls.append(str(statement))
+        if (len(calls) == failure_at and failure_at != 3) or (
+            failure_at == 4 and len(calls) == 3
+        ):
+            raise original
+        if len(calls) > 1 and "set_config" in str(statement) and cleanup_fails:
+            raise RuntimeError("secondary cleanup failure")
+        result = Mock()
+        if failure_at == 3 and len(calls) == 2:
+            result.first.side_effect = original
+        return result
+
+    monkeypatch.setattr(db_session, "execute", execute)
+    with pytest.raises(DBAPIError) as raised:
+        pa.replace_password_representation(
+            db_session,
+            replacement=pa.PasswordRepresentationReplacement(
+                credential_id=uuid4(),
+                expected_version=1,
+                expected_hash="synthetic-old",
+                new_hash="synthetic-new",
+            ),
+        )
+    assert raised.value is original
+    assert "set_config" in calls[-1]
+    assert "'', true" in calls[-1]
+    assert db_session.autoflush is True

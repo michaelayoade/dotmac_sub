@@ -49,3 +49,39 @@ snapshots can change as authoritative credentials change. No reset, notification
 disablement, rehash or setting change occurs. The B-PR1 portal-login `src` runtime
 metric is deliberately split into the portal authentication slice to avoid
 overlapping portal worker files; this census does not claim usage measurement.
+
+
+## Reversible credential recovery prerequisites
+
+The same CLI supports `--mode read-only --report recovery-readiness`. This
+separate aggregate report has schema version 1, one UTC `observed_at`,
+`reversible_count`, and cohorts of principal/provider/reason/count. It covers
+exactly the plain/encrypted/reference USER credential families counted by the
+inventory; every row enters exactly one reason, including external/inactive
+credentials. No credential values, contacts or identifiers cross the query
+boundary. No AccessCredential or RadiusUser observations are included.
+
+`auth.credential_recovery` owns the typed SQL prerequisite interpretation;
+`auth.credential_security_inventory` only groups and counts it. Reasons are
+ordered: multiple principal links are ambiguous; absent/dangling principal is
+missing; nonlocal credential; inactive credential/principal; canceled
+subscriber; multiple active local credentials for one principal are ambiguous;
+missing/blank email is unresolved support; otherwise exact local email eligible.
+Zero principal links are missing. Known prefix families include malformed
+representations, so readiness is not validation of stored credential material.
+
+All three principal types need an email for canonical exact recovery. A blank
+email cannot establish a recovery channel. Staff/reseller administrator password
+updates are refused by credential administration; this report does not invent a
+support fallback for them. Exact-local-email eligibility means only current
+structural prerequisites. It does not verify mailbox ownership, prove notices
+were sent/delivered, establish support staffing, or authorize enforcement.
+Whitespace-only email is conservatively unresolved even where the existing
+runtime's truthiness check would strip it to an empty string.
+
+Both reports use the existing clean PostgreSQL REPEATABLE READ READ ONLY
+snapshot boundary. Rebuild on demand; compare in the same snapshot and at the
+same observation time for count conservation. No report is persisted, no
+campaign is executed, no reset capability is minted and no setting is adopted.
+PostgreSQL integration cases are hosted-test evidence only; local collection
+and synthetic SQLite execution do not prove PostgreSQL snapshot semantics.

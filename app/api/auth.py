@@ -433,5 +433,42 @@ def update_api_key(key_id: str, payload: ApiKeyUpdate, db: Session = Depends(get
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["api-keys"],
 )
-def delete_api_key(key_id: str, db: Session = Depends(get_db)):
-    auth_service.api_keys.revoke(db, key_id)
+def delete_api_key(key_id: UUID, auth: dict = Depends(require_role("admin"))):
+    from sqlalchemy.exc import OperationalError
+
+    from app.services import api_key_administration as api_key_admin
+    from app.services.audit_adapter import AuditActor
+
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    command = api_key_admin.RevokeApiKeyCommand(
+        context=CommandContext.system(
+            actor=str(actor.actor_id),
+            scope=api_key_admin.SCOPE,
+            reason="Administrative API-key revocation",
+        ),
+        key_id=key_id,
+        actor=actor,
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            api_key_admin.revoke(command_db, command=command)
+        except api_key_admin.ApiKeyRevocationError as exc:
+            raise HTTPException(
+                status_code=404 if exc.code.endswith(".not_found") else 403,
+                detail=exc.message,
+            ) from exc
+        except OperationalError as exc:
+            if (
+                getattr(exc.orig, "sqlstate", None) == "55P03"
+                or getattr(exc.orig, "pgcode", None) == "55P03"
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="API key revocation busy",
+                    headers={"Retry-After": "5"},
+                ) from exc
+            raise
