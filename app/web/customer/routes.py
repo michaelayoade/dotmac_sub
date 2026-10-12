@@ -37,7 +37,6 @@ from app.schemas.service_period_purchase import (
     ServicePeriodPurchaseCheckoutRequest,
     ServicePeriodPurchasePreviewRequest,
 )
-from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import chat_session as chat_session_service
@@ -57,7 +56,9 @@ from app.services import customer_portal_contacts as customer_portal_contacts_se
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_notifications as customer_notifications_service
 from app.services import customer_portal_profile_commands as portal_profile_commands
+from app.services import password_authentication as subscriber_mfa_owner
 from app.services import payment_proofs as payment_proofs_service
+from app.services import subscriber_mfa_enrollment_adapter as subscriber_mfa_adapter
 from app.services import web_customer_actions as customer_profile_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
@@ -1934,8 +1935,24 @@ def customer_mfa_setup(request: Request, db: Session = Depends(get_db)) -> Respo
     if not subscriber_id:
         return RedirectResponse(url="/portal/profile", status_code=303)
 
-    setup = auth_flow_service.auth_flow.mfa_setup(
-        db, str(subscriber_id), "Authenticator app"
+    proof = subscriber_mfa_adapter.session_proof(
+        principal_type="subscriber",
+        principal_id=str(subscriber_id),
+        session_id=str(customer.get("auth_session_id")),
+        is_impersonation=bool(
+            customer.get("is_impersonation") or customer.get("impersonated_by")
+        ),
+    )
+    setup = subscriber_mfa_adapter.setup(
+        command=subscriber_mfa_owner.SetupSubscriberMfaCommand(
+            context=subscriber_mfa_adapter.command_context(
+                proof=proof, reason="Customer MFA setup"
+            ),
+            subscriber_id=proof.subscriber_id,
+            label="Authenticator app",
+            provenance=subscriber_mfa_owner.SubscriberMfaProvenance.CUSTOMER_WEB,
+            session=proof,
+        )
     )
     return templates.TemplateResponse(
         "customer/profile/mfa_setup.html",
@@ -1943,9 +1960,9 @@ def customer_mfa_setup(request: Request, db: Session = Depends(get_db)) -> Respo
             "request": request,
             "customer": customer,
             "active_page": "profile",
-            "method_id": setup["method_id"],
-            "secret_key": setup["secret"],
-            "otpauth_uri": setup["otpauth_uri"],
+            "method_id": setup.method_id,
+            "secret_key": setup.secret,
+            "otpauth_uri": setup.otpauth_uri,
         },
     )
 
@@ -1976,10 +1993,28 @@ def customer_mfa_confirm(
         return RedirectResponse(url="/portal/profile", status_code=303)
 
     try:
-        method = auth_flow_service.auth_flow.mfa_confirm(
-            db, method_id, code.strip(), str(subscriber_id)
+        proof = subscriber_mfa_adapter.session_proof(
+            principal_type="subscriber",
+            principal_id=str(subscriber_id),
+            session_id=str(customer.get("auth_session_id")),
+            is_impersonation=bool(
+                customer.get("is_impersonation") or customer.get("impersonated_by")
+            ),
         )
-    except Exception:
+        outcome = subscriber_mfa_adapter.confirm(
+            command=subscriber_mfa_owner.ConfirmSubscriberMfaCommand(
+                context=subscriber_mfa_adapter.command_context(
+                    proof=proof, reason="Customer MFA confirmation"
+                ),
+                subscriber_id=proof.subscriber_id,
+                method_id=UUID(method_id),
+                code=code.strip(),
+                provenance=subscriber_mfa_owner.SubscriberMfaProvenance.CUSTOMER_WEB,
+                session=proof,
+                recovery_delivery=subscriber_mfa_owner.RecoveryCodeDelivery.RETURN_ONCE,
+            )
+        )
+    except (HTTPException, ValueError) as exc:
         return templates.TemplateResponse(
             "customer/profile/mfa_setup.html",
             {
@@ -1991,14 +2026,11 @@ def customer_mfa_confirm(
                 "otpauth_uri": "",
                 "error": "Invalid verification code. Please try again.",
             },
-            status_code=401,
+            status_code=exc.status_code if isinstance(exc, HTTPException) else 400,
+            headers=exc.headers if isinstance(exc, HTTPException) else None,
         )
 
-    recovery_codes = (
-        auth_flow_service.generate_mfa_recovery_codes(db, method)
-        if getattr(method, "id", None)
-        else []
-    )
+    recovery_codes = outcome.recovery_codes
     if recovery_codes:
         return templates.TemplateResponse(
             "customer/profile/mfa_setup.html",

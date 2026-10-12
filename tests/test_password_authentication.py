@@ -34,6 +34,7 @@ from app.services.auth_flow import AuthFlow, change_password, hash_password
 from tests.authentication_denial_unit import (
     authentication_denial_unit_session as authentication_denial_unit_session,
 )
+from tests.subscriber_mfa_fixtures import seed_enabled_subscriber_mfa
 from tests.support.tx_trace import assert_protected_tx, trace_transactions
 from tests.test_auth_flow import _make_request, _system_user_with_credential
 
@@ -61,14 +62,10 @@ def _credential(db_session, person, *, username="user@example.com", **extra):
 
 
 def _enable_mfa(db_session, person):
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(person.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
-    return setup["secret"], setup["method_id"]
+    return setup.secret, setup.method_id
 
 
 def _row(db_session, credential_id):

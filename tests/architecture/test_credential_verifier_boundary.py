@@ -145,20 +145,56 @@ def test_access_login_uses_service_verifier_only() -> None:
     assert "verify_user_password" not in calls
 
 
-def test_native_password_admission_remains_uninstalled() -> None:
-    """Adoption must explicitly retire this guard with its reviewed runtime wiring."""
-    dormant = {"NativePasswordAdmission", "LimiterConfiguration"}
+DORMANT_PASSWORD_TYPES = {
+    "NativePasswordAdmission",
+    "LimiterConfiguration",
+    "UserPasswordWorkRequest",
+    "UserPasswordWork",
+    "LegacyPasswordWork",
+    "AdmittedArgon2PasswordWork",
+    "NativePasswordObserver",
+    "NativePasswordObservation",
+    "NativePasswordCaptureStatus",
+}
+
+
+def _dormant_password_references(source: str) -> set[str]:
+    """Reject imports and qualified references, including renamed imports."""
+    tree = ast.parse(source)
+    violations: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            violations.update(
+                alias.name
+                for alias in node.names
+                if alias.name in DORMANT_PASSWORD_TYPES
+            )
+        if isinstance(node, ast.Attribute) and node.attr in DORMANT_PASSWORD_TYPES:
+            violations.add(node.attr)
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in DORMANT_PASSWORD_TYPES
+        ):
+            violations.add(node.id)
+    return violations
+
+
+def test_native_password_work_remains_uninstalled() -> None:
+    """Adoption must retire this guard in a separately reviewed runtime slice."""
     for directory in ("app", "scripts"):
         for path in (ROOT / directory).rglob("*.py"):
-            tree = ast.parse(path.read_text(), filename=str(path))
-            aliases = set(dormant)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom):
-                    aliases.update(
-                        alias.asname or alias.name
-                        for alias in node.names
-                        if alias.name in dormant
-                    )
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    assert _called_name(node) not in aliases, path
+            if path == ROOT / "app/services/user_passwords.py":
+                continue
+            assert not _dormant_password_references(path.read_text()), path
+
+
+def test_dormant_work_guard_detects_alias_and_qualified_imports() -> None:
+    for source in (
+        "from app.services.user_passwords import AdmittedArgon2PasswordWork as Work\nWork()",
+        "import app.services.user_passwords as passwords\npasswords.AdmittedArgon2PasswordWork()",
+        "from app.services import user_passwords as passwords\npasswords.LegacyPasswordWork()",
+        "import app.services.user_passwords\napp.services.user_passwords.UserPasswordWorkRequest()",
+        "from app.services.user_passwords import UserPasswordWork as Boundary",
+    ):
+        assert _dormant_password_references(source)

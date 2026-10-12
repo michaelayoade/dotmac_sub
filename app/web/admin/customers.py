@@ -1969,41 +1969,69 @@ def customer_user_reset_mfa(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
+    from app.services import credential_administration as credentials
 
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
     try:
-        result = web_customer_user_access_service.reset_customer_mfa(
-            db,
-            customer_type=customer_type,
-            customer_id=customer_id,
-            request=request,
-            actor_id=actor_id,
+        auth = getattr(request.state, "auth", None)
+        if (
+            not isinstance(auth, Mapping)
+            or auth.get("principal_type") != "system_user"
+            or auth.get("impersonated_by")
+        ):
+            raise credentials.error(
+                "invalid_command_context", "Trusted customer recovery actor required."
+            )
+        try:
+            actor_id = UUID(str(auth.get("principal_id")))
+            target_id = UUID(customer_id)
+            kind = credentials.CustomerKind(customer_type)
+        except (ValueError, TypeError) as exc:
+            raise credentials.error(
+                "invalid_command_context", "Invalid customer recovery request."
+            ) from exc
+        command = credentials.ResetCustomerMfaCommand(
+            context=CommandContext.system(
+                actor=str(actor_id),
+                scope=credentials.CUSTOMER_MFA_RESET_SCOPE,
+                reason=credentials.CUSTOMER_MFA_RESET_REASON,
+            ),
+            customer_id=target_id,
+            customer_kind=kind,
+            provenance=credentials.AdminCustomerRecovery(actor_id),
+        )
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = web_customer_user_access_service.reset_customer_mfa(
+                command_db, command=command
+            )
+        message = (
+            "Two-factor authentication has been disabled for this customer. "
+            "They can re-enroll from the portal profile page."
+            if outcome.changed
+            else "Two-factor authentication is already reset for this customer."
         )
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
-            ok=bool(result["ok"]),
-            title=str(result["title"]),
-            message=str(result["message"]),
+            ok=True,
+            title="MFA reset",
+            message=message,
         )
-    except Exception as exc:
-        web_customer_user_access_service.log_customer_user_access_error(
-            db=db,
-            request=request,
-            action=web_customer_user_access_service.MFA_RESET_AUDIT_ACTION,
-            customer_type=customer_type,
-            customer_id=customer_id,
-            actor_id=actor_id,
-            error=exc,
-        )
+    except DomainError as exc:
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
             ok=False,
             title="MFA reset",
-            message=str(exc),
+            message=exc.message,
+        )
+    except Exception:
+        logger.exception("Customer MFA reset failed")
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="MFA reset",
+            message="MFA reset could not be completed. Please try again.",
         )
 
 

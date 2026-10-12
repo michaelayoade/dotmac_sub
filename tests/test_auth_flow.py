@@ -53,6 +53,8 @@ from tests.authentication_denial_unit import (
     authentication_denial_unit_session as authentication_denial_unit_session,
 )
 from tests.staff_identity_fixtures import add_bound_staff_user, project_staff_login
+from tests.subscriber_mfa_fixtures import seed_enabled_subscriber_mfa
+from tests.subscriber_mfa_owner_support import authenticated_subscriber_enrollment
 
 pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
@@ -482,9 +484,9 @@ def test_access_credential_login_returns_mfa_token_when_enabled(
     db_session.add(access_credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    code = pyotp.TOTP(setup["secret"]).now()
-    AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
+    )
 
     result = AuthFlow.login(
         db_session,
@@ -513,8 +515,11 @@ def test_mfa_setup_confirm(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    secret = setup["secret"]
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    setup = enrollment.setup(label="device")
+    secret = setup.secret
 
     # Generate OTP code and verify using an explicit timecode to avoid
     # timezone skew (app imports may change TZ from CEST to Africa/Lagos,
@@ -536,9 +541,7 @@ def test_mfa_setup_confirm(db_session, person, monkeypatch):
 
     monkeypatch.setattr(pyotp.TOTP, "verify", _verify_fixed)
 
-    method = AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), code, str(person.id)
-    )
+    method = enrollment.confirm(method_id=setup.method_id, code=code)
 
     assert method.enabled is True
     assert method.is_primary is True
@@ -670,9 +673,9 @@ def test_login_returns_mfa_token_when_enabled(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    code = pyotp.TOTP(setup["secret"]).now()
-    AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
+    )
 
     request = _make_request()
     result = AuthFlow.login(
@@ -1127,12 +1130,8 @@ def test_password_reset_does_not_bypass_mfa(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(person.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
 
     result = request_password_reset(db_session, person.email)
@@ -1253,13 +1252,10 @@ def test_mfa_recovery_code_is_one_time_login_fallback(db_session, person, monkey
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    method = AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(person.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
+    method = db_session.get(MFAMethod, setup.method_id)
     recovery_codes = auth_flow_service.generate_mfa_recovery_codes(db_session, method)
 
     assert len(recovery_codes) == 10
@@ -1536,11 +1532,10 @@ def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeyp
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    totp = pyotp.TOTP(setup["secret"])
-    AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), totp.now(), str(person.id)
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
+    totp = pyotp.TOTP(setup.secret)
 
     request = _make_request()
     result = AuthFlow.login(
@@ -1560,7 +1555,7 @@ def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeyp
     assert exc.value.status_code == 429
     assert "Try again in 15 minutes." in str(exc.value.detail)
 
-    method = db_session.get(MFAMethod, setup["method_id"])
+    method = db_session.get(MFAMethod, setup.method_id)
     assert method.locked_until is not None
 
 
@@ -1595,11 +1590,10 @@ def test_mfa_lockout_uses_configured_policy(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    totp = pyotp.TOTP(setup["secret"])
-    AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), totp.now(), str(person.id)
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
+    totp = pyotp.TOTP(setup.secret)
 
     request = _make_request()
     result = AuthFlow.login(
@@ -1612,7 +1606,7 @@ def test_mfa_lockout_uses_configured_policy(db_session, person, monkeypatch):
             AuthFlow.mfa_verify(db_session, mfa_token, wrong, request)
         assert exc.value.status_code == 401
 
-    method = db_session.get(MFAMethod, setup["method_id"])
+    method = db_session.get(MFAMethod, setup.method_id)
     assert method.locked_until is not None
     remaining = auth_flow_service._as_utc(method.locked_until) - datetime.now(UTC)
     assert timedelta(minutes=3) <= remaining <= timedelta(minutes=4)
@@ -1625,9 +1619,12 @@ def test_mfa_lockout_uses_configured_policy(db_session, person, monkeypatch):
 
 def test_mfa_setup_reuses_pending_method_row(db_session, person, monkeypatch):
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
-    first = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    second = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    assert str(first["method_id"]) == str(second["method_id"])
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    first = enrollment.setup(label="device")
+    second = enrollment.setup(label="device")
+    assert first.method_id == second.method_id
     pending = (
         db_session.query(MFAMethod).filter(MFAMethod.subscriber_id == person.id).count()
     )

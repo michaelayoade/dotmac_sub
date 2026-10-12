@@ -15,10 +15,11 @@ from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.models.system_user import SystemUser
 from app.services import customer_portal
 from app.services import web_customer_auth as web_customer_auth_service
-from app.services.auth_flow import AuthFlow, hash_password
+from app.services.auth_flow import hash_password
 from tests.authentication_denial_unit import (
     authentication_denial_unit_session as authentication_denial_unit_session,
 )
+from tests.subscriber_mfa_fixtures import seed_enabled_subscriber_mfa
 
 pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
@@ -527,12 +528,8 @@ def test_customer_login_redirects_to_mfa_when_enabled(
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(subscriber.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(subscriber.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=subscriber.id, label="device"
     )
 
     response = web_customer_auth_service.customer_login_submit(
@@ -568,12 +565,8 @@ def test_customer_mfa_submit_creates_customer_session(
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(subscriber.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(subscriber.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=subscriber.id, label="device"
     )
     login_response = web_customer_auth_service.customer_login_submit(
         _request(),
@@ -596,7 +589,7 @@ def test_customer_mfa_submit_creates_customer_session(
     valid_response = web_customer_auth_service.customer_mfa_submit(
         _request(cookies=pending_cookies),
         db_session,
-        pyotp.TOTP(setup["secret"]).now(),
+        pyotp.TOTP(setup.secret).now(),
     )
 
     assert valid_response.status_code == 303
@@ -811,12 +804,8 @@ def test_customer_mfa_pending_has_no_session_or_login_success(
     from app.services import password_authentication as pa
 
     credential = _local_portal_credential(db_session, subscriber)
-    setup = AuthFlow.mfa_setup(db_session, str(subscriber.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(subscriber.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=subscriber.id, label="device"
     )
     response = web_customer_auth_service.customer_login_submit(
         _request(), db_session, credential.username, "portal-secret", False, None
@@ -857,12 +846,8 @@ def test_customer_mfa_rejects_reset_version_without_consuming_method(
     from app.models.auth import MFAMethod
 
     credential = _local_portal_credential(db_session, subscriber)
-    setup = AuthFlow.mfa_setup(db_session, str(subscriber.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(subscriber.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=subscriber.id, label="device"
     )
     response = web_customer_auth_service.customer_login_submit(
         _request(), db_session, credential.username, "portal-secret", False, None
@@ -870,10 +855,10 @@ def test_customer_mfa_rejects_reset_version_without_consuming_method(
     cookies = _response_cookies(response)
     credential.credential_version += 1
     db_session.commit()
-    method = db_session.get(MFAMethod, setup["method_id"])
+    method = db_session.get(MFAMethod, setup.method_id)
     before = method.last_used_at
     result = web_customer_auth_service.customer_mfa_submit(
-        _request(cookies), db_session, pyotp.TOTP(setup["secret"]).now()
+        _request(cookies), db_session, pyotp.TOTP(setup.secret).now()
     )
     assert result.status_code == 401
     db_session.refresh(method)
@@ -912,12 +897,8 @@ def test_radius_customer_mfa_preserves_source_and_rejects_marker_change(
     )
     db_session.add(radius)
     db_session.commit()
-    setup = AuthFlow.mfa_setup(db_session, str(subscriber.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(subscriber.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=subscriber.id, label="device"
     )
     response = web_customer_auth_service.customer_login_submit(
         _request(), db_session, access.username, "radius-secret", False, None
@@ -936,7 +917,7 @@ def test_radius_customer_mfa_preserves_source_and_rejects_marker_change(
     changed.updated_at = datetime.now(UTC) + timedelta(seconds=1)
     db_session.commit()
     denied = web_customer_auth_service.customer_mfa_submit(
-        _request(cookies), db_session, pyotp.TOTP(setup["secret"]).now()
+        _request(cookies), db_session, pyotp.TOTP(setup.secret).now()
     )
     assert denied.status_code == 401
     assert portal_successes == []
@@ -946,7 +927,7 @@ def test_radius_customer_mfa_preserves_source_and_rejects_marker_change(
     )
     cookies = _response_cookies(response)
     allowed = web_customer_auth_service.customer_mfa_submit(
-        _request(cookies), db_session, pyotp.TOTP(setup["secret"]).now()
+        _request(cookies), db_session, pyotp.TOTP(setup.secret).now()
     )
     assert allowed.status_code == 303
     assert portal_successes == ["radius_user"]
@@ -1100,18 +1081,14 @@ def test_customer_mfa_rejects_unbound_expired_or_mismatched_challenge(
 
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode())
     credential = _local_portal_credential(db_session, subscriber)
-    setup = AuthFlow.mfa_setup(db_session, str(subscriber.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(subscriber.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=subscriber.id, label="device"
     )
     response = web_customer_auth_service.customer_login_submit(
         _request(), db_session, credential.username, "portal-secret", False, None
     )
     cookies = _response_cookies(response)
-    method = db_session.get(MFAMethod, setup["method_id"])
+    method = db_session.get(MFAMethod, setup.method_id)
     before = (method.last_used_at, method.failed_attempts)
     key = (
         "customer_mfa_context"
@@ -1133,7 +1110,7 @@ def test_customer_mfa_rejects_unbound_expired_or_mismatched_challenge(
         payload, af._jwt_secret(db_session), af._jwt_algorithm(db_session)
     )
     denied = web_customer_auth_service.customer_mfa_submit(
-        _request(cookies), db_session, pyotp.TOTP(setup["secret"]).now()
+        _request(cookies), db_session, pyotp.TOTP(setup.secret).now()
     )
     assert denied.status_code == 401
     assert customer_portal.SESSION_COOKIE_NAME not in _response_cookies(denied)

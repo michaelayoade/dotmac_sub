@@ -50,7 +50,9 @@ from app.services import (
     customer_credential_enrollment,
 )
 from app.services import auth_flow as auth_flow_service
+from app.services import password_authentication as subscriber_mfa_owner
 from app.services import session_manager as session_manager_service
+from app.services import subscriber_mfa_enrollment_adapter as subscriber_mfa_adapter
 from app.services import user_profile as user_profile_service
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
@@ -160,12 +162,28 @@ def mfa_setup(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ) -> MfaSetupResponse:
-    if str(payload.subscriber_id) != str(auth["subscriber_id"]):
-        raise HTTPException(status_code=403, detail="Forbidden")
-    result = auth_flow_service.auth_flow.mfa_setup(
-        db, str(payload.subscriber_id), payload.label
+    proof = subscriber_mfa_adapter.session_proof(
+        principal_type=str(auth.get("principal_type")),
+        principal_id=str(auth.get("principal_id")),
+        session_id=str(auth.get("session_id")),
+        is_impersonation=bool(auth.get("impersonated_by")),
     )
-    return MfaSetupResponse.model_validate(result)
+    if payload.subscriber_id != proof.subscriber_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    result = subscriber_mfa_adapter.setup(
+        command=subscriber_mfa_owner.SetupSubscriberMfaCommand(
+            context=subscriber_mfa_adapter.command_context(
+                proof=proof, reason="Authenticated MFA setup"
+            ),
+            subscriber_id=proof.subscriber_id,
+            label=payload.label,
+            provenance=subscriber_mfa_owner.SubscriberMfaProvenance.AUTH_API,
+            session=proof,
+        )
+    )
+    return MfaSetupResponse(
+        method_id=result.method_id, secret=result.secret, otpauth_uri=result.otpauth_uri
+    )
 
 
 @router.post(
@@ -184,10 +202,26 @@ def mfa_confirm(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ) -> MFAMethodRead:
-    result = auth_flow_service.auth_flow.mfa_confirm(
-        db, str(payload.method_id), payload.code, auth["subscriber_id"]
+    proof = subscriber_mfa_adapter.session_proof(
+        principal_type=str(auth.get("principal_type")),
+        principal_id=str(auth.get("principal_id")),
+        session_id=str(auth.get("session_id")),
+        is_impersonation=bool(auth.get("impersonated_by")),
     )
-    return MFAMethodRead.model_validate(result)
+    result = subscriber_mfa_adapter.confirm(
+        command=subscriber_mfa_owner.ConfirmSubscriberMfaCommand(
+            context=subscriber_mfa_adapter.command_context(
+                proof=proof, reason="Authenticated MFA confirmation"
+            ),
+            subscriber_id=proof.subscriber_id,
+            method_id=payload.method_id,
+            code=payload.code,
+            provenance=subscriber_mfa_owner.SubscriberMfaProvenance.AUTH_API,
+            session=proof,
+            recovery_delivery=subscriber_mfa_owner.RecoveryCodeDelivery.NONE,
+        )
+    )
+    return MFAMethodRead.model_validate(result.method)
 
 
 @router.post(

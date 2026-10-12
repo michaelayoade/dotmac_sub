@@ -48,6 +48,8 @@ from app.services import (
     reseller_ticket_projection,
     team_inbox_widget,
 )
+from app.services import password_authentication as subscriber_mfa_owner
+from app.services import subscriber_mfa_enrollment_adapter as subscriber_mfa_adapter
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
@@ -455,13 +457,38 @@ def my_reseller_mfa_setup(
     _reseller_id(db, principal)  # 403 unless the caller is a reseller
     from app.services import auth_flow as auth_flow_service
 
-    setup = auth_flow_service.auth_flow.mfa_setup(
-        db, str(principal["subscriber_id"]), "Authenticator app"
+    if principal.get("principal_type") == "reseller_user":
+        setup = auth_flow_service.auth_flow.reseller_mfa_setup(
+            db=db,
+            reseller_user_id=str(principal["principal_id"]),
+            label="Authenticator app",
+        )
+        return {
+            "method_id": str(setup["method_id"]),
+            "secret": setup["secret"],
+            "otpauth_uri": setup["otpauth_uri"],
+        }
+    proof = subscriber_mfa_adapter.session_proof(
+        principal_type=str(principal.get("principal_type")),
+        principal_id=str(principal.get("principal_id")),
+        session_id=str(principal.get("session_id")),
+        is_impersonation=bool(principal.get("impersonated_by")),
+    )
+    setup = subscriber_mfa_adapter.setup(
+        command=subscriber_mfa_owner.SetupSubscriberMfaCommand(
+            context=subscriber_mfa_adapter.command_context(
+                proof=proof, reason="Reseller MFA setup"
+            ),
+            subscriber_id=proof.subscriber_id,
+            label="Authenticator app",
+            provenance=subscriber_mfa_owner.SubscriberMfaProvenance.RESELLER_API,
+            session=proof,
+        )
     )
     return {
-        "method_id": str(setup["method_id"]),
-        "secret": setup["secret"],
-        "otpauth_uri": setup["otpauth_uri"],
+        "method_id": str(setup.method_id),
+        "secret": setup.secret,
+        "otpauth_uri": setup.otpauth_uri,
     }
 
 
@@ -476,17 +503,62 @@ def my_reseller_mfa_confirm(
     reseller_id = _reseller_id(db, principal)
     from app.services import auth_flow as auth_flow_service
 
-    try:
-        auth_flow_service.auth_flow.mfa_confirm(
-            db, payload.method_id, payload.code.strip(), str(principal["subscriber_id"])
+    if principal.get("principal_type") == "reseller_user":
+        auth_flow_service.auth_flow.reseller_mfa_confirm(
+            db=db,
+            method_id=str(payload.method_id),
+            code=payload.code.strip(),
+            reseller_user_id=str(principal["principal_id"]),
         )
-    except Exception:
-        raise HTTPException(
-            status_code=400, detail="Invalid verification code"
-        ) from None
-    return reseller_portal.get_profile(
-        db, reseller_id, str(principal["subscriber_id"])
-    ) or {"mfa_enabled": True}
+    else:
+        proof = subscriber_mfa_adapter.session_proof(
+            principal_type=str(principal.get("principal_type")),
+            principal_id=str(principal.get("principal_id")),
+            session_id=str(principal.get("session_id")),
+            is_impersonation=bool(principal.get("impersonated_by")),
+        )
+        try:
+            method_id = UUID(str(payload.method_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid MFA method") from exc
+        subscriber_mfa_adapter.confirm(
+            command=subscriber_mfa_owner.ConfirmSubscriberMfaCommand(
+                context=subscriber_mfa_adapter.command_context(
+                    proof=proof, reason="Reseller MFA confirmation"
+                ),
+                subscriber_id=proof.subscriber_id,
+                method_id=method_id,
+                code=payload.code.strip(),
+                provenance=subscriber_mfa_owner.SubscriberMfaProvenance.RESELLER_API,
+                session=proof,
+                recovery_delivery=subscriber_mfa_owner.RecoveryCodeDelivery.NONE,
+            )
+        )
+    profile = (
+        reseller_portal.get_profile(db, reseller_id, str(principal["principal_id"]))
+        or {}
+    )
+    summary = subscriber_mfa_owner.query_principal_mfa(
+        db,
+        query=subscriber_mfa_owner.PrincipalMfaQuery(
+            principal=subscriber_mfa_owner.MfaProfilePrincipal(
+                str(principal["principal_type"])
+            ),
+            principal_id=UUID(str(principal["principal_id"])),
+        ),
+    )
+    profile["mfa_enabled"] = summary.enabled
+    profile["mfa_methods"] = [
+        {
+            "id": str(method.id),
+            "label": method.label,
+            "method_type": method.method_type.value,
+            "verified_at": method.verified_at,
+            "enabled": method.enabled,
+        }
+        for method in summary.methods
+    ]
+    return profile
 
 
 @router.get("/billing")

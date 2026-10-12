@@ -110,3 +110,43 @@ native hashes or database. They prove accounting/refusal/release behavior, not
 worker/Celery performance, production memory headroom, tuning, deployment
 acceptance, or safe activation. Existing password algorithms, flags, policy,
 strict settings adoption and service-secret/PPPoE behavior remain unchanged.
+
+## Dormant password-work observation boundary
+
+`UserPasswordWork.verify(UserPasswordWorkRequest)` is a typed, immutable-input
+contract owned here. Both password and stored representation are excluded from
+request repr. `LegacyPasswordWork` permanently uses COMPAT without Argon limits
+or upgrade work. `AdmittedArgon2PasswordWork` requires explicit typed verification
+limits, admission instance, observer and existing compatibility verifier; it has
+no defaults, singleton, settings, environment flags or installed runtime caller.
+
+The same canonical parser/policy path validates encoded size, exact PHC grammar,
+parameters, type, version and encoding before admission. Salt and digest must use
+canonical unpadded Base64: strict decoding, actual decoded-length checks and exact
+re-encoding reject malformed alphabets, padding and nonzero unused trailing bits.
+Parameter fields use the canonical m,t,p order with positive decimal integers,
+no duplicate fields, signs, leading zeros, whitespace or trailing data. Only the actual low-level `verify_secret`
+call is timed, with monotonic start/end inside the admitted scope. Native failure
+also records its interval. Malformed input, policy rejection and admission refusal
+record no interval. Compatibility parsing, reversible resolution and legacy
+callbacks are excluded. Capacity remains held until native completion, including
+BaseException unwind; observer delivery happens after release. Observations carry
+only operation kind, monotonic start/end and admission wait seconds, never secret,
+identity, request, hash or exception text. No native hash work is added.
+
+`NativePasswordObserver.observe` acknowledges RECORDED or INCOMPLETE. Rejection,
+invalid acknowledgement or any observer exception permanently marks the work
+instance incomplete while preserving the verification result or original error.
+A collector MUST drain all callers then invoke `require_complete_capture()` before
+accepting measurements; it raises `IncompletePasswordCaptureError` after any lost
+record. Successful acknowledgement establishes delivery only, not durable storage
+or completeness of an external collector. Collector integrity remains required.
+
+This boundary is dormant/uninstalled and provides no performance acceptance.
+Login/API/web/`complete_password_step` remain unchanged. Existing verification
+can hold an implicit read transaction until completion: safe future installation
+requires a separately reviewed snapshot/revalidation design before native work,
+plus acceptance capture, fixture/executor and operational authorization. There is
+no prepared replacement, CAS wiring, persistence, upgrade or parameter selection.
+Architecture guards refuse production imports/use of the dormant work contracts;
+fake-native tests alone establish source behavior, not real hashing performance.

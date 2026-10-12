@@ -124,27 +124,10 @@ def test_invite_rejected_for_canceled_subscriber(db_session, subscriber, _no_ema
 
 
 def test_reset_customer_mfa_disables_methods(db_session, subscriber):
-    from app.models.auth import MFAMethod, MFAMethodType
+    from app.models.auth import MFAMethod
+    from tests.test_customer_mfa_reset import command, reset_account
 
-    method = MFAMethod(
-        subscriber_id=subscriber.id,
-        method_type=MFAMethodType.totp,
-        secret="encrypted",
-        enabled=True,
-        is_primary=True,
-        is_active=True,
-    )
-    db_session.add(method)
-    db_session.commit()
-
-    result = svc.reset_customer_mfa(
-        db_session,
-        request=None,
-        customer_type="person",
-        customer_id=str(subscriber.id),
-        actor_id=None,
-    )
-    assert result["ok"] is True
-    db_session.refresh(method)
-    assert method.enabled is False
-    assert method.is_active is False
+    account = reset_account.__wrapped__(db_session, subscriber)
+    result = svc.reset_customer_mfa(db_session, command=command(account))
+    assert result.changed
+    assert not db_session.get(MFAMethod, account.method_id).enabled
