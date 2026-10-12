@@ -21,6 +21,7 @@ from app.services.prepaid_service_renewals import (
     preview_tax_inclusive_renewal_document_correction,
 )
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 _KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,119}$")
 
@@ -74,6 +75,7 @@ def main() -> int:
     parser.add_argument("--permission-evidence")
     parser.add_argument("--idempotency-key")
     args = parser.parse_args()
+    refuse_apply(args.apply)
     query = TaxInclusiveRenewalDocumentCorrectionQuery(
         account_id=args.account_id,
         subscription_id=args.subscription_id,

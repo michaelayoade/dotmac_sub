@@ -873,7 +873,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "To link the sender to an existing Customer, open Contact details and click Existing Customer to load likely matches. If none is right, type at least two characters to search all active Customers by name, email, phone, company, account number, subscriber number, or Customer ID, then choose the exact result before selecting Link Customer.",
         "Keep the Inbox visible while available; its authenticated heartbeat refreshes your routing presence but never overrides Away, On break, or Offline.",
         "Open the conversation or linked ticket before acting, then return to the same filtered queue context.",
-        "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and customer-wait handoff interval.",
+        "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and customer-wait handoff interval. When editing an existing AI route, review its team, confidence, priority, and active state; Keep current preserves an inactive team unless you explicitly choose an active replacement. Use Disable or Reactivate for state changes; if the route changed since the page loaded, reload before trying again.",
         "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
             "Inbox overview counts reflect the last full page load. Choose Refresh counts when you need current totals; the filtered list updates separately.",

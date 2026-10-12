@@ -42,6 +42,23 @@ combined Inbox/Support workspace.
 
 ## Owner inventory
 
+### Editing existing AI routes
+
+Inbox settings offers a row-level Edit route action, including inactive rows.
+The adapter submits `UpdateAiRouteCommand` and `AiRoutePatch`; the command owner
+enters the owner executor once, and the routing participant locks the existing
+row and flushes explicit changes. Channel, intent and route UUID are immutable.
+The edited row's updated timestamp is checked under that lock; stale forms are
+rejected and must be reloaded. Thresholds outside zero to one are rejected.
+An audit event records the staff actor, route UUID, resulting team and state.
+The helper never creates a replacement route or retroactively reassigns old
+conversations. Repeated same-value edits preserve the route identity.
+
+After deployment, edit the existing WhatsApp `coverage_request` row, select
+Sales (call center), retain the reviewed threshold/priority, set Active and save.
+Verify the resulting row before testing a synthetic inbound enquiry. Do not
+reactivate the old Help Desk target or duplicate the channel/intent pair.
+
 | Concern | Canonical owner | Responsibility |
 | --- | --- | --- |
 | Inbound provider facts, deduplication, and identity-collision quarantine | `communications.team_inbox_observations` | Commits one normalized provider observation before consequences and durably quarantines conflicting SMTP candidates |

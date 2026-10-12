@@ -644,7 +644,7 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only():
     row metadata, not the audit log, which is the limitation the gate above
     describes.
 
-    Six actions are audited, for six distinct reasons:
+    Seven actions are audited, for seven distinct reasons:
 
     - the conversation → ticket handoff, because it crosses an ownership line
       into ``support.ticket_lifecycle``;
@@ -659,18 +659,21 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only():
       decision without creating a global contact route.
     - selecting a represented Lead, because it crosses into the canonical Lead
       relationship owner without changing the sender's identity.
+    - editing an AI intake route, because it changes which team receives a
+      classified customer conversation.
 
-    A seventh entry here should be a decision, not drift.
+    An eighth entry here should be a decision, not drift.
     """
     commands = Path("app/services/team_inbox_commands.py").read_text()
     handoff = Path("app/services/conversation_ticket_handoff.py").read_text()
 
     assert "stage_audit_event" in handoff
-    assert commands.count("stage_audit_event(") == 6
+    assert commands.count("stage_audit_event(") == 7
     assert 'action="reply_comment"' in commands
     assert 'action="ai_conversation_human_takeover"' in commands
     assert 'action="inbox_represented_customer_selected"' in commands
     assert 'action="inbox_represented_lead_selected"' in commands
+    assert 'action="team_inbox.ai_route_updated"' in commands
     assert "TRANSCRIPT_AUDIT_ACTION" in commands
     for command in ("def apply_label(", "def update_status("):
         body = commands.split(command, 1)[1].split("\ndef ", 1)[0]
