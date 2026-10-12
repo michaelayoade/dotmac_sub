@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from app.models.subscriber import Subscriber, UserType
 from app.services import web_customer_actions as actions
+from app.services.audit_adapter import AuditActor
 
 
 def _make_customer(db_session, *, is_active: bool = True) -> Subscriber:
@@ -153,7 +154,9 @@ def test_status_execute_applies_after_a_valid_preview(db_session):
 def test_delete_preview_flags_active_rows_and_requires_confirmation(db_session):
     active = _make_customer(db_session, is_active=True)
     preview = actions.bulk_delete_customers_from_payload(
-        db_session, {"customer_ids": [{"id": str(active.id)}], "preview_only": True}
+        db_session,
+        {"customer_ids": [{"id": str(active.id)}], "preview_only": True},
+        actor=AuditActor.user("preview-test"),
     )
     assert preview["preview"] is True
     assert preview["impact"]["destructive"] is True
@@ -163,7 +166,9 @@ def test_delete_preview_flags_active_rows_and_requires_confirmation(db_session):
 
     with pytest.raises(HTTPException) as exc:
         actions.bulk_delete_customers_from_payload(
-            db_session, {"customer_ids": [{"id": str(active.id)}]}
+            db_session,
+            {"customer_ids": [{"id": str(active.id)}]},
+            actor=AuditActor.user("preview-test"),
         )
     assert exc.value.status_code == 400
 
@@ -173,6 +178,7 @@ def test_delete_execute_rejects_stale_eligibility_impact(db_session):
     preview = actions.bulk_delete_customers_from_payload(
         db_session,
         {"customer_ids": [{"id": str(inactive.id)}], "preview_only": True},
+        actor=AuditActor.user("preview-test"),
     )
     assert preview["impact"]["eligible"] == 1
     inactive.is_active = True
@@ -190,5 +196,6 @@ def test_delete_execute_rejects_stale_eligibility_impact(db_session):
                 },
                 "confirmed": True,
             },
+            actor=AuditActor.user("preview-test"),
         )
     assert exc.value.status_code == 409

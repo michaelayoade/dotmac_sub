@@ -17,7 +17,7 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.subscribers import delete_subscriber
+from app.adapters.customer_account_deletion import require_deleted
 from app.models.auth import (
     ApiKey,
     AuthenticationBinding,
@@ -50,13 +50,60 @@ from app.models.notification import (
 )
 from app.models.party import Party, PartyType
 from app.models.subscriber import Reseller, Subscriber
-from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web
+from app.services.audit_adapter import AuditActor
+from app.services.customer_account_deletion import (
+    CustomerAccountDeletionError,
+    CustomerDeletionExpectation,
+    CustomerDeletionPolicy,
+    DeleteCustomerAccountCommand,
+    delete_customer_account,
+)
+from app.services.owner_commands import CommandContext
+
+ACTOR = AuditActor.user("customer-deletion-test-administrator")
+
+
+def _delete(
+    db: Session,
+    customer_id: str,
+    *,
+    policy: CustomerDeletionPolicy = CustomerDeletionPolicy.JSON,
+) -> None:
+    context = CommandContext.system(
+        actor=f"user:{ACTOR.actor_id}",
+        scope="customer:delete",
+        reason="Customer deletion integration test",
+    )
+    with Session(db.get_bind()) as owner_db:
+        outcome = delete_customer_account(
+            owner_db,
+            command=DeleteCustomerAccountCommand(
+                context=context,
+                actor=ACTOR,
+                subscriber_id=UUID(customer_id),
+                policy=policy,
+            ),
+        )
+    require_deleted(outcome, business=policy is CustomerDeletionPolicy.WEB_BUSINESS)
+
+
+def _person(db: Session, customer_id: str) -> None:
+    _delete(db, customer_id, policy=CustomerDeletionPolicy.WEB_PERSON)
+
+
+def _business(db: Session, customer_id: str) -> None:
+    _delete(db, customer_id, policy=CustomerDeletionPolicy.WEB_BUSINESS)
 
 
 @pytest.fixture
-def deletion_db(cloned_database: Callable[[str], URL]) -> Iterator[Session]:
+def deletion_db(
+    cloned_database: Callable[[str], URL], monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Session]:
     engine = create_engine(cloned_database("heads"))
+    monkeypatch.setattr(
+        "app.services.db_session_adapter.SessionLocal", lambda: Session(engine)
+    )
     try:
         with Session(engine) as db:
             yield db
@@ -89,8 +136,12 @@ def _fk_name(db: Session, table: str, column: str, parent: str) -> str:
     return fk["name"]
 
 
-def _assert_fk_failure(error: IntegrityError, *, table: str, constraint: str) -> None:
+def _assert_fk_failure(
+    error: CustomerAccountDeletionError, *, table: str, constraint: str
+) -> None:
     # Diagnostic identifiers only: do not render SQL, parameters or row details.
+    error = error.__cause__
+    assert isinstance(error, IntegrityError)
     assert error.orig.sqlstate == "23503"
     assert error.orig.diag.table_name == table
     assert error.orig.diag.constraint_name == constraint
@@ -178,7 +229,7 @@ def test_actual_parent_delete_retires_and_detaches_network(
     active_id, retired_id, a4_id, a6_id = _network(db, customer_id)
     db.commit()
 
-    subscriber_service.subscribers.delete(db=db, subscriber_id=str(customer_id))
+    _delete(db, str(customer_id))
 
     db.expire_all()
     assert db.get(Subscriber, customer_id) is None
@@ -223,8 +274,8 @@ def test_parent_financial_blocker_rolls_back_network_changes(
     constraint = _fk_name(db, "invoices", "account_id", "subscribers")
     db.commit()
 
-    with pytest.raises(IntegrityError) as caught:
-        subscriber_service.subscribers.delete(db=db, subscriber_id=str(customer_id))
+    with pytest.raises(CustomerAccountDeletionError) as caught:
+        _delete(db, str(customer_id))
     db.rollback()
     _assert_fk_failure(caught.value, table="invoices", constraint=constraint)
 
@@ -249,7 +300,7 @@ def test_nonactive_cpe_status_unchanged_on_parent_delete(
     db.add(device)
     db.commit()
     device_id = device.id
-    subscriber_service.subscribers.delete(db=db, subscriber_id=str(customer_id))
+    _delete(db, str(customer_id))
     db.expire_all()
     retained = db.get(CPEDevice, device_id)
     assert retained is not None
@@ -263,9 +314,7 @@ def test_web_rejects_active_customer(deletion_db: Session, kind: str) -> None:
     customer_id = _customer(db, active=True, business=kind == "business")
     child_ids = _auth_children(db, customer_id)
     db.commit()
-    action = (
-        web.delete_person_customer if kind == "person" else web.delete_business_customer
-    )
+    action = _person if kind == "person" else _business
     with pytest.raises(HTTPException) as caught:
         action(db, str(customer_id))
     assert caught.value.status_code == 409
@@ -279,7 +328,7 @@ def test_json_accepts_active_customer_without_auth_children(
 ) -> None:
     customer_id = _customer(deletion_db, active=True)
     deletion_db.commit()
-    delete_subscriber(subscriber_id=str(customer_id), db=deletion_db)
+    _delete(deletion_db, str(customer_id))
     assert deletion_db.get(Subscriber, customer_id) is None
 
 
@@ -296,8 +345,8 @@ def test_json_does_not_implicitly_delete_auth_children(deletion_db: Session) -> 
     credential_id = credential.id
     constraint = _fk_name(db, "user_credentials", "subscriber_id", "subscribers")
     db.commit()
-    with pytest.raises(IntegrityError) as caught:
-        delete_subscriber(subscriber_id=str(customer_id), db=db)
+    with pytest.raises(CustomerAccountDeletionError) as caught:
+        _delete(db, str(customer_id))
     db.rollback()
     _assert_fk_failure(caught.value, table="user_credentials", constraint=constraint)
     assert db.get(Subscriber, customer_id) is not None
@@ -309,7 +358,7 @@ def test_web_success_removes_existing_auth_children(deletion_db: Session) -> Non
     customer_id = _customer(db)
     ids = _auth_children(db, customer_id)
     db.commit()
-    web.delete_person_customer(db, str(customer_id))
+    _person(db, str(customer_id))
     assert db.get(Subscriber, customer_id) is None
     for model, child_id in zip(
         (UserCredential, MFAMethod, AuthSession, ApiKey), ids, strict=True
@@ -317,7 +366,7 @@ def test_web_success_removes_existing_auth_children(deletion_db: Session) -> Non
         assert db.get(model, child_id) is None
 
 
-def test_known_web_split_commit_loses_auth_before_parent_failure(
+def test_web_parent_failure_atomically_preserves_auth(
     deletion_db: Session,
 ) -> None:
     db = deletion_db
@@ -326,15 +375,15 @@ def test_known_web_split_commit_loses_auth_before_parent_failure(
     db.add(Invoice(account_id=customer_id))
     constraint = _fk_name(db, "invoices", "account_id", "subscribers")
     db.commit()
-    with pytest.raises(IntegrityError) as caught:
-        web.delete_person_customer(db, str(customer_id))
+    with pytest.raises(CustomerAccountDeletionError) as caught:
+        _person(db, str(customer_id))
     db.rollback()
     _assert_fk_failure(caught.value, table="invoices", constraint=constraint)
     assert db.get(Subscriber, customer_id) is not None
     for model, child_id in zip(
         (UserCredential, MFAMethod, AuthSession, ApiKey), ids, strict=True
     ):
-        assert db.get(model, child_id) is None
+        assert db.get(model, child_id) is not None
 
 
 def test_mfa_recovery_fk_blocks_web_cleanup_before_commit(deletion_db: Session) -> None:
@@ -346,8 +395,8 @@ def test_mfa_recovery_fk_blocks_web_cleanup_before_commit(deletion_db: Session) 
     constraint = _fk_name(db, "mfa_recovery_codes", "mfa_method_id", "mfa_methods")
     db.commit()
     recovery_id = recovery.id
-    with pytest.raises(IntegrityError) as caught:
-        web.delete_person_customer(db, str(customer_id))
+    with pytest.raises(CustomerAccountDeletionError) as caught:
+        _person(db, str(customer_id))
     db.rollback()
     _assert_fk_failure(caught.value, table="mfa_recovery_codes", constraint=constraint)
     assert db.get(Subscriber, customer_id) is not None
@@ -365,7 +414,7 @@ def test_business_subscription_precheck_preserves_auth(deletion_db: Session) -> 
     subscription_id = _subscription(db, customer_id)
     db.commit()
     with pytest.raises(HTTPException) as caught:
-        web.delete_business_customer(db, str(customer_id))
+        _business(db, str(customer_id))
     assert caught.value.status_code == 409
     assert (
         caught.value.detail == "Delete subscriptions before deleting business customer."
@@ -374,7 +423,7 @@ def test_business_subscription_precheck_preserves_auth(deletion_db: Session) -> 
     assert db.get(Subscription, subscription_id) is not None
 
 
-def test_person_subscription_blocker_occurs_after_auth_commit(
+def test_person_subscription_blocker_atomically_preserves_auth(
     deletion_db: Session,
 ) -> None:
     db = deletion_db
@@ -382,15 +431,17 @@ def test_person_subscription_blocker_occurs_after_auth_commit(
     key_id = _auth_children(db, customer_id)[3]
     subscription_id = _subscription(db, customer_id)
     db.commit()
-    with pytest.raises(IntegrityError) as caught:
-        web.delete_person_customer(db, str(customer_id))
+    with pytest.raises(CustomerAccountDeletionError) as caught:
+        _person(db, str(customer_id))
     db.rollback()
-    assert caught.value.orig.sqlstate == "23502"
-    assert caught.value.orig.diag.table_name == "subscriptions"
-    assert caught.value.orig.diag.column_name == "subscriber_id"
+    failure = caught.value.__cause__
+    assert isinstance(failure, IntegrityError)
+    assert failure.orig.sqlstate == "23502"
+    assert failure.orig.diag.table_name == "subscriptions"
+    assert failure.orig.diag.column_name == "subscriber_id"
     assert db.get(Subscriber, customer_id) is not None
     assert db.get(Subscription, subscription_id) is not None
-    assert db.get(ApiKey, key_id) is None
+    assert db.get(ApiKey, key_id) is not None
 
 
 def test_bulk_preserves_earlier_success_and_skips_ineligible_items(
@@ -413,6 +464,17 @@ def test_bulk_preserves_earlier_success_and_skips_ineligible_items(
             {"id": str(missing_id), "type": "subscriber"},
             {"id": str(last_id), "type": "business"},
         ],
+        actor=ACTOR,
+        expectations=tuple(
+            CustomerDeletionExpectation(item, active, subscribed)
+            for item, active, subscribed in [
+                (first_id, False, False),
+                (active_id, True, False),
+                (subscribed_id, False, True),
+                (missing_id, False, False),
+                (last_id, False, False),
+            ]
+        ),
     )
     assert result == {
         "success": True,
@@ -486,7 +548,7 @@ def test_party_binding_preserved_intent_cascades_notification_detaches(
         intent.id,
         notification.id,
     )
-    web.delete_person_customer(db, str(customer_id))
+    _person(db, str(customer_id))
     db.expire_all()
     assert db.get(Party, party_id) is not None
     assert db.get(AuthenticationBinding, binding_id) is not None

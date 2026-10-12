@@ -28,6 +28,7 @@ def test_exact_owner_and_retired_fallback() -> None:
         UPDATE_CONCERN,
         WEB_CONCERN,
         AUTHENTICATION_CONCERN,
+        "customer hard deletion API-key cleanup",
     )
     assert service.contract is not None
     assert not hasattr(auth.ApiKeys, "delete")

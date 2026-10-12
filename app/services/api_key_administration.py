@@ -1215,3 +1215,161 @@ def authenticate(
             else f"{OWNER}.authentication_unavailable",
             message="API-key authentication unavailable.",
         ) from None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CaptureCustomerKeysCommand:
+    context: CommandContext = field(repr=False)
+    actor: AuditActor = field(repr=False)
+    subscriber_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedCustomerKeys:
+    locked_key_ids: tuple[UUID, ...]
+
+
+def capture_and_lock_customer_keys(
+    db: Session, *, command: CaptureCustomerKeysCommand
+) -> CapturedCustomerKeys:
+    """Exact participant: lock the captured sorted IDs before the parent."""
+    from app.services.customer_account_deletion import (
+        require_customer_deletion_participant,
+    )
+
+    if not isinstance(command, CaptureCustomerKeysCommand) or not isinstance(
+        command.subscriber_id, UUID
+    ):
+        raise DomainError(
+            code=f"{OWNER}.invalid_participant",
+            message="Typed customer key capture required.",
+        )
+    require_customer_deletion_participant(
+        db, context=command.context, actor=command.actor
+    )
+    captured = tuple(
+        db.scalars(
+            select(ApiKey.id)
+            .where(ApiKey.subscriber_id == command.subscriber_id)
+            .order_by(ApiKey.id)
+        )
+    )
+    locked = (
+        tuple(
+            db.scalars(
+                select(ApiKey.id)
+                .where(ApiKey.id.in_(captured))
+                .order_by(ApiKey.id)
+                .with_for_update(nowait=True)
+            )
+        )
+        if captured
+        else ()
+    )
+    return CapturedCustomerKeys(locked)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CustomerKeyDeletionCommand:
+    context: CommandContext = field(repr=False)
+    actor: AuditActor = field(repr=False)
+    subscriber_id: UUID
+    locked_key_ids: tuple[UUID, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerKeyDeletionOutcome:
+    deleted_key_ids: tuple[UUID, ...]
+
+
+def stage_customer_key_deletion(
+    db: Session, *, command: CustomerKeyDeletionCommand
+) -> CustomerKeyDeletionOutcome:
+    """Delete only previously locked keys still bound to this exact customer."""
+    from app.services.customer_account_deletion import (
+        require_customer_deletion_participant,
+    )
+
+    if (
+        not isinstance(command, CustomerKeyDeletionCommand)
+        or not isinstance(command.subscriber_id, UUID)
+        or not isinstance(command.locked_key_ids, tuple)
+        or any(not isinstance(value, UUID) for value in command.locked_key_ids)
+    ):
+        raise DomainError(
+            code=f"{OWNER}.invalid_participant",
+            message="Typed customer key deletion required.",
+        )
+    require_customer_deletion_participant(
+        db, context=command.context, actor=command.actor
+    )
+    validate_customer_key_capture(db, command=command)
+    # Fresh scalar predicate is authoritative even if a captured ORM object was stale.
+    actual = (
+        tuple(
+            sorted(
+                db.scalars(
+                    delete(ApiKey)
+                    .where(
+                        ApiKey.id.in_(command.locked_key_ids),
+                        ApiKey.subscriber_id == command.subscriber_id,
+                    )
+                    .returning(ApiKey.id)
+                ),
+                key=str,
+            )
+        )
+        if command.locked_key_ids
+        else ()
+    )
+    for key_id in actual:
+        stage_audit_event(
+            db,
+            action="auth.api_key.deleted",
+            entity_type="api_key",
+            entity_id=str(key_id),
+            actor=command.actor,
+            details={
+                "schema_version": 1,
+                "reason": "customer_account_deletion",
+                "command_id": str(command.context.command_id),
+                "correlation_id": str(command.context.correlation_id),
+            },
+        )
+    db.flush()
+    return CustomerKeyDeletionOutcome(actual)
+
+
+def validate_customer_key_capture(
+    db: Session, *, command: CustomerKeyDeletionCommand
+) -> None:
+    """Post-parent nonlocking recapture: never acquire a newly attached key."""
+    from app.services.customer_account_deletion import (
+        require_customer_deletion_participant,
+    )
+
+    if (
+        not isinstance(command, CustomerKeyDeletionCommand)
+        or not isinstance(command.subscriber_id, UUID)
+        or not isinstance(command.locked_key_ids, tuple)
+        or any(not isinstance(value, UUID) for value in command.locked_key_ids)
+    ):
+        raise DomainError(
+            code=f"{OWNER}.invalid_participant",
+            message="Typed customer key capture required.",
+        )
+    require_customer_deletion_participant(
+        db, context=command.context, actor=command.actor
+    )
+    current = set(
+        db.scalars(
+            select(ApiKey.id).where(ApiKey.subscriber_id == command.subscriber_id)
+        )
+    )
+    if current.difference(command.locked_key_ids):
+        from app.services.customer_account_deletion import CustomerAccountDeletionError
+
+        raise CustomerAccountDeletionError(
+            code="customer.account_deletion.busy",
+            message="Customer changed concurrently. Retry deletion.",
+        )
