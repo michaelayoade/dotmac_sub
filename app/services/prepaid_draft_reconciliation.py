@@ -4263,13 +4263,20 @@ def preview_reviewed_paid_prepaid_period_replacement(
             entitlement=entitlement,
             payment_reference=payment_reference,
         )
-    account_credit = round_money(
-        get_account_credit_balance(
+    try:
+        account_credit = _reviewed_paid_period_funding_balance(
             db,
-            str(account_id),
+            account_id=account_id,
             currency=charge.currency,
         )
-    )
+    except PrepaidFundingBaselineMissingError:
+        return manual(
+            "verified prepaid funding prerequisite is missing",
+            allocation=allocation,
+            entitlement=entitlement,
+            payment_reference=payment_reference,
+            void_preview=void_preview,
+        )
     available_after_release = round_money(
         PaymentAllocations.available_amount(db, str(payment.id))
         + to_decimal(allocation.amount)
@@ -4318,6 +4325,23 @@ def preview_reviewed_paid_prepaid_period_replacement(
             "tax_rate_id": charge.tax_rate_id,
             "tax_application": charge.tax_application,
         },
+    )
+
+
+def _reviewed_paid_period_funding_balance(
+    db: Session,
+    *,
+    account_id: UUID,
+    currency: str,
+) -> Decimal:
+    """Return the cutover-aware funding position preserved by this repair."""
+
+    return round_money(
+        verified_prepaid_funding_balance(
+            db,
+            account_id,
+            currency=currency,
+        )
     )
 
 
@@ -7974,17 +7998,23 @@ def _reviewed_paid_period_replacement_result(
     expected_total = round_money(query.expected_total)
     period_start = _utc(query.service_period_start)
     period_end = _utc(query.service_period_end)
-    remaining_credit = (
-        round_money(
-            get_account_credit_balance(
+    try:
+        remaining_credit = (
+            _reviewed_paid_period_funding_balance(
                 db,
-                str(replacement.account_id),
+                account_id=replacement.account_id,
                 currency=(replacement.currency or "NGN").upper(),
             )
+            if replacement is not None
+            else Decimal("0.00")
         )
-        if replacement is not None
-        else Decimal("0.00")
-    )
+    except PrepaidFundingBaselineMissingError:
+        _error(
+            "opening_funding_unavailable",
+            "Verified prepaid funding is unavailable for this replacement.",
+            account_id=(str(replacement.account_id) if replacement else None),
+            currency=((replacement.currency or "NGN").upper() if replacement else None),
+        )
     access_consequence = db.scalar(
         select(FinancialAccessConsequence).where(
             FinancialAccessConsequence.idempotency_key
@@ -8334,13 +8364,19 @@ def replace_reviewed_paid_prepaid_period(
         )
 
         refreshed_subscription = db.get(Subscription, current.subscription_id)
-        remaining_credit = round_money(
-            get_account_credit_balance(
+        try:
+            remaining_credit = _reviewed_paid_period_funding_balance(
                 db,
-                str(current.account_id),
+                account_id=current.account_id,
                 currency=(replacement.currency or "NGN").upper(),
             )
-        )
+        except PrepaidFundingBaselineMissingError:
+            _error(
+                "opening_funding_unavailable",
+                "Verified prepaid funding is unavailable for this replacement.",
+                account_id=str(current.account_id),
+                currency=(replacement.currency or "NGN").upper(),
+            )
         if (
             refreshed_subscription is None
             or refreshed_subscription.next_billing_at is None
