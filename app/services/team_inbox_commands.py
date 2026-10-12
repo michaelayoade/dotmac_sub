@@ -3476,6 +3476,7 @@ def create_ai_route(
 class UpdateAiRouteCommand:
     context: CommandContext
     patch: team_inbox_routing.AiRoutePatch
+    actor: AuditActor
 
 
 def update_ai_route(
@@ -3488,9 +3489,9 @@ def update_ai_route(
             action="team_inbox.ai_route_updated",
             entity_type="team_inbox_ai_route",
             entity_id=str(outcome.route_id),
+            actor=command.actor,
             request_id=str(command.context.command_id),
             metadata={
-                "actor": command.context.actor,
                 "service_team_id": str(outcome.service_team_id),
                 "is_active": outcome.is_active,
             },

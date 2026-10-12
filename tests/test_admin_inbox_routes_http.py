@@ -58,7 +58,7 @@ def test_ai_route_edit_adapter_passes_typed_patch_and_staff_context(db_session):
         patch("app.web.admin.inbox.team_inbox_commands.update_ai_route") as update,
     ):
         response = TestClient(app).post(
-            f"/crm/inbox/ai-routes/{route_id}",
+            f"{settings_router.prefix}/ai-routes/{route_id}",
             data={
                 "ai_service_team_id": str(team_id),
                 "confidence_threshold": "0.8",
@@ -76,6 +76,7 @@ def test_ai_route_edit_adapter_passes_typed_patch_and_staff_context(db_session):
     assert command.patch.service_team_id == team_id
     assert command.patch.expected_updated_at == timestamp
     assert command.context.actor == f"person:{actor_id}"
+    assert command.actor.actor_id == str(actor_id)
 
 
 def _client(db_session) -> TestClient:

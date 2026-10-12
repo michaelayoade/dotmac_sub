@@ -16,10 +16,12 @@ from uuid import UUID
 
 import pytest
 
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.team_inbox import TeamInboxAiRoute
 from app.services import email as email_service
 from app.services import team_inbox_commands, team_inbox_routing
+from app.services.audit_adapter import AuditActor
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 
@@ -51,6 +53,7 @@ def test_inactive_ai_route_can_be_reassigned_and_enabled_without_duplicate(db_se
                 scope="inbox:route-edit",
                 reason="test reviewed reassignment",
             ),
+            actor=AuditActor.service("test:staff"),
             patch=team_inbox_routing.AiRoutePatch(
                 route_id=route_id,
                 service_team_id=UUID(str(sales)),
@@ -69,6 +72,9 @@ def test_inactive_ai_route_can_be_reassigned_and_enabled_without_duplicate(db_se
         "coverage_request",
         0.8,
     )
+    audit = db_session.query(AuditEvent).one()
+    assert audit.actor_type is AuditActorType.service
+    assert audit.actor_id == "test:staff"
 
 
 def test_ai_route_stale_edit_is_rejected(db_session):
@@ -91,6 +97,7 @@ def test_ai_route_stale_edit_is_rejected(db_session):
                     scope="inbox:route-edit",
                     reason="test stale form",
                 ),
+                actor=AuditActor.service("test:staff"),
                 patch=team_inbox_routing.AiRoutePatch(
                     route_id=route_id, expected_updated_at=stale, is_active=False
                 ),

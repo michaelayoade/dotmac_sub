@@ -76,6 +76,7 @@ from app.services import (
     team_inbox_contact_context as contact_context_service,
 )
 from app.services.ai.client import AIClientError
+from app.services.audit_adapter import AuditActor
 from app.services.auth_dependencies import can, load_permission_keys, require_permission
 from app.services.catalog import plan_family_catalogues
 from app.services.common import coerce_uuid
@@ -4681,6 +4682,7 @@ def team_inbox_ai_route_update(
                     scope="team-inbox:ai-route-edit",
                     reason="staff edited an existing Inbox AI route",
                 ),
+                actor=AuditActor.user(actor_id),
                 patch=team_inbox_routing.AiRoutePatch(
                     route_id=route_id,
                     display_name=display_name,
