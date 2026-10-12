@@ -25,6 +25,7 @@ _CANARY_CONFIG = frozenset(
         CanaryDisposition.invalid_dictionary,
         CanaryDisposition.missing_secret,
         CanaryDisposition.aborted_collision,
+        CanaryDisposition.collision_check_unavailable,
     }
 )
 HEALTHY_CANARY = frozenset(
@@ -200,5 +201,29 @@ def evaluate_canary_stale(nas_label: str, *, interval_hours: int) -> PostureFind
         impact="CoA reachability has not been verified within twice the canary interval.",
         evidence={"interval_hours": interval_hours},
         fix="Check the canary task and its control.",
+        layer=HealthLayer.service,
+    )
+
+
+FAILED_CANARY_VALUES = frozenset(
+    {CanaryDisposition.timeout.value, CanaryDisposition.transport_error.value}
+)
+
+
+def evaluate_canary_unverified(
+    nas_label: str, *, disposition: str, pending_minutes: int
+) -> PostureFinding:
+    """A first probe failed and its re-probe never reported back."""
+    return PostureFinding(
+        check=CheckId.coa_canary_unverified,
+        qualifier="0",
+        priority=HealthPriority.high,
+        title=f"{nas_label}: CoA canary failed and was never re-verified",
+        impact=(
+            "The first canary probe got no reply and the follow-up probe did "
+            "not complete; CoA reachability is unverified."
+        ),
+        evidence={"disposition": disposition, "pending_minutes": pending_minutes},
+        fix="Check the Celery workers and queue, then the NAS CoA path.",
         layer=HealthLayer.service,
     )

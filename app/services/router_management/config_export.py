@@ -35,6 +35,10 @@ class RouterConfigExportEmptyError(RouterConfigExportError):
     """The router answered but returned no configuration text."""
 
 
+class RouterConfigExportStrictUnsupportedError(RouterConfigExportError):
+    """Strict host-key checking was requested on a transport that cannot honour it."""
+
+
 class RouterConfigExportNoAuthError(RouterConfigExportError):
     """No SSH key or password is configured on the Sub worker."""
 
@@ -56,12 +60,20 @@ def fetch_config_export(router: Router, *, strict_host_key: bool = False) -> str
 
     ``strict_host_key`` forces the SSH transport to reject a host that is not
     already pinned in known_hosts (no trust-on-first-use), whatever the global
-    ``router_config_ssh_strict_host_key`` setting is. It can only tighten.
+    ``router_config_ssh_strict_host_key`` setting is. It can only tighten. The
+    REST transport cannot honour it and refuses (``strict_unsupported``).
     """
     if settings.router_config_export_via_ssh:
         if strict_host_key:
             return export_config_via_ssh(router, strict_host_key=True)
         return export_config_via_ssh(router)
+
+    if strict_host_key:
+        # The REST transport has no SSH host key to pin; refuse rather than
+        # silently ignore a request that can only tighten security.
+        raise RouterConfigExportStrictUnsupportedError(
+            "strict host-key checking is not supported by the REST export transport"
+        )
 
     from app.services.router_management.connection import RouterConnectionService
 

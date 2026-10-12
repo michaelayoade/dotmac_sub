@@ -69,6 +69,35 @@ enforcement outcomes already have a durable record (ADR 0017); CoA does not.
    (`reconcile_service_path`) to raise `coa-timeouts` findings. No reader may
    treat a bucket as the intended state of a subscription.
 
+6. **Canary safety (added in review).**
+   - *Collision check, exactly what is covered:* before each probe the
+     synthetic `User-Name` is checked against local `access_credentials` and
+     `radius_users`, and against the external FreeRADIUS `radacct.username`
+     of every configured external RADIUS DB (read-only, one `SELECT ... LIMIT 1`
+     with a 500 ms server-side `statement_timeout`). If a lookup errors, the
+     probe is NOT sent and the run records `collision_check_unavailable` (a
+     medium `coa-canary-config` finding; no outcome bucket). With no external
+     DB configured there is nothing external to collide with and only the local
+     tables are checked. The name carries a non-producible prefix plus 64 random
+     bits, so a collision is not expected in practice.
+   - *Not covered by the 500 ms timeout:* the time to obtain a database
+     connection (pool checkout, TCP connect to the external DB) and, for the
+     evidence write, the wait for a connection before `SET LOCAL
+     statement_timeout` takes effect. This is the same gap as ADR 0017.
+   - *Time budget:* a canary run stops scheduling new probes when the remaining
+     budget (12 minutes of the 15 minute soft limit) is below one spacing
+     interval; unprobed targets get no bucket and are picked up by the next
+     run (`deferred` counter).
+   - *Re-probe locking and escalation:* the re-probe task locks per NAS, so
+     re-probes for different NAS never skip each other. A first-probe failure
+     whose re-probe has not reported within `max(3 x reprobe delay, 15 min)` is
+     escalated by `reconcile_service_path` to a high `coa-canary-unverified`
+     finding instead of staying pending; the next healthy probe resolves it.
+   - *Duplicate NAS rows:* rows sharing host and CoA port are probed once, using
+     the row with a local `shared_secret` (ties by id). This matches
+     enforcement's secret resolution order (local secret first, then the
+     external `nas` table).
+
 ## Invariants
 
 - A CoA outcome counter is written only by `network.coa_outcome_evidence`

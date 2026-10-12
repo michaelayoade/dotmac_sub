@@ -26,7 +26,17 @@ SERVICE_CHECKS = (
     CheckId.coa_timeouts,
     CheckId.enforcement_path_failing,
     CheckId.coa_canary_stale,
+    CheckId.coa_canary_unverified,
 )
+
+
+def pending_reprobe_limit_seconds(settings: RouterHealthSettings) -> int:
+    """How long a failed first probe may wait for its re-probe before escalating.
+
+    Three re-probe delays (min 15 minutes) cover broker lag and one retry; past
+    that the re-probe has been lost and the NAS is reported as unverified.
+    """
+    return max(3 * settings.coa_canary_reprobe_seconds, 15 * 60)
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,8 @@ class NasInput:
     #: disposition -> count over the CoA window (disconnect + update kinds).
     coa_counts: Mapping[str, int]
     enforcement_failures: Sequence[EnforcementFailureRow]
+    #: disposition of that newest canary bucket (``None`` when there is none).
+    last_canary_disposition: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +105,7 @@ def compute_service_path(
     scopes: list[findings_service.Scope] = []
     notes = annotations or {}
     stale_after = timedelta(hours=2 * settings.coa_canary_interval_hours)
+    unverified_after = timedelta(seconds=pending_reprobe_limit_seconds(settings))
     for nas in nas_rows:
         label = nas_label(nas.name, nas.router_name)
         produced: list[PostureFinding] = []
@@ -115,6 +128,22 @@ def compute_service_path(
                         label, interval_hours=settings.coa_canary_interval_hours
                     )
                 )
+        if (
+            canary_enabled
+            and nas.canary_eligible
+            and nas.last_canary_at is not None
+            and nas.last_canary_disposition in service_checks.FAILED_CANARY_VALUES
+            and now - nas.last_canary_at > unverified_after
+        ):
+            produced.append(
+                service_checks.evaluate_canary_unverified(
+                    label,
+                    disposition=nas.last_canary_disposition or "",
+                    pending_minutes=int(
+                        (now - nas.last_canary_at).total_seconds() // 60
+                    ),
+                )
+            )
         nas_notes = notes.get(nas.nas_device_id, {})
         for pf in produced:
             finding = to_nas_finding(pf, nas)
@@ -123,7 +152,10 @@ def compute_service_path(
                 finding = replace(finding, known_issue=issue)
             findings.append(finding)
         for check in SERVICE_CHECKS:
-            if check is CheckId.coa_canary_stale and not canary_enabled:
+            if (
+                check in {CheckId.coa_canary_stale, CheckId.coa_canary_unverified}
+                and not canary_enabled
+            ):
                 continue
             scopes.append(
                 findings_service.Scope(HealthLayer.service, nas.nas_device_id, check)

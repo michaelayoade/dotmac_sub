@@ -304,14 +304,18 @@ def reconcile_service_path(
     ):
         counts[nas_id][disposition] = int(total or 0)
     last_canary: dict[UUID, datetime] = {}
-    for nas_id, last_at in db.execute(
-        select(NasCoaOutcomeBucket.nas_device_id, func.max(NasCoaOutcomeBucket.last_at))
-        .where(NasCoaOutcomeBucket.kind == "canary")
-        .group_by(NasCoaOutcomeBucket.nas_device_id)
+    last_canary_disposition: dict[UUID, str] = {}
+    for nas_id, disposition, last_at in db.execute(
+        select(
+            NasCoaOutcomeBucket.nas_device_id,
+            NasCoaOutcomeBucket.disposition,
+            NasCoaOutcomeBucket.last_at,
+        ).where(NasCoaOutcomeBucket.kind == "canary")
     ):
-        last_canary[nas_id] = (
-            last_at.replace(tzinfo=UTC) if last_at.tzinfo is None else last_at
-        )
+        stamp = last_at.replace(tzinfo=UTC) if last_at.tzinfo is None else last_at
+        if nas_id not in last_canary or stamp >= last_canary[nas_id]:
+            last_canary[nas_id] = stamp
+            last_canary_disposition[nas_id] = disposition
     failures: dict[UUID, list[EnforcementFailureRow]] = defaultdict(list)
     for nas_id, path, failure_class, total in db.execute(
         select(
@@ -352,6 +356,7 @@ def reconcile_service_path(
                 router_name=router[1] if router else None,
                 canary_eligible=nas.id in eligible_ids,
                 last_canary_at=last_canary.get(nas.id),
+                last_canary_disposition=last_canary_disposition.get(nas.id),
                 coa_counts=counts.get(nas.id, {}),
                 enforcement_failures=failures.get(nas.id, []),
             )

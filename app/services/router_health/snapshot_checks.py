@@ -35,6 +35,10 @@ _FIX_BY_CLASS: dict[str, str] = {
         "Pre-seed this router's SSH host key in the known_hosts file from a "
         "trusted path; Sub does not trust a host key on first use."
     ),
+    ConfigExportFailureClass.strict_unsupported.value: (
+        "Enable the SSH export transport; the REST export cannot pin host keys "
+        "for non-online routers."
+    ),
     ConfigExportFailureClass.empty_export.value: (
         "The router returned an empty export; check the dotmac-ops user policy."
     ),

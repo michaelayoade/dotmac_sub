@@ -68,6 +68,7 @@ def test_real_reject_policy_text_is_host_key_unknown() -> None:
         (wrapped(TimeoutError()), C.unreachable),
         (ce.RouterConfigExportEmptyError("e"), C.empty_export),
         (ce.RouterConfigExportNoAuthError("n"), C.no_auth_configured),
+        (ce.RouterConfigExportStrictUnsupportedError("s"), C.strict_unsupported),
         (wrapped(ValueError("weird")), C.other),
     ],
 )
@@ -254,3 +255,11 @@ def test_posture_run_end_to_end_then_fix_resolves(db_session, monkeypatch) -> No
     ]
     assert still == []
     assert uuid4()  # keep import used
+
+
+def test_rest_export_refuses_strict_host_key(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ce, "settings", types.SimpleNamespace(router_config_export_via_ssh=False)
+    )
+    with pytest.raises(ce.RouterConfigExportStrictUnsupportedError):
+        ce.fetch_config_export(types.SimpleNamespace(name="r"), strict_host_key=True)

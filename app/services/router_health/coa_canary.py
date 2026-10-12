@@ -28,6 +28,7 @@ from app.models.catalog import AccessCredential, NasDevice
 from app.models.radius import RadiusUser
 from app.models.router_health import NasCoaOutcomeBucket
 from app.services import control_registry, enforcement
+from app.services.radius_session_reconcile import external_radacct_username_seen
 from app.services.router_health import commands, reconciler, service_checks
 from app.services.router_health import findings as findings_service
 from app.services.router_health.coa_evidence import record_coa_outcome
@@ -59,7 +60,15 @@ CANARY_FINDING_CHECKS = (
 )
 _FAILED = frozenset({CanaryDisposition.timeout, CanaryDisposition.transport_error})
 # Dispositions stored in nas_coa_outcome_buckets (a collision sends nothing).
-_NOT_RECORDED = frozenset({CanaryDisposition.aborted_collision})
+_NOT_RECORDED = frozenset(
+    {
+        CanaryDisposition.aborted_collision,
+        CanaryDisposition.collision_check_unavailable,
+    }
+)
+
+# Leave headroom under the task soft limit (15 minutes) for the closing commit.
+CANARY_RUN_BUDGET_SECONDS = 12 * 60
 
 ReprobeScheduler = Callable[[UUID, UUID, int], None]
 
@@ -70,7 +79,11 @@ def canary_username() -> str:
 
 
 def username_collides(db: Session, username: str) -> bool:
-    """True if any credential, RADIUS user or accounting identity uses the name."""
+    """True if a local credential or RADIUS user row uses the name.
+
+    The external radacct check is separate (``external_radacct_username_seen``)
+    because it can fail and must then stop the probe rather than pass it.
+    """
     if db.scalar(
         select(func.count())
         .select_from(AccessCredential)
@@ -94,6 +107,7 @@ class CanaryRunStats:
     findings: int = 0
     skipped: str | None = None
     run_id: UUID | None = None
+    deferred: int = 0
 
 
 def _group_targets(nas_rows: list[NasDevice]) -> list[CanaryTarget]:
@@ -106,7 +120,10 @@ def _group_targets(nas_rows: list[NasDevice]) -> list[CanaryTarget]:
         groups.setdefault((str(host), int(nas.coa_port or 3799)), []).append(nas)
     targets: list[CanaryTarget] = []
     for (host, port), rows in sorted(groups.items()):
-        ordered = sorted(rows, key=lambda n: str(n.id))
+        # Enforcement resolves the CoA secret from the row's local shared_secret
+        # first (then the external nas table), so the probing row is one that
+        # has a local secret; ties break by id for a stable choice.
+        ordered = sorted(rows, key=lambda n: (not n.shared_secret, str(n.id)))
         targets.append(
             CanaryTarget(
                 host=host,
@@ -189,6 +206,12 @@ def send_canary(db: Session, target: CanaryTarget) -> CanaryDisposition:
     username = canary_username()
     if username_collides(db, username):
         return CanaryDisposition.aborted_collision
+    external = external_radacct_username_seen(db, username)
+    if external is None:
+        # Fail safe: if uniqueness cannot be proven, send nothing.
+        return CanaryDisposition.collision_check_unavailable
+    if external:
+        return CanaryDisposition.aborted_collision
     disposition = enforcement.send_coa_probe_disconnect(db, nas, username=username)
     return CanaryDisposition(disposition.value)
 
@@ -267,6 +290,8 @@ def run_coa_canary(
     schedule_reprobe: ReprobeScheduler,
     sleep: Callable[[float], None] = time.sleep,
     now: datetime | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    budget_seconds: float = CANARY_RUN_BUDGET_SECONDS,
 ) -> CanaryRunStats:
     moment = now or datetime.now(UTC)
     settings = load_settings(db)
@@ -297,9 +322,18 @@ def run_coa_canary(
         ),
     )
     results: list[CanaryResult] = []
+    spacing = settings.coa_canary_spacing_ms / 1000.0
+    started = monotonic()
+    deferred = 0
     for index, target in enumerate(targets):
         if index:
-            sleep(settings.coa_canary_spacing_ms / 1000.0)
+            # Stop scheduling new probes when less than one spacing interval
+            # of the run budget is left; deferred targets stay eligible for
+            # the next run (no bucket was written for them).
+            if budget_seconds - (monotonic() - started) < spacing:
+                deferred = len(targets) - index
+                break
+            sleep(spacing)
         disposition = send_canary(db, target)
         db.rollback()
         result = CanaryResult(target=target, disposition=disposition)
@@ -326,13 +360,14 @@ def run_coa_canary(
     _ = outcome
     pending = sum(1 for r in results if r.disposition in _FAILED)
     return CanaryRunStats(
-        targets=len(targets),
+        targets=len(results),
         healthy=sum(
             1 for r in results if r.disposition in service_checks.HEALTHY_CANARY
         ),
         failed_pending_reprobe=pending,
         findings=len(findings),
         run_id=run_id,
+        deferred=deferred,
     )
 
 

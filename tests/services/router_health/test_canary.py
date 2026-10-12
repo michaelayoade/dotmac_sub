@@ -241,3 +241,100 @@ def test_default_settings_load(db_session) -> None:
     loaded = load_settings(db_session)
     assert loaded.alert_mode == "shadow"
     assert loaded.coa_canary_spacing_ms == 2000
+
+
+def test_external_radacct_hit_aborts_and_error_fails_safe(
+    db_session, monkeypatch
+) -> None:
+    nas = add_nas(db_session, "a", "192.0.2.10")
+    target = CanaryTarget("192.0.2.10", 3799, (nas.id,), nas.id)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        coa_canary.enforcement,
+        "send_coa_probe_disconnect",
+        lambda db, n, username: sent.append(username) or CanaryDisposition.rejected,
+    )
+    monkeypatch.setattr(coa_canary, "external_radacct_username_seen", lambda d, u: True)
+    assert (
+        coa_canary.send_canary(db_session, target)
+        is CanaryDisposition.aborted_collision
+    )
+    monkeypatch.setattr(coa_canary, "external_radacct_username_seen", lambda d, u: None)
+    assert (
+        coa_canary.send_canary(db_session, target)
+        is CanaryDisposition.collision_check_unavailable
+    )
+    assert sent == []  # nothing was transmitted in either case
+    monkeypatch.setattr(
+        coa_canary, "external_radacct_username_seen", lambda d, u: False
+    )
+    assert coa_canary.send_canary(db_session, target) is CanaryDisposition.rejected
+    assert len(sent) == 1
+
+
+def test_external_radacct_lookup_error_returns_none(db_session, monkeypatch) -> None:
+    from app.services import radius_session_reconcile as rsr
+
+    monkeypatch.setattr(
+        rsr, "_active_external_sync_configs", lambda db: [{"db_url": "x"}]
+    )
+
+    def boom(url):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(rsr, "_get_external_engine", boom)
+    assert rsr.external_radacct_username_seen(db_session, "u") is None
+    monkeypatch.setattr(rsr, "_active_external_sync_configs", lambda db: [])
+    assert rsr.external_radacct_username_seen(db_session, "u") is False
+
+
+def test_unavailable_collision_check_is_a_config_finding_not_a_bucket(
+    db_session, canary_env, monkeypatch
+) -> None:
+    add_nas(db_session, "a", "192.0.2.10")
+    monkeypatch.setattr(
+        coa_canary,
+        "send_canary",
+        lambda db, t: CanaryDisposition.collision_check_unavailable,
+    )
+    stats = coa_canary.run_coa_canary(
+        db_session,
+        task_name="t",
+        schedule_reprobe=lambda *a: pytest.fail("not a CoA failure"),
+        sleep=lambda s: None,
+    )
+    assert stats.findings == 1 and canary_env == []
+
+
+def test_run_stops_scheduling_probes_when_budget_is_below_one_spacing(
+    db_session, canary_env, monkeypatch
+) -> None:
+    for i in range(4):
+        add_nas(db_session, f"n{i}", f"192.0.2.{10 + i}")
+    sent: list[str] = []
+    monkeypatch.setattr(
+        coa_canary,
+        "send_canary",
+        lambda db, t: sent.append(t.host) or CanaryDisposition.rejected,
+    )
+    clock = iter([0.0, 1.0, 9.0, 99.0, 99.0, 99.0])  # start, then elapsed readings
+    stats = coa_canary.run_coa_canary(
+        db_session,
+        task_name="t",
+        schedule_reprobe=lambda *a: None,
+        sleep=lambda s: None,
+        monotonic=lambda: next(clock),
+        budget_seconds=10.0,
+    )
+    # 2nd probe: 10-1=9 left >= 2s spacing -> sent; 3rd: 10-9=1 < 2s -> stop.
+    assert len(sent) == 2
+    assert stats.targets == 2 and stats.deferred == 2
+
+
+def test_duplicate_rows_probe_with_the_row_that_has_a_local_secret(db_session) -> None:
+    no_secret = add_nas(db_session, "a-1", "192.0.2.10")
+    with_secret = add_nas(db_session, "a-2", "192.0.2.10")
+    with_secret.shared_secret = "enc:x"
+    db_session.commit()
+    (target,) = coa_canary._group_targets([no_secret, with_secret])
+    assert target.primary_nas_device_id == with_secret.id

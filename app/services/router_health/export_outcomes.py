@@ -16,6 +16,7 @@ from app.services.router_health.contracts import ConfigExportFailureClass
 from app.services.router_management.config_export import (
     RouterConfigExportEmptyError,
     RouterConfigExportNoAuthError,
+    RouterConfigExportStrictUnsupportedError,
 )
 
 # paramiko's RejectPolicy raises "Server 'h' not found in known_hosts"; accept
@@ -30,6 +31,8 @@ def _classify_one(exc: BaseException) -> ConfigExportFailureClass | None:
         return ConfigExportFailureClass.auth_failed
     if isinstance(exc, RouterConfigExportNoAuthError):
         return ConfigExportFailureClass.no_auth_configured
+    if isinstance(exc, RouterConfigExportStrictUnsupportedError):
+        return ConfigExportFailureClass.strict_unsupported
     if isinstance(exc, RouterConfigExportEmptyError):
         return ConfigExportFailureClass.empty_export
     if isinstance(exc, SSHException) and _UNKNOWN_HOST_RE.search(str(exc)) is not None:

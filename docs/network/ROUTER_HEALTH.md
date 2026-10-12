@@ -107,3 +107,21 @@ Disable the controls. To clear the alerts run
 `python scripts/router_health_retire_findings.py` (dry run by default; `--apply`
 resolves every `network:router-health:` alert and writes an audit event).
 Migration 672 is inert and may stay; `downgrade()` drops the evidence tables.
+
+## Suspension-path bypass checks
+
+Beyond "the jump exists and the chain ends in a drop", posture now reports
+(`suspension-jump` / `suspension-chain`, critical unless noted):
+
+- a `return`, or any `accept` other than the narrow DNS (`udp` 53) and portal
+  (`tcp` 80/443 to a single host) allows, placed before the terminal
+  reject/drop in a suspension chain (rule order is evaluated);
+- a forward jump narrowed by matchers beyond `src-address-list=<suspended>` and
+  a negated `dst-address-list` (`narrowed`);
+- the negated walled-garden destination list holding prefixes shorter than
+  `suspension_exclusion_max_prefix_breadth` (default `/24`) (critical) or more
+  than `suspension_exclusion_max_entries` entries (default 50, high).
+
+Policy `defaults` accept `suspension_portal_addresses` (single IPs). When it is
+empty, any single-host `tcp` 80/443 allow counts as the portal allow; set it to
+pin the allowed portal address exactly.

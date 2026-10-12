@@ -64,6 +64,7 @@ class CheckId(StrEnum):
     coa_canary_acked = "coa-canary-acked"
     coa_canary_config = "coa-canary-config"
     coa_canary_stale = "coa-canary-stale"
+    coa_canary_unverified = "coa-canary-unverified"
     # policy layer
     policy_invalid = "policy-invalid"
     policy_unmatched = "policy-unmatched"
@@ -85,6 +86,7 @@ POSTURE_CHECKS_OFF_ALIASES: Mapping[str, tuple[CheckId, ...]] = {
         CheckId.coa_canary_acked,
         CheckId.coa_canary_config,
         CheckId.coa_canary_stale,
+        CheckId.coa_canary_unverified,
     ),
 }
 
@@ -118,6 +120,8 @@ class ConfigExportFailureClass(StrEnum):
     #: approved pre-seeded known_hosts instead of trust-on-first-use.
     host_key_unknown = "host_key_unknown"
     empty_export = "empty_export"
+    #: Strict was requested but the REST export transport cannot pin host keys.
+    strict_unsupported = "strict_unsupported"
     no_auth_configured = "no_auth_configured"
     other = "other"
 
@@ -150,6 +154,7 @@ class CanaryDisposition(StrEnum):
     missing_secret = "missing_secret"
     unexpected_response = "unexpected_response"
     aborted_collision = "aborted_collision"
+    collision_check_unavailable = "collision_check_unavailable"
 
 
 @dataclass(frozen=True)

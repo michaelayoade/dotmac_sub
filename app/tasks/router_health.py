@@ -44,15 +44,25 @@ SOFT_LIMIT_SECONDS = {
 
 
 def _run(
-    task_name: str, control_key: str, body: Callable[[Session], dict[str, Any]]
+    task_name: str,
+    control_key: str,
+    body: Callable[[Session], dict[str, Any]],
+    *,
+    lock_scope: str | None = None,
 ) -> dict[str, Any]:
+    """Run one task body under an advisory lock.
+
+    ``lock_scope`` narrows the lock (for example one NAS) so independent
+    subjects never skip each other.
+    """
     started = time.monotonic()
     db = db_session_adapter.create_session()
     try:
         if not control_registry.is_enabled(db, control_key):
             return {"skipped": "control_disabled"}
         with postgres_session_advisory_lock(
-            _lock_key(task_name), timeout_ms=_LOCK_TIMEOUT_MS
+            _lock_key(f"{task_name}:{lock_scope}" if lock_scope else task_name),
+            timeout_ms=_LOCK_TIMEOUT_MS,
         ) as acquired:
             if not acquired:
                 observability.record_task_skip(task_name, reason="lock_held")
@@ -117,6 +127,7 @@ def run_coa_canary() -> dict[str, Any]:
             "healthy": stats.healthy,
             "failed_pending_reprobe": stats.failed_pending_reprobe,
             "findings": stats.findings,
+            "deferred": stats.deferred,
             "skipped": stats.skipped or "",
         }
 
@@ -138,4 +149,9 @@ def reprobe_coa_canary(nas_device_id: str, run_id: str) -> dict[str, Any]:
             "skipped": stats.skipped or "",
         }
 
-    return _run(TASK_REPROBE, reconciler.CONTROL_CANARY, body)
+    return _run(
+        TASK_REPROBE,
+        reconciler.CONTROL_CANARY,
+        body,
+        lock_scope=nas_device_id,
+    )
