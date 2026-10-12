@@ -79,6 +79,35 @@ def test_ai_route_edit_adapter_passes_typed_patch_and_staff_context(db_session):
     assert command.actor.actor_id == str(actor_id)
 
 
+def test_ai_route_deactivation_uses_typed_stale_checked_command(db_session):
+    from app.web.admin.inbox import settings_router
+
+    app = FastAPI()
+    app.include_router(settings_router)
+    app.dependency_overrides[get_db] = lambda: db_session
+    for route in settings_router.routes:
+        for dependency in getattr(route, "dependencies", ()):
+            app.dependency_overrides[dependency.dependency] = lambda: None
+    route_id, actor_id = uuid.uuid4(), uuid.uuid4()
+    timestamp = datetime.now(UTC)
+    with (
+        patch("app.web.admin.inbox._actor_id_from_request", return_value=str(actor_id)),
+        patch("app.web.admin.inbox.team_inbox_commands.update_ai_route") as update,
+    ):
+        response = TestClient(app).post(
+            f"{settings_router.prefix}/ai-routes/{route_id}/delete",
+            data={"expected_updated_at": timestamp.isoformat()},
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    command = update.call_args.kwargs["command"]
+    assert isinstance(command, team_inbox_commands.UpdateAiRouteCommand)
+    assert command.patch.route_id == route_id
+    assert command.patch.is_active is False
+    assert command.patch.expected_updated_at == timestamp
+    assert command.actor.actor_id == str(actor_id)
+
+
 def _client(db_session) -> TestClient:
     app = FastAPI()
     app.include_router(router)

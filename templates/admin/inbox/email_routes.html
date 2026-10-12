@@ -718,8 +718,9 @@
                                         <input type="hidden" name="expected_updated_at" value="{{ route.updated_at.isoformat() }}">
                                         <p class="text-xs text-slate-500">{{ route.channel_type|replace('_', ' ')|title }} / {{ route.intent_key }}. Channel and intent remain unchanged.</p>
                                         <label class="block text-xs text-slate-700 dark:text-slate-200">Target team
-                                            <select name="ai_service_team_id" required class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">
-                                                {% for team in service_team_options %}<option value="{{ team.id }}" {% if route.service_team_id|string == team.id|string %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
+                                            <select name="ai_service_team_id" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">
+                                                <option value="" selected disabled>Keep current: {{ route.service_team_name or "Unknown team" }}</option>
+                                                {% for team in service_team_options %}<option value="{{ team.id }}">Change to {{ team.name }}</option>{% endfor %}
                                             </select>
                                         </label>
                                         <label class="block text-xs text-slate-700 dark:text-slate-200">Display name<input name="display_name" value="{{ route.display_name or '' }}" maxlength="160" class="mt-1 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
@@ -735,12 +736,6 @@
                                     <input type="hidden" name="is_active" value="{{ 'false' if route.is_active else 'true' }}">
                                     <button class="min-h-9 rounded-lg border border-slate-300 px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-700 dark:text-slate-200">{{ "Disable" if route.is_active else "Reactivate" }}</button>
                                 </form>
-                                {% if route.is_active %}
-                                <form method="post" action="/admin/crm/inbox/ai-routes/{{ route.id }}/delete" onsubmit="return confirm('Deactivate this AI route?')">
-                                    {% include "components/forms/csrf_input.html" %}
-                                    <button class="min-h-9 rounded-lg border border-rose-300 px-2.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300">Deactivate</button>
-                                </form>
-                                {% endif %}
                             </div>
                         </td>
                     </tr>

@@ -3503,13 +3503,6 @@ def update_ai_route(
     )
 
 
-def delete_ai_route(db: Session, *, route_id: str | UUID) -> None:
-    def action() -> None:
-        team_inbox_routing.delete_ai_route(db, route_id)
-
-    _commit(db, action)
-
-
 def stage_attachments(
     db: Session,
     *,

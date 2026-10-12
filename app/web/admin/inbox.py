@@ -4704,12 +4704,34 @@ def team_inbox_ai_route_update(
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def team_inbox_ai_route_delete(
+    request: Request,
     route_id: UUID,
+    expected_updated_at: datetime = Form(...),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
+    actor_id = _actor_id_from_request(request)
+    if actor_id is None:
+        return _routes_redirect(
+            status="error", message="An authenticated staff actor is required."
+        )
     try:
-        team_inbox_commands.delete_ai_route(db, route_id=route_id)
+        team_inbox_commands.update_ai_route(
+            db,
+            command=team_inbox_commands.UpdateAiRouteCommand(
+                context=CommandContext.system(
+                    actor=f"person:{actor_id}",
+                    scope="team-inbox:ai-route-deactivate",
+                    reason="staff deactivated an existing Inbox AI route",
+                ),
+                actor=AuditActor.user(actor_id),
+                patch=team_inbox_routing.AiRoutePatch(
+                    route_id=route_id,
+                    is_active=False,
+                    expected_updated_at=expected_updated_at,
+                ),
+            ),
+        )
     except (DomainError, ValueError) as exc:
         return _routes_redirect(status="error", message=str(exc))
     return _routes_redirect(status="success", message="AI intake route deactivated.")

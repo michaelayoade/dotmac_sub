@@ -122,14 +122,14 @@ def test_edit_route_renders_inactive_destination_and_stale_form_version():
 
     from jinja2 import DictLoader, Environment
 
-    route_id, team_id = uuid4(), uuid4()
+    route_id, inactive_team_id, active_team_id = uuid4(), uuid4(), uuid4()
     route = team_inbox_routing.AiRouteRow(
         id=str(route_id),
         channel_type="whatsapp",
         intent_key="coverage_request",
         display_name="Coverage & Sales",
-        service_team_id=str(team_id),
-        service_team_name="Help Desk",
+        service_team_id=str(inactive_team_id),
+        service_team_name="Former Help Desk",
         confidence_threshold=0.8,
         priority=100,
         is_active=False,
@@ -151,13 +151,18 @@ def test_edit_route_renders_inactive_destination_and_stale_form_version():
         .from_string(fragment)
         .render(
             route=route,
-            service_team_options=[{"id": team_id, "name": "Help Desk"}],
+            service_team_options=[{"id": active_team_id, "name": "Active Help Desk"}],
         )
     )
     assert f"/ai-routes/{route_id}" in html
     assert 'name="expected_updated_at"' in html
     assert 'value="false" selected' in html
     assert "Coverage &amp; Sales" in html
+    assert "Keep current: Former Help Desk" in html
+    assert '<option value="" selected disabled>' in html
+    assert (
+        f'<option value="{active_team_id}">Change to Active Help Desk</option>' in html
+    )
 
 
 def test_ai_intake_meta_social_form_uses_connector_key():

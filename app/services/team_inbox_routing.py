@@ -706,12 +706,6 @@ def update_ai_route(db: Session, *, patch: AiRoutePatch) -> AiRouteUpdateOutcome
     return AiRouteUpdateOutcome(route.id, route.service_team_id, route.is_active)
 
 
-def delete_ai_route(db: Session, route_id: str | UUID) -> None:
-    update_ai_route(
-        db, patch=AiRoutePatch(route_id=UUID(str(route_id)), is_active=False)
-    )
-
-
 def _metadata_text(metadata: dict | None, *keys: str) -> str | None:
     if not isinstance(metadata, dict):
         return None
