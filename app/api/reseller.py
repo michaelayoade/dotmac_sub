@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app import subscriber_mfa_enrollment_http as subscriber_mfa_adapter
 from app.db import get_db
 from app.schemas.billing import (
     BillingAccountCreditAllocationConfirm,
@@ -49,7 +50,6 @@ from app.services import (
     team_inbox_widget,
 )
 from app.services import password_authentication as subscriber_mfa_owner
-from app.services import subscriber_mfa_enrollment_adapter as subscriber_mfa_adapter
 from app.services.auth_dependencies import require_user_auth
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])

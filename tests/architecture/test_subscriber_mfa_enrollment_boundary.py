@@ -33,6 +33,17 @@ def test_adapters_do_not_reintroduce_subscriber_writers() -> None:
     assert "generate_mfa_recovery_codes" not in customer[start:end]
 
 
+def test_http_transport_adapter_stays_outside_service_layer() -> None:
+    transport = ROOT / "app/subscriber_mfa_enrollment_http.py"
+    service_adapter = ROOT / "app/services/subscriber_mfa_enrollment_adapter.py"
+    assert transport.is_file()
+    assert not service_adapter.exists()
+    source = transport.read_text()
+    assert "from fastapi import HTTPException" in source
+    assert "owner.setup_subscriber_mfa" in source
+    assert "owner.confirm_subscriber_mfa" in source
+
+
 def test_concern_registered_and_lock_refresh_required() -> None:
     from app.services.sot_relationships import service_relationship
 

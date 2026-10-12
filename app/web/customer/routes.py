@@ -31,6 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from app import subscriber_mfa_enrollment_http as subscriber_mfa_adapter
 from app.db import finish_read_transaction, get_db
 from app.models.domain_settings import SettingDomain
 from app.schemas.service_period_purchase import (
@@ -58,7 +59,6 @@ from app.services import customer_portal_notifications as customer_notifications
 from app.services import customer_portal_profile_commands as portal_profile_commands
 from app.services import password_authentication as subscriber_mfa_owner
 from app.services import payment_proofs as payment_proofs_service
-from app.services import subscriber_mfa_enrollment_adapter as subscriber_mfa_adapter
 from app.services import web_customer_actions as customer_profile_service
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services import web_network_speedtests as web_network_speedtests_service

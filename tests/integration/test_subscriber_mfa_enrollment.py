@@ -22,11 +22,11 @@ from sqlalchemy import event, select, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session, SessionTransaction, sessionmaker
 
+from app import subscriber_mfa_enrollment_http as adapter
 from app.models.auth import MFAMethod, SessionStatus
 from app.models.auth import Session as AuthSession
 from app.models.subscriber import Subscriber
 from app.services import password_authentication as owner
-from app.services import subscriber_mfa_enrollment_adapter as adapter
 from tests.integration.test_password_auth_credential_race import (
     _signing as _signing,
 )

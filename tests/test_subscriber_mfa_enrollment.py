@@ -14,12 +14,12 @@ from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app import subscriber_mfa_enrollment_http as adapter
 from app.models.audit import AuditEvent
 from app.models.auth import MFAMethod, MFARecoveryCode, SessionStatus
 from app.models.auth import Session as AuthSession
 from app.models.event_store import EventStore
 from app.services import password_authentication as owner
-from app.services import subscriber_mfa_enrollment_adapter as adapter
 
 
 @pytest.fixture

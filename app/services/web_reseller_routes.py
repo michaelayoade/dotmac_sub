@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
+from app import subscriber_mfa_enrollment_http as subscriber_mfa_adapter
 from app.db import get_db
 from app.models.auth import MFAMethod
 from app.services import auth_flow as auth_flow_service
@@ -21,7 +22,6 @@ from app.services import (
     reseller_ticket_projection,
 )
 from app.services import password_authentication as subscriber_mfa_owner
-from app.services import subscriber_mfa_enrollment_adapter as subscriber_mfa_adapter
 from app.services.audit_adapter import AuditActor
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError

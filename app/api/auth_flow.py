@@ -13,6 +13,7 @@ from fastapi import (
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app import subscriber_mfa_enrollment_http as subscriber_mfa_adapter
 from app.db import get_db
 from app.schemas.auth import MFAMethodRead
 from app.schemas.auth_flow import (
@@ -52,7 +53,6 @@ from app.services import (
 from app.services import auth_flow as auth_flow_service
 from app.services import password_authentication as subscriber_mfa_owner
 from app.services import session_manager as session_manager_service
-from app.services import subscriber_mfa_enrollment_adapter as subscriber_mfa_adapter
 from app.services import user_profile as user_profile_service
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter

@@ -8,8 +8,10 @@ The actor must be the subject subscriber. API keys, staff, reseller-user, and
 impersonation contexts cannot enter this subscriber command; native reseller
 and staff enrollment remain with their existing flows.
 
-Adapters normalize established authentication context and open a fresh owner
-session. Each command enters `execute_owner_command` once. Locks are refreshed
+HTTP transport normalization and error mapping live in
+`app/subscriber_mfa_enrollment_http.py`. API and web adapters use it to normalize
+established authentication context and open a fresh owner session. Each command
+enters `execute_owner_command` once. Locks are refreshed
 Subscriber FOR UPDATE -> exact AuthSession FOR UPDATE -> factors in UUID order.
 The session must still be active, unrevoked, unexpired and belong exclusively
 to the subscriber. This second check closes the middleware/reset window: a
