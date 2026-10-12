@@ -374,10 +374,12 @@ def test_session_delete_revokes(db_session, person):
         expires_at=datetime(2099, 1, 1, tzinfo=UTC),
     )
     db_session.add(session)
+    db_session.flush()
+    session_id = str(session.id)
     db_session.commit()
     auth_service.sessions.delete(
         db_session,
-        str(session.id),
+        session_id,
         actor=AuditActor.system("auth-service-test"),
     )
     db_session.refresh(session)

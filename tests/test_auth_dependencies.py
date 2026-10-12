@@ -283,9 +283,12 @@ def test_revoke_session_records_durable_revocation(db_session, person):
         expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
+    db_session.flush()
+    session_id = str(session.id)
+    subscriber_id = person.id
     db_session.commit()
     result = session_manager_service.revoke_session(
-        db_session, str(session.id), person.id
+        db_session, session_id, subscriber_id
     )
 
     db_session.refresh(session)

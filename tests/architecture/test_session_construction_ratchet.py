@@ -171,7 +171,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: are fast unit fixtures, not PostgreSQL acceptance or production construction.
 #: +1 from tests/test_argon2id_benchmark.py: a disposable SQLite engine proves
 #: the benchmark report path without adding a production construction site.
-TEST_FIXTURE_BASELINE_TOTAL = 243
+#: +2 from tests/test_auth_flow_helpers.py and
+#: tests/test_admin_system_route_guards.py: fresh owner-command Sessions prove
+#: logout and administrative session revocation commit independently of the
+#: adapter's request Session. These are test-only transaction-boundary fixtures.
+TEST_FIXTURE_BASELINE_TOTAL = 245
 
 
 def _baseline() -> dict[str, int]:

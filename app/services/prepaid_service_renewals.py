@@ -187,6 +187,9 @@ _TAX_INCLUSIVE_DOCUMENT_CORRECTION_SCOPE = (
 _TAX_INCLUSIVE_DOCUMENT_CORRECTION_METADATA_KEY = (
     "tax_inclusive_renewal_document_correction"
 )
+_TAX_INCLUSIVE_DOCUMENT_CORRECTION_REVERSAL_REASON = (
+    "Replace tax-inclusive direct renewal with canonical invoice"
+)
 TAX_INCLUSIVE_RENEWAL_DOCUMENT_CORRECTION_SCOPE = _LEGACY_TAX_CORRECTION_AUTH_SCOPE
 _LEGACY_PAYMENT_INVOICE_REPAIR_CONCERN = (
     "reviewed legacy payment-backed prepaid renewal invoice repair"
@@ -4619,7 +4622,7 @@ def preview_tax_inclusive_renewal_document_correction(
         PreviewAccountAdjustmentReversalQuery(
             adjustment_id=adjustment.id,
             request=AccountAdjustmentReversalPreviewRequest(
-                reason="Replace tax-inclusive direct renewal with canonical invoice"
+                reason=_TAX_INCLUSIVE_DOCUMENT_CORRECTION_REVERSAL_REASON
             ),
         ),
     )
@@ -4882,10 +4885,7 @@ def correct_tax_inclusive_renewal_document(
                 context=command.context,
                 adjustment_id=adjustment.id,
                 confirmation=AccountAdjustmentReversalConfirm(
-                    reason=(
-                        "Replace tax-inclusive direct prepaid renewal with its "
-                        "canonical paid invoice"
-                    ),
+                    reason=_TAX_INCLUSIVE_DOCUMENT_CORRECTION_REVERSAL_REASON,
                     preview_fingerprint=current.reversal_preview_fingerprint,
                     idempotency_key=key,
                 ),
