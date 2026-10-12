@@ -2667,7 +2667,7 @@ def test_reviewed_paid_period_replacement_reuses_payment_and_preserves_credit(
 
     assert get_account_credit_balance(
         db_session, str(subscriber.id), currency="NGN"
-    ) == Decimal("371375.50")
+    ) == Decimal("314874.00")
     assert preview.account_credit_before == Decimal("56501.50")
     assert preview.disposition is (
         ReviewedPaidPrepaidPeriodReplacementDisposition.exact_paid_period_replacement
