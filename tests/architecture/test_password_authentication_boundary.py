@@ -55,6 +55,8 @@ def test_owner_is_registered_with_its_contracted_concerns() -> None:
         "authentication failure counters",
         "authenticated password change",
         "portal authentication source snapshots",
+        "authenticated subscriber MFA enrollment",
+        "principal-specific MFA profile projection",
     }
 
 

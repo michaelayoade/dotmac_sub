@@ -31,10 +31,13 @@ def _credential_administration_service(
     dependencies: tuple[str, ...],
 ) -> SOTService:
     input_name = f"{name} command and canonical state"
+    customer_mfa = name == "auth.credential_administration"
     return SOTService(
         name=name,
         module=module,
-        owns=(concern,),
+        owns=(concern, "administrative customer MFA reset")
+        if customer_mfa
+        else (concern,),
         depends_on=dependencies,
         contract=ServiceContract(
             concerns=(
@@ -46,6 +49,17 @@ def _credential_administration_service(
                     input_names=(input_name,),
                     canonical_writer=None if coordinator else name,
                 ),
+            )
+            + (
+                (
+                    ConcernContract(
+                        name="administrative customer MFA reset",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(input_name,),
+                    ),
+                )
+                if customer_mfa
+                else ()
             ),
             authoritative_inputs=(
                 AuthorityInput(
@@ -60,8 +74,8 @@ def _credential_administration_service(
                 if coordinator
                 else TransactionMode.PARTICIPANT,
                 boundary="Public coordinator executes once on a transaction-free session; participants flush only. Credential, subscriber registration metadata, database session revocation, audit and outbox commit or roll back together. Preparation reads/hash occur on a separate session before locks.",
-                locking="Principal FOR UPDATE precedes credential FOR UPDATE; creation serializes on Subscriber. PostgreSQL per-lock wait is bounded at five seconds.",
-                idempotency="No durable command replay claim. Repeated deactivation is a no-op; unique credential identity arbitrates creation. Password reset is a fresh transition on each successful invocation.",
+                locking="Principal FOR UPDATE precedes credential FOR UPDATE; creation and customer MFA reset serialize on refreshed Subscriber. MFA factors lock in UUID order before recovery and AuthSession updates. PostgreSQL per-lock wait is bounded at five seconds.",
+                idempotency="No durable command replay claim. Repeated deactivation is a no-op; unique credential identity arbitrates creation. Password reset is a fresh transition on each successful invocation. Customer MFA clean repeat audits only; live-factor removal or secret/counter/recovery residue cleanup revokes sessions and stages one event.",
                 retries="Lock timeout is retryable only after rollback and maps to 503 Retry-After. Unknown commit outcome is not automatically retried; inspect committed state before resubmission.",
             ),
             errors=ErrorContract(
@@ -69,6 +83,7 @@ def _credential_administration_service(
                     f"auth.credential_administration.{code}"
                     for code in (
                         "invalid_command_context",
+                        "ineligible_customer",
                         "invalid_password",
                         "invalid_username",
                         "invalid_principal",
@@ -85,7 +100,7 @@ def _credential_administration_service(
                 mapping_owner="app.api.auth and administrative web adapters",
                 retryable_codes=("auth.credential_administration.lock_timeout",),
                 fail_closed_on=(
-                    "missing trusted actor or credential-write scope",
+                    "missing trusted actor or credential-write scope; customer MFA reset requires matching active SystemUser provenance and customer:write",
                     "active caller transaction including flushed writes",
                     "stale principal/provider",
                     "audit or outbox failure",
@@ -128,6 +143,7 @@ def _credential_administration_service(
             test_refs=(
                 "tests/test_credential_administration.py",
                 "tests/architecture/test_credential_administration_boundary.py",
+                "tests/test_customer_mfa_reset.py",
             ),
         ),
     )
@@ -183,9 +199,10 @@ DOMAIN = DomainSOT(
                 "user password representation verification",
                 "explicit Argon2id hash parameters",
                 "explicit native password admission",
+                "dormant native password work observation",
             ),
             notes=(
-                "User-only foundation with dormant explicitly configured process-local admission. "
+                "User-only foundation with dormant explicitly configured process-local admission and work observation; no login installation or performance acceptance. "
                 "Existing adapters default COMPAT; REFUSE "
                 "is explicit and is not connected to settings. Service-secret compatibility "
                 "remains in auth_flow. No rehash, notices, or persistence."
@@ -210,8 +227,24 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.POLICY,
                         input_names=("explicit native password admission budget",),
                     ),
+                    ConcernContract(
+                        name="dormant native password work observation",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "submitted user password and stored representation",
+                            "explicit password policy and parameters",
+                            "explicit native password admission budget",
+                            "explicit native password observer",
+                        ),
+                    ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="explicit native password observer",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed NativePasswordObserver receives secret-free low-level intervals after admission release and explicitly acknowledges capture; require_complete_capture rejects lost delivery after callers drain.",
+                    ),
                     AuthorityInput(
                         name="submitted user password and stored representation",
                         owner="auth.user_passwords",
@@ -244,6 +277,7 @@ DOMAIN = DomainSOT(
                         "auth.user_passwords.invalid_admission_configuration",
                         "auth.user_passwords.admission_saturated",
                         "auth.user_passwords.admission_timed_out",
+                        "auth.user_passwords.incomplete_native_capture",
                     ),
                     mapping_owner="auth_flow compatibility adapter and future password creation owners",
                     fail_closed_on=(
@@ -252,6 +286,7 @@ DOMAIN = DomainSOT(
                         "bcrypt input above 72 UTF-8 bytes",
                         "invalid explicit admission budget",
                         "full waiter budget or expired admission timeout",
+                        "incomplete native observation capture before measurement acceptance",
                     ),
                 ),
                 migration=MigrationContract(
@@ -263,6 +298,8 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_user_password_policy.py",
                     "tests/test_user_password_admission.py",
+                    "tests/test_user_password_work.py",
+                    "tests/architecture/test_credential_verifier_boundary.py",
                     "tests/test_auth_legacy_bcrypt.py",
                 ),
             ),
@@ -1945,6 +1982,8 @@ DOMAIN = DomainSOT(
                 "authentication failure counters",
                 "authenticated password change",
                 "portal authentication source snapshots",
+                "authenticated subscriber MFA enrollment",
+                "principal-specific MFA profile projection",
             ),
             depends_on=(
                 "auth.session_staging",
@@ -1954,6 +1993,7 @@ DOMAIN = DomainSOT(
                 "control.settings_spec",
                 "observability.audit_log",
                 "runtime.db_sessions",
+                "events.dispatcher",
             ),
             notes=(
                 "Credential standing is version-bound. Password verification "
@@ -1986,6 +2026,21 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="principal-specific MFA profile projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("credential standing record",),
+                    ),
+                    ConcernContract(
+                        name="authenticated subscriber MFA enrollment",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "canonical authenticating principal state",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
                     ConcernContract(
                         name="password authentication success transition",
                         role=OwnerRole.COMMAND_WRITER,
@@ -2117,7 +2172,14 @@ DOMAIN = DomainSOT(
                         "failure propagates unchanged to the owner for rollback."
                     ),
                     locking=(
-                        "No SELECT FOR UPDATE and no lock while hashing. PPPoE "
+                        "Authenticated subscriber enrollment locks refreshed Subscriber FOR UPDATE, "
+                        "then exact authenticated AuthSession FOR UPDATE, revalidates active, "
+                        "unrevoked, unexpired matching subscriber proof with no impersonation, "
+                        "then locks all factors in UUID order. Reset uses the same principal "
+                        "order; reset-first invalidates stale setup/confirmation sessions. "
+                        "Subscriber enrollment never releases a caller transaction and uses "
+                        "authentication:mfa:self as an internal proof scope, never RBAC. "
+                        "No lock while hashing. PPPoE "
                         "gates take FOR SHARE on the access_credentials row "
                         "after the principal lock so a secret change cannot "
                         "commit mid-gate. A "
@@ -2156,6 +2218,10 @@ DOMAIN = DomainSOT(
                 ),
                 errors=ErrorContract(
                     domain_codes=(
+                        "auth.password_authentication.invalid_mfa_principal",
+                        "auth.password_authentication.mfa_unavailable",
+                        "auth.password_authentication.invalid_mfa_session",
+                        "auth.password_authentication.invalid_mfa_method",
                         "auth.password_authentication.invalid_credentials",
                         "auth.password_authentication.locked",
                         "auth.password_authentication.must_change_password",
@@ -2189,13 +2255,17 @@ DOMAIN = DomainSOT(
                         "auth.password_step_succeeded",
                         "auth.password_changed",
                         "auth.authentication_denied",
+                        "credential_administration.completed",
                     ),
                     schema_version=1,
-                    delivery_owner="observability.audit_log",
+                    delivery_owner="events.dispatcher",
                     compatibility=(
-                        "These are audit rows staged in the owner transaction "
-                        "(schema_version 1 metadata); no domain event is "
-                        "emitted. Metadata carries identifiers and the "
+                        "Audit evidence is persisted by observability.audit_log in the owner transaction; "
+                        "(schema_version 1 metadata). Subscriber self enrollment also stages "
+                        "credential_administration.completed with safe principal/method IDs, "
+                        "closed transition/provenance and invalidate_sessions=False; the "
+                        "registered credential-session projection invalidates authentication "
+                        "cache without revoking sessions. Metadata carries identifiers and the "
                         "credential_version for success only, never a secret, hash, token "
                         "or raw body. Failed evidence is an AuditEvent with is_success=False, "
                         "a bounded status, enum reason/surface/phase, canonical target UUID "
@@ -2207,6 +2277,18 @@ DOMAIN = DomainSOT(
                     replay=(
                         "Audit rows are immutable evidence; credential state "
                         "stays authoritative and is not rebuilt from them."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="subscriber MFA enrollment authentication cache",
+                        input_names=("credential standing record",),
+                        writer="auth.password_authentication",
+                        freshness="Factor/audit/event intent commit atomically; credential_session_projection invalidates principal cache after commit.",
+                        stale_behavior="AuthSession and factor rows stay authoritative; failed event handler remains retryable.",
+                        drift_signal="Failed credential_session_projection handler attempt.",
+                        rebuild_operation="Replay credential_administration.completed for the exact subscriber with invalidate_sessions=False.",
+                        repair_owner="auth.password_authentication",
                     ),
                 ),
                 migration=MigrationContract(
@@ -2242,8 +2324,12 @@ DOMAIN = DomainSOT(
                     "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
                     "docs/security/AUTHENTICATION_DENIAL_AUDIT.md",
                     "docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md",
+                    "docs/designs/SUBSCRIBER_MFA_ENROLLMENT.md",
                 ),
                 test_refs=(
+                    "tests/test_subscriber_mfa_enrollment.py",
+                    "tests/integration/test_subscriber_mfa_enrollment.py",
+                    "tests/architecture/test_subscriber_mfa_enrollment_boundary.py",
                     "tests/test_password_authentication.py",
                     "tests/test_authentication_denial_audit.py",
                     "tests/test_authentication_denial_adapters.py",

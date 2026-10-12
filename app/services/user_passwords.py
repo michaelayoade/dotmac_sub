@@ -6,7 +6,9 @@ The caller owns recovery, notices, standing, and any future upgrade transaction.
 
 from __future__ import annotations
 
+import base64
 import math
+import re
 import secrets
 import threading
 import time
@@ -14,6 +16,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Protocol
 
 from argon2 import Parameters, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError
@@ -220,6 +223,45 @@ def verify_user_password(
     legacy_verify: Callable[[str, str | None], bool],
 ) -> PasswordVerificationOutcome:
     """Apply policy before invoking any reversible compatibility operation."""
+    return _verify_user_password(
+        request, legacy_verify=legacy_verify, argon2_verify=verify_secret
+    )
+
+
+def _canonical_argon2id_parameters(stored: str) -> Parameters:
+    """Validate complete PHC grammar and canonical bytes before native work.
+
+    extract_parameters infers byte lengths from text and does not validate Base64.
+    Decode only after the caller's encoded-length bound has been checked.
+    """
+    matched = re.fullmatch(
+        r"\$argon2id\$v=[1-9][0-9]*\$"
+        r"m=[1-9][0-9]*,t=[1-9][0-9]*,p=[1-9][0-9]*\$"
+        r"([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)",
+        stored,
+    )
+    if matched is None:
+        raise InvalidHashError("Invalid Argon2id representation")
+    parameters = extract_parameters(stored)
+    for encoded, expected_length in zip(
+        matched.groups(), (parameters.salt_len, parameters.hash_len), strict=True
+    ):
+        decoded = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
+        if (
+            len(decoded) != expected_length
+            or base64.b64encode(decoded).decode("ascii").rstrip("=") != encoded
+        ):
+            raise InvalidHashError("Noncanonical Argon2id representation")
+    return parameters
+
+
+def _verify_user_password(
+    request: UserPasswordVerification,
+    *,
+    legacy_verify: Callable[[str, str | None], bool],
+    argon2_verify: Callable[[bytes, bytes, Type], bool],
+) -> PasswordVerificationOutcome:
+    """One canonical parser and policy path for compatibility and dormant work."""
     representation = classify_password_format(request.stored)
     status = PasswordVerificationStatus.INVALID
     if not isinstance(request.reversible_policy, ReversiblePasswordPolicy):
@@ -238,12 +280,12 @@ def verify_user_password(
             limits = request.argon2_limits
             if limits is None or len(request.stored) > limits.max_encoded_length:
                 return PasswordVerificationOutcome(status, representation)
-            parameters = extract_parameters(request.stored)
+            parameters = _canonical_argon2id_parameters(request.stored)
             accepted = (
                 limits.permits(parameters)
                 and parameters.type is Type.ID
                 and parameters.version == ARGON2_VERSION
-                and verify_secret(
+                and argon2_verify(
                     request.stored.encode("ascii"),
                     request.password.encode("utf-8"),
                     Type.ID,
@@ -342,3 +384,123 @@ def hash_user_password(request: Argon2idHashRequest) -> str:
         type=Type.ID,
         version=ARGON2_VERSION,
     ).decode("ascii")
+
+
+@dataclass(frozen=True)
+class UserPasswordWorkRequest:
+    password: str = field(repr=False)
+    stored: str | None = field(repr=False)
+
+
+class UserPasswordWork(Protocol):
+    def verify(
+        self, request: UserPasswordWorkRequest
+    ) -> PasswordVerificationOutcome: ...
+
+
+@dataclass(frozen=True)
+class LegacyPasswordWork:
+    """Permanent COMPAT path; no Argon limits, instrumentation or upgrades."""
+
+    legacy_verify: Callable[[str, str | None], bool] = field(repr=False)
+
+    def verify(self, request: UserPasswordWorkRequest) -> PasswordVerificationOutcome:
+        return verify_user_password(
+            UserPasswordVerification(request.password, request.stored),
+            legacy_verify=self.legacy_verify,
+        )
+
+
+class NativePasswordOperationKind(str, Enum):
+    ARGON2ID_VERIFY = "argon2id_verify"
+
+
+@dataclass(frozen=True)
+class NativePasswordObservation:
+    kind: NativePasswordOperationKind
+    started_monotonic: float
+    ended_monotonic: float
+    admission_wait_seconds: float
+
+
+class NativePasswordCaptureStatus(str, Enum):
+    RECORDED = "recorded"
+    INCOMPLETE = "incomplete"
+
+
+class NativePasswordObserver(Protocol):
+    def observe(
+        self, observation: NativePasswordObservation
+    ) -> NativePasswordCaptureStatus: ...
+
+
+class IncompletePasswordCaptureError(RuntimeError):
+    code = "auth.user_passwords.incomplete_native_capture"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
+class AdmittedArgon2PasswordWork:
+    """Dormant synchronous work; capture completeness is an acceptance gate.
+
+    No production caller is installed. Observer errors cannot alter authentication
+    or mask native errors. A failed/rejected delivery permanently marks this work
+    instance incomplete; any collector must call require_complete_capture after
+    draining all work and before accepting measurements. No reset is provided.
+    """
+
+    def __init__(
+        self,
+        *,
+        limits: Argon2idVerificationLimits,
+        admission: NativePasswordAdmission,
+        observer: NativePasswordObserver,
+        legacy_verify: Callable[[str, str | None], bool],
+    ) -> None:
+        self._limits = limits
+        self._admission = admission
+        self._observer = observer
+        self._legacy_verify = legacy_verify
+        self._capture_complete = True
+
+    def require_complete_capture(self) -> None:
+        """Check only after all callers have drained; not a performance verdict."""
+        if not self._capture_complete:
+            raise IncompletePasswordCaptureError()
+
+    def verify(self, request: UserPasswordWorkRequest) -> PasswordVerificationOutcome:
+        return _verify_user_password(
+            UserPasswordVerification(
+                request.password,
+                request.stored,
+                argon2_limits=self._limits,
+            ),
+            legacy_verify=self._legacy_verify,
+            argon2_verify=self._verify_argon2,
+        )
+
+    def _verify_argon2(self, stored: bytes, password: bytes, kind: Type) -> bool:
+        observation: NativePasswordObservation | None = None
+        try:
+            with self._admission.admit() as admitted:
+                started = time.monotonic()
+                try:
+                    return verify_secret(stored, password, kind)
+                finally:
+                    ended = time.monotonic()
+                    observation = NativePasswordObservation(
+                        NativePasswordOperationKind.ARGON2ID_VERIFY,
+                        started,
+                        ended,
+                        admitted.queue_wait_seconds,
+                    )
+        finally:
+            # Capacity is already released, including native BaseException unwind.
+            if observation is not None:
+                try:
+                    recorded = self._observer.observe(observation)
+                    if recorded is not NativePasswordCaptureStatus.RECORDED:
+                        self._capture_complete = False
+                except BaseException:
+                    self._capture_complete = False

@@ -17,6 +17,14 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.auth_flow import LogoutResponse, TokenResponse
 from app.services import auth_flow as auth_flow_service
 from app.services.db_session_adapter import db_session_adapter
+from app.services.password_authentication import PasswordAuthenticationError
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
+from tests.subscriber_mfa_fixtures import seed_enabled_subscriber_mfa
+from tests.subscriber_mfa_owner_support import authenticated_subscriber_enrollment
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 def _make_request(cookies: str | None = None):
@@ -333,10 +341,11 @@ def test_mfa_confirm_and_verify_errors(db_session, person, monkeypatch):
     db_session.add(method)
     db_session.commit()
 
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(method.id), "123456", str(person.id)
-        )
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    with pytest.raises(PasswordAuthenticationError):
+        enrollment.confirm(method_id=method.id, code="123456")
 
     with pytest.raises(HTTPException):
         auth_flow_service.AuthFlow.mfa_verify(
@@ -362,10 +371,12 @@ def test_mfa_confirm_invalid_code(db_session, person, monkeypatch):
     )
     db_session.add(method)
     db_session.commit()
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(method.id), "000000", str(person.id)
-        )
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    monkeypatch.setattr(pyotp.TOTP, "verify", lambda *args, **kwargs: False)
+    with pytest.raises(PasswordAuthenticationError):
+        enrollment.confirm(method_id=method.id, code="000000")
 
 
 def test_mfa_confirm_person_mismatch(db_session, person, monkeypatch):
@@ -382,36 +393,47 @@ def test_mfa_confirm_person_mismatch(db_session, person, monkeypatch):
     )
     db_session.add(method)
     db_session.commit()
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(method.id), "000000", "other-person"
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    with pytest.raises(PasswordAuthenticationError):
+        enrollment.confirm(
+            method_id=method.id, code="000000", subscriber_id=uuid.uuid4()
         )
 
 
-def test_mfa_confirm_not_found(db_session):
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(uuid.uuid4()), "000000", str(uuid.uuid4())
-        )
+def test_mfa_confirm_not_found(db_session, person):
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    with pytest.raises(PasswordAuthenticationError):
+        enrollment.confirm(method_id=uuid.uuid4(), code="000000")
 
 
 def test_mfa_confirm_commit_error(db_session, person, monkeypatch):
+    from sqlalchemy import event
+
     key = Fernet.generate_key().decode("utf-8")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", key)
-    setup = auth_flow_service.AuthFlow.mfa_setup(
-        db_session, str(person.id), label="device"
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
     )
-    code = pyotp.TOTP(setup["secret"]).now()
+    setup = enrollment.setup(label="device")
+    code = pyotp.TOTP(setup.secret).now()
 
-    def _boom():
+    def _boom(_session):
         raise auth_flow_service.IntegrityError("stmt", "params", "orig")
 
-    monkeypatch.setattr(db_session, "commit", _boom)
-    monkeypatch.setattr(db_session, "rollback", lambda: None)
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(setup["method_id"]), code, str(person.id)
-        )
+    event.listen(db_session, "before_commit", _boom)
+    try:
+        with pytest.raises(auth_flow_service.IntegrityError):
+            enrollment.confirm(method_id=setup.method_id, code=code)
+    finally:
+        event.remove(db_session, "before_commit", _boom)
+    db_session.expire_all()
+    method = db_session.get(MFAMethod, setup.method_id)
+    assert method.enabled is False
+    assert method.verified_at is None
 
 
 def _v2_mfa_token(db_session, person, *, with_credential=True):
@@ -489,12 +511,8 @@ def test_mfa_verify_invalid_code(db_session, person, monkeypatch):
     key = Fernet.generate_key().decode("utf-8")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", key)
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    setup = auth_flow_service.AuthFlow.mfa_setup(
-        db_session, str(person.id), label="device"
-    )
-    code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), code, str(person.id)
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
     mfa_token = _v2_mfa_token(db_session, person)
     with pytest.raises(HTTPException) as excinfo:
@@ -518,19 +536,15 @@ def test_mfa_verify_response_success(db_session, person, monkeypatch):
     )
     db_session.add(credential)
     db_session.commit()
-    setup = auth_flow_service.AuthFlow.mfa_setup(
-        db_session, str(person.id), label="device"
-    )
-    code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), code, str(person.id)
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
     login_result = auth_flow_service.AuthFlow.login(
         db_session, "mfa@example.com", "secret", _make_request(), None
     )
     mfa_token = login_result["mfa_token"]
     response = auth_flow_service.AuthFlow.mfa_verify_response(
-        db_session, mfa_token, pyotp.TOTP(setup["secret"]).now(), _make_request()
+        db_session, mfa_token, pyotp.TOTP(setup.secret).now(), _make_request()
     )
     assert response.status_code == 200
 
@@ -586,12 +600,8 @@ def test_login_response_mfa_required(db_session, person, monkeypatch):
     )
     db_session.add(credential)
     db_session.commit()
-    setup = auth_flow_service.AuthFlow.mfa_setup(
-        db_session, str(person.id), label="device"
-    )
-    code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), code, str(person.id)
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
 
     result = auth_flow_service.AuthFlow.login_response(

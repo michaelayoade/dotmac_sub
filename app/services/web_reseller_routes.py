@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
+from app import subscriber_mfa_enrollment_http as subscriber_mfa_adapter
 from app.db import get_db
 from app.models.auth import MFAMethod
 from app.services import auth_flow as auth_flow_service
@@ -20,6 +21,7 @@ from app.services import (
     reseller_portal,
     reseller_ticket_projection,
 )
+from app.services import password_authentication as subscriber_mfa_owner
 from app.services.audit_adapter import AuditActor
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
@@ -1001,9 +1003,28 @@ def reseller_mfa_setup(request: Request, db: Session):
             db, context["principal_id"], "Authenticator app"
         )
     else:
-        setup = auth_flow_service.auth_flow.mfa_setup(
-            db, context["principal_id"], "Authenticator app"
+        proof = subscriber_mfa_adapter.session_proof(
+            principal_type=str(context["principal_type"]),
+            principal_id=str(context["principal_id"]),
+            session_id=str(context["session"].get("auth_session_id")),
+            is_impersonation=bool(context.get("is_impersonation")),
         )
+        outcome = subscriber_mfa_adapter.setup(
+            command=subscriber_mfa_owner.SetupSubscriberMfaCommand(
+                context=subscriber_mfa_adapter.command_context(
+                    proof=proof, reason="Reseller MFA setup"
+                ),
+                subscriber_id=proof.subscriber_id,
+                label="Authenticator app",
+                provenance=subscriber_mfa_owner.SubscriberMfaProvenance.RESELLER_WEB,
+                session=proof,
+            )
+        )
+        setup = {
+            "method_id": outcome.method_id,
+            "secret": outcome.secret,
+            "otpauth_uri": outcome.otpauth_uri,
+        }
     return templates.TemplateResponse(
         "reseller/profile/mfa_setup.html",
         {
@@ -1029,10 +1050,26 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
                 db, method_id, code.strip(), context["principal_id"]
             )
         else:
-            method = auth_flow_service.auth_flow.mfa_confirm(
-                db, method_id, code.strip(), context["principal_id"]
+            proof = subscriber_mfa_adapter.session_proof(
+                principal_type=str(context["principal_type"]),
+                principal_id=str(context["principal_id"]),
+                session_id=str(context["session"].get("auth_session_id")),
+                is_impersonation=bool(context.get("is_impersonation")),
             )
-    except Exception:
+            outcome = subscriber_mfa_adapter.confirm(
+                command=subscriber_mfa_owner.ConfirmSubscriberMfaCommand(
+                    context=subscriber_mfa_adapter.command_context(
+                        proof=proof, reason="Reseller MFA confirmation"
+                    ),
+                    subscriber_id=proof.subscriber_id,
+                    method_id=UUID(method_id),
+                    code=code.strip(),
+                    provenance=subscriber_mfa_owner.SubscriberMfaProvenance.RESELLER_WEB,
+                    session=proof,
+                    recovery_delivery=subscriber_mfa_owner.RecoveryCodeDelivery.RETURN_ONCE,
+                )
+            )
+    except (HTTPException, ValueError) as exc:
         return templates.TemplateResponse(
             "reseller/profile/mfa_setup.html",
             {
@@ -1045,13 +1082,14 @@ def reseller_mfa_confirm(request: Request, db: Session, method_id: str, code: st
                 "otpauth_uri": "",
                 "error": "Invalid verification code. Please try again.",
             },
-            status_code=401,
+            status_code=exc.status_code if isinstance(exc, HTTPException) else 400,
+            headers=exc.headers if isinstance(exc, HTTPException) else None,
         )
 
     recovery_codes = (
         auth_flow_service.generate_mfa_recovery_codes(db, method)
-        if getattr(method, "id", None)
-        else []
+        if context["principal_type"] == "reseller_user"
+        else outcome.recovery_codes
     )
     if recovery_codes:
         return templates.TemplateResponse(

@@ -286,6 +286,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open the specific record before performing a state-changing action.",
         "After confirming a customer message, use the send status panel to follow recipient preparation and delivery. If confirmation is lost, keep the send reference and choose Check status before submitting another send.",
         "If a prepaid funding quarantine banner appears, prepaid service cannot be created or activated until Finance captures the account's opening balance through the runbook the banner names. Only when the customer must be connected first, an admin may grant an activation override with a clear reason; revoke it once the opening is captured.",
+        "To recover a customer's lost MFA device, confirm their identity and use Reset MFA in Account. A successful reset removes their factors and recovery codes and ends their active sessions; ask them to sign in again and set MFA up from the portal profile page.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
             "An activation override only admits prepaid activation. The account stays funding-quarantined, excluded from balance-based suspension and restoration, and still counts in the quarantine alert until its opening is captured.",
@@ -294,6 +295,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "The action requires permission to cancel payment intents and review payment proofs.",
             "Customer pages use a short-lived notification-choice snapshot; use the bulk notification setup workflow when provider templates need to be refreshed.",
             "Impersonation is privileged and audited. Never use it to bypass normal approval or billing controls.",
+            "MFA setup requires the customer's own active session; it cannot be completed while impersonating them. Repeating a reset while MFA factors and recovery material remain cleared does not end sessions created afterward.",
         ),
         route_templates=(
             "/admin/customers/{customer_type}/{customer_id}/**",
@@ -1364,6 +1366,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Handle a prepaid funding quarantine",
             8,
             permission="billing:prepaid_funding:activation_override",
+        ),
+        _action(
+            "reset-customer-mfa",
+            "Recover a customer's lost MFA device",
+            9,
+            permission="customer:write",
         ),
     ),
     "subscription-test-connection": (

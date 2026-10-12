@@ -258,6 +258,8 @@ def test_stolen_seed_cannot_reconfirm_disabled_method_nor_demote_new_primary(
     import pyotp
 
     from app.services import auth_flow
+    from app.services.password_authentication import PasswordAuthenticationError
+    from tests.subscriber_mfa_owner_support import authenticated_subscriber_enrollment
 
     monkeypatch.setattr(auth_flow, "_decrypt_secret", lambda db, value: value)
     seed = pyotp.random_base32()
@@ -279,11 +281,12 @@ def test_stolen_seed_cannot_reconfirm_disabled_method_nor_demote_new_primary(
     db_session.add(fresh)
     db_session.commit()
     fresh_id = fresh.id
-    with pytest.raises(HTTPException) as exc:
-        auth_flow.auth_flow.mfa_confirm(
-            db_session, str(old_id), pyotp.TOTP(seed).now(), sub_id
-        )
-    assert exc.value.status_code == 403
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=subscriber.id
+    )
+    with pytest.raises(PasswordAuthenticationError) as exc:
+        enrollment.confirm(method_id=old_id, code=pyotp.TOTP(seed).now())
+    assert exc.value.code == "auth.password_authentication.invalid_mfa_method"
     db_session.expire_all()
     assert db_session.get(MFAMethod, old_id).enabled is False
     assert db_session.get(MFAMethod, fresh_id).is_primary is True
@@ -329,29 +332,51 @@ def test_setup_after_disabling_pending_row_creates_a_new_confirmable_row(
 ):
     import pyotp
 
+    from tests.subscriber_mfa_owner_support import authenticated_subscriber_enrollment
+
     flow = _identity_crypto(monkeypatch).auth_flow
     principal, setup_name, confirm_name, column = _principals(
         db_session, subscriber, kind
     )
     pid = str(principal.id)
-    first = getattr(flow, setup_name)(db_session, pid, "first")
-    old_id = first["method_id"]
     if kind == "subscriber":
+        enrollment = authenticated_subscriber_enrollment(
+            db_session, subscriber_id=principal.id
+        )
+        first = enrollment.setup(label="first")
+        old_id = first.method_id
         auth_service.mfa_methods.delete(
             db_session, str(old_id), actor_id="admin", reason="unit test reason"
         )
     else:
+        first = getattr(flow, setup_name)(db_session, pid, "first")
+        old_id = first["method_id"]
         # Staff/reseller factors are not removable through the generic API.
         old_row = db_session.get(MFAMethod, old_id)
         old_row.is_active = old_row.enabled = old_row.is_primary = False
         old_row.secret = None
         db_session.commit()
 
-    second = getattr(flow, setup_name)(db_session, pid, "second")
-    assert second["method_id"] != old_id
-    confirmed = getattr(flow, confirm_name)(
-        db_session, str(second["method_id"]), pyotp.TOTP(second["secret"]).now(), pid
-    )
+    if kind == "subscriber":
+        # Removal revoked the original session; a fresh authenticated session
+        # is required to enroll again.
+        enrollment = authenticated_subscriber_enrollment(
+            db_session, subscriber_id=principal.id
+        )
+        second = enrollment.setup(label="second")
+        assert second.method_id != old_id
+        confirmed = enrollment.confirm(
+            method_id=second.method_id, code=pyotp.TOTP(second.secret).now()
+        )
+    else:
+        second = getattr(flow, setup_name)(db_session, pid, "second")
+        assert second["method_id"] != old_id
+        confirmed = getattr(flow, confirm_name)(
+            db_session,
+            str(second["method_id"]),
+            pyotp.TOTP(second["secret"]).now(),
+            pid,
+        )
     assert confirmed.is_primary and confirmed.is_active
     db_session.expire_all()
     old = db_session.get(MFAMethod, old_id)

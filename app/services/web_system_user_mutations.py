@@ -48,40 +48,6 @@ def disable_user_mfa(
     staff_provisioning.remove_staff_mfa(db, command)
 
 
-def disable_subscriber_mfa(
-    db: Session, *, subscriber_id: str, actor_id: str | None = None
-) -> None:
-    """Disable all MFA methods for a subscriber (customer/reseller portal user).
-
-    Admin recovery path for customers who lost their authenticator; without it
-    a locked-out subscriber has no way back in short of account deletion.
-    """
-    from app.models.subscriber import Subscriber
-    from app.services.audit_adapter import record_audit_event
-
-    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
-    if not subscriber:
-        raise ValueError("Subscriber not found")
-    db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).update(
-        {
-            "enabled": False,
-            "is_active": False,
-            "failed_attempts": 0,
-            "locked_until": None,
-        }
-    )
-    record_audit_event(
-        db,
-        action="auth.mfa_disabled",
-        entity_type="subscriber",
-        entity_id=str(subscriber.id),
-        actor_id=actor_id,
-        metadata={"email": subscriber.email},
-    )
-    db.commit()
-    auth_cache.invalidate_principal("subscriber", str(subscriber.id))
-
-
 def reset_user_password(db: Session, *, user_id: str) -> str:
     """Reset active credential password and require change at next login."""
     system_user = db.get(SystemUser, coerce_uuid(user_id))

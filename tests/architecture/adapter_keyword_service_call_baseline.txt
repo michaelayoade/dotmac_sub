@@ -9,7 +9,7 @@
 # Lower the count when you convert call sites to keywords; never raise it, and
 # never add a new module.
 app/api/analytics.py 2
-app/api/auth_flow.py 3
+app/api/auth_flow.py 2
 app/api/billing.py 22
 app/api/campaigns.py 1
 app/api/catalog.py 18
@@ -32,7 +32,7 @@ app/api/notifications.py 8
 app/api/payment_proofs.py 3
 app/api/projects.py 1
 app/api/qualification.py 6
-app/api/reseller.py 8
+app/api/reseller.py 7
 app/api/sales_orders.py 1
 app/api/scheduler.py 1
 app/api/search.py 1
@@ -52,6 +52,6 @@ app/web/admin/surveys.py 1
 app/web/admin/system.py 1
 app/web/auth/routes.py 7
 app/web/customer/auth.py 2
-app/web/customer/routes.py 10
+app/web/customer/routes.py 9
 app/web/reseller/auth.py 1
 app/web/reseller/routes.py 16
