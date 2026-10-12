@@ -73,6 +73,7 @@ def test_prepaid_draft_reconciliation_has_one_contracted_owner():
         "reviewed paid-period replacement command"
         in paid_period_replacement.input_names
     )
+    assert "verified customer funding position" in (paid_period_replacement.input_names)
     assert "financial access restoration protocol" in (
         paid_period_replacement.input_names
     )

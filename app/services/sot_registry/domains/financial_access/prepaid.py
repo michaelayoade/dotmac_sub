@@ -3293,7 +3293,9 @@ SERVICES: tuple[SOTService, ...] = (
             " A separate Finance-approved paid-period replacement command "
             "handles the no-draft case: it proves one lapsed auto-renewal "
             "overlap, exact preceding coverage, payment allocation, verified "
-            "proof, contract charge, and unchanged customer credit; then it "
+            "proof, contract charge, and unchanged verified customer funding "
+            "position; pre-opening mirror residue is never admitted as current "
+            "credit. It then "
             "voids the wrong paid invoice and invokes the canonical renewal "
             "participant for the reviewed replacement period."
         ),
@@ -3380,6 +3382,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "reviewed paid-period replacement command",
                         "canonical prepaid subscription contract",
                         "canonical payment-backed account credit",
+                        "verified customer funding position",
                         "verified payment proof",
                         "canonical superseded paid invoice allocation evidence",
                         "canonical funded service entitlement",
@@ -3644,6 +3647,16 @@ SERVICES: tuple[SOTService, ...] = (
                         "opening-position boundary when present, source "
                         "payments, and shortfall; pre-boundary mirror residue "
                         "is excluded"
+                    ),
+                ),
+                AuthorityInput(
+                    name="verified customer funding position",
+                    owner="financial.prepaid_funding_reconstruction",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "reviewed funding baseline plus canonical forward "
+                        "money facts, excluding quarantined accounts and "
+                        "pre-opening mirror residue"
                     ),
                 ),
                 AuthorityInput(

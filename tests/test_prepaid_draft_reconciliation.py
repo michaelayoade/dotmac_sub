@@ -47,6 +47,7 @@ from app.schemas.billing import (
     PaymentAllocationPreviewRequest,
 )
 from app.services import prepaid_draft_reconciliation as reconciliation_service
+from app.services.billing._common import get_account_credit_balance
 from app.services.billing.invoices import (
     InvoiceOwnerError,
     Invoices,
@@ -2527,6 +2528,27 @@ def test_reviewed_paid_period_replacement_reuses_payment_and_preserves_credit(
     subscription,
 ):
     ensure_test_prepaid_contract(db_session, subscription, Decimal("100.00"))
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.other,
+            amount=Decimal("314874.00"),
+            currency="NGN",
+            memo="Pre-opening mirror residue",
+            is_active=True,
+            affects_customer_position=True,
+            effective_date=datetime(2026, 3, 11, 10, tzinfo=UTC),
+            created_at=datetime(2026, 3, 11, 10, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("56501.50"),
+        position_at=datetime(2026, 8, 2, tzinfo=UTC),
+    )
     reviewed_start = datetime(2026, 9, 22, tzinfo=UTC)
     reviewed_end = datetime(2026, 10, 22, tzinfo=UTC)
     wrong_start = datetime(2026, 10, 10, 23, tzinfo=UTC)
@@ -2631,7 +2653,7 @@ def test_reviewed_paid_period_replacement_reuses_payment_and_preserves_credit(
         service_period_start=reviewed_start,
         service_period_end=reviewed_end,
         expected_total=Decimal("100.00"),
-        expected_remaining_credit=Decimal("0.00"),
+        expected_remaining_credit=Decimal("56501.50"),
         payment_reference="TRF-REVIEWED-PERIOD",
         approval=ReviewedExistingDraftSettlementApproval(
             approver_system_user_id=approver.id,
@@ -2643,6 +2665,10 @@ def test_reviewed_paid_period_replacement_reuses_payment_and_preserves_credit(
     )
     preview = preview_reviewed_paid_prepaid_period_replacement(db_session, query)
 
+    assert get_account_credit_balance(
+        db_session, str(subscriber.id), currency="NGN"
+    ) == Decimal("371375.50")
+    assert preview.account_credit_before == Decimal("56501.50")
     assert preview.disposition is (
         ReviewedPaidPrepaidPeriodReplacementDisposition.exact_paid_period_replacement
     )
@@ -2692,9 +2718,9 @@ def test_reviewed_paid_period_replacement_reuses_payment_and_preserves_credit(
     assert replacement_entitlement.starts_at == reviewed_start.replace(tzinfo=None)
     assert replacement_entitlement.ends_at == reviewed_end.replace(tzinfo=None)
     assert subscription.next_billing_at == reviewed_end.replace(tzinfo=None)
-    assert result.remaining_credit == Decimal("0.00")
+    assert result.remaining_credit == Decimal("56501.50")
     assert result.remaining_credit == preview.account_credit_before
-    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("0.00")
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("56501.50")
 
 
 def test_reviewed_paid_period_replacement_rejects_incomplete_evidence(

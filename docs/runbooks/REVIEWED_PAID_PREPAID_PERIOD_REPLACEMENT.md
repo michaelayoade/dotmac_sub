@@ -37,8 +37,10 @@ poetry run python -m scripts.billing.replace_reviewed_paid_prepaid_period \
 Proceed only when `disposition` is `exact_paid_period_replacement` and
 `actionable` is true. Finance must verify the account, subscription, invoice,
 allocation, entitlement, Payment, old and new interval bounds, total, current
-credit, released payment capacity, proof reference, void fingerprint, and
-preview fingerprint against the evidence package.
+verified prepaid funding balance, released payment capacity, proof reference,
+void fingerprint, and preview fingerprint against the evidence package. The
+reported balance is the reviewed opening plus native post-boundary facts; do
+not substitute an unbounded raw historical-ledger total.
 
 ## Apply
 
