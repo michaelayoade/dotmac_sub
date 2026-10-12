@@ -211,3 +211,101 @@ def test_lock_timeout_maps_to_retryable_error(db_session, monkeypatch) -> None:
     with pytest.raises(ro.ResellerOnboardingError) as exc:
         ro.remove_reseller_user_mfa(db_session, _cmd(make_admin(db_session), rid, pid))
     assert exc.value.retryable is True
+
+
+def _route_request():
+    from starlette.requests import Request
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/x",
+            "headers": [],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "client": ("testclient", 1),
+            "scheme": "http",
+        }
+    )
+
+
+def _call_route(db, admin, rid, pid, reason):
+    from app.web.admin import resellers as web
+
+    return web.reseller_user_disable_mfa(
+        str(rid),
+        str(pid),
+        _route_request(),
+        form={"removal_reason": reason},
+        auth={"principal_type": "system_user", "principal_id": str(admin)},
+        db=db,
+    )
+
+
+def test_route_is_gated_by_reseller_write_permission():
+    from app.web.admin import resellers as web
+
+    route = next(
+        r
+        for r in web.router.routes
+        if getattr(r, "path", "").endswith(
+            "/users/reseller_user/{principal_id}/disable-mfa"
+        )
+    )
+    assert any(
+        getattr(d.call, "__name__", "") == "_require_permission"
+        for d in route.dependant.dependencies
+    )
+
+
+def test_route_success_redirects_and_removes(db_session):
+    admin = make_admin(db_session)
+    rid, pid = _reseller_user(db_session)
+    response = _call_route(db_session, admin, rid, pid, REASON)
+    assert response.status_code == 303
+    assert (
+        "removed" in response.headers["location"].lower()
+        or "MFA" in response.headers["location"]
+    )
+    assert _live(db_session, pid) == 0
+
+
+def test_route_refuses_missing_or_short_reason_and_non_admin(db_session, monkeypatch):
+    from app.web.admin import resellers as web
+    from tests.mfa_removal_helpers import make_staff
+
+    seen = []
+
+    def fake_error(request, db, **kw):
+        seen.append(kw["error"])
+        return "error-response"
+
+    monkeypatch.setattr(web, "_portal_access_error_response", fake_error)
+    admin = make_admin(db_session)
+    rid, pid = _reseller_user(db_session)
+    for reason in ("", "ab"):
+        assert _call_route(db_session, admin, rid, pid, reason) == "error-response"
+        assert "reason" in seen[-1]
+    helper = make_staff(db_session, role="helpdesk", permissions=("reseller:write",))
+    assert _call_route(db_session, helper, rid, pid, REASON) == "error-response"
+    assert "not permitted" in seen[-1]
+    assert _live(db_session, pid) == 2
+
+
+def test_route_hides_non_domain_exception_text(db_session, monkeypatch):
+    from app.web.admin import resellers as web
+
+    seen = []
+    monkeypatch.setattr(
+        web, "_portal_access_error_response", lambda *_a, **kw: seen.append(kw["error"])
+    )
+    admin = make_admin(db_session)
+    rid, pid = _reseller_user(db_session)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("secret internal detail")
+
+    monkeypatch.setattr(web.reseller_onboarding, "remove_reseller_user_mfa", boom)
+    _call_route(db_session, admin, rid, pid, REASON)
+    assert seen == ["Unable to remove reseller user MFA."]

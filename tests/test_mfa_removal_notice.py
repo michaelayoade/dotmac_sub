@@ -72,7 +72,11 @@ def test_notice_is_queued_to_address_on_file_without_secrets(
     assert len(rows) == 1
     note = rows[0]
     assert note.recipient == email
-    assert "Ada Admin" in note.body
+    if kind == "system_user":
+        assert "Ada Admin" in note.body
+    else:
+        assert "Ada Admin" not in note.body
+        assert "removed by Dotmac support at" in note.body
     assert "2026-10-11 12:00 UTC" in note.body
     assert "contact support or security" in note.body
     assert "must-not-leak" not in note.body + (note.subject or "")
@@ -97,7 +101,7 @@ def test_unknown_actor_falls_back_and_missing_email_is_skipped(db_session, subsc
     MfaRemovalNoticeHandler().handle(
         db_session, _event("subscriber", subscriber.id, "api_key:erp")
     )
-    assert "by an administrator at" in db_session.query(Notification).one().body
+    assert "by Dotmac support at" in db_session.query(Notification).one().body
     u = SystemUser(first_name="N", last_name="E", email=f"{uuid4().hex[:6]}@ex.test")
     db_session.add(u)
     db_session.commit()
@@ -150,3 +154,49 @@ def test_delivery_failure_cannot_undo_a_committed_removal(db_session, monkeypatc
     assert outcome.changed is True
     db_session.expire_all()
     assert db_session.query(MFAMethod).one().secret is None
+
+
+def _staff_notice(db_session, monkeypatch, *, forced, display_name="Ada Admin"):
+    from app.services.events.handlers import mfa_removal_notice as mod
+
+    monkeypatch.setattr(mod, "_force_admin_mfa", lambda _db: forced)
+    actor = SystemUser(first_name="A", last_name="B", email="secret-actor@ex.test")
+    actor.display_name = display_name
+    db_session.add(actor)
+    db_session.commit()
+    pid, _email = _principal(db_session, "system_user", None)
+    MfaRemovalNoticeHandler().handle(
+        db_session, _event("system_user", pid, f"user:{actor.id}")
+    )
+    return db_session.query(Notification).one().body
+
+
+def test_staff_notice_with_forced_enrolment_on(db_session, monkeypatch):
+    body = _staff_notice(db_session, monkeypatch, forced=True)
+    assert "asked to set up MFA again at your next sign-in" in body
+
+
+def test_staff_notice_with_forced_enrolment_off(db_session, monkeypatch):
+    body = _staff_notice(db_session, monkeypatch, forced=False)
+    assert "next sign-in" not in body
+    assert "account security settings" in body
+
+
+def test_reseller_and_subscriber_notices_never_promise_forced_enrolment(
+    db_session, subscriber, monkeypatch
+):
+    from app.services.events.handlers import mfa_removal_notice as mod
+
+    monkeypatch.setattr(mod, "_force_admin_mfa", lambda _db: True)
+    for kind in ("reseller_user", "subscriber"):
+        pid, _ = _principal(db_session, kind, subscriber)
+        MfaRemovalNoticeHandler().handle(db_session, _event(kind, pid, "user:x"))
+    for note in db_session.query(Notification).all():
+        assert "next sign-in" not in note.body
+        assert "account security settings" in note.body
+
+
+def test_actor_display_never_falls_back_to_email(db_session, monkeypatch):
+    body = _staff_notice(db_session, monkeypatch, forced=False, display_name="")
+    assert "secret-actor@ex.test" not in body
+    assert "removed by an administrator at" in body

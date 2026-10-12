@@ -16,6 +16,7 @@ from app.models.notification import NotificationChannel
 from app.models.subscriber import ResellerUser, Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.notification import NotificationDeliveryLatency
+from app.services.auth_flow import _force_admin_mfa
 from app.services.communication_intents import (
     CommunicationClass,
     CommunicationIntent,
@@ -26,6 +27,7 @@ from app.services.events.types import Event, EventType
 HANDLED_EVENT_TYPES = frozenset({EventType.credential_administration_completed})
 _PRINCIPAL_TYPES = frozenset({"subscriber", "system_user", "reseller_user"})
 _FALLBACK_ACTOR = "an administrator"
+_SUPPORT_NAME = "Dotmac support"
 
 
 def _recipient(
@@ -51,7 +53,11 @@ def _recipient(
     )
 
 
-def _actor_display(db: Session, actor: str | None) -> str:
+def _actor_display(db: Session, actor: str | None, *, recipient_is_staff: bool) -> str:
+    """Name shown as the remover. Non-staff recipients never see staff identity."""
+
+    if not recipient_is_staff:
+        return _SUPPORT_NAME
     raw = (actor or "").strip()
     if raw.startswith("user:"):
         raw = raw[len("user:") :]
@@ -59,18 +65,23 @@ def _actor_display(db: Session, actor: str | None) -> str:
         user = db.get(SystemUser, UUID(raw))
     except ValueError:
         return _FALLBACK_ACTOR
-    if user is None:
-        return _FALLBACK_ACTOR
-    return (user.display_name or user.email or _FALLBACK_ACTOR).strip()
+    name = (user.display_name or "").strip() if user else ""
+    return name or _FALLBACK_ACTOR
 
 
-def render_notice(*, actor_name: str, removed_at: datetime) -> tuple[str, str]:
+def render_notice(
+    *, actor_name: str, removed_at: datetime, forced_enrolment: bool = False
+) -> tuple[str, str]:
     when = removed_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    follow_up = (
+        "You will be asked to set up MFA again at your next sign-in."
+        if forced_enrolment
+        else "Please set up MFA again from your account security settings."
+    )
     body = (
         f"Your multi-factor authentication was removed by {actor_name} at "
         f"{when}. If you didn't request this, contact support or security "
-        "immediately. You will be asked to set up MFA again at your next "
-        "sign-in."
+        f"immediately. {follow_up}"
     )
     return "Your multi-factor authentication was removed", body
 
@@ -100,8 +111,11 @@ class MfaRemovalNoticeHandler:
             removed_at = datetime.fromisoformat(str(raw_at))
         except ValueError:
             removed_at = event.occurred_at
+        is_staff = principal_type == "system_user"
         subject, body = render_notice(
-            actor_name=_actor_display(db, event.actor), removed_at=removed_at
+            actor_name=_actor_display(db, event.actor, recipient_is_staff=is_staff),
+            removed_at=removed_at,
+            forced_enrolment=is_staff and _force_admin_mfa(db),
         )
         submit_communication_intent(
             db,
