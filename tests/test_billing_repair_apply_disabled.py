@@ -19,6 +19,45 @@ _COMMON = [
     "--subscription-id",
     _UUID,
 ]
+_FP = "a" * 64
+_APPLY_EVIDENCE = {
+    "correct_tax_inclusive_renewal_document": [
+        "--preview-fingerprint",
+        _FP,
+        "--actor-user-id",
+        _UUID,
+        "--reason-evidence-reference",
+        "case-ref-0001",
+        "--permission-evidence",
+        "perm-evidence-0001",
+        "--idempotency-key",
+        "idem-key-0123456789",
+    ],
+    "repair_legacy_payment_backed_renewal_invoice": [
+        "--preview-fingerprint",
+        _FP,
+        "--actor-user-id",
+        _UUID,
+        "--reason-evidence-reference",
+        "case-ref-0001",
+        "--permission-evidence",
+        "perm-evidence-0001",
+        "--idempotency-key",
+        "idem-key-0123456789",
+    ],
+    "replace_reviewed_paid_prepaid_period": [
+        "--fingerprint",
+        _FP,
+        "--idempotency-key",
+        "idem-key-0123456789",
+        "--actor",
+        "operator",
+        "--actor-system-user-id",
+        _UUID,
+        "--reason",
+        "case-ref-0001",
+    ],
+}
 _CASES = {
     "correct_tax_inclusive_renewal_document": [
         *_COMMON,
@@ -115,11 +154,8 @@ def test_apply_is_refused_without_touching_the_database(script, monkeypatch, cap
 
 def test_apply_with_full_evidence_is_still_refused(script, monkeypatch, capsys):
     name, module, adapter = script
-    argv = _required_args(module, name) + [
-        "--apply",
-        "--idempotency-key",
-        "abcdefghijklmnop1234",
-    ]
+    # Complete apply evidence: without the guard this would open the write session.
+    argv = _required_args(module, name) + ["--apply", *_APPLY_EVIDENCE[name]]
     monkeypatch.setattr("sys.argv", [name, *argv])
 
     with pytest.raises(SystemExit) as exc:
