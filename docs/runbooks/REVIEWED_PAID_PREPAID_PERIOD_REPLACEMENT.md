@@ -1,5 +1,11 @@
 # Reviewed paid prepaid period replacement
 
+> **Policy (2026-10-12): billing repair writes are disabled.** `--apply` on
+> this command is refused (non-zero exit, nothing is written). The dry-run
+> preview still works. Record the case for the billing exceptions review
+> instead, pending the ADR 0007 obligation-identity migration. Any `--apply`
+> steps below are retained for history only.
+
 Use this runbook only when one fully paid prepaid invoice covers the wrong
 future-shifted period, the immediately preceding period is missing, and the
 same Payment must fund the corrected period without changing customer credit.

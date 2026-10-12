@@ -1,5 +1,11 @@
 # Legacy payment-backed prepaid renewal invoice repair
 
+> **Policy (2026-10-12): billing repair writes are disabled.** `--apply` on
+> this command is refused (non-zero exit, nothing is written). The dry-run
+> preview still works. Record the case for the billing exceptions review
+> instead, pending the ADR 0007 obligation-identity migration. Any `--apply`
+> steps below are retained for history only.
+
 Owner: `financial.prepaid_service_renewals`
 
 Use this runbook only for one reviewed historical prepaid period with an

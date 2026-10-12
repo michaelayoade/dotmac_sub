@@ -27,6 +27,7 @@ from app.services.prepaid_service_renewals import (
     repair_legacy_payment_backed_renewal_invoice,
 )
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 _KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,119}$")
 
@@ -153,6 +154,7 @@ def main() -> int:
     parser.add_argument("--reason-evidence-reference")
     parser.add_argument("--idempotency-key")
     args = parser.parse_args()
+    refuse_apply(args.apply)
     query = _query(args)
 
     if not args.apply:
