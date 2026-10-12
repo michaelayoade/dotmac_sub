@@ -75,6 +75,9 @@ ROOT = Path(__file__).resolve().parents[2]
 APPROVED: frozenset[str] = frozenset(
     {
         "app/services/enforcement_evidence.py::record_enforcement_application",
+        # ADR 0018: hourly CoA outcome counters, plus its bounded retention prune.
+        "app/services/router_health/coa_evidence.py::record_coa_outcome",
+        "app/services/router_health/coa_evidence.py::prune_coa_outcome_buckets",
     }
 )
 

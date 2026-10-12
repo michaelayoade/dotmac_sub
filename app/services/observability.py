@@ -70,6 +70,7 @@ _STATE_SNAPSHOT_SPECS = {
     # 19 repair/run signals + 5 last-complete-cycle account-state signals +
     # cycle_totals_age_seconds + 3 finance work-item backlog signals = 28.
     "prepaid_enforcement": {"max_observations": 32, "ttl_seconds": 7 * 86_400},
+    "router_health": {"max_observations": 64, "ttl_seconds": 86_400},
     "router_sot": {"max_observations": 16, "ttl_seconds": 7 * 86_400},
 }
 _STATE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+$")
@@ -421,8 +422,12 @@ def record_metric(
         )
 
 
-def record_finding(db: Session, finding: Finding) -> str:
-    """Sync a single operational finding into the admin alert lifecycle."""
+def record_finding(db: Session, finding: Finding, *, notify: bool = True) -> str:
+    """Sync a single operational finding into the admin alert lifecycle.
+
+    ``notify=False`` keeps the alert visible in the alert console but queues no
+    ``AdminNotification`` rows (shadow-mode findings).
+    """
     return admin_alerts.sync_alert(
         db,
         admin_alerts.AlertFinding(
@@ -435,6 +440,7 @@ def record_finding(db: Session, finding: Finding) -> str:
             details=finding.details,
             target_url=finding.target_url,
         ),
+        target_users=None if notify else [],
     )
 
 

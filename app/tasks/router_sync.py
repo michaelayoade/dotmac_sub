@@ -24,12 +24,16 @@ from app.models.router_management import (
     RouterSnapshotSource,
     RouterStatus,
 )
+from app.services import control_registry
 from app.services.db_session_adapter import db_session_adapter
 from app.services.device_adapter_binding import (
     AdapterBindingError,
     assert_adapter_binding,
 )
 from app.services.network_operations import network_operations
+from app.services.router_health import reconciler as router_health_reconciler
+from app.services.router_health.contracts import ConfigExportOutcome
+from app.services.router_health.export_outcomes import classify_export_failure
 from app.services.router_management.config import RouterConfigService
 from app.services.router_management.config_export import fetch_config_export
 from app.services.router_management.connection import RouterConnectionService
@@ -49,8 +53,10 @@ from app.services.router_management.write_adapter import (
 logger = logging.getLogger(__name__)
 
 
-def _fetch_config_export(router) -> str:
+def _fetch_config_export(router, *, strict_host_key: bool = False) -> str:
     """Compatibility wrapper around the canonical snapshot transport."""
+    if strict_host_key:
+        return fetch_config_export(router, strict_host_key=True)
     return fetch_config_export(router)
 
 
@@ -113,13 +119,18 @@ def sync_all_interfaces() -> dict:
 def capture_scheduled_snapshots() -> dict:
     db = db_session_adapter.create_session()
     try:
+        # Every active router that is not in maintenance is attempted, so a
+        # router stuck at a non-online status is no longer silently skipped
+        # (router health reports the failure class instead). Routers that were
+        # not online are contacted with STRICT host-key checking: an unpinned
+        # key is refused (host_key_unknown), never trusted on first use.
         routers = list(
             db.execute(
                 select(Router)
                 .options(selectinload(Router.jump_host))
                 .where(
                     Router.is_active.is_(True),
-                    Router.status == RouterStatus.online,
+                    Router.status != RouterStatus.maintenance,
                 )
             )
             .scalars()
@@ -138,9 +149,15 @@ def capture_scheduled_snapshots() -> dict:
 
         success = 0
         failed = 0
+        outcomes: list[ConfigExportOutcome] = []
         for router in routers:
+            strict = router.status != RouterStatus.online
             try:
-                config_text = _fetch_config_export(router)
+                config_text = (
+                    _fetch_config_export(router, strict_host_key=True)
+                    if strict
+                    else _fetch_config_export(router)
+                )
                 # store_snapshot commits its own short transaction.
                 RouterConfigService.store_snapshot(
                     db,
@@ -156,14 +173,53 @@ def capture_scheduled_snapshots() -> dict:
                 )
                 db.commit()
                 success += 1
+                outcomes.append(
+                    ConfigExportOutcome(
+                        router_id=router.id,
+                        ok=True,
+                        failure_class=None,
+                        at=datetime.now(UTC),
+                    )
+                )
             except Exception as exc:
                 db.rollback()
                 logger.warning("Failed to snapshot %s: %s", router.name, exc)
                 failed += 1
+                outcomes.append(
+                    ConfigExportOutcome(
+                        router_id=router.id,
+                        ok=False,
+                        failure_class=classify_export_failure(exc),
+                        at=datetime.now(UTC),
+                    )
+                )
 
+        _record_export_outcomes(db, outcomes)
         return {"success": success, "failed": failed, "total": len(routers)}
     finally:
         db.close()
+
+
+def _record_export_outcomes(db, outcomes: list[ConfigExportOutcome]) -> None:
+    """Persist typed export outcomes once per run; never fails the snapshot task."""
+    try:
+        db.rollback()
+        router_health_reconciler.record_config_export_outcomes(
+            db, outcomes=outcomes, task_name="router_sync.capture_scheduled_snapshots"
+        )
+    except Exception:
+        db.rollback()
+        logger.warning("Failed to record router config export outcomes", exc_info=True)
+        return
+    try:
+        if control_registry.is_enabled(db, router_health_reconciler.CONTROL_POSTURE):
+            from app.tasks.router_health import reconcile_router_posture
+
+            reconcile_router_posture.delay()
+    except Exception:
+        logger.warning("Failed to queue router health posture run", exc_info=True)
+    finally:
+        db.rollback()
 
 
 @celery_app.task(name="router_sync.cleanup_idle_tunnels")
