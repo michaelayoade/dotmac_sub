@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 
 from paramiko.ssh_exception import (
@@ -17,7 +18,9 @@ from app.services.router_management.config_export import (
     RouterConfigExportNoAuthError,
 )
 
-_UNKNOWN_HOST_MARKER = "not found in known hosts"
+# paramiko's RejectPolicy raises "Server 'h' not found in known_hosts"; accept
+# the spaced spelling too so a wording change cannot silently reclassify it.
+_UNKNOWN_HOST_RE = re.compile(r"not found in known[ _]hosts", re.IGNORECASE)
 
 
 def _classify_one(exc: BaseException) -> ConfigExportFailureClass | None:
@@ -29,7 +32,7 @@ def _classify_one(exc: BaseException) -> ConfigExportFailureClass | None:
         return ConfigExportFailureClass.no_auth_configured
     if isinstance(exc, RouterConfigExportEmptyError):
         return ConfigExportFailureClass.empty_export
-    if isinstance(exc, SSHException) and _UNKNOWN_HOST_MARKER in str(exc):
+    if isinstance(exc, SSHException) and _UNKNOWN_HOST_RE.search(str(exc)) is not None:
         return ConfigExportFailureClass.host_key_unknown
     if isinstance(
         exc,

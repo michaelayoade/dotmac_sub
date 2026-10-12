@@ -24,11 +24,34 @@ from app.services.router_management import config_export as ce
 from app.tasks import router_sync
 
 
+class _LogOnlyClient:
+    def _log(self, *args: object) -> None:
+        return None
+
+
+def reject_policy_error() -> paramiko.SSHException:
+    """The exception paramiko's real RejectPolicy raises (not a hand-typed string)."""
+    key = paramiko.RSAKey.generate(1024)
+    try:
+        paramiko.RejectPolicy().missing_host_key(_LogOnlyClient(), "198.51.100.7", key)
+    except paramiko.SSHException as exc:
+        return exc
+    raise AssertionError("RejectPolicy did not raise")
+
+
 def wrapped(cause: BaseException) -> ce.RouterConfigExportError:
     try:
         raise ce.RouterConfigExportError("SENTINEL-TEXT") from cause
     except ce.RouterConfigExportError as exc:
         return exc
+
+
+def test_real_reject_policy_text_is_host_key_unknown() -> None:
+    exc = reject_policy_error()
+    assert "known_hosts" in str(exc)
+    assert classify_export_failure(wrapped(exc)) is C.host_key_unknown
+    spaced = paramiko.SSHException("Server 'h' not found in known hosts")
+    assert classify_export_failure(wrapped(spaced)) is C.host_key_unknown
 
 
 @pytest.mark.parametrize(
@@ -37,7 +60,7 @@ def wrapped(cause: BaseException) -> ce.RouterConfigExportError:
         (wrapped(AuthenticationException("x")), C.auth_failed),
         (wrapped(BadHostKeyException("h", None, None)), C.host_key_changed),
         (
-            wrapped(paramiko.SSHException("Server 'h' not found in known hosts")),
+            wrapped(reject_policy_error()),
             C.host_key_unknown,
         ),
         (wrapped(NoValidConnectionsError({("h", 120): OSError()})), C.unreachable),
@@ -78,7 +101,7 @@ def test_widened_scope_strictness_and_single_outcome_call(
     def fake_fetch(router, *, strict_host_key=False):
         calls.append((router.name, strict_host_key))
         if router.name == "offline":
-            raise wrapped(paramiko.SSHException("Server 'h' not found in known hosts"))
+            raise wrapped(reject_policy_error())
         return "/system identity\nset name=online\n"
 
     recorded: list[list[ConfigExportOutcome]] = []

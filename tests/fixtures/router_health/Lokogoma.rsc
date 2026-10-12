@@ -2,7 +2,7 @@
 /snmp community
 set [ find default=yes ] addresses=192.0.2.1/32,192.0.2.2/32,192.0.2.3/32,192.0.2.4/32
 /interface pppoe-server server
-add default-profile=default-encryption disabled=no interface="sfp-sfpplus12=>To Switch" one-session-per-host=yes service-name=fastnet
+add default-profile=default-encryption disabled=no interface="sfp-sfpplus12=>To Switch" one-session-per-host=yes service-name=isp-service-a
 /ip firewall address-list
 add address=192.0.2.5 list=suspended
 add address=192.0.2.6 list=suspended

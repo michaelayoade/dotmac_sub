@@ -2,7 +2,7 @@
 /snmp community
 set [ find default=yes ] addresses=192.0.2.1/32,192.0.2.2/32,192.0.2.3/32,192.0.2.4/32
 /interface pppoe-server server
-add default-profile=default-encryption disabled=no interface="Internet Access Bridge" one-session-per-host=yes service-name=fastnet-gudu
+add default-profile=default-encryption disabled=no interface="Internet Access Bridge" one-session-per-host=yes service-name=isp-service-a
 /ip firewall address-list
 add address=192.0.2.94 disabled=yes list=suspended
 add address=192.0.2.95 comment="dotmac migrated after app/radius reconcile" list=suspended
@@ -284,7 +284,7 @@ add action=accept chain=input comment="INPUT-PROTECT: accept SNMP from pollers" 
 add action=accept chain=input comment="INPUT-PROTECT: accept NTP from internal" dst-port=123 protocol=udp src-address-list=ipp-internal
 add action=accept chain=input comment="INPUT-PROTECT: accept btest TCP from mgmt" dst-port=2000 protocol=tcp src-address-list=ipp-mgmt
 add action=accept chain=input comment="INPUT-PROTECT: accept btest UDP from mgmt" dst-port=2000-2100 protocol=udp src-address-list=ipp-mgmt
-add action=accept chain=input comment="INPUT-PROTECT: accept EoIP/GRE from SPDC" protocol=gre src-address-list=ipp-eoip
+add action=accept chain=input comment="INPUT-PROTECT: accept EoIP/GRE from peer site" protocol=gre src-address-list=ipp-eoip
 add action=log chain=input comment="INPUT-PROTECT: log would-drop from internal" limit=20/1m,20:packet log-prefix=IPP-WD-INT src-address-list=ipp-internal
 add action=drop chain=input comment="INPUT-PROTECT: drop all else"
 /ip firewall nat

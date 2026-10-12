@@ -14,7 +14,7 @@ from app.services.router_health.policy import (
 )
 from tests.services.router_health.support import FIXTURE_DIR, TODAY, default_policy
 
-SEED = FIXTURE_DIR.parents[2] / "docs" / "network" / "router_health_policy.seed.json"
+EXAMPLE = FIXTURE_DIR.parents[2] / "docs" / "network" / "router_health_policy.example.json"
 
 
 def base() -> dict:
@@ -37,8 +37,8 @@ def test_minimal_default_and_none_are_valid() -> None:
     assert router_health_policy_error([1]) is not None
 
 
-def test_seed_json_validates_and_uses_documentation_addresses() -> None:
-    raw = json.loads(SEED.read_text())
+def test_example_json_validates_and_uses_documentation_addresses() -> None:
+    raw = json.loads(EXAMPLE.read_text())
     assert error(raw) is None
     for source in raw["defaults"]["snmp_allowed_sources"]:
         assert source.startswith("192.0.2.")

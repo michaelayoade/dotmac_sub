@@ -72,13 +72,12 @@ behaviour (a changed key is always refused).
 
 ## Policy
 
-`docs/network/router_health_policy.seed.json` is the 2026-10-12 starting policy.
-It uses **documentation-range** addresses (`192.0.2.0/24`) in
-`snmp_allowed_sources`, `ops_user.required_address` and the BGP exception
-scopes. Before applying it through the audited settings write, replace those
-with the real poller/sub-prod addresses from the private cutover notes; do not
-commit real addresses here. The Karsana entry matches on `router_name`; confirm
-the exact Sub router name, otherwise Sub reports `policy-unmatched` (low).
+`docs/network/router_health_policy.example.json` is a synthetic example (placeholder router names, dates and addresses). The real starting policy is kept outside the repository (private cutover notes).
+It uses documentation-range addresses only. The real policy (real router
+names, exception scopes and dates) is kept in the private cutover notes and is
+applied through the audited settings write; never commit it or real addresses
+here. A `router_name` match that finds no router is reported as
+`policy-unmatched` (low).
 
 Rules: every override and exception needs a reason; overrides that weaken a
 check need `until` (at most 180 days ahead) and lapse at the end of that day
