@@ -433,7 +433,11 @@ For suspended subscribers: restricted dashboard with outstanding balance, warnin
 ![Reseller Dashboard](guide_screenshots/51_reseller_dashboard.png)
 
 - Dashboard with alert notifications (overdue, suspended, new accounts)
-- Account management with search
+- Account management with search and account-status filters
+- **All statuses** excludes disabled and canceled accounts. Select **Disabled**
+  to review disabled accounts or **Canceled** to review retained canceled
+  accounts. Canceled rows are read-only and do not allow customer impersonation
+  or account actions.
 - Invoice history per account
 - Revenue report with Chart.js bar chart
 - Customer impersonation ("View as Customer")

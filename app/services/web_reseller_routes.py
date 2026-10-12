@@ -6,7 +6,7 @@ import logging
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -20,6 +20,7 @@ from app.services import (
     reseller_portal,
     reseller_ticket_projection,
 )
+from app.services.audit_adapter import AuditActor
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.list_query import (
@@ -236,8 +237,20 @@ def reseller_accounts(
 
     definition = RESELLER_ACCOUNT_LIST_DEFINITION
     requested_status_filter = status_filter
-    if status_filter not in reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS:
-        status_filter = None
+    try:
+        resolved_status_filter = (
+            reseller_portal.ResellerAccountListStatusFilter(status_filter)
+            if status_filter
+            else None
+        )
+    except ValueError:
+        resolved_status_filter = None
+    if (
+        resolved_status_filter is not None
+        and resolved_status_filter.value
+        not in reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS
+    ):
+        resolved_status_filter = None
     safe_sort = (
         sort_by if sort_by in definition.sortable_keys else definition.default_sort
     )
@@ -249,31 +262,50 @@ def reseller_accounts(
     )
     requested_query = definition.build_query(
         search=search,
-        filters={"status_filter": status_filter},
+        filters={
+            "status_filter": (
+                resolved_status_filter.value if resolved_status_filter else None
+            )
+        },
         sort_by=safe_sort,
         sort_dir=safe_dir,
         page=max(1, page),
         per_page=safe_per_page,
     )
     reseller_id = str(context["reseller"].id)
-    total = reseller_portal.count_accounts(
+    account_result = reseller_portal.query_reseller_account_list(
         db,
-        reseller_id=reseller_id,
-        search=requested_query.search,
-        status_filter=status_filter,
+        reseller_portal.ResellerAccountListQuery(
+            reseller_id=UUID(reseller_id),
+            limit=requested_query.per_page,
+            offset=(requested_query.page - 1) * requested_query.per_page,
+            search=requested_query.search,
+            status_filter=resolved_status_filter,
+            order_by=reseller_portal.ResellerAccountListOrder(requested_query.sort_by),
+            order_dir=reseller_portal.ResellerAccountListDirection(
+                requested_query.sort_dir
+            ),
+        ),
     )
-    page_meta = PageMeta.from_query(requested_query, total)
+    page_meta = PageMeta.from_query(requested_query, account_result.total)
     list_query = requested_query.with_page(page_meta.page)
-    accounts = reseller_portal.list_accounts(
-        db,
-        reseller_id=reseller_id,
-        limit=list_query.per_page,
-        offset=(page_meta.page - 1) * list_query.per_page,
-        search=list_query.search,
-        status_filter=status_filter,
-        order_by=list_query.sort_by,
-        order_dir=list_query.sort_dir,
-    )
+    if list_query.page != requested_query.page:
+        account_result = reseller_portal.query_reseller_account_list(
+            db,
+            reseller_portal.ResellerAccountListQuery(
+                reseller_id=UUID(reseller_id),
+                limit=list_query.per_page,
+                offset=(list_query.page - 1) * list_query.per_page,
+                search=list_query.search,
+                status_filter=resolved_status_filter,
+                order_by=reseller_portal.ResellerAccountListOrder(list_query.sort_by),
+                order_dir=reseller_portal.ResellerAccountListDirection(
+                    list_query.sort_dir
+                ),
+            ),
+        )
+    accounts = account_result.items
+    total = account_result.total
     if request_needs_canonicalization(
         list_query,
         search=search,
@@ -299,7 +331,9 @@ def reseller_accounts(
             "page": page_meta.page,
             "per_page": page_meta.per_page,
             "search": list_query.search or "",
-            "status_filter": status_filter or "",
+            "status_filter": (
+                resolved_status_filter.value if resolved_status_filter else ""
+            ),
             "status_options": reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS,
             "total": total,
             "total_pages": page_meta.total_pages,
@@ -320,6 +354,7 @@ def reseller_account_view(
 
     session_token = reseller_portal.create_customer_impersonation_session(
         db=db,
+        request=request,
         reseller_id=str(context["reseller"].id),
         account_id=account_id,
         return_to="/reseller/accounts",
@@ -869,6 +904,12 @@ def reseller_resend_email_verification(request: Request, db: Session):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url=RESELLER_LOGIN_URL, status_code=303)
+    if context.get("is_impersonation"):
+        return Response(
+            content="Email verification is unavailable during impersonation.",
+            status_code=403,
+            media_type="text/plain",
+        )
     sent = False
     # Email verification is a subscriber-account concept; a first-class
     # reseller_user principal has no backing subscriber, so this is a no-op
@@ -876,7 +917,39 @@ def reseller_resend_email_verification(request: Request, db: Session):
     subscriber = context["subscriber"]
     if subscriber is not None:
         try:
-            sent = auth_flow_service.send_email_verification(db, str(subscriber.id))
+            from uuid import UUID
+
+            from app.services import email_verification
+            from app.services.db_session_adapter import db_session_adapter
+            from app.services.owner_commands import CommandContext
+
+            # Derive the authenticated target before opening the independent owner session.
+            target_id = UUID(str(subscriber.id))
+            with db_session_adapter.owner_command_session() as owner_db:
+                outcome = email_verification.request_email_verification(
+                    owner_db,
+                    command=email_verification.RequestEmailVerificationCommand(
+                        context=CommandContext.system(
+                            actor=f"subscriber:{target_id}",
+                            scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                            reason="Authenticated email verification resend",
+                        ),
+                        subscriber_id=target_id,
+                        actor=AuditActor.user(str(target_id)),
+                    ),
+                )
+                sent = outcome.queued
+        except email_verification.EmailVerificationError as exc:
+            if exc.code == "auth.email_verification.lock_timeout":
+                return Response(
+                    content=exc.message,
+                    status_code=503,
+                    headers={"Retry-After": "5"},
+                    media_type="text/plain",
+                )
+            logger.warning(
+                "reseller_resend_email_verification_rejected code=%s", exc.code
+            )
         except Exception:
             logger.warning("reseller_resend_email_verification_failed", exc_info=True)
     return RedirectResponse(

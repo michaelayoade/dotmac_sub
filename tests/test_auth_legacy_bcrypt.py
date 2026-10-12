@@ -177,5 +177,6 @@ def test_access_credential_login_refuses_bcrypt_secret_hash(
             )
     assert exc.value.status_code == 401
     assert any(
-        "stored PPPoE secret unavailable" in r.getMessage() for r in caplog.records
+        r.getMessage() == "access_credential_verification_unavailable"
+        for r in caplog.records
     )

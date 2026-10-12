@@ -27,7 +27,8 @@ VENDOR_ACCESS_MESSAGE = "Vendor access required"
 class VendorAdmissionRequiredError(DomainError):
     """The principal behind an issued access token is not a vendor operator."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, resolved_principal_id: UUID | None = None) -> None:
+        self.resolved_principal_id = resolved_principal_id
         super().__init__(
             code="vendor_auth.access_required",
             message=VENDOR_ACCESS_MESSAGE,
@@ -51,6 +52,7 @@ class VendorLoginEligibilityResult:
     system_user_id: UUID | None = None
     vendor_user_id: UUID | None = None
     vendor_id: UUID | None = None
+    resolved_credential_id: UUID | None = None
 
 
 def _active_membership(db: Session, system_user_id: UUID) -> FieldVendorUser | None:
@@ -101,7 +103,8 @@ def resolve_vendor_login_eligibility(
         )
     if credential.system_user_id is None:
         return VendorLoginEligibilityResult(
-            status=VendorLoginEligibilityStatus.VENDOR_ACCESS_REQUIRED
+            resolved_credential_id=credential.id,
+            status=VendorLoginEligibilityStatus.VENDOR_ACCESS_REQUIRED,
         )
     # Vendor login eligibility is a staff authentication decision, so it
     # resolves through the same owner as login, refresh and session validation.
@@ -111,16 +114,19 @@ def resolve_vendor_login_eligibility(
         principal = staff_party_authentication.resolve_staff_principal(db, credential)
     except staff_party_authentication.StaffProjectionError:
         return VendorLoginEligibilityResult(
+            resolved_credential_id=credential.id,
             status=VendorLoginEligibilityStatus.VENDOR_ACCESS_REQUIRED,
             system_user_id=credential.system_user_id,
         )
     membership = _active_membership(db, credential.system_user_id)
     if principal is None or not principal.is_active or membership is None:
         return VendorLoginEligibilityResult(
+            resolved_credential_id=credential.id,
             status=VendorLoginEligibilityStatus.VENDOR_ACCESS_REQUIRED,
             system_user_id=credential.system_user_id,
         )
     return VendorLoginEligibilityResult(
+        resolved_credential_id=credential.id,
         status=VendorLoginEligibilityStatus.ELIGIBLE,
         system_user_id=credential.system_user_id,
         vendor_user_id=membership.id,
@@ -192,8 +198,17 @@ def resolve_vendor_admission_for_access_token(
     payload = decode_access_token(db, access_token)
     principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
     principal_type = str(payload.get("principal_type") or "")
+    resolved_principal_id = None
+    try:
+        principal_uuid = UUID(principal_id)
+    except ValueError:
+        pass
+    else:
+        principal = db.get(SystemUser, principal_uuid)
+        if principal is not None:
+            resolved_principal_id = principal.id
     if not principal_id or principal_type != "system_user":
-        raise VendorAdmissionRequiredError()
+        raise VendorAdmissionRequiredError(resolved_principal_id=resolved_principal_id)
     try:
         context = vendor_context(
             db,
@@ -208,7 +223,9 @@ def resolve_vendor_admission_for_access_token(
         )
     except HTTPException as exc:
         if exc.status_code == 403:
-            raise VendorAdmissionRequiredError() from exc
+            raise VendorAdmissionRequiredError(
+                resolved_principal_id=resolved_principal_id
+            ) from exc
         raise
     native_vendor_id = context.get("native_vendor_id")
     return VendorTokenAdmission(

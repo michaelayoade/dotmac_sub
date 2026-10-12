@@ -37,6 +37,7 @@ from app.services import credential_administration as credential_admin
 from app.services import settings_spec
 from app.services import web_auth as web_auth_service
 from app.services import web_system_config as web_system_config_service
+from app.services.audit_adapter import AuditActor
 from app.services.auth_flow import hash_password
 from tests import credential_administration_fixtures as credential_commands
 from tests.staff_identity_fixtures import project_staff_login
@@ -373,8 +374,14 @@ def test_session_delete_revokes(db_session, person):
         expires_at=datetime(2099, 1, 1, tzinfo=UTC),
     )
     db_session.add(session)
+    db_session.flush()
+    session_id = str(session.id)
     db_session.commit()
-    auth_service.sessions.delete(db_session, str(session.id))
+    auth_service.sessions.delete(
+        db_session,
+        session_id,
+        actor=AuditActor.system("auth-service-test"),
+    )
     db_session.refresh(session)
     assert session.status == SessionStatus.revoked
     assert session.revoked_at is not None

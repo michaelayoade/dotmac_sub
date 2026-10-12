@@ -181,7 +181,12 @@ class PodmanTransport:
             prefix="dm-runner-secret-", suffix=".env", dir=self._runtime_dir
         )
         try:
-            os.fchmod(fd, 0o600)
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is None:
+                raise RunnerTransportError(
+                    "secure file-descriptor permissions are unavailable on this host"
+                )
+            fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 entries = [
                     (_secret_env_name(name), value)

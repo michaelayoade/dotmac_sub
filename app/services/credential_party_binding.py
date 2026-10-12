@@ -31,6 +31,8 @@ from sqlalchemy.orm import Session, aliased
 
 from app.models.auth import AuthenticationBinding, UserCredential
 from app.models.party import Party, PartyIdentityStatus, PartyType
+from app.models.subscriber import ResellerUser, Subscriber
+from app.models.system_user import SystemUser
 from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.authentication_mechanism_registry import (
     UndeclaredAuthenticationMechanismError,
@@ -312,6 +314,7 @@ def _locked_credential(db: Session, credential_id: UUID) -> UserCredential:
         select(UserCredential)
         .where(UserCredential.id == credential_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if credential is None:
         _error("credential_missing", "The credential was not found.")
@@ -319,7 +322,12 @@ def _locked_credential(db: Session, credential_id: UUID) -> UserCredential:
 
 
 def _locked_person_party(db: Session, party_id: UUID) -> Party:
-    party = db.scalar(select(Party).where(Party.id == party_id).with_for_update())
+    party = db.scalar(
+        select(Party)
+        .where(Party.id == party_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if party is None:
         _error("party_missing", "The Party was not found.")
     if party.party_type != PartyType.person.value:
@@ -345,6 +353,7 @@ def _locked_binding(db: Session, binding_id: UUID) -> AuthenticationBinding:
         select(AuthenticationBinding)
         .where(AuthenticationBinding.id == binding_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if binding is None:
         _error(
@@ -368,102 +377,100 @@ def _locked_binding(db: Session, binding_id: UUID) -> AuthenticationBinding:
     return binding
 
 
-def _require_legacy_principal_alignment(
-    db: Session,
+def _locked_principal(
+    db: Session, kind: CredentialPrincipalKind, principal_id: UUID
+) -> SystemUser | ResellerUser | Subscriber | None:
+    """Lock the independently supplied principal before any credential/Party."""
+
+    if kind is CredentialPrincipalKind.system_user:
+        return db.scalar(
+            select(SystemUser)
+            .where(SystemUser.id == principal_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    if kind is CredentialPrincipalKind.reseller_user:
+        return db.scalar(
+            select(ResellerUser)
+            .where(ResellerUser.id == principal_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    return db.scalar(
+        select(Subscriber)
+        .where(Subscriber.id == principal_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+
+
+def _require_credential_principal(
     credential: UserCredential,
-    party: Party,
     *,
     expected_principal_kind: CredentialPrincipalKind,
     expected_principal_id: UUID,
 ) -> None:
-    """Prove the command and R1 agree with the authoritative legacy principal."""
+    """Check every legacy identity field from the freshly locked credential."""
 
-    from app.models.subscriber import ResellerUser, Subscriber
-    from app.models.system_user import SystemUser
-
-    actual_principal_kind: CredentialPrincipalKind
-    actual_principal_id: UUID
-    if credential.system_user_id is not None:
-        actual_principal_kind = CredentialPrincipalKind.system_user
-        actual_principal_id = credential.system_user_id
-    elif credential.reseller_user_id is not None:
-        actual_principal_kind = CredentialPrincipalKind.reseller_user
-        actual_principal_id = credential.reseller_user_id
-    elif credential.subscriber_id is not None:
-        actual_principal_kind = CredentialPrincipalKind.subscriber
-        actual_principal_id = credential.subscriber_id
-    else:
+    identities = {
+        CredentialPrincipalKind.system_user: credential.system_user_id,
+        CredentialPrincipalKind.reseller_user: credential.reseller_user_id,
+        CredentialPrincipalKind.subscriber: credential.subscriber_id,
+    }
+    present = [(kind, value) for kind, value in identities.items() if value is not None]
+    if not present:
         _error(
             "principal_mismatch",
             "The credential has no authoritative legacy principal reference.",
             expected_principal_kind=expected_principal_kind.value,
             actual_principal_kind="none",
         )
-
-    if (
-        actual_principal_kind is not expected_principal_kind
-        or actual_principal_id != expected_principal_id
-    ):
+    if present != [(expected_principal_kind, expected_principal_id)]:
         _error(
             "principal_mismatch",
-            "The credential's authoritative legacy principal differs from the "
-            "typed command.",
+            "The credential's authoritative legacy principal differs from the typed command.",
             expected_principal_kind=expected_principal_kind.value,
-            actual_principal_kind=actual_principal_kind.value,
+            actual_principal_kind=present[0][0].value
+            if len(present) == 1
+            else "ambiguous",
         )
 
-    principal_party_id: UUID | None
-    principal_party_type: str | None
-    if actual_principal_kind is CredentialPrincipalKind.system_user:
-        system_user = db.scalar(
-            select(SystemUser)
-            .where(SystemUser.id == actual_principal_id)
-            .with_for_update()
-        )
-        principal_party_id = (
-            system_user.person_party_id if system_user is not None else None
-        )
-        principal_party_type = PartyType.person.value
-    elif actual_principal_kind is CredentialPrincipalKind.reseller_user:
-        reseller_user = db.scalar(
-            select(ResellerUser)
-            .where(ResellerUser.id == actual_principal_id)
-            .with_for_update()
-        )
-        principal_party_id = (
-            reseller_user.person_party_id if reseller_user is not None else None
-        )
-        principal_party_type = PartyType.person.value
-    else:
-        subscriber = db.scalar(
-            select(Subscriber)
-            .where(Subscriber.id == actual_principal_id)
-            .with_for_update()
-        )
-        principal_party_id = subscriber.party_id if subscriber is not None else None
-        principal_party_type = (
-            subscriber.party.party_type
-            if subscriber is not None and subscriber.party is not None
-            else None
-        )
 
+def _require_legacy_principal_alignment(
+    db: Session,
+    principal: SystemUser | ResellerUser | Subscriber | None,
+    party: Party,
+) -> None:
+    """Validate Party alignment using the principal already locked first."""
+
+    principal_party_id = (
+        principal.party_id
+        if isinstance(principal, Subscriber)
+        else principal.person_party_id
+        if principal is not None
+        else None
+    )
     if principal_party_id is None:
         _error(
             "principal_party_missing",
-            "The credential's authoritative legacy principal has no reviewed "
-            "Party binding yet.",
+            "The credential's authoritative legacy principal has no reviewed Party binding yet.",
         )
+    # Read the scalar type freshly; an ORM relationship may be cached from a
+    # prior transaction. This read never selects or locks a different principal.
+    principal_party_type = (
+        db.scalar(select(Party.party_type).where(Party.id == principal_party_id))
+        if isinstance(principal, Subscriber)
+        else PartyType.person.value
+    )
     if principal_party_type == PartyType.organization.value:
         _error(
             "organization_administrator_required",
-            "An organization-owned account needs separately reviewed human "
-            "administrator evidence before its credential can be projected.",
+            "An organization-owned account needs separately reviewed human administrator evidence before its credential can be projected.",
         )
     if principal_party_id != party.id:
         _error(
             "principal_party_mismatch",
-            "The requested Person Party differs from the authoritative legacy "
-            "principal binding.",
+            "The requested Person Party differs from the authoritative legacy principal binding.",
         )
 
 
@@ -537,15 +544,17 @@ def _bind_credential_party(
             "The command tenant is not Sub's provisioned operator tenant.",
         )
 
+    principal = _locked_principal(
+        db, command.expected_principal_kind, command.expected_principal_id
+    )
     credential = _locked_credential(db, command.credential_id)
-    party = _locked_person_party(db, command.party_id)
-    _require_legacy_principal_alignment(
-        db,
+    _require_credential_principal(
         credential,
-        party,
         expected_principal_kind=command.expected_principal_kind,
         expected_principal_id=command.expected_principal_id,
     )
+    party = _locked_person_party(db, command.party_id)
+    _require_legacy_principal_alignment(db, principal, party)
     binding = _locked_binding(db, command.authentication_binding_id)
     provider_code = _provider_code(credential)
     # Mechanism and storage are two vocabularies. Comparing them literally
@@ -608,7 +617,6 @@ def _bind_credential_party(
         .where(UserCredential.tenant_id == tenant.id)
         .where(UserCredential.party_id == party.id)
         .where(UserCredential.authentication_binding_id == binding.id)
-        .with_for_update()
     )
     if collision is not None:
         _error(

@@ -49,7 +49,12 @@ from app.services.auth_flow import (
     verify_user_password,
 )
 from app.services.owner_commands import CommandContext
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
 from tests.staff_identity_fixtures import add_bound_staff_user, project_staff_login
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 def _make_request(user_agent: str = "pytest"):
@@ -1073,8 +1078,14 @@ def test_forgot_password_flow_rate_limited(db_session, person, monkeypatch):
 
 
 def test_web_forgot_password_submit_sends_email(db_session, person, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    from app.services import db_session_adapter as session_module
     from app.services import web_auth as web_auth_service
 
+    monkeypatch.setattr(
+        session_module, "SessionLocal", lambda: Session(bind=db_session.get_bind())
+    )
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     person.email = "web-forgot@example.com"
     credential = UserCredential(
@@ -1725,10 +1736,17 @@ def test_session_manager_handles_system_user_principals(db_session):
     )
     assert listed.total == 1
 
-    revoked = session_manager.revoke_all_other_sessions(
-        db_session, system_user.id, None, principal_type="system_user"
-    )
-    assert revoked.revoked_count == 1
+    from app.services.db_session_adapter import db_session_adapter
+
+    principal_id = system_user.id
+    with db_session_adapter.owner_command_session() as command_db:
+        with pytest.raises(session_manager.SessionRevocationError) as exc:
+            session_manager.revoke_all_other_sessions(
+                command_db, principal_id, None, principal_type="system_user"
+            )
+    assert exc.value.code == "app_sessions.auth.invalid_current_session"
+    db_session.expire_all()
+    assert session.status == SessionStatus.active
 
 
 def test_admin_reset_password_clears_lockout(db_session, monkeypatch):

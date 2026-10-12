@@ -31,7 +31,13 @@ from app.models.catalog import AccessCredential
 from app.services import auth_flow as auth_flow_service
 from app.services import password_authentication as pa
 from app.services.auth_flow import AuthFlow, change_password, hash_password
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
+from tests.support.tx_trace import assert_protected_tx, trace_transactions
 from tests.test_auth_flow import _make_request, _system_user_with_credential
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 @pytest.fixture(autouse=True)
@@ -272,9 +278,11 @@ def test_mfa_pending_password_step_commits_standing_only(db_session, person):
 def test_full_login_stamps_last_login_and_stages_success_audit(db_session, person):
     credential = _credential(db_session, person)
 
-    result = AuthFlow.login(
-        db_session, "user@example.com", "secret", _make_request(), None
-    )
+    with trace_transactions(db_session.get_bind().engine) as trace:
+        result = AuthFlow.login(
+            db_session, "user@example.com", "secret", _make_request(), None
+        )
+    assert_protected_tx(trace.result)
 
     assert result["access_token"] and result["refresh_token"]
     assert _row(db_session, credential.id).last_login_at is not None
@@ -479,8 +487,12 @@ def test_audit_failure_inside_phase_b_fails_closed(db_session, person, monkeypat
 
     monkeypatch.setattr(pa, "stage_audit_event", boom)
 
-    with pytest.raises(RuntimeError):
-        AuthFlow.login(db_session, "user@example.com", "secret", _make_request(), None)
+    with trace_transactions(db_session.get_bind().engine) as trace:
+        with pytest.raises(RuntimeError):
+            AuthFlow.login(
+                db_session, "user@example.com", "secret", _make_request(), None
+            )
+    assert_protected_tx(trace.result, success=False)
 
     row = _row(db_session, credential.id)
     assert _sessions(db_session) == 0
@@ -1027,6 +1039,7 @@ def test_pppoe_gate_takes_a_row_share_lock(db_session, person):
         credential_version=None,
         access_credential_id=access.id,
         verified_hash=access.secret_hash,
+        access_credential_updated_at=access.updated_at,
     )
     db_session.execute = spy  # type: ignore[method-assign]
     try:

@@ -139,6 +139,9 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
         "app.services.domain_settings",
         "app.services.enforcement",
         "app.services.network.radius_sessions",
+        # The same module exposes two fully contracted reseller boundaries: a
+        # read-only list projection and an idempotent status-action coordinator.
+        "app.services.reseller_portal",
         # Public owner commands and the explicitly registered flush-only
         # assignment participant share this module and distinct boundaries.
         "app.services.work_order_commands",

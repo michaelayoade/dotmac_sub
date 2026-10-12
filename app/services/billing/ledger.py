@@ -83,6 +83,27 @@ class LedgerAccountAdjustmentError(ValueError):
         super().__init__(message)
 
 
+class LegacyRenewalLedgerReversalError(ValueError):
+    """Transport-neutral rejection from the legacy-renewal ledger participant."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyPaymentBackedRenewalLedgerReversal:
+    """Exact immutable ledger evidence an owning repair may reverse once."""
+
+    ledger_entry_id: UUID
+    account_id: UUID
+    payment_id: UUID
+    amount: Decimal
+    currency: str
+    category: LedgerCategory
+    reason: str
+
+
 def _reversal_target_statement(entry_id: str):
     """Select the entry under a row lock for reversal serialization.
 
@@ -98,6 +119,55 @@ def _reversal_target_statement(entry_id: str):
 
 
 class LedgerEntries(ListResponseMixin):
+    @staticmethod
+    def stage_legacy_payment_backed_renewal_reversal(
+        db: Session,
+        command: LegacyPaymentBackedRenewalLedgerReversal,
+    ) -> LedgerEntry:
+        """Append the unique reversal for one proven legacy renewal debit.
+
+        This is a flush-only participant.  The prepaid-renewal repair owner
+        proves the wider payment/settlement/entitlement chain and owns the
+        transaction; this boundary rechecks the immutable ledger facts under
+        the ledger row lock before appending the structural reversal.
+        """
+
+        original = db.scalar(_reversal_target_statement(str(command.ledger_entry_id)))
+        expected_currency = command.currency.strip().upper()
+        if (
+            original is None
+            or original.account_id != command.account_id
+            or original.payment_id != command.payment_id
+            or original.invoice_id is not None
+            or original.entry_type is not LedgerEntryType.debit
+            or original.source is not LedgerSource.invoice
+            or original.category is not command.category
+            or not original.is_active
+            or not original.affects_customer_position
+            or original.reversal_of_entry_id is not None
+            or original.amount != command.amount
+            or (original.currency or "").upper() != expected_currency
+            or not command.reason.strip()
+        ):
+            raise LegacyRenewalLedgerReversalError(
+                "evidence_mismatch",
+                "The selected ledger row is not the exact legacy renewal debit.",
+            )
+        try:
+            return LedgerEntries.reverse(
+                db,
+                str(original.id),
+                memo=(
+                    f"{command.reason} [legacy payment-backed prepaid renewal repair]"
+                ),
+                commit=False,
+            )
+        except HTTPException as exc:
+            raise LegacyRenewalLedgerReversalError(
+                "reversal_rejected",
+                "The canonical ledger rejected the legacy renewal reversal.",
+            ) from exc
+
     @staticmethod
     def stage_account_adjustment_debit(
         db: Session,

@@ -530,11 +530,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("financial.prepaid_service_renewals") == (
         "access.subscription_lifecycle",
+        "auth.permission_gate",
         "billing.contracts",
         "customer.accounts",
         "financial.account_adjustments",
         "financial.customer_subledger",
         "financial.invoices",
+        "financial.ledger",
         "financial.payments",
         "financial.billing_tax_resolution",
         "financial.prepaid_funding_reconstruction",

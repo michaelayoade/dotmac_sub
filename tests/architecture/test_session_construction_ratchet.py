@@ -130,7 +130,52 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +2 from tests/test_credential_administration.py: independent read/write
 #: sessions prove retained ORM objects are refreshed by locked owner admission.
 #: Production preparation uses app.db.SessionLocal, adding no construction debt.
-TEST_FIXTURE_BASELINE_TOTAL = 191
+#: +1 from tests/integration/test_email_verification_intents_pg.py: independent
+#: migrated PostgreSQL sessions prove exact Subscriber locking, request replay,
+#: and the existing dedupe unique constraint. No production site is added.
+#: +1 from tests/customer_profile_owner_support.py: canonical profile tests use
+#: a fresh Session within fixture isolation, preserving the caller Session.
+#: This is fast-unit evidence only; no production construction site is added.
+#: +8 from authentication-denial proofs: tests/test_authentication_denial_audit.py
+#: adds one disposable file-SQLite Engine and six explicit Session sites for
+#: independent lifecycle, observation, cleanup-failure, lock preservation and
+#: pending/flushed request-write isolation. tests/authentication_denial_unit.py
+#: adds one explicitly logic-only savepoint Session factory. PostgreSQL denial
+#: proofs reuse the existing migrated factory. No runtime baseline grows.
+#: +6 from tests/integration/test_identity_lock_order_concurrency.py: one
+#: disposable migrated test-engine factory, one setup Session and four explicit
+#: independent sessionmaker sites prove implicit FK blocking, incumbent lock
+#: inversion, tuple arbitration and stale principal-reference refusal. These
+#: are reviewed test fixtures; the production construction baseline is unchanged.
+#: +10 from tests/integration/test_oidc_atomic_session_concurrency.py: one
+#: migrated test-engine factory and nine explicitly isolated Session sites
+#: pin backend identities while testing admission/reset serialization, binding
+#: drift, ceremony replay and device supersession. No runtime allowance grows.
+#: +3 from the OIDC commit-capable unit lane: tests/oidc_atomic_unit.py owns
+#: one disposable Engine and one engine-bound Session per test; the external
+#: root refusal regression adds one Connection-bound Session. These fixtures
+#: exercise real root completion without bypassing the production entry guard.
+#: +2 from tests/test_tx_trace.py: explicit helper Session counterexamples
+#: reject independent state/audit root attribution.
+#: +10 from atomic session-revocation proofs: eight independent PostgreSQL
+#: Session sites force exact lock interleavings; two SQLite Session sites prove
+#: caller-flushed-write preservation and independent committed observation.
+#: Test-only additions; production construction allowance is unchanged.
+#: Reseller standing PostgreSQL cases add two isolated Session constructors.
+#: These test fixtures do not expand the production construction allowance.
+# Six explicit fixture constructions in test_anonymous_recovery_adapter.py
+# exercise fresh lifecycle rollback and independent file-SQLite connections.
+# The production constructor inventory remains unchanged.
+#: +2 from tests/test_credential_security_inventory.py:52,99: disposable SQLite
+#: engines prove bounded SQL aggregates and shared UTC age-band cutoffs. These
+#: are fast unit fixtures, not PostgreSQL acceptance or production construction.
+#: +1 from tests/test_argon2id_benchmark.py: a disposable SQLite engine proves
+#: the benchmark report path without adding a production construction site.
+#: +2 from tests/test_auth_flow_helpers.py and
+#: tests/test_admin_system_route_guards.py: fresh owner-command Sessions prove
+#: logout and administrative session revocation commit independently of the
+#: adapter's request Session. These are test-only transaction-boundary fixtures.
+TEST_FIXTURE_BASELINE_TOTAL = 245
 
 
 def _baseline() -> dict[str, int]:

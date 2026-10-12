@@ -136,7 +136,6 @@ app/services/sales/service.py
 app/services/sales_orders.py
 app/services/scheduler.py
 app/services/secrets.py
-app/services/session_manager.py
 app/services/settings_api_custom.py
 app/services/subscriber.py
 app/services/subscription_changes.py

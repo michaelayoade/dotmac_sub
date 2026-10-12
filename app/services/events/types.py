@@ -30,6 +30,8 @@ class EventType(enum.Enum):
     field_attachment_deleted = "field.attachment_deleted"
     field_job_location_corrected = "field.job_location_corrected"
 
+    authentication_sessions_revoked = "authentication_sessions.revoked"
+
     # Authentication-session security events
     authentication_session_rotated = "authentication_session.rotated"
     authentication_session_refresh_refused = "authentication_session.refresh_refused"
@@ -53,6 +55,7 @@ class EventType(enum.Enum):
     subscriber_service_location_updated = "subscriber.service_location_updated"
     subscriber_location_confirmed = "subscriber.location_confirmed"
     subscriber_location_prompt_snoozed = "subscriber.location_prompt_snoozed"
+    customer_connection_type_changed = "customer.connection_type_changed"
     field_location_history_pruned = "field_location.history_pruned"
     subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
     subscriber_billing_mode_changed = "subscriber.billing_mode_changed"

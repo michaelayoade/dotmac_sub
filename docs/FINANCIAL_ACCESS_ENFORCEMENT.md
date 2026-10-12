@@ -507,6 +507,12 @@ the same transaction after flushing lock changes. Delivery begins only after
 commit. A rollback therefore cannot send a suspension/restoration event for
 state that never existed.
 
+Expired or canceled service history alone does not mean the customer deleted
+their account. When no non-terminal service remains, the lifecycle projection
+uses the login-capable `suspended` status. The account can become `canceled` only
+through an explicit account-deletion transition, which records the deletion
+request and intentionally prevents portal login.
+
 Enforcement handlers attempt the owned local and external consequences. A
 failed RADIUS projection, access-state projection, session-cleanup enqueue, or
 financial restoration is raised to the durable dispatcher. The handler remains
@@ -915,6 +921,31 @@ The resulting ordinary prepaid draft must then pass the existing reviewed
 settlement command, which atomically allocates funding, creates entitlement,
 and advances the billing anchor. Ambiguous or changed evidence leaves all
 customer and financial state unchanged.
+
+## Legacy payment-backed prepaid renewal invoice repair
+
+A historical payment-linked service debit and its active ledger-backed
+entitlement can be converted to canonical paid-invoice evidence only through
+`financial.prepaid_service_renewals`. The preview is read-only and accepts
+explicit account, subscription, Payment, ledger, entitlement, UTC period,
+gross, currency, and expected surviving funding. It proves one active
+succeeded and unreturned settlement, one unreversed invoice-source service
+debit with no invoice or `AccountAdjustment`, one exact entitlement, exclusive
+contract tax, an anchor equal to the selected coverage end, and no competing
+invoice or overlap. Settlement-level prepaid consumption must be zero or the
+same gross amount, and any payment-linked invoice-less renewal outcome must
+identify only the selected chain. The payment projection retains those
+historical facts but reclassifies their amount to the new paid allocation,
+preventing double consumption in payment history.
+
+Apply requires the reviewed fingerprint, a real user UUID, confirmed
+`billing:ledger:write` permission, a non-secret approval reference, reason, and
+bounded idempotency key. The owner appends a structural ledger reversal,
+retires the old entitlement, creates and settles the canonical invoice from
+the selected Payment, replaces the entitlement for the identical interval,
+and reprojects the unchanged anchor. It refuses any cross-currency netting or
+funding drift. See
+`docs/runbooks/LEGACY_PAYMENT_BACKED_PREPAID_RENEWAL_INVOICE_REPAIR.md`.
 
 ## Subscription pause
 

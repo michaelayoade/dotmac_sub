@@ -275,9 +275,7 @@ def test_validate_session_token_ignores_stale_cached_session(monkeypatch, db_ses
     ]
 
 
-def test_revoke_session_invalidates_cached_session_context(
-    db_session, person, monkeypatch
-):
+def test_revoke_session_records_durable_revocation(db_session, person):
     session = AuthSession(
         subscriber_id=person.id,
         status=SessionStatus.active,
@@ -285,26 +283,20 @@ def test_revoke_session_invalidates_cached_session_context(
         expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
+    db_session.flush()
+    session_id = str(session.id)
+    subscriber_id = person.id
     db_session.commit()
-    invalidations = []
-
-    monkeypatch.setattr(
-        session_manager_service.auth_cache,
-        "invalidate_session_context",
-        lambda *args, **kwargs: invalidations.append((args, kwargs)),
+    result = session_manager_service.revoke_session(
+        db_session,
+        session_id,
+        subscriber_id,
+        current_session_id=session_id,
     )
 
-    session_manager_service.revoke_session(db_session, str(session.id), person.id)
-
-    assert invalidations == [
-        (
-            (str(session.id),),
-            {
-                "principal_type": "subscriber",
-                "principal_id": str(person.id),
-            },
-        )
-    ]
+    db_session.refresh(session)
+    assert result.revoked_count == 1
+    assert session.status is SessionStatus.revoked
 
 
 def test_require_web_auth_redirects_unsafe_requests_to_referer(monkeypatch, db_session):

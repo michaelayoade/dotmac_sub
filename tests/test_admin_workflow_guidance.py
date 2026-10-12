@@ -409,7 +409,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 63
+    assert len(guides) == 64
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -483,6 +483,23 @@ def test_walled_garden_page_has_its_own_guide() -> None:
     settings = guidance_for_path("/admin/system/config/radius")
     assert settings is not None
     assert settings.id == "settings"
+
+
+def test_customer_connection_types_page_has_its_own_guide() -> None:
+    guide = guidance_for_path("/admin/system/customer-connection-types")
+
+    assert guide is not None
+    assert guide.id == "customer-connection-types"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "deactivation preserves existing customer assignments" in content
+    actions = {action.id: action for action in help_actions_for(guide)}
+    assert (
+        actions["save-customer-connection-type"].permission == "system:settings:write"
+    )
+    assert (
+        actions["deactivate-customer-connection-type"].permission
+        == "system:settings:write"
+    )
 
 
 def test_subledger_opening_correction_pages_have_their_own_guide() -> None:

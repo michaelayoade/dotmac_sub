@@ -18,7 +18,6 @@ from app.models.subscriber import (
     AddressType,
     ChannelType,
     ContactMethod,
-    CustomerConnectionType,
     Gender,
     SubscriberCategory,
     SubscriberStatus,
@@ -154,7 +153,7 @@ class SubscriberBase(BaseModel):
 
     # Service location (POP site determines NAS/IP pool for provisioning)
     pop_site_id: UUID | None = None
-    connection_type: CustomerConnectionType | None = None
+    connection_type: str | None = Field(default=None, max_length=64)
 
     # Account fields
     subscriber_number: str | None = Field(default=None, max_length=80)
@@ -277,7 +276,7 @@ class SubscriberUpdate(BaseModel):
 
     # Service location
     pop_site_id: UUID | None = None
-    connection_type: CustomerConnectionType | None = None
+    connection_type: str | None = Field(default=None, max_length=64)
 
     # Account fields
     subscriber_number: str | None = Field(default=None, max_length=80)

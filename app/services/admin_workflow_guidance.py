@@ -1214,6 +1214,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "You must hold the admin role and the reseller-write permission, and the user must belong to the reseller whose page you are on; you cannot remove your own MFA.",
             "The action appears only for reseller users, not for customers linked to the reseller.",
+            "If removal fails unexpectedly, the page shows a safe general message; use the protected logs and audit evidence for investigation instead of exposing internal details to the user.",
         ),
     ),
     _guide(
@@ -1242,6 +1243,22 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "The portal entry comes from the Captive Portal URL and IP on the RADIUS Configuration page and cannot be edited here.",
             "Resource keys cannot change after creation because routers carry them in rule tags; remove and re-add a resource to rename its key.",
+        ),
+    ),
+    _guide(
+        "customer-connection-types",
+        "Settings",
+        "Manage customer connection types",
+        "System and customer administrators",
+        "Manage the reusable connection types that classify each customer's last-mile connection.",
+        ("/admin/system/customer-connection-types",),
+        "Review each configured type, its active state, display order, and assigned customer count.",
+        "Add a type or edit its name, description, display order, and active state; its stable code does not change after creation.",
+        "Deactivate a type when it should no longer be offered for new customer assignments.",
+        "Verify that active types are available on customer forms and that existing inactive assignments remain visible.",
+        notes=(
+            "Adding, editing, activating, or deactivating a type requires system settings write permission.",
+            "Deactivation preserves existing customer assignments and their readable labels.",
         ),
     ),
     _guide(
@@ -2188,6 +2205,30 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("check-walled-garden-readiness", "Check router readiness", 3),
     ),
+    "customer-connection-types": (
+        _action(
+            "review-customer-connection-types",
+            "Review customer connection types",
+            0,
+        ),
+        _action(
+            "save-customer-connection-type",
+            "Add or edit a customer connection type",
+            1,
+            permission="system:settings:write",
+        ),
+        _action(
+            "deactivate-customer-connection-type",
+            "Deactivate a customer connection type",
+            2,
+            permission="system:settings:write",
+        ),
+        _action(
+            "verify-customer-connection-types",
+            "Verify customer connection type availability",
+            3,
+        ),
+    ),
     "meta-connection": (
         _action("review-meta-connection", "Review the Meta connection", 0),
         _action(
@@ -2361,7 +2402,13 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
     AdminHelpNavigationSection(
         "settings",
         "Settings",
-        ("settings", "walled-garden", "smtp-senders", "custom-fields-center"),
+        (
+            "settings",
+            "walled-garden",
+            "customer-connection-types",
+            "smtp-senders",
+            "custom-fields-center",
+        ),
         "system:settings:read",
     ),
     AdminHelpNavigationSection(

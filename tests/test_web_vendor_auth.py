@@ -20,7 +20,12 @@ from app.models.system_user import SystemUser
 from app.models.vendor_routes import Vendor
 from app.services.auth_flow import AuthFlow, hash_password
 from app.web import vendor_auth_flow as web_vendor_auth
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
 from tests.staff_identity_fixtures import project_staff_login
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 def _request(

@@ -22,9 +22,32 @@ def _clear_session_fallbacks():
     reseller_portal._RESELLER_SESSION_EPOCHS.clear()  # noqa: SLF001
 
 
+def _legacy_session(*, username, account_id, subscriber_id, remember=False):
+    token = str(uuid4())
+    now = datetime.now(UTC)
+    payload = {
+        "username": username,
+        "account_id": str(account_id),
+        "subscriber_id": str(subscriber_id),
+        "remember": remember,
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(days=1)).isoformat(),
+    }
+    store_session(
+        cps._CUSTOMER_SESSION_PREFIX,
+        token,
+        payload,
+        86400,
+        cps._CUSTOMER_SESSIONS,
+        principal_id=str(subscriber_id),
+        fallback_index=cps._CUSTOMER_SESSION_INDEX,
+    )
+    return token
+
+
 def test_revoke_customer_sessions_invalidates_existing_tokens():
     subscriber_id = uuid4()
-    token = cps.create_customer_session(
+    token = _legacy_session(
         username="cust@example.com",
         account_id=subscriber_id,
         subscriber_id=subscriber_id,
@@ -37,7 +60,7 @@ def test_revoke_customer_sessions_invalidates_existing_tokens():
 
 def test_revoke_customer_sessions_leaves_other_subscribers_alone():
     subscriber_a, subscriber_b = uuid4(), uuid4()
-    token_b = cps.create_customer_session(
+    token_b = _legacy_session(
         username="other@example.com",
         account_id=subscriber_b,
         subscriber_id=subscriber_b,
@@ -46,10 +69,12 @@ def test_revoke_customer_sessions_leaves_other_subscribers_alone():
     assert cps.get_customer_session(token_b) is not None
 
 
-def test_customer_refresh_capped_at_absolute_lifetime():
-    subscriber_id = uuid4()
+def test_customer_refresh_capped_at_absolute_lifetime(db_session, subscriber):
+    subscriber_id = subscriber.id
     token = cps.create_customer_session(
         username="cap@example.com",
+        is_impersonation=True,
+        db=db_session,
         account_id=subscriber_id,
         subscriber_id=subscriber_id,
     )
@@ -65,18 +90,20 @@ def test_customer_refresh_capped_at_absolute_lifetime():
         cps._CUSTOMER_SESSIONS,  # noqa: SLF001
     )
 
-    assert cps.refresh_customer_session(token) is None
+    assert cps.refresh_customer_session(token, db_session) is None
     assert cps.get_customer_session(token) is None
 
 
-def test_customer_refresh_inside_absolute_lifetime_slides():
-    subscriber_id = uuid4()
+def test_customer_refresh_inside_absolute_lifetime_slides(db_session, subscriber):
+    subscriber_id = subscriber.id
     token = cps.create_customer_session(
         username="slide@example.com",
+        is_impersonation=True,
+        db=db_session,
         account_id=subscriber_id,
         subscriber_id=subscriber_id,
     )
-    refreshed = cps.refresh_customer_session(token)
+    refreshed = cps.refresh_customer_session(token, db_session)
     assert refreshed is not None
     # Expiry never exceeds creation + absolute cap.
     created = datetime.fromisoformat(refreshed["created_at"])
@@ -86,12 +113,12 @@ def test_customer_refresh_inside_absolute_lifetime_slides():
 
 def test_customer_session_listing_marks_current_session():
     subscriber_id = uuid4()
-    current = cps.create_customer_session(
+    current = _legacy_session(
         username="current@example.com",
         account_id=subscriber_id,
         subscriber_id=subscriber_id,
     )
-    other = cps.create_customer_session(
+    other = _legacy_session(
         username="other@example.com",
         account_id=subscriber_id,
         subscriber_id=subscriber_id,
@@ -113,12 +140,12 @@ def test_customer_session_listing_marks_current_session():
 
 def test_revoke_other_customer_sessions_keeps_current_session():
     subscriber_id = uuid4()
-    current = cps.create_customer_session(
+    current = _legacy_session(
         username="current@example.com",
         account_id=subscriber_id,
         subscriber_id=subscriber_id,
     )
-    other = cps.create_customer_session(
+    other = _legacy_session(
         username="other@example.com",
         account_id=subscriber_id,
         subscriber_id=subscriber_id,
@@ -206,3 +233,60 @@ def test_profile_templates_include_portal_session_controls():
     assert "/reseller/profile/sessions/sign-out-others" in reseller_template
     assert "Portal sessions" in customer_template
     assert "Portal sessions" in reseller_template
+
+
+def test_customer_refresh_rejects_legacy_unbound_session(db_session, subscriber):
+    token = _legacy_session(
+        username="legacy", account_id=subscriber.id, subscriber_id=subscriber.id
+    )
+    assert cps.refresh_customer_session(token, db_session) is None
+    assert cps.get_customer_session(token) is None
+
+
+@pytest.mark.parametrize("standing", ["revoked", "expired"])
+def test_customer_refresh_rejects_revoked_database_standing(
+    db_session, subscriber, standing
+):
+    from uuid import UUID
+
+    from app.models.auth import Session as AuthSession
+    from app.models.auth import SessionStatus
+
+    token = cps.create_customer_session(
+        username="bound",
+        account_id=subscriber.id,
+        subscriber_id=subscriber.id,
+        is_impersonation=True,
+        db=db_session,
+    )
+    payload = cps.get_customer_session(token)
+    row = db_session.get(AuthSession, UUID(payload["auth_session_id"]))
+    if standing == "revoked":
+        row.status = SessionStatus.revoked
+        row.revoked_at = datetime.now(UTC)
+    else:
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.commit()
+    assert cps.refresh_customer_session(token, db_session) is None
+
+
+def test_customer_refresh_never_extends_database_deadline(db_session, subscriber):
+    from uuid import UUID
+
+    from app.models.auth import Session as AuthSession
+
+    token = cps.create_customer_session(
+        username="db-deadline",
+        account_id=subscriber.id,
+        subscriber_id=subscriber.id,
+        is_impersonation=True,
+        db=db_session,
+    )
+    payload = cps.get_customer_session(token)
+    row = db_session.get(AuthSession, UUID(payload["auth_session_id"]))
+    deadline = datetime.now(UTC) + timedelta(seconds=90)
+    row.expires_at = deadline
+    db_session.commit()
+    refreshed = cps.refresh_customer_session(token, db_session)
+    assert refreshed is not None
+    assert datetime.fromisoformat(refreshed["expires_at"]) == deadline

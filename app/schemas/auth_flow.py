@@ -137,7 +137,7 @@ class SessionListResponse(BaseModel):
 
 
 class SessionRevokeResponse(BaseModel):
-    revoked_at: datetime
+    revoked_at: datetime | None
     revoked_count: int = 1
 
 

@@ -66,6 +66,7 @@ from app.services.application_exception_observability import (
     PaymentVerificationOutcome,
     record_payment_verification_outcome,
 )
+from app.services.audit_adapter import AuditActor
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_context import (
     optional_customer_account_id,
@@ -1754,6 +1755,12 @@ def customer_update_profile(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
+    if customer.get("is_impersonation") or customer.get("impersonated_by"):
+        return Response(
+            content="Profile verification changes are unavailable during impersonation.",
+            status_code=403,
+            media_type="text/plain",
+        )
     subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return templates.TemplateResponse(
@@ -1780,6 +1787,7 @@ def customer_update_profile(
                         scope=portal_profile_commands.PORTAL_PROFILE_WRITE_SCOPE,
                         reason="customer portal profile submission",
                     ),
+                    actor=AuditActor.user(str(customer.get("id") or subscriber_id)),
                     subscriber_id=UUID(str(subscriber_id)),
                     first_name=first_name,
                     last_name=last_name,
@@ -1862,10 +1870,48 @@ def customer_resend_email_verification(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
     sent = False
+    if customer.get("is_impersonation") or customer.get("impersonated_by"):
+        return Response(
+            content="Profile verification changes are unavailable during impersonation.",
+            status_code=403,
+            media_type="text/plain",
+        )
     subscriber_id = optional_customer_subscriber_id(db, customer)
     if subscriber_id:
         try:
-            sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
+            from uuid import UUID
+
+            from app.services import email_verification
+            from app.services.db_session_adapter import db_session_adapter
+            from app.services.owner_commands import CommandContext
+
+            # Derive the authenticated target before opening the independent owner session.
+            target_id = UUID(str(subscriber_id))
+            with db_session_adapter.owner_command_session() as owner_db:
+                outcome = email_verification.request_email_verification(
+                    owner_db,
+                    command=email_verification.RequestEmailVerificationCommand(
+                        context=CommandContext.system(
+                            actor=f"subscriber:{target_id}",
+                            scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                            reason="Authenticated email verification resend",
+                        ),
+                        subscriber_id=target_id,
+                        actor=AuditActor.user(str(target_id)),
+                    ),
+                )
+                sent = outcome.queued
+        except email_verification.EmailVerificationError as exc:
+            if exc.code == "auth.email_verification.lock_timeout":
+                return Response(
+                    content=exc.message,
+                    status_code=503,
+                    headers={"Retry-After": "5"},
+                    media_type="text/plain",
+                )
+            logger.warning(
+                "customer_resend_email_verification_rejected code=%s", exc.code
+            )
         except Exception:
             logger.warning("customer_resend_email_verification_failed", exc_info=True)
     return RedirectResponse(

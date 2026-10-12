@@ -76,7 +76,10 @@ class _DockerUnixHTTPConnection(http.client.HTTPConnection):
         self.socket_path = socket_path
 
     def connect(self) -> None:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        address_family = getattr(socket, "AF_UNIX", None)
+        if address_family is None:
+            raise OSError("Unix-domain sockets are unavailable on this host")
+        sock = socket.socket(address_family, socket.SOCK_STREAM)
         sock.connect(self.socket_path)
         self.sock = sock
 

@@ -19,6 +19,7 @@ from sqlalchemy import MetaData, Table, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider, UserCredential
+from app.services import password_authentication as pa
 from app.services.auth_flow import verify_user_password
 
 MAX_ROWS = 500
@@ -129,6 +130,7 @@ def _verify_local_password(db: Session, *, principal_id: str, password: str) -> 
     if credential and verify_user_password(password, credential.password_hash):
         return True
 
+    subscriber_credential_id = credential.id if credential is not None else None
     credential = db.scalars(
         select(UserCredential)
         .where(UserCredential.system_user_id == principal_id)
@@ -136,7 +138,22 @@ def _verify_local_password(db: Session, *, principal_id: str, password: str) -> 
         .where(UserCredential.is_active.is_(True))
         .order_by(UserCredential.created_at.desc())
     ).first()
-    return bool(credential and verify_user_password(password, credential.password_hash))
+    verified = bool(
+        credential and verify_user_password(password, credential.password_hash)
+    )
+    if not verified:
+        credential_id = credential.id if credential else subscriber_credential_id
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CREDENTIALS,
+                surface=pa.DenialSurface.INSPECTOR_STEP_UP,
+                phase=pa.DenialPhase.STEP_UP,
+                target=pa.DenialTarget(pa.DenialTargetKind.CREDENTIAL, credential_id)
+                if credential_id
+                else None,
+            )
+        )
+    return verified
 
 
 def issue_confirmation_token(*, principal_id: str) -> str:

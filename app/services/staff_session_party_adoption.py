@@ -147,26 +147,31 @@ def _project_staff_session_party(
             field="projection_evidence",
         )
 
-    # One lock order across every execution prevents two reviewed plans from
-    # projecting the same identity/session tuple in opposite order.
-    party = db.scalar(
-        select(Party).where(Party.id == command.person_party_id).with_for_update()
-    )
-    if party is None or party.party_type != PartyType.person.value:
-        raise _error(
-            "party_binding_refused",
-            "The approved Person Party is unavailable for session projection.",
-        )
     principal = db.scalar(
         select(SystemUser)
         .where(SystemUser.id == command.expected_system_user_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if principal is None:
         raise _error(
             "staff_account_not_found",
             "The approved staff principal was not found.",
         )
+    # One lock order across every execution prevents two reviewed plans from
+    # projecting the same identity/session tuple in opposite order.
+    party = db.scalar(
+        select(Party)
+        .where(Party.id == command.person_party_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if party is None or party.party_type != PartyType.person.value:
+        raise _error(
+            "party_binding_refused",
+            "The approved Person Party is unavailable for session projection.",
+        )
+
     if not principal.is_active or principal.person_party_id != party.id:
         raise _error(
             "party_binding_refused",
@@ -176,6 +181,7 @@ def _project_staff_session_party(
         select(AuthSession)
         .where(AuthSession.id == command.session_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if auth_session is None:
         raise _error(

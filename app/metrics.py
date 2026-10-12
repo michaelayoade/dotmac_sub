@@ -29,6 +29,10 @@ WORKER_STARTUP_DURATION = Histogram(
 APPLICATION_READINESS = Gauge(
     "application_readiness", "Whether essential startup and routes are ready"
 )
+AUDIT_SETTINGS_FALLBACKS = Counter(
+    "audit_settings_fallbacks_total",
+    "Supplementary request audit settings failures using enabled defaults",
+)
 INTEGRATION_ROUTE_404 = Counter(
     "integration_route_404_total",
     "404 responses for registered integration routes",
@@ -1301,4 +1305,35 @@ def record_customer_device_command_refusal(*, command: str, code: str) -> None:
 CREDENTIAL_FORMAT_REJECTIONS = Counter(
     "credential_format_rejections_total",
     "Credential verification refused unavailable, unknown or malformed stored material",
+)
+
+PORTAL_AUTHENTICATION_SUCCESSES = Counter(
+    "portal_authentication_successes_total",
+    "Delivered customer portal logins by verified credential source",
+    ["src"],
+)
+
+
+def record_portal_authentication_success(*, src: str) -> None:
+    """Bound label cardinality; telemetry cannot change authentication results."""
+    if src not in {"user_credential", "access_credential", "radius_user"}:
+        return
+    try:
+        PORTAL_AUTHENTICATION_SUCCESSES.labels(src=src).inc()
+    except Exception:
+        pass
+
+
+AUTHENTICATION_DENIAL_WRITE_FAILURES = Counter(
+    "authentication_denial_write_failures_total",
+    "Failure-side authentication evidence writes that did not complete.",
+)
+AUTHENTICATION_UNKNOWN_DENIALS = Counter(
+    "authentication_unknown_denials_total",
+    "Authentication denials without a trusted resolved target; no identity labels.",
+)
+
+ANONYMOUS_RECOVERY_FAILURES = Counter(
+    "anonymous_password_recovery_failures_total",
+    "Anonymous recovery owner or session lifecycle failures.",
 )

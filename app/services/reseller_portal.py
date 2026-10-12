@@ -4,15 +4,16 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
 from types import SimpleNamespace
-from typing import TypeVar
+from typing import Literal, TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy import and_, func, or_
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy import and_, func, not_, or_
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import app.services.auth_flow as auth_flow_service
@@ -37,9 +38,10 @@ from app.models.subscriber import (
     SubscriberStatus,
     UserType,
 )
-from app.schemas.status_presentation import StatusTone
+from app.schemas.status_presentation import StatusPresentation, StatusTone
 from app.services import catalog as catalog_service
 from app.services import customer_portal
+from app.services import password_authentication as pa
 from app.services.account_lifecycle import (
     apply_requested_account_status,
     clear_account_lifecycle_override,
@@ -56,6 +58,12 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+)
+from app.services.reseller_session_standing import (
+    ResellerSessionRefreshQuery,
+    ResellerSessionStandingQuery,
+    resolve_reseller_session_refresh,
+    resolve_reseller_session_standing,
 )
 from app.services.session_store import (
     delete_session,
@@ -151,6 +159,60 @@ def _subscriber_label(subscriber: Subscriber | None) -> str:
     return display or display_name or "Customer"
 
 
+class ResellerAccountListStatusFilter(StrEnum):
+    overdue = "overdue"
+    new = SubscriberStatus.new.value
+    active = SubscriberStatus.active.value
+    blocked = SubscriberStatus.blocked.value
+    suspended = SubscriberStatus.suspended.value
+    paused = SubscriberStatus.paused.value
+    disabled = SubscriberStatus.disabled.value
+    canceled = SubscriberStatus.canceled.value
+    delinquent = SubscriberStatus.delinquent.value
+
+
+class ResellerAccountListOrder(StrEnum):
+    created_at = "created_at"
+    balance = "balance"
+    overdue = "overdue"
+    name = "name"
+
+
+class ResellerAccountListDirection(StrEnum):
+    ascending = "asc"
+    descending = "desc"
+
+
+@dataclass(frozen=True, slots=True)
+class ResellerAccountListQuery:
+    reseller_id: UUID
+    limit: int
+    offset: int
+    search: str | None = None
+    status_filter: ResellerAccountListStatusFilter | None = None
+    order_by: ResellerAccountListOrder = ResellerAccountListOrder.created_at
+    order_dir: ResellerAccountListDirection = ResellerAccountListDirection.descending
+
+
+@dataclass(frozen=True, slots=True)
+class ResellerAccountListItem:
+    id: UUID
+    account_number: str | None
+    subscriber_name: str
+    status: SubscriberStatus
+    status_presentation: StatusPresentation
+    is_read_only: bool
+    open_balance: Decimal
+    open_invoices: int
+    last_payment_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResellerAccountListResult:
+    items: tuple[ResellerAccountListItem, ...]
+    total: int
+
+
 def _customer_accounts_query(db: Session, reseller_id: str):
     reseller_uuid = coerce_uuid(reseller_id)
     # Lazy import avoids any import cycle with the subscriber service.
@@ -165,11 +227,49 @@ def _customer_accounts_query(db: Session, reseller_id: str):
                 Subscriber.user_type != UserType.reseller,
             )
         )
-        # Exclude soft-deleted (canceled) accounts so they don't leak into the
-        # accounts list, counts, drill-down, and the alert/revenue metrics that
-        # build on this query.
+        # Keep strict consumers on the non-canceled cohort: detail, actions,
+        # impersonation, billing drill-down, and alert/revenue metrics. The
+        # account list has a separate, exact-filter-only canceled projection.
         .filter(not_soft_deleted_subscriber_clause())
     )
+
+
+def _reseller_account_list_scope_query(
+    db: Session,
+    reseller_id: str,
+    status_filter: ResellerAccountListStatusFilter | None,
+):
+    """Return the exact reseller-owned cohort admitted to the accounts list.
+
+    Canceled accounts are retained records and are visible only through the
+    explicit canceled filter. Legacy Splynx rows carrying deletion evidence
+    remain excluded. Other reseller reads continue to use
+    ``_customer_accounts_query`` and therefore cannot drill into, impersonate,
+    bill, or act on canceled accounts.
+    """
+    reseller_uuid = coerce_uuid(reseller_id)
+    query = (
+        db.query(Subscriber)
+        .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(
+            or_(
+                Subscriber.user_type.is_(None),
+                Subscriber.user_type != UserType.reseller,
+            )
+        )
+    )
+    if status_filter == ResellerAccountListStatusFilter.canceled:
+        from app.services.customer_account_visibility import (
+            splynx_deleted_import_clause,
+        )
+
+        return query.filter(Subscriber.status == SubscriberStatus.canceled).filter(
+            not_(splynx_deleted_import_clause())
+        )
+
+    from app.services.subscriber import not_soft_deleted_subscriber_clause
+
+    return query.filter(not_soft_deleted_subscriber_clause())
 
 
 def _get_customer_account(
@@ -409,8 +509,14 @@ def _get_session(session_token: str) -> dict | None:
     session = load_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
     if not session:
         return None
-    expires_at = datetime.fromisoformat(session["expires_at"])
-    if _now() > expires_at:
+    try:
+        expires_at = datetime.fromisoformat(session["expires_at"])
+        if expires_at.tzinfo is None:
+            raise ValueError("Unbound session clock")
+    except (KeyError, ValueError, TypeError):
+        invalidate_session(session_token)
+        return None
+    if _now() >= expires_at:
         invalidate_session(session_token)
         return None
     if _reseller_session_revoked(session):
@@ -439,7 +545,9 @@ def _reseller_session_revoked(session: dict) -> bool:
     try:
         created = datetime.fromisoformat(str(created_raw))
         epoch_at = datetime.fromisoformat(epoch)
-    except ValueError:
+        if created.tzinfo is None or epoch_at.tzinfo is None:
+            return True
+    except (ValueError, TypeError):
         return True
     return created <= epoch_at
 
@@ -576,7 +684,14 @@ def invalidate_session(session_token: str, db: Session | None = None) -> None:
 def login(
     db: Session, username: str, password: str, request: Request, remember: bool
 ) -> dict:
-    result = auth_flow_service.auth_flow.login(db, username, password, request, None)
+    result = auth_flow_service.auth_flow.login(
+        db=db,
+        username=username,
+        password=password,
+        request=request,
+        provider=None,
+        denial_surface=pa.DenialSurface.RESELLER,
+    )
     if result.get("mfa_required"):
         return {"mfa_required": True, "mfa_token": result.get("mfa_token")}
     access_token = result.get("access_token")
@@ -584,19 +699,27 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
         )
-    return _session_from_access_token(db, access_token, username, remember)
+    return _session_from_access_token(
+        db, access_token, username, remember, request=request
+    )
 
 
 def verify_mfa(
     db: Session, mfa_token: str, code: str, request: Request, remember: bool
 ) -> dict:
-    result = auth_flow_service.auth_flow.mfa_verify(db, mfa_token, code, request)
+    result = auth_flow_service.auth_flow.mfa_verify(
+        db=db,
+        mfa_token=mfa_token,
+        code=code,
+        request=request,
+        denial_surface=pa.DenialSurface.RESELLER,
+    )
     access_token = result.get("access_token")
     if not access_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code"
         )
-    return _session_from_access_token(db, access_token, None, remember)
+    return _session_from_access_token(db, access_token, None, remember, request=request)
 
 
 def _session_from_access_token(
@@ -604,6 +727,8 @@ def _session_from_access_token(
     access_token: str,
     username: str | None,
     remember: bool,
+    *,
+    request: Request | None = None,
 ) -> dict:
     payload = auth_flow_service.decode_access_token(db, access_token)
     principal_id = payload.get("sub")
@@ -615,7 +740,35 @@ def _session_from_access_token(
         )
 
     auth_session = db.get(AuthSession, coerce_uuid(session_id))
+    resolved_principal_id = (
+        (
+            auth_session.reseller_user_id
+            or auth_session.subscriber_id
+            or auth_session.system_user_id
+        )
+        if auth_session
+        else None
+    )
+    denial_target = (
+        pa.DenialTarget(pa.DenialTargetKind.PRINCIPAL, resolved_principal_id)
+        if resolved_principal_id
+        else None
+    )
+
+    def record_admission_denial(status_code: Literal[401, 403, 404] = 403) -> None:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.SESSION_ADMISSION,
+                surface=pa.DenialSurface.RESELLER,
+                phase=pa.DenialPhase.SESSION_ADMISSION,
+                target=denial_target,
+                status_code=status_code,
+                request=request,
+            )
+        )
+
     if not auth_session or auth_session.status != SessionStatus.active:
+        record_admission_denial(401)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
         )
@@ -629,6 +782,7 @@ def _session_from_access_token(
         if now.tzinfo is None:
             now = now.replace(tzinfo=UTC)
         if session_expires <= now:
+            record_admission_denial(401)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
             )
@@ -642,6 +796,7 @@ def _session_from_access_token(
             or not reseller_user.is_active
             or not reseller_user.reseller_id
         ):
+            record_admission_denial()
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required"
             )
@@ -669,12 +824,14 @@ def _session_from_access_token(
 
     reseller_user = _get_reseller_user(db, str(principal_id))
     if not reseller_user:
+        record_admission_denial()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required"
         )
 
     subscriber = db.get(Subscriber, reseller_user.subscriber_id)
     if not subscriber:
+        record_admission_denial(404)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found"
         )
@@ -701,11 +858,67 @@ def _session_from_access_token(
     }
 
 
+def _ordinary_standing_query(session: dict) -> ResellerSessionStandingQuery | None:
+    """Convert serialized identifiers; ordinary cookies have no guessed identity."""
+    principal_type = session.get("principal_type")
+    if principal_type not in ("subscriber", "reseller_user"):
+        return None
+    try:
+        return ResellerSessionStandingQuery(
+            auth_session_id=UUID(str(session["auth_session_id"])),
+            principal_type=principal_type,
+            principal_id=UUID(str(session["principal_id"])),
+            reseller_id=UUID(str(session["reseller_id"])),
+            subscriber_id=(
+                UUID(str(session["subscriber_id"]))
+                if session.get("subscriber_id") is not None
+                else None
+            ),
+            reseller_user_id=(
+                UUID(str(session["reseller_user_id"]))
+                if session.get("reseller_user_id") is not None
+                else None
+            ),
+        )
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return None
+
+
 def get_context(db: Session, session_token: str | None) -> dict | None:
+    # The compatibility facade maps storage failures consistently for every
+    # protected reseller HTTP consumer; the read owner remains transport-neutral.
+    try:
+        return _resolve_context(db, session_token)
+    except (SQLAlchemyError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Session service unavailable"
+        ) from exc
+
+
+def _resolve_context(db: Session, session_token: str | None) -> dict | None:
     session = _get_session(session_token or "")
     if not session:
         return None
 
+    # Legacy administrator impersonation has a separate actor/binding residual.
+    # Only the exact explicit flag selects it; ordinary transport values cannot.
+    if session.get("is_impersonation") is not True:
+        query = _ordinary_standing_query(session)
+        if query is None or resolve_reseller_session_standing(db, query=query) is None:
+            invalidate_session(session_token or "")
+            return None
+        with db.no_autoflush:
+            context = _hydrate_reseller_context(db, session, ordinary=True)
+        if context is not None:
+            context["principal_type"] = query.principal_type
+            context["principal_id"] = str(query.principal_id)
+        return context
+    return _hydrate_reseller_context(db, session)
+
+
+def _hydrate_reseller_context(
+    db: Session, session: dict, *, ordinary: bool = False
+) -> dict | None:
     reseller = db.get(Reseller, coerce_uuid(session["reseller_id"]))
     if not reseller:
         return None
@@ -735,7 +948,7 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
             # which is None for a first-class reseller_user principal.
             "principal_type": "reseller_user",
             "principal_id": str(reseller_user.id),
-            "is_impersonation": bool(session.get("is_impersonation")),
+            "is_impersonation": session.get("is_impersonation") is True,
             "return_to": session.get("return_to"),
         }
 
@@ -743,7 +956,15 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
     if not subscriber:
         return None
 
-    reseller_user = _get_reseller_user(db, str(subscriber.id))
+    reseller_user = (
+        db.query(ResellerUser)
+        .filter(ResellerUser.subscriber_id == coerce_uuid(session["principal_id"]))
+        .filter(ResellerUser.is_active.is_(True))
+        .order_by(ResellerUser.created_at.desc())
+        .first()
+        if ordinary
+        else _get_reseller_user(db, str(subscriber.id))
+    )
     if not reseller_user:
         return None
 
@@ -763,7 +984,7 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
         "reseller_user": reseller_user,
         "principal_type": "subscriber",
         "principal_id": str(subscriber.id),
-        "is_impersonation": bool(session.get("is_impersonation")),
+        "is_impersonation": session.get("is_impersonation") is True,
         "return_to": session.get("return_to"),
     }
 
@@ -777,6 +998,47 @@ def refresh_session(
     if not session:
         return None
     now = _now()
+    if session.get("is_impersonation") is not True:
+        standing_query = _ordinary_standing_query(session)
+        try:
+            created = datetime.fromisoformat(str(session["created_at"]))
+            if created.tzinfo is None:
+                raise ValueError("Unbound session clock")
+        except (KeyError, ValueError, TypeError):
+            created = None
+        if db is None or standing_query is None or created is None:
+            invalidate_session(session_token)
+            return None
+        # Settings reads also must not flush unrelated pending caller writes.
+        with db.no_autoflush:
+            outcome = resolve_reseller_session_refresh(
+                db,
+                query=ResellerSessionRefreshQuery(
+                    standing=standing_query,
+                    now=now,
+                    created_at=created,
+                    sliding_ttl_seconds=_session_ttl_seconds(
+                        session.get("remember", False), db
+                    ),
+                    absolute_ttl_seconds=_absolute_ttl_seconds(db),
+                ),
+            )
+        if outcome is None:
+            invalidate_session(session_token)
+            return None
+        session["expires_at"] = outcome.expires_at.isoformat()
+        store_session(
+            _RESELLER_SESSION_PREFIX,
+            session_token,
+            session,
+            outcome.ttl_seconds,
+            _RESELLER_SESSIONS,
+            principal_id=str(standing_query.principal_id),
+            fallback_index=_RESELLER_SESSION_INDEX,
+        )
+        return session
+
+    # Existing explicit legacy impersonation refresh is outside this slice.
     ttl_seconds = _session_ttl_seconds(session.get("remember", False), db)
     new_expires_at = now + timedelta(seconds=ttl_seconds)
     # Sliding refresh is capped at an absolute lifetime from creation so a
@@ -895,10 +1157,14 @@ def get_remember_max_age(db: Session | None = None) -> int:
 
 
 ACCOUNT_ORDER_FIELDS = ("created_at", "balance", "overdue", "name")
-ACCOUNT_STATUS_FILTERS = ("overdue",) + tuple(
-    status.value for status in SubscriberStatus
+ACCOUNT_STATUS_FILTERS = tuple(
+    status.value for status in ResellerAccountListStatusFilter
 )
-ACCOUNT_LIST_STATUS_OPTIONS = tuple(status.value for status in SubscriberStatus)
+ACCOUNT_LIST_STATUS_OPTIONS = tuple(
+    status.value
+    for status in ResellerAccountListStatusFilter
+    if status is not ResellerAccountListStatusFilter.overdue
+)
 _RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX = "reseller_account_status"
 
 
@@ -1243,17 +1509,17 @@ def _filtered_accounts_query(
     db: Session,
     reseller_id: str,
     search: str | None,
-    status_filter: str | None,
+    status_filter: ResellerAccountListStatusFilter | None,
     invoice_sq,
 ):
-    query = _customer_accounts_query(db, reseller_id).outerjoin(
-        invoice_sq, invoice_sq.c.aid == Subscriber.id
-    )
+    query = _reseller_account_list_scope_query(
+        db, reseller_id, status_filter
+    ).outerjoin(invoice_sq, invoice_sq.c.aid == Subscriber.id)
     query = _apply_account_search(query, search)
-    if status_filter == "overdue":
+    if status_filter == ResellerAccountListStatusFilter.overdue:
         query = query.filter(func.coalesce(invoice_sq.c.overdue_invoices, 0) > 0)
-    elif status_filter in ACCOUNT_LIST_STATUS_OPTIONS:
-        query = query.filter(Subscriber.status == SubscriberStatus(status_filter))
+    elif status_filter is not None:
+        query = query.filter(Subscriber.status == SubscriberStatus(status_filter.value))
     else:
         query = query.filter(
             or_(
@@ -1264,29 +1530,29 @@ def _filtered_accounts_query(
     return query
 
 
-def list_accounts(
+def _list_account_items(
     db: Session,
     reseller_id: str,
     limit: int,
     offset: int,
     search: str | None = None,
-    status_filter: str | None = None,
-    order_by: str = "created_at",
-    order_dir: str = "desc",
-) -> list[dict]:
+    status_filter: ResellerAccountListStatusFilter | None = None,
+    order_by: ResellerAccountListOrder = ResellerAccountListOrder.created_at,
+    order_dir: ResellerAccountListDirection = ResellerAccountListDirection.descending,
+) -> tuple[ResellerAccountListItem, ...]:
     invoice_sq = _open_invoice_subquery(db)
     query = _filtered_accounts_query(db, reseller_id, search, status_filter, invoice_sq)
 
-    descending = order_dir != "asc"
-    if order_by == "balance":
+    descending = order_dir is not ResellerAccountListDirection.ascending
+    if order_by is ResellerAccountListOrder.balance:
         sort_col = func.coalesce(invoice_sq.c.open_balance, 0)
-    elif order_by == "overdue":
+    elif order_by is ResellerAccountListOrder.overdue:
         sort_col = func.coalesce(invoice_sq.c.overdue_invoices, 0)
-    elif order_by == "name":
+    elif order_by is ResellerAccountListOrder.name:
         sort_col = func.lower(
             func.coalesce(Subscriber.display_name, Subscriber.first_name)
         )
-        descending = order_dir == "desc"
+        descending = order_dir is ResellerAccountListDirection.descending
     else:
         sort_col = Subscriber.created_at
     query = query.order_by(
@@ -1297,7 +1563,7 @@ def list_accounts(
     accounts = query.limit(limit).offset(offset).all()
     account_ids = [account.id for account in accounts]
     if not account_ids:
-        return []
+        return ()
 
     open_statuses = {
         InvoiceStatus.issued,
@@ -1333,24 +1599,66 @@ def list_accounts(
     )
     last_payments = {str(row.account_id): row.last_paid_at for row in payment_rows}
 
-    results = []
+    results: list[ResellerAccountListItem] = []
     for account in accounts:
         summary = invoice_summary.get(str(account.id), {})
         results.append(
-            {
-                "id": str(account.id),
-                "account_number": account.account_number,
-                "subscriber_name": _subscriber_label(account),
-                "status": account.status.value if account.status else "active",
-                "status_presentation": account_status_presentation(
-                    account.status
-                ).model_dump(mode="json"),
-                "open_balance": summary.get("balance", 0),
-                "open_invoices": summary.get("count", 0),
-                "last_payment_at": last_payments.get(str(account.id)),
-            }
+            ResellerAccountListItem(
+                id=account.id,
+                account_number=account.account_number,
+                subscriber_name=_subscriber_label(account),
+                status=account.status or SubscriberStatus.active,
+                status_presentation=account_status_presentation(account.status),
+                is_read_only=account.status == SubscriberStatus.canceled,
+                open_balance=Decimal(str(summary.get("balance", 0))),
+                open_invoices=int(summary.get("count", 0)),
+                last_payment_at=last_payments.get(str(account.id)),
+            )
         )
-    return results
+    return tuple(results)
+
+
+def _account_list_item_payload(item: ResellerAccountListItem) -> dict[str, object]:
+    """Serialize a typed row for compatibility with legacy internal callers."""
+    return {
+        "id": str(item.id),
+        "account_number": item.account_number,
+        "subscriber_name": item.subscriber_name,
+        "status": item.status.value,
+        "status_presentation": item.status_presentation.model_dump(mode="json"),
+        "is_read_only": item.is_read_only,
+        "open_balance": item.open_balance,
+        "open_invoices": item.open_invoices,
+        "last_payment_at": item.last_payment_at,
+    }
+
+
+def list_accounts(
+    db: Session,
+    reseller_id: str,
+    limit: int,
+    offset: int,
+    search: str | None = None,
+    status_filter: ResellerAccountListStatusFilter | None = None,
+    order_by: str = "created_at",
+    order_dir: str = "desc",
+) -> list[dict[str, object]]:
+    """Compatibility wrapper for unchanged internal reseller projections."""
+    typed_order = ResellerAccountListOrder(order_by)
+    typed_direction = ResellerAccountListDirection(order_dir)
+    return [
+        _account_list_item_payload(item)
+        for item in _list_account_items(
+            db,
+            reseller_id,
+            limit,
+            offset,
+            search,
+            status_filter,
+            typed_order,
+            typed_direction,
+        )
+    ]
 
 
 def _subscription_label(subscription: Subscription | None) -> str:
@@ -1518,11 +1826,36 @@ def count_accounts(
     db: Session,
     reseller_id: str,
     search: str | None = None,
-    status_filter: str | None = None,
+    status_filter: ResellerAccountListStatusFilter | None = None,
 ) -> int:
     invoice_sq = _open_invoice_subquery(db)
     query = _filtered_accounts_query(db, reseller_id, search, status_filter, invoice_sq)
     return query.with_entities(func.count(Subscriber.id)).scalar() or 0
+
+
+def query_reseller_account_list(
+    db: Session,
+    query: ResellerAccountListQuery,
+) -> ResellerAccountListResult:
+    """Resolve one typed reseller-scoped account-list page and matching count."""
+    reseller_id = str(query.reseller_id)
+    items = _list_account_items(
+        db,
+        reseller_id,
+        query.limit,
+        query.offset,
+        query.search,
+        query.status_filter,
+        query.order_by,
+        query.order_dir,
+    )
+    total = count_accounts(
+        db,
+        reseller_id,
+        query.search,
+        query.status_filter,
+    )
+    return ResellerAccountListResult(items=items, total=total)
 
 
 def get_dashboard_summary(
@@ -2381,6 +2714,8 @@ def create_customer_impersonation_session(
     reseller_id: str,
     account_id: str,
     return_to: str,
+    *,
+    request: Request | None = None,
 ) -> str:
     account = _get_customer_account(db, reseller_id, account_id)
     if not account:
@@ -2421,6 +2756,8 @@ def create_customer_impersonation_session(
         subscriber_id=account.id,
         subscription_id=selected_subscription_id,
         is_impersonation=True,
+        db=db,
+        request=request,
         # Reseller "view as customer" uses the same customer portal capabilities
         # as the customer. The impersonation marker remains for attribution and
         # the Exit View banner.

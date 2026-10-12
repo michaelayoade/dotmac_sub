@@ -2,18 +2,24 @@
 
 import logging
 import re
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.csrf import renew_csrf_cookie
 from app.models.auth import AuthProvider, UserCredential
 from app.models.subscriber import ResellerUser, Subscriber
+from app.services import (
+    anonymous_recovery_adapter,
+    credential_recovery,
+    reseller_portal,
+)
 from app.services import auth_flow as auth_flow_service
-from app.services import credential_recovery, reseller_portal
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.web.reseller.branding import get_reseller_templates
@@ -70,6 +76,8 @@ def reseller_login_page(request: Request, error: str | None = None):
         )
         if context:
             return RedirectResponse(url="/reseller/dashboard", status_code=303)
+    except (SQLAlchemyError, RuntimeError):
+        return Response(status_code=503)
     finally:
         db.close()
 
@@ -188,21 +196,15 @@ def reseller_forgot_password_page(request: Request, success: bool = False):
 
 
 def reseller_forgot_password_submit(request: Request, db: Session, email: str):
-    try:
-        credential_recovery.request_password_recovery(
-            db,
-            credential_recovery.RequestPasswordRecoveryCommand(
-                context=_credential_recovery_context(
-                    "Reseller portal password recovery request"
-                ),
-                email=email,
-                next_login_path=_RESELLER_RESET_LOGIN_PATH,
+    anonymous_recovery_adapter.request_password_recovery(
+        command=credential_recovery.RequestPasswordRecoveryCommand(
+            context=_credential_recovery_context(
+                "Reseller portal password recovery request"
             ),
-        )
-    except Exception:
-        logger.info(
-            "Reseller password reset request failed for %s", email, exc_info=True
-        )
+            email=email,
+            next_login_path=_RESELLER_RESET_LOGIN_PATH,
+        ),
+    )
     return templates.TemplateResponse(
         "reseller/auth/forgot-password.html",
         {"request": request, "success": True},
@@ -333,6 +335,21 @@ def reseller_refresh(request: Request):
             if session.get("remember")
             else reseller_portal.get_session_max_age(db)
         )
+        if session.get("is_impersonation") is not True:
+            max_age = min(
+                max_age,
+                max(
+                    1,
+                    int(
+                        (
+                            datetime.fromisoformat(session["expires_at"])
+                            - datetime.now(UTC)
+                        ).total_seconds()
+                    ),
+                ),
+            )
+    except (SQLAlchemyError, RuntimeError):
+        return Response(status_code=503)
     finally:
         db.close()
 

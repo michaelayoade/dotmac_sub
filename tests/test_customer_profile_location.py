@@ -7,9 +7,15 @@ from pathlib import Path
 import pytest
 
 from app.services import customer_profile_location
-from app.services.web_customer_actions import (
+from app.services.audit_adapter import AuditActor
+from app.services.customer_portal_profile_commands import (
+    CustomerPortalProfileCommandError,
     UpdateCustomerProfileCommand,
     update_customer_profile,
+)
+from tests.customer_profile_owner_support import (
+    profile_command_context,
+    profile_owner_session,
 )
 
 
@@ -49,35 +55,12 @@ def test_profile_update_canonicalizes_fct_and_abuja_municipal_alias(
         lambda *_args, **_kwargs: None,
     )
 
-    outcome = update_customer_profile(
-        db_session,
-        command=UpdateCustomerProfileCommand(
-            subscriber_id=subscriber.id,
-            first_name=subscriber.first_name,
-            last_name=subscriber.last_name,
-            email=subscriber.email,
-            billing_notifications=True,
-            sms_updates=True,
-            country_code="NG",
-            region="Federal Capital Territory (FCT) - Abuja",
-            lga="Abuja Municipal Area Council",
-        ),
-    )
-
-    assert outcome is not None
-    assert outcome.subscriber.country_code == "NG"
-    assert outcome.subscriber.region == "FEDERAL CAPITAL TERRITORY"
-    assert outcome.subscriber.lga == "Municipal Area Council"
-
-
-def test_profile_update_rejects_lga_from_another_state(db_session, subscriber) -> None:
-    with pytest.raises(
-        ValueError,
-        match="is not a Local Government Area",
-    ):
-        update_customer_profile(
-            db_session,
+    with profile_owner_session(db_session) as owner_db:
+        outcome = update_customer_profile(
+            owner_db,
             command=UpdateCustomerProfileCommand(
+                context=profile_command_context(actor_id=subscriber.id),
+                actor=AuditActor.user(str(subscriber.id)),
                 subscriber_id=subscriber.id,
                 first_name=subscriber.first_name,
                 last_name=subscriber.last_name,
@@ -85,10 +68,41 @@ def test_profile_update_rejects_lga_from_another_state(db_session, subscriber) -
                 billing_notifications=True,
                 sms_updates=True,
                 country_code="NG",
-                region="Lagos",
+                region="Federal Capital Territory (FCT) - Abuja",
                 lga="Abuja Municipal Area Council",
             ),
         )
+    db_session.refresh(subscriber)
+
+    assert outcome is not None
+    assert subscriber.country_code == "NG"
+    assert subscriber.region == "FEDERAL CAPITAL TERRITORY"
+    assert subscriber.lga == "Municipal Area Council"
+
+
+def test_profile_update_rejects_lga_from_another_state(db_session, subscriber) -> None:
+    with pytest.raises(
+        CustomerPortalProfileCommandError,
+        match="is not a Local Government Area",
+    ):
+        with profile_owner_session(db_session) as owner_db:
+            update_customer_profile(
+                owner_db,
+                command=UpdateCustomerProfileCommand(
+                    context=profile_command_context(actor_id=subscriber.id),
+                    actor=AuditActor.user(str(subscriber.id)),
+                    subscriber_id=subscriber.id,
+                    first_name=subscriber.first_name,
+                    last_name=subscriber.last_name,
+                    email=subscriber.email,
+                    billing_notifications=True,
+                    sms_updates=True,
+                    country_code="NG",
+                    region="Lagos",
+                    lga="Abuja Municipal Area Council",
+                ),
+            )
+        db_session.refresh(subscriber)
 
 
 @pytest.mark.parametrize(
@@ -107,21 +121,25 @@ def test_profile_update_rejects_invalid_location_combinations(
     lga: str,
     message: str,
 ) -> None:
-    with pytest.raises(ValueError, match=message):
-        update_customer_profile(
-            db_session,
-            command=UpdateCustomerProfileCommand(
-                subscriber_id=subscriber.id,
-                first_name=subscriber.first_name,
-                last_name=subscriber.last_name,
-                email=subscriber.email,
-                billing_notifications=True,
-                sms_updates=True,
-                country_code=country_code,
-                region=region,
-                lga=lga,
-            ),
-        )
+    with pytest.raises(CustomerPortalProfileCommandError, match=message):
+        with profile_owner_session(db_session) as owner_db:
+            update_customer_profile(
+                owner_db,
+                command=UpdateCustomerProfileCommand(
+                    context=profile_command_context(actor_id=subscriber.id),
+                    actor=AuditActor.user(str(subscriber.id)),
+                    subscriber_id=subscriber.id,
+                    first_name=subscriber.first_name,
+                    last_name=subscriber.last_name,
+                    email=subscriber.email,
+                    billing_notifications=True,
+                    sms_updates=True,
+                    country_code=country_code,
+                    region=region,
+                    lga=lga,
+                ),
+            )
+        db_session.refresh(subscriber)
 
 
 def test_profile_contact_address_uses_dependent_typeahead_controls() -> None:

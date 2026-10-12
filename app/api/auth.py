@@ -20,7 +20,11 @@ from app.schemas.auth import (
 from app.schemas.common import ListResponse
 from app.services import auth as auth_service
 from app.services import credential_administration as credential_admin
-from app.services.auth_dependencies import require_permission, require_role
+from app.services.auth_dependencies import (
+    require_permission,
+    require_role,
+    require_user_auth,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 
@@ -319,8 +323,39 @@ def list_sessions(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["sessions"],
 )
-def delete_session(session_id: str, db: Session = Depends(get_db)):
-    auth_service.sessions.delete(db, session_id)
+def delete_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_user_auth),
+):
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+
+    from app.services.audit_adapter import AuditActor
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.session_manager import SessionRevocationError
+
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            auth_service.sessions.delete(command_db, session_id=session_id, actor=actor)
+        except SessionRevocationError as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
+        except OperationalError as exc:
+            if (
+                getattr(exc.orig, "sqlstate", None) == "55P03"
+                or getattr(exc.orig, "pgcode", None) == "55P03"
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Session revocation busy",
+                    headers={"Retry-After": "5"},
+                ) from exc
+            raise
 
 
 @router.post(

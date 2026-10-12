@@ -178,3 +178,17 @@ def invalidate_principal_strict(principal_type: str, principal_id: str) -> int:
 
 def invalidate_all_auth_cache() -> int:
     return app_cache.scan_delete(app_cache.cache_key(_AUTH_NAMESPACE))
+
+
+def invalidate_session_context_strict(
+    session_id: str, *, principal_type: str, principal_id: str
+) -> None:
+    """Delete exactly one committed revoked session; propagate outage for retry."""
+    client = app_cache.get_cache_redis()
+    if client is None:
+        raise RuntimeError("Durable auth cache is unavailable")
+    try:
+        client.delete(_session_key(session_id))
+        client.srem(_principal_sessions_key(principal_type, principal_id), session_id)
+    except RedisError as exc:
+        raise RuntimeError("Durable session cache invalidation failed") from exc
