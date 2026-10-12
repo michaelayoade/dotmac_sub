@@ -409,7 +409,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 63
+    assert len(guides) == 64
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id

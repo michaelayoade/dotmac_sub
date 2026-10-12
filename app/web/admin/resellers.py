@@ -20,6 +20,7 @@ from app.services import (
 )
 from app.services import web_admin_resellers as reseller_svc
 from app.services.auth_dependencies import require_permission
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.web_system_common import humanize_integrity_error
 from app.web.request_parsing import parse_form_data
@@ -732,7 +733,11 @@ def reseller_user_disable_mfa(
             reseller_id=reseller_id,
             page=page,
             per_page=per_page,
-            error=_error_message(exc, "Unable to remove reseller user MFA."),
+            error=(
+                exc.message
+                if isinstance(exc, DomainError)
+                else "Unable to remove reseller user MFA."
+            ),
         )
     notice = (
         "MFA removed, sessions revoked and the user notified."
