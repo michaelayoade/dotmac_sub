@@ -1,6 +1,8 @@
 # Website and social-DM campaign readiness
 
-Campaign destinations are the website coverage form and Instagram/Facebook DMs.
+Campaign destinations are the website's WhatsApp-first Sales entry and
+Instagram/Facebook DMs. The website coverage form was replaced on 2026-10-12
+with Michael's explicit publication authorization.
 The primary conversion is a committed Selfcare Lead, not a click, message,
 coverage result, account creation or activated subscription.
 
@@ -32,7 +34,9 @@ supervisor; escalate integration failures to the integration operator.
 
 Count distinct saved Lead IDs created in a declared UTC reporting window, using
 immutable LeadOriginCapture evidence. Separate website `fiber-coverage-v1`,
-Instagram DM and Facebook Messenger cohorts. Preserve unknown-source counts
+Instagram DM and Facebook Messenger cohorts. Current website-entry messages
+arrive in the WhatsApp cohort. A public website name in a prepared message is
+customer-submitted context, not authenticated campaign attribution. Preserve unknown-source counts
 rather than guessing channel from mutable display labels. DM origin interaction
 keys include `inbox-message:` or `lead-intake:` prefixes; these are not bare UUIDs.
 
@@ -55,9 +59,11 @@ authoritative even when external conversion delivery is delayed or unavailable.
 
 ## Outstanding launch gates
 
-- [ ] Deferred signing secret, secure WordPress exchange, settings and existing
-  binding activation verified by the authorized operator.
-- [ ] Website durable retry/recovery acceptance in `website/fiber/README.md`.
+- [ ] Website WhatsApp destination matched to the enabled Selfcare account.
+- [ ] Synthetic sent-message, Inbox arrival, Sales routing, Lead linkage and
+  delivered-reply acceptance completed. Merely opening WhatsApp is insufficient.
+- [ ] If a signed form is restored in a future change, its deferred signing
+  secret, binding and durable recovery acceptance remain required.
 - [ ] Capture safeguard PR deployed after full GitHub CI and staging acceptance.
 - [ ] Instagram/Facebook coverage-request routes configured to Sales after the
   corrected selector is deployed; existing new-connection routes verified.
