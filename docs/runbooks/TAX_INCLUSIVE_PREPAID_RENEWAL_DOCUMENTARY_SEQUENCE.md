@@ -1,5 +1,12 @@
 # Tax-inclusive prepaid renewal documentary sequence
 
+> **Policy (2026-10-12): billing repair writes are disabled.** `--apply` on
+> this command is refused (non-zero exit, nothing is written). The dry-run
+> preview still works. Record the case in the Knowledge debt register
+> (`dotmac-debt-register`) under the billing exceptions review for Michael;
+> do not script a fix. This holds pending the ADR 0007 obligation-identity
+> migration. Any `--apply` steps below are retained for history only.
+
 This is a dry-run-first, entity-scoped procedure. Never substitute a staging or
 production connection during development validation. Put approved identifiers,
 amounts, fingerprints, actor UUIDs, and ticket references only in the operator's
@@ -10,7 +17,7 @@ untracked command record.
 Preview:
 
 ```bash
-poetry run python scripts/billing/correct_tax_inclusive_renewal_document.py \
+poetry run python -m scripts.billing.correct_tax_inclusive_renewal_document \
   --account-id <uuid> --subscription-id <uuid> \
   --adjustment-id <uuid> --entitlement-id <uuid> --payment-id <uuid> \
   --expected-invoice-total <decimal> --expected-remaining-credit <decimal>
@@ -19,7 +26,7 @@ poetry run python scripts/billing/correct_tax_inclusive_renewal_document.py \
 Apply only an actionable, independently reviewed fingerprint:
 
 ```bash
-poetry run python scripts/billing/correct_tax_inclusive_renewal_document.py \
+poetry run python -m scripts.billing.correct_tax_inclusive_renewal_document \
   --account-id <uuid> --subscription-id <uuid> \
   --adjustment-id <uuid> --entitlement-id <uuid> --payment-id <uuid> \
   --expected-invoice-total <decimal> --expected-remaining-credit <decimal> \
