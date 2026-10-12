@@ -909,6 +909,10 @@ from app.models.referral_native import (  # noqa: F401
     ReferralRewardStatus,
     ReferralStatus,
 )
+from app.models.router_health import (  # noqa: F401
+    NasCoaOutcomeBucket,
+    RouterHealthSignal,
+)
 from app.models.router_management import (  # noqa: F401
     JumpHost,
     Router,

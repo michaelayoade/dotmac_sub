@@ -177,6 +177,12 @@ from app.tasks.radius_health import run_radius_health_check
 from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
 from app.tasks.referrals import reconcile_referral_mirror
 from app.tasks.reports import send_scheduled_ncc_report
+from app.tasks.router_health import (
+    reconcile_router_posture,
+    reconcile_service_path,
+    reprobe_coa_canary,
+    run_coa_canary,
+)
 from app.tasks.router_sync import (
     audit_sot_drift,
     capture_scheduled_snapshots,
@@ -410,6 +416,10 @@ __all__ = [
     # Router config sync/snapshot (keystone) — previously unregistered, so the
     # scheduled capture never ran. Importing here registers them with the worker.
     "capture_scheduled_snapshots",
+    "reconcile_router_posture",
+    "reconcile_service_path",
+    "reprobe_coa_canary",
+    "run_coa_canary",
     "audit_sot_drift",
     "cleanup_idle_tunnels",
     "execute_config_push",

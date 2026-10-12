@@ -165,7 +165,8 @@ the record survives the caller's rollback. It never joins or reads back the
 caller's transaction, emits no domain event, and never raises into the caller
 except to propagate a task time limit. Every use needs its own approving ADR,
 registered in `tests/architecture/test_out_of_band_evidence_ratchet.py`; the
-first is ADR 0017 (`access.enforcement_evidence`).
+first is ADR 0017 (`access.enforcement_evidence`); the second is ADR 0018
+(`network.coa_outcome_evidence`).
 
 ## 4. Concurrency and idempotency
 

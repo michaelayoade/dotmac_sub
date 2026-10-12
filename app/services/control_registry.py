@@ -318,6 +318,28 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         ),
     ),
     Control(
+        key="network.router_health_posture",
+        layer=Layer.feature,
+        owner_module="network",
+        default=False,
+        on_missing=False,
+        description=(
+            "Router health reconciler: snapshot posture, snapshot staleness and "
+            "CoA service-path findings (database-only evaluation)."
+        ),
+    ),
+    Control(
+        key="network.router_health_coa_canary",
+        layer=Layer.feature,
+        owner_module="network",
+        default=False,
+        on_missing=False,
+        description=(
+            "Router health reconciler: daily no-op CoA canary. Sends a "
+            "Disconnect-Request for a non-existent user to production NAS."
+        ),
+    ),
+    Control(
         key="network.tr069_sync",
         layer=Layer.feature,
         owner_module="network",
