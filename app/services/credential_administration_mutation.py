@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from app.models.auth import (
     AuthProvider,
@@ -209,6 +209,7 @@ def deactivate(
 class FactorDisableResult:
     methods_disabled: int
     recovery_codes_deactivated: int
+    factors_cleaned: int = 0
 
     @property
     def changed(self) -> bool:
@@ -216,7 +217,10 @@ class FactorDisableResult:
 
 
 def disable_locked_principal_factors(
-    db: Session, *, principal_column: object, principal_id: object
+    db: Session,
+    *,
+    principal_column: InstrumentedAttribute[UUID | None],
+    principal_id: UUID,
 ) -> FactorDisableResult:
     """Disable every live factor of a principal the caller has already locked.
 
@@ -228,13 +232,17 @@ def disable_locked_principal_factors(
     methods = list(
         db.scalars(
             select(MFAMethod)
-            .where(principal_column == principal_id)  # type: ignore[arg-type]
+            .where(principal_column == principal_id)
             .order_by(MFAMethod.id)
             .with_for_update()
             .execution_options(populate_existing=True)
         )
     )
     live = [m for m in methods if m.is_active or m.enabled or m.is_primary]
+    cleaned = sum(
+        bool(m.secret is not None or m.failed_attempts or m.locked_until is not None)
+        for m in methods
+    )
     codes = 0
     if methods:
         # Also scrub rows that were disabled earlier (legacy bulk disable left
@@ -256,4 +264,4 @@ def disable_locked_principal_factors(
         method.failed_attempts = 0
         method.locked_until = None
     db.flush()
-    return FactorDisableResult(len(live), codes)
+    return FactorDisableResult(len(live), codes, cleaned)

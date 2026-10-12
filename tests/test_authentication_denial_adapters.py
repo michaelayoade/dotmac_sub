@@ -152,16 +152,19 @@ def test_typed_refusal_after_recovery_spend_rolls_back_before_denial_audit(
 def test_enrollment_wrong_code_is_independent_counter_and_audit(
     db_session, person, monkeypatch
 ):
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="synthetic device")
-    method_id = setup["method_id"]
+    from tests.subscriber_mfa_owner_support import authenticated_subscriber_enrollment
+
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    setup = enrollment.setup(label="synthetic device")
+    method_id = setup.method_id
     import pyotp
 
     monkeypatch.setattr(pyotp.TOTP, "verify", lambda *args, **kwargs: False)
-    with pytest.raises(HTTPException) as refusal:
-        AuthFlow.mfa_confirm(
-            db_session, str(method_id), "synthetic-wrong", str(person.id)
-        )
-    assert refusal.value.status_code == 401
+    with pytest.raises(pa.PasswordAuthenticationError) as refusal:
+        enrollment.confirm(method_id=method_id, code="synthetic-wrong")
+    assert refusal.value.code == "auth.password_authentication.invalid_mfa_code"
     db_session.expire_all()
     assert db_session.get(MFAMethod, method_id).failed_attempts == 1
     evidence = _denials(db_session)

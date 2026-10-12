@@ -34,11 +34,12 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv6Address, ip_address
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from uuid import UUID
 
 from jose import JWTError
@@ -359,6 +360,7 @@ class PasswordFailureEffect:
 class MfaFailureEffect:
     method_id: UUID
     policy: FailurePolicy
+    subscriber_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1551,15 +1553,25 @@ def mfa_failure_statement(
     *,
     now: datetime,
     policy: FailurePolicy,
+    subscriber_id: UUID | None = None,
 ):
     """Atomic MFA failure update; resets the counter to 0 when the lock is set."""
 
     m = MFAMethod
     count = func.coalesce(m.failed_attempts, 0) + 1
+    statement = update(m).where(m.id == method_id)
+    if subscriber_id is not None:
+        # Enrollment releases its locks before this independent owner runs.
+        # A reset/reassignment in that window must not alter revoked/foreign factors.
+        statement = statement.where(
+            m.subscriber_id == subscriber_id,
+            m.is_active.is_(True),
+            m.method_type == MFAMethodType.totp,
+            m.secret.is_not(None),
+            m.secret != "",
+        )
     return (
-        update(m)
-        .where(m.id == method_id)
-        .values(
+        statement.values(
             failed_attempts=case(
                 (m.locked_until > now, m.failed_attempts),
                 (count >= policy.max_attempts, 0),
@@ -1610,6 +1622,7 @@ def record_authentication_denial(denial: AuthenticationDenial) -> None:
                             denial.effect.method_id,
                             now=_now(),
                             policy=denial.effect.policy,
+                            subscriber_id=denial.effect.subscriber_id,
                         )
                     )
                 assert denial.target is not None
@@ -1960,4 +1973,445 @@ def establish_customer_impersonation_session(
             "Establish authorized customer impersonation",
         ),
         operation,
+    )
+
+
+# Authenticated subscriber self-service enrollment. This is separate from the
+# credential-bound forced-enrollment challenge above.
+CONCERN_SUBSCRIBER_ENROLLMENT = "authenticated subscriber MFA enrollment"
+SUBSCRIBER_MFA_SCOPE = "authentication:mfa:self"
+_SETUP_SUBSCRIBER_MFA = OwnerCommandDefinition(
+    owner=OWNER, concern=CONCERN_SUBSCRIBER_ENROLLMENT, name="setup_subscriber_mfa"
+)
+_CONFIRM_SUBSCRIBER_MFA = OwnerCommandDefinition(
+    owner=OWNER, concern=CONCERN_SUBSCRIBER_ENROLLMENT, name="confirm_subscriber_mfa"
+)
+EnrollmentResultT = TypeVar("EnrollmentResultT")
+
+
+class SubscriberMfaProvenance(StrEnum):
+    AUTH_API = "auth_api"
+    RESELLER_API = "reseller_api"
+    CUSTOMER_WEB = "customer_web"
+    RESELLER_WEB = "reseller_web"
+
+
+class RecoveryCodeDelivery(StrEnum):
+    NONE = "none"
+    RETURN_ONCE = "return_once"
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberMfaSessionProof:
+    session_id: UUID
+    subscriber_id: UUID
+    is_impersonation: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetupSubscriberMfaCommand:
+    context: CommandContext
+    subscriber_id: UUID
+    label: str | None
+    provenance: SubscriberMfaProvenance
+    session: SubscriberMfaSessionProof
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmSubscriberMfaCommand:
+    context: CommandContext
+    subscriber_id: UUID
+    method_id: UUID
+    code: str = field(repr=False)
+    provenance: SubscriberMfaProvenance
+    session: SubscriberMfaSessionProof
+    recovery_delivery: RecoveryCodeDelivery
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberMfaSetupOutcome:
+    method_id: UUID
+    secret: str = field(repr=False)
+    otpauth_uri: str = field(repr=False)
+    command_id: UUID
+    correlation_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberMfaMethodView:
+    id: UUID
+    subscriber_id: UUID
+    method_type: MFAMethodType
+    label: str | None
+    phone: str | None
+    email: str | None
+    is_primary: bool
+    enabled: bool
+    is_active: bool
+    verified_at: datetime | None
+    last_used_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberMfaConfirmationOutcome:
+    method: SubscriberMfaMethodView
+    recovery_codes: tuple[str, ...] = field(repr=False)
+    command_id: UUID
+    correlation_id: UUID
+
+
+def _lock_subscriber_enrollment(
+    db: Session, command: SetupSubscriberMfaCommand | ConfirmSubscriberMfaCommand
+) -> list[MFAMethod]:
+    from app.models.subscriber import Subscriber
+
+    proof = command.session
+    if (
+        not isinstance(command.subscriber_id, UUID)
+        or not isinstance(command.provenance, SubscriberMfaProvenance)
+        or not isinstance(proof, SubscriberMfaSessionProof)
+        or not isinstance(proof.session_id, UUID)
+        or not isinstance(proof.subscriber_id, UUID)
+        or proof.is_impersonation is not False
+        or proof.subscriber_id != command.subscriber_id
+        or command.context.actor != f"subscriber:{command.subscriber_id}"
+        or command.context.scope != SUBSCRIBER_MFA_SCOPE
+    ):
+        raise PasswordAuthenticationError(
+            "invalid_mfa_session", "Authenticated subscriber session required."
+        )
+    _set_lock_timeout(db)
+    subscriber = db.scalar(
+        select(Subscriber)
+        .where(Subscriber.id == command.subscriber_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if subscriber is None or not subscriber.is_active:
+        raise PasswordAuthenticationError("account_disabled", "Account disabled.")
+    session = db.scalar(
+        select(AuthSession)
+        .where(AuthSession.id == proof.session_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        session is None
+        or session.subscriber_id != command.subscriber_id
+        or session.system_user_id is not None
+        or session.reseller_user_id is not None
+        or session.status != SessionStatus.active
+        or session.revoked_at is not None
+        or (_as_utc(session.expires_at) or _now()) <= _now()
+    ):
+        raise PasswordAuthenticationError(
+            "invalid_mfa_session", "Authenticated subscriber session required."
+        )
+    return list(
+        db.scalars(
+            select(MFAMethod)
+            .where(MFAMethod.subscriber_id == command.subscriber_id)
+            .order_by(MFAMethod.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+
+
+def _stage_subscriber_enrollment(
+    db: Session,
+    command: SetupSubscriberMfaCommand | ConfirmSubscriberMfaCommand,
+    method: MFAMethod,
+    transition: Literal["mfa_setup", "mfa_confirm"],
+) -> None:
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    evidence = {
+        "schema_version": 1,
+        "aggregate_type": "mfa_method",
+        "aggregate_id": str(method.id),
+        "principal_type": "subscriber",
+        "principal_id": str(command.subscriber_id),
+        "method_id": str(method.id),
+        "transition": transition,
+        "invalidate_sessions": False,
+        "sessions_revoked": 0,
+        "command_id": str(command.context.command_id),
+        "correlation_id": str(command.context.correlation_id),
+        "reason": command.context.reason,
+        "scope": command.context.scope,
+        "provenance": command.provenance.value,
+    }
+    stage_audit_event(
+        db,
+        action=f"auth.credential_admin.{transition}",
+        entity_type="mfa_method",
+        entity_id=str(method.id),
+        actor=AuditActor.user(str(command.subscriber_id)),
+        metadata=evidence,
+    )
+    emit_event(
+        db,
+        EventType.credential_administration_completed,
+        evidence,
+        actor=command.context.actor,
+        subscriber_id=command.subscriber_id,
+    )
+
+
+def _run_subscriber_enrollment(
+    db: Session,
+    *,
+    definition: OwnerCommandDefinition,
+    context: CommandContext,
+    operation: Callable[[], EnrollmentResultT],
+) -> EnrollmentResultT:
+    try:
+        return execute_owner_command(
+            db, definition=definition, context=context, operation=operation
+        )
+    except OperationalError as exc:
+        if _sqlstate(exc) == _LOCK_NOT_AVAILABLE:
+            raise PasswordAuthenticationError(
+                "lock_timeout",
+                "MFA settings are busy; retry shortly.",
+                details={"retry_after": LOCK_TIMEOUT_RETRY_AFTER_SECONDS},
+            ) from exc
+        raise
+
+
+def setup_subscriber_mfa(
+    db: Session,
+    *,
+    command: SetupSubscriberMfaCommand,
+) -> SubscriberMfaSetupOutcome:
+    def operation() -> SubscriberMfaSetupOutcome:
+        import pyotp
+
+        from app.models.subscriber import Subscriber
+
+        methods = _lock_subscriber_enrollment(db, command)
+        pending = [
+            m
+            for m in methods
+            if m.method_type == MFAMethodType.totp
+            and m.is_active
+            and not m.enabled
+            and m.verified_at is None
+        ]
+        method = max(pending, key=lambda m: (m.created_at, m.id)) if pending else None
+        af = _auth_flow()
+        secret = pyotp.random_base32()
+        try:
+            encrypted = af._encrypt_secret(db, secret)
+        except Exception as exc:
+            raise PasswordAuthenticationError(
+                "mfa_unavailable", "MFA enrollment is unavailable."
+            ) from exc
+        if method is None:
+            method = MFAMethod(
+                subscriber_id=command.subscriber_id,
+                method_type=MFAMethodType.totp,
+                enabled=False,
+                is_primary=False,
+                is_active=True,
+            )
+            db.add(method)
+        method.label, method.secret = command.label, encrypted
+        db.flush()
+        credential = db.scalar(
+            select(UserCredential).where(
+                UserCredential.subscriber_id == command.subscriber_id,
+                UserCredential.provider == AuthProvider.local,
+            )
+        )
+        subscriber = db.get(Subscriber, command.subscriber_id)
+        assert subscriber is not None
+        username = (
+            credential.username
+            if credential and credential.username
+            else subscriber.email
+        )
+        uri = pyotp.TOTP(secret).provisioning_uri(
+            name=username, issuer_name=af._totp_issuer(db)
+        )
+        _stage_subscriber_enrollment(db, command, method, "mfa_setup")
+        return SubscriberMfaSetupOutcome(
+            method.id,
+            secret,
+            uri,
+            command.context.command_id,
+            command.context.correlation_id,
+        )
+
+    return _run_subscriber_enrollment(
+        db,
+        definition=_SETUP_SUBSCRIBER_MFA,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def confirm_subscriber_mfa(
+    db: Session,
+    *,
+    command: ConfirmSubscriberMfaCommand,
+) -> SubscriberMfaConfirmationOutcome:
+    denial: AuthenticationDenial | None = None
+
+    def operation() -> SubscriberMfaConfirmationOutcome:
+        nonlocal denial
+        import pyotp
+
+        methods = _lock_subscriber_enrollment(db, command)
+        if not isinstance(command.method_id, UUID) or not isinstance(
+            command.recovery_delivery, RecoveryCodeDelivery
+        ):
+            raise PasswordAuthenticationError(
+                "invalid_mfa_method", "Invalid MFA method."
+            )
+        method = next((m for m in methods if m.id == command.method_id), None)
+        if (
+            method is None
+            or method.method_type != MFAMethodType.totp
+            or not method.is_active
+            or not method.secret
+        ):
+            raise PasswordAuthenticationError(
+                "invalid_mfa_method", "MFA method unavailable."
+            )
+        locked = _as_utc(method.locked_until)
+        if locked and locked > _now():
+            raise PasswordAuthenticationError("mfa_locked", "Too many incorrect codes.")
+        af = _auth_flow()
+        try:
+            secret = af._decrypt_secret(db, method.secret)
+            accepted = pyotp.TOTP(secret).verify(command.code, valid_window=0)
+        except Exception as exc:
+            # Legacy crypto helpers may raise transport exceptions. Normalize
+            # them here without retaining submitted material in error details.
+            raise PasswordAuthenticationError(
+                "mfa_unavailable", "MFA enrollment is unavailable."
+            ) from exc
+        if not accepted:
+            denial = AuthenticationDenial(
+                reason=DenialReason.INVALID_CODE,
+                surface=DenialSurface.ENROLLMENT,
+                phase=DenialPhase.ENROLLMENT,
+                target=DenialTarget(
+                    DenialTargetKind.METHOD,
+                    method.id,
+                    DenialProvenance.AUTHENTICATED_PRINCIPAL,
+                ),
+                attempt_id=command.context.command_id,
+                correlation_id=command.context.correlation_id,
+                effect=MfaFailureEffect(
+                    method.id, af._mfa_failure_policy(db), command.subscriber_id
+                ),
+            )
+            raise PasswordAuthenticationError("invalid_mfa_code", "Invalid MFA code.")
+        for other in methods:
+            if other.id != method.id:
+                other.is_primary = False
+        # Release the partial-unique primary before promoting another factor.
+        db.flush()
+        method.enabled, method.is_primary = True, True
+        method.verified_at, method.failed_attempts, method.locked_until = (
+            _now(),
+            0,
+            None,
+        )
+        db.flush()
+        codes = (
+            tuple(af.stage_mfa_recovery_codes(db, method.id))
+            if command.recovery_delivery is RecoveryCodeDelivery.RETURN_ONCE
+            else ()
+        )
+        _stage_subscriber_enrollment(db, command, method, "mfa_confirm")
+        view = SubscriberMfaMethodView(
+            **{
+                name: getattr(method, name)
+                for name in SubscriberMfaMethodView.__dataclass_fields__
+            }
+        )
+        return SubscriberMfaConfirmationOutcome(
+            view, codes, command.context.command_id, command.context.correlation_id
+        )
+
+    try:
+        return _run_subscriber_enrollment(
+            db,
+            definition=_CONFIRM_SUBSCRIBER_MFA,
+            context=command.context,
+            operation=operation,
+        )
+    except PasswordAuthenticationError:
+        # execute_owner_command has rolled back and released principal/session/factor locks.
+        if denial is not None:
+            record_authentication_denial(denial)
+        raise
+
+
+class MfaProfilePrincipal(StrEnum):
+    SUBSCRIBER = "subscriber"
+    RESELLER_USER = "reseller_user"
+
+
+@dataclass(frozen=True, slots=True)
+class PrincipalMfaQuery:
+    principal: MfaProfilePrincipal
+    principal_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileMfaMethod:
+    id: UUID
+    label: str | None
+    method_type: MFAMethodType
+    verified_at: datetime | None
+    enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PrincipalMfaSummary:
+    enabled: bool
+    methods: tuple[ProfileMfaMethod, ...]
+
+
+def query_principal_mfa(
+    db: Session, *, query: PrincipalMfaQuery
+) -> PrincipalMfaSummary:
+    """Safe principal-specific MFA projection for an already authenticated adapter.
+
+    Organization profile rendering remains with the legacy reseller read path;
+    this resolver owns factor selection and the enabled interpretation.
+    """
+    if not isinstance(query.principal, MfaProfilePrincipal) or not isinstance(
+        query.principal_id, UUID
+    ):
+        raise PasswordAuthenticationError(
+            "invalid_mfa_principal", "Invalid MFA principal."
+        )
+    column = (
+        MFAMethod.subscriber_id
+        if query.principal is MfaProfilePrincipal.SUBSCRIBER
+        else MFAMethod.reseller_user_id
+    )
+    rows = db.scalars(
+        select(MFAMethod)
+        .where(column == query.principal_id, MFAMethod.is_active.is_(True))
+        .order_by(MFAMethod.created_at.desc(), MFAMethod.id)
+    )
+    methods = tuple(
+        ProfileMfaMethod(
+            row.id, row.label, row.method_type, row.verified_at, row.enabled
+        )
+        for row in rows
+    )
+    return PrincipalMfaSummary(
+        any(method.enabled and method.verified_at is not None for method in methods),
+        methods,
     )

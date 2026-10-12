@@ -12,6 +12,9 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import reseller as reseller_api
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
 
 
 def _subscriber_principal():
@@ -301,8 +304,15 @@ def test_profile_roundtrip_and_update(db_session, monkeypatch):
     assert updated["contact_phone"] is None  # blank clears the field
 
 
+@pytest.mark.usefixtures("authentication_denial_unit_session")
 def test_mfa_setup_and_confirm_flow(db_session, monkeypatch):
+    from contextlib import contextmanager
+
     from cryptography.fernet import Fernet
+    from sqlalchemy.orm import Session
+
+    from app.services.db_session_adapter import db_session_adapter
+    from tests.subscriber_mfa_owner_support import authenticated_subscriber_enrollment
 
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
     from app.models.subscriber import Reseller, Subscriber, UserType
@@ -322,25 +332,43 @@ def test_mfa_setup_and_confirm_flow(db_session, monkeypatch):
         "reseller_id_for_subscriber",
         lambda db, sid: str(reseller.id),
     )
-    principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
+    enrollment = authenticated_subscriber_enrollment(db_session, subscriber_id=sub.id)
+    principal = {
+        "principal_type": "subscriber",
+        "principal_id": str(sub.id),
+        "subscriber_id": str(sub.id),
+        "session_id": str(enrollment.proof.session_id),
+    }
+    connection = db_session.connection()
+
+    @contextmanager
+    def command_session():
+        with Session(
+            bind=connection, join_transaction_mode="create_savepoint"
+        ) as session:
+            yield session
+
+    monkeypatch.setattr(db_session_adapter, "owner_command_session", command_session)
 
     setup = reseller_api.my_reseller_mfa_setup(db=db_session, principal=principal)
     assert setup["method_id"] and setup["secret"] and setup["otpauth_uri"]
 
-    # Wrong code -> 400, method stays unverified.
+    # Wrong code -> 401, method stays unverified.
+    import pyotp
+
+    valid_code = pyotp.TOTP(setup["secret"]).now()
+    wrong_code = "000000" if valid_code != "000000" else "111111"
     with pytest.raises(HTTPException) as exc:
         reseller_api.my_reseller_mfa_confirm(
             payload=reseller_api.MfaConfirmRequest(
-                method_id=setup["method_id"], code="000000"
+                method_id=setup["method_id"], code=wrong_code
             ),
             db=db_session,
             principal=principal,
         )
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 401
 
     # Correct TOTP -> enabled.
-    import pyotp
-
     code = pyotp.TOTP(setup["secret"]).now()
     out = reseller_api.my_reseller_mfa_confirm(
         payload=reseller_api.MfaConfirmRequest(method_id=setup["method_id"], code=code),

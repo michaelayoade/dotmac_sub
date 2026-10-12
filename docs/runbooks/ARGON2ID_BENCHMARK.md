@@ -101,3 +101,22 @@ adapter and separately authorized measurements:
 No SSH, Docker, staging, production, CI dispatch, real hashing workload or load run
 is part of implementing/testing this source slice. Focused unit tests inject a
 fake hasher and deterministic clock; they are correctness evidence only.
+
+### Dormant password-work instrumentation (not acceptance)
+
+`auth.user_passwords` now contains the dormant `UserPasswordWork` boundary.
+`LegacyPasswordWork` remains COMPAT with no Argon limits; explicit
+`AdmittedArgon2PasswordWork` records only admitted low-level Argon verification
+intervals, including failures. Parsing, policy, legacy/reversible callbacks and
+observer delivery are outside those intervals; refusal has no interval. No native
+hashing, upgrade or persistence is installed. No runtime caller may construct or
+use this boundary until separately reviewed adoption retires its architecture guard.
+
+A future measurement collector must drain all callers and call
+`require_complete_capture()` before acceptance: rejected records or observer
+failures permanently invalidate that work instance's capture. Acknowledgement
+alone proves neither external durability nor end-to-end workload completeness.
+See `docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md` for the typed contract.
+No login hook is wired: existing implicit read transactions require separate
+snapshot/revalidation design. Fake-native local tests are source evidence only;
+this addition authorizes no benchmark run or production parameter decision.

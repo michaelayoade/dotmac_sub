@@ -300,16 +300,15 @@ def _audit_count(factory, account, action) -> int:
 
 
 def _enable_mfa(factory, account):
+    from tests.subscriber_mfa_fixtures import seed_enabled_subscriber_mfa
+
     with factory() as session:
-        setup = AuthFlow.mfa_setup(session, str(account.subscriber_id), label="device")
-        method = AuthFlow.mfa_confirm(
-            session,
-            str(setup["method_id"]),
-            pyotp.TOTP(setup["secret"]).now(),
-            str(account.subscriber_id),
+        setup = seed_enabled_subscriber_mfa(
+            session, subscriber_id=account.subscriber_id
         )
+        method = session.get(MFAMethod, setup.method_id)
         codes = auth_flow_service.generate_mfa_recovery_codes(session, method)
-    return setup["secret"], setup["method_id"], codes
+    return setup.secret, setup.method_id, codes
 
 
 def _password_step(factory, account):

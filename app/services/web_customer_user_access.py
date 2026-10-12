@@ -14,7 +14,7 @@ from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, MFAMethod, UserCredential
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
-from app.services import credential_recovery
+from app.services import credential_administration, credential_recovery
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.audit_adapter import record_audit_event
 from app.services.owner_commands import CommandContext
@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 INVITE_AUDIT_ACTION = "customer_user_invite"
 RESET_AUDIT_ACTION = "customer_user_reset_link"
-MFA_RESET_AUDIT_ACTION = "customer_user_mfa_reset"
 LOGIN_TOGGLE_AUDIT_ACTION = "customer_user_login_toggle"
 PRIMARY_LOGIN_AUDIT_ACTION = "customer_user_primary_login_set"
 
@@ -531,34 +530,10 @@ def send_customer_reset_link(
 
 
 def reset_customer_mfa(
-    db: Session,
-    *,
-    request,
-    customer_type: str,
-    customer_id: str,
-    actor_id: str | None,
-) -> dict[str, object]:
-    """Disable a customer's MFA methods (lost-authenticator recovery)."""
-    target = resolve_customer_user_target(
-        db, customer_type=customer_type, customer_id=customer_id
-    )
-    web_system_user_mutations_service.disable_subscriber_mfa(
-        db, subscriber_id=str(target.subscriber.id), actor_id=actor_id
-    )
-    record_audit_event(
-        db,
-        action=MFA_RESET_AUDIT_ACTION,
-        entity_type="subscriber",
-        entity_id=str(target.subscriber.id),
-        actor_id=actor_id,
-        metadata={"email": target.email, "customer_type": customer_type},
-    )
-    return {
-        "ok": True,
-        "title": "MFA reset",
-        "message": "Two-factor authentication has been disabled for this customer. "
-        "They can re-enroll from the portal profile page.",
-    }
+    db: Session, *, command: credential_administration.ResetCustomerMfaCommand
+) -> credential_administration.CustomerMfaResetOutcome:
+    """Forward the trusted typed recovery command to its transaction owner."""
+    return credential_administration.reset_customer_mfa(db, command=command)
 
 
 def set_customer_login_active(

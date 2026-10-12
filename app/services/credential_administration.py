@@ -1,4 +1,4 @@
-"""Password-only administrative credential command coordinator.
+"""Administrative credential and customer MFA recovery command coordinator.
 
 Password policy and hashing run in a separate read session before acquiring
 principal -> credential locks. Caller transactions are always rejected, even
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypeVar
 from uuid import UUID
@@ -19,9 +19,15 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models.auth import AuthProvider, UserCredential
+from app.models.auth import AuthProvider, MFAMethod, SessionStatus, UserCredential
+from app.models.auth import Session as AuthSession
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import ResellerUser, Subscriber, SubscriberCategory
+from app.models.subscriber import (
+    ResellerUser,
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+)
 from app.models.system_user import SystemUser
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
@@ -222,11 +228,15 @@ def _prepare_password(
 
 
 def _run(
-    db: Session, context: CommandContext, operation: Callable[[], OutcomeT]
+    db: Session,
+    context: CommandContext,
+    operation: Callable[[], OutcomeT],
+    *,
+    definition: OwnerCommandDefinition = _DEFINITION,
 ) -> OutcomeT:
     try:
         return execute_owner_command(
-            db, definition=_DEFINITION, context=context, operation=operation
+            db, definition=definition, context=context, operation=operation
         )
     except IntegrityError as exc:
         raise error("conflict", "Credential identity is already in use.") from exc
@@ -446,3 +456,178 @@ def provision_subscriber_login(
         )
 
     return _run(db, command.context, operation)
+
+
+CUSTOMER_MFA_RESET_SCOPE = "customer:write"
+CUSTOMER_MFA_RESET_REASON = "Administrative customer MFA reset"
+CUSTOMER_MFA_RESET_CONCERN = "administrative customer MFA reset"
+_MFA_RESET_DEFINITION = OwnerCommandDefinition(
+    owner=OWNER, concern=CUSTOMER_MFA_RESET_CONCERN, name="reset_customer_mfa"
+)
+
+
+class CustomerKind(StrEnum):
+    person = "person"
+    business = "business"
+
+
+@dataclass(frozen=True, slots=True)
+class AdminCustomerRecovery:
+    """Closed staff provenance, supplied by the authenticated web adapter."""
+
+    actor_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ResetCustomerMfaCommand:
+    context: CommandContext
+    customer_id: UUID
+    customer_kind: CustomerKind
+    provenance: AdminCustomerRecovery
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerMfaResetOutcome:
+    subscriber_id: UUID
+    changed: bool
+    factors_disabled: int
+    factors_cleaned: int
+    recovery_codes_deactivated: int
+    sessions_revoked: int
+    command_id: UUID
+    correlation_id: UUID
+
+
+def reset_customer_mfa(
+    db: Session, *, command: ResetCustomerMfaCommand
+) -> CustomerMfaResetOutcome:
+    """Remove factors/recovery residue and standing under the subscriber lock.
+
+    Cleanup of previously disabled secret or recovery material is a security
+    transition too. A clean repeat records audit only; it leaves new sessions
+    intact. Credential versions and password recovery capabilities are unchanged.
+    """
+    if db.in_transaction():
+        raise error(
+            "active_caller_transaction",
+            "MFA reset requires a transaction-free session.",
+        )
+    if (
+        not isinstance(command, ResetCustomerMfaCommand)
+        or not isinstance(command.context, CommandContext)
+        or not isinstance(command.customer_id, UUID)
+        or not isinstance(command.customer_kind, CustomerKind)
+        or type(command.provenance) is not AdminCustomerRecovery
+        or not isinstance(command.provenance.actor_id, UUID)
+        or command.context.actor != str(command.provenance.actor_id)
+        or command.context.scope != CUSTOMER_MFA_RESET_SCOPE
+        or command.context.reason != CUSTOMER_MFA_RESET_REASON
+    ):
+        raise error(
+            "invalid_command_context", "Trusted customer recovery actor required."
+        )
+
+    def operation() -> CustomerMfaResetOutcome:
+        from app.services.audit_adapter import AuditActor, stage_audit_event
+        from app.services.credential_administration_mutation import (
+            disable_locked_principal_factors,
+        )
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        _lock_principal(db, PrincipalType.subscriber, command.customer_id)
+        subscriber = db.get(Subscriber, command.customer_id)
+        assert subscriber is not None
+        actor = db.scalar(
+            select(SystemUser)
+            .where(SystemUser.id == command.provenance.actor_id)
+            .execution_options(populate_existing=True)
+        )
+        if actor is None or not actor.is_active:
+            raise error(
+                "invalid_command_context", "Trusted customer recovery actor required."
+            )
+        if subscriber.status == SubscriberStatus.canceled:
+            raise error("ineligible_customer", "Customer account is canceled.")
+        if (
+            command.customer_kind is CustomerKind.business
+            and subscriber.category != SubscriberCategory.business
+        ):
+            raise error(
+                "ineligible_customer",
+                "Business customer has no primary contact with email.",
+            )
+        if not (subscriber.email or "").strip():
+            raise error("ineligible_customer", "Customer has no email address.")
+        factors = disable_locked_principal_factors(
+            db, principal_column=MFAMethod.subscriber_id, principal_id=subscriber.id
+        )
+        changed = (
+            factors.changed
+            or factors.factors_cleaned > 0
+            or factors.recovery_codes_deactivated > 0
+        )
+        revoked = 0
+        if changed:
+            revoked = int(
+                db.query(AuthSession)
+                .filter(
+                    AuthSession.subscriber_id == subscriber.id,
+                    AuthSession.status == SessionStatus.active,
+                )
+                .update(
+                    {"status": SessionStatus.revoked, "revoked_at": datetime.now(UTC)},
+                    synchronize_session=False,
+                )
+                or 0
+            )
+        db.flush()
+        evidence = {
+            "schema_version": 1,
+            "aggregate_type": "subscriber",
+            "aggregate_id": str(subscriber.id),
+            "principal_type": "subscriber",
+            "principal_id": str(subscriber.id),
+            "transition": "customer_mfa_reset",
+            "customer_kind": command.customer_kind.value,
+            "changed": changed,
+            "factors_disabled": factors.methods_disabled,
+            "factors_cleaned": factors.factors_cleaned,
+            "recovery_codes_deactivated": factors.recovery_codes_deactivated,
+            "invalidate_sessions": changed,
+            "sessions_revoked": revoked,
+            "command_id": str(command.context.command_id),
+            "correlation_id": str(command.context.correlation_id),
+            "causation_id": str(command.context.causation_id)
+            if command.context.causation_id
+            else None,
+            "reason": CUSTOMER_MFA_RESET_REASON,
+        }
+        stage_audit_event(
+            db,
+            action="auth.mfa_disabled",
+            entity_type="subscriber",
+            entity_id=str(subscriber.id),
+            actor=AuditActor.user(str(actor.id)),
+            metadata=evidence,
+        )
+        if changed:
+            emit_event(
+                db,
+                EventType.credential_administration_completed,
+                evidence,
+                actor=command.context.actor,
+                subscriber_id=subscriber.id,
+            )
+        return CustomerMfaResetOutcome(
+            subscriber.id,
+            changed,
+            factors.methods_disabled,
+            factors.factors_cleaned,
+            factors.recovery_codes_deactivated,
+            revoked,
+            command.context.command_id,
+            command.context.correlation_id,
+        )
+
+    return _run(db, command.context, operation, definition=_MFA_RESET_DEFINITION)

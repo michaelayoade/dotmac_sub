@@ -1,4 +1,4 @@
-# Password-only administrative credential commands
+# Administrative credential commands
 
 The `auth.credential_administration` application coordinator owns create,
 password/username/metadata update, explicit deactivation, and atomic subscriber
@@ -75,3 +75,39 @@ it composed already-committed legacy customer creation and a new flushed event
 transaction with later metadata writes. Broad legacy customer creation and
 other ORM seed writers remain separate migration debt; this slice claims no
 atomicity for them and does not add a second transaction-completion path.
+
+
+## Administrative customer MFA reset
+
+The same coordinator owns the exact `administrative customer MFA reset` concern,
+using `ResetCustomerMfaCommand` and a separate `customer:write` admission. The web
+adapter takes SystemUser identity from trusted `request.state.auth`, rejects
+impersonation and mismatched provenance, and opens a fresh command session. It
+retains the existing customer-write support-role permission; no new admin-role
+requirement or human reason field is introduced. The reason is fixed to
+`Administrative customer MFA reset`. The owner validates matching active staff
+identity and retains existing target eligibility: noncanceled Subscriber with
+email; business targets additionally require business category and the primary
+contact email represented by that Subscriber. Email-free recovery is separate.
+
+The refreshed Subscriber FOR UPDATE precedes UUID-ordered factor locks. All
+factor seeds, flags, failure counters and lockouts are cleared; active recovery
+codes are deactivated. Live-factor removal or cleanup of legacy secret, counter,
+lockout or recovery residue is a security transition: active database sessions
+are revoked and one safe `credential_administration.completed` event is staged.
+Counts distinguish live factors disabled, factor rows cleaned and recovery codes
+deactivated. A fully clean repeat stages the canonical `auth.mfa_disabled` audit
+only, without another event or revoking sessions created since the prior reset.
+Audit, cleanup, revocation and outbox share one owner transaction and roll back
+on any failure. The previous subscriber bulk writer and second wrapper audit are
+retired. The original writer's factor UPDATE and first audit already shared a
+commit; this migration adds complete cleanup, revocation and owner locking.
+
+Subscriber self setup/confirmation must use the same Subscriber lock and recheck
+the exact AuthSession under lock. A reset winner revokes that standing, so a
+waiting enrollment cannot restore flags; an enrollment winner is subsequently
+removed by reset. Acceptance of that race requires the composed enrollment slice
+and hosted PostgreSQL tests in both orders. Password credential versions and reset
+capabilities are unchanged; no universal MFA challenge epoch is claimed. Existing
+projection handling repairs portal caches after commit while database standing
+remains authoritative. Staff typed removal and native reseller flows are unchanged.
