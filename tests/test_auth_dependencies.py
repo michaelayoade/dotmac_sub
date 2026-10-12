@@ -288,7 +288,10 @@ def test_revoke_session_records_durable_revocation(db_session, person):
     subscriber_id = person.id
     db_session.commit()
     result = session_manager_service.revoke_session(
-        db_session, session_id, subscriber_id
+        db_session,
+        session_id,
+        subscriber_id,
+        current_session_id=session_id,
     )
 
     db_session.refresh(session)
