@@ -185,7 +185,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: Customer MFA reset races add one migrated-PostgreSQL sessionmaker fixture.
 #: Subscriber enrollment adds one file-backed SQLite engine and four unit
 #: Sessions to prove independent denial evidence survives owner rollback.
-TEST_FIXTURE_BASELINE_TOTAL = 259
+#: JSON API-key issuance adds five migrated-PostgreSQL Session sites for
+#: independent atomicity and uniqueness observers; production is unchanged.
+#: JSON API-key PATCH adds five migrated-PostgreSQL Session sites for exact-key
+#: locking, null/constraint rollback and independent observers; production is unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 269
 
 
 def _baseline() -> dict[str, int]:

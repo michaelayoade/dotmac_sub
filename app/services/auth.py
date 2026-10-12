@@ -1,7 +1,6 @@
 import hashlib
 import hmac
 import logging
-import secrets
 import time
 import uuid
 from datetime import UTC, datetime
@@ -28,11 +27,6 @@ from app.models.auth import (
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusServer
 from app.models.subscriber import Subscriber
-from app.schemas.auth import (
-    ApiKeyCreate,
-    ApiKeyGenerateRequest,
-    ApiKeyUpdate,
-)
 from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import (
     apply_ordering,
@@ -474,9 +468,7 @@ class Sessions(ListResponseMixin):
 
 class ApiKeys(ListResponseMixin):
     @staticmethod
-    def generate_with_rate_limit(
-        db: Session, payload: ApiKeyGenerateRequest, request: Request | None
-    ):
+    def enforce_generation_rate_limit(db: Session, request: Request | None) -> None:
         client_ip = "unknown"
         if request is not None and request.client:
             client_ip = request.client.host
@@ -506,34 +498,6 @@ class ApiKeys(ListResponseMixin):
                 status_code=503,
                 detail="Rate limiting unavailable (Redis error)",
             ) from exc
-        api_key, raw_key = ApiKeys.generate(db, payload)
-        return {"key": raw_key, "api_key": api_key}
-
-    @staticmethod
-    def generate(db: Session, payload: ApiKeyGenerateRequest):
-        raw_key = secrets.token_urlsafe(32)
-        data = payload.model_dump()
-        data["key_hash"] = hash_api_key(raw_key)
-        data.setdefault("is_active", True)
-        if data.get("subscriber_id"):
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        api_key = ApiKey(**data)
-        db.add(api_key)
-        db.commit()
-        db.refresh(api_key)
-        return api_key, raw_key
-
-    @staticmethod
-    def create(db: Session, payload: ApiKeyCreate):
-        if payload.subscriber_id:
-            _ensure_subscriber(db, str(payload.subscriber_id))
-        data = payload.model_dump()
-        data["key_hash"] = hash_api_key(data["key_hash"])
-        api_key = ApiKey(**data)
-        db.add(api_key)
-        db.commit()
-        db.refresh(api_key)
-        return api_key
 
     @staticmethod
     def get(db: Session, key_id: str):
@@ -570,22 +534,6 @@ class ApiKeys(ListResponseMixin):
             {"created_at": ApiKey.created_at, "label": ApiKey.label},
         )
         return apply_pagination(query, limit, offset).all()
-
-    @staticmethod
-    def update(db: Session, key_id: str, payload: ApiKeyUpdate):
-        api_key = db.get(ApiKey, coerce_uuid(key_id))
-        if not api_key:
-            raise HTTPException(status_code=404, detail="API key not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "subscriber_id" in data and data["subscriber_id"] is not None:
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        if "key_hash" in data and data["key_hash"]:
-            data["key_hash"] = hash_api_key(data["key_hash"])
-        for key, value in data.items():
-            setattr(api_key, key, value)
-        db.commit()
-        db.refresh(api_key)
-        return api_key
 
 
 user_credentials = UserCredentials()

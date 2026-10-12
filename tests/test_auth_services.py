@@ -39,6 +39,8 @@ from app.services import web_auth as web_auth_service
 from app.services import web_system_config as web_system_config_service
 from app.services.audit_adapter import AuditActor
 from app.services.auth_flow import hash_password
+from tests import api_key_issuance_fixtures as issuance_commands
+from tests import api_key_update_fixtures as update_commands
 from tests import credential_administration_fixtures as credential_commands
 from tests.staff_identity_fixtures import project_staff_login
 
@@ -404,9 +406,9 @@ def test_api_key_generate_with_redis(monkeypatch, db_session):
     fake = _FakeRedis()
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: fake)
     payload = ApiKeyGenerateRequest(label="test")
-    result = auth_service.api_keys.generate_with_rate_limit(db_session, payload, None)
-    raw_key = result["key"]
-    api_key = result["api_key"]
+    result = issuance_commands.generate_with_rate_limit(db_session, payload, None)
+    raw_key = result.key
+    api_key = result.api_key
     # Scheme-agnostic: matches whatever hash_api_key produces (HMAC when a
     # server secret is configured, legacy sha256 otherwise).
     assert auth_service.hash_api_key(raw_key) == api_key.key_hash
@@ -415,7 +417,7 @@ def test_api_key_generate_with_redis(monkeypatch, db_session):
 def test_api_key_rate_limit_requires_redis(monkeypatch, db_session):
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: None)
     with pytest.raises(HTTPException) as exc:
-        auth_service.api_keys.generate_with_rate_limit(
+        issuance_commands.generate_with_rate_limit(
             db_session, ApiKeyGenerateRequest(label="test"), None
         )
     assert exc.value.status_code == 503
@@ -426,14 +428,14 @@ def test_api_key_rate_limit_exceeded(monkeypatch, db_session):
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: fake)
     monkeypatch.setattr(auth_service, "_auth_int_setting", lambda _db, key, default: 1)
     with pytest.raises(HTTPException) as exc:
-        auth_service.api_keys.generate_with_rate_limit(
+        issuance_commands.generate_with_rate_limit(
             db_session, ApiKeyGenerateRequest(label="test"), None
         )
     assert exc.value.status_code == 429
 
 
 def test_api_key_update_and_revoke(db_session, person):
-    created = auth_service.api_keys.create(
+    created = issuance_commands.create(
         db_session,
         ApiKeyCreate(
             person_id=person.id,
@@ -441,7 +443,7 @@ def test_api_key_update_and_revoke(db_session, person):
             key_hash="raw-key",
         ),
     )
-    updated = auth_service.api_keys.update(
+    updated = update_commands.update(
         db_session,
         str(created.id),
         ApiKeyUpdate(key_hash="new-key"),

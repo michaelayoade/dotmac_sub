@@ -28,6 +28,8 @@ from app.services import credential_administration as credential_admin
 from app.services import session_manager
 from app.services.audit_adapter import AuditActor
 from app.services.common import apply_ordering, apply_pagination, validate_enum
+from tests import api_key_issuance_fixtures as issuance_commands
+from tests import api_key_update_fixtures as update_commands
 from tests import credential_administration_fixtures as credential_commands
 
 
@@ -333,7 +335,7 @@ def test_sessions_list_get(db_session, person):
 
 def test_api_key_generate_with_person(db_session, person):
     payload = ApiKeyGenerateRequest(person_id=person.id, label="test")
-    api_key, raw = auth_service.api_keys.generate(db_session, payload)
+    api_key, raw = issuance_commands.generate(db_session, payload)
     assert api_key.person_id == person.id
     assert auth_service.hash_api_key(raw) == api_key.key_hash
 
@@ -345,7 +347,7 @@ def test_api_key_generate_rate_limit_redis_error(monkeypatch, db_session):
 
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: _BoomRedis())
     with pytest.raises(HTTPException):
-        auth_service.api_keys.generate_with_rate_limit(
+        issuance_commands.generate_with_rate_limit(
             db_session, ApiKeyGenerateRequest(label="test"), None
         )
 
@@ -366,14 +368,14 @@ def test_api_key_generate_rate_limit_with_request(monkeypatch, db_session):
             "client": ("127.0.0.1", 12345),
         }
     )
-    result = auth_service.api_keys.generate_with_rate_limit(
+    result = issuance_commands.generate_with_rate_limit(
         db_session, ApiKeyGenerateRequest(label="test"), request
     )
-    assert "key" in result
+    assert result.key
 
 
 def test_api_keys_get_and_update_person(db_session, person):
-    api_key = auth_service.api_keys.create(
+    api_key = issuance_commands.create(
         db_session,
         ApiKeyCreate(
             person_id=person.id,
@@ -384,12 +386,12 @@ def test_api_keys_get_and_update_person(db_session, person):
     fetched = auth_service.api_keys.get(db_session, str(api_key.id))
     assert fetched.id == api_key.id
 
-    updated = auth_service.api_keys.update(
+    updated = update_commands.update(
         db_session,
         str(api_key.id),
         ApiKeyUpdate(person_id=person.id),
     )
-    assert updated.person_id == person.id
+    assert updated.subscriber_id == person.id
 
 
 def test_user_credentials_default_provider(monkeypatch, db_session, person):

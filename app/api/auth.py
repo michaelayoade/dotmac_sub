@@ -365,8 +365,48 @@ def delete_session(
     tags=["api-keys"],
     dependencies=[_credential_admin],
 )
-def create_api_key(payload: ApiKeyCreate, db: Session = Depends(get_db)):
-    return auth_service.api_keys.create(db, payload)
+def create_api_key(
+    payload: ApiKeyCreate, auth: dict = Depends(require_role("admin"))
+) -> ApiKeyRead:
+    from app.services import api_key_administration as api_key_admin
+    from app.services.audit_adapter import AuditActor
+
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    command = api_key_admin.CreateApiKeyCommand(
+        context=CommandContext.system(
+            actor=str(actor.actor_id),
+            scope=api_key_admin.CREATE_SCOPE,
+            reason="Administrative API-key creation",
+        ),
+        actor=actor,
+        supplied_secret=payload.key_hash,
+        subscriber_id=payload.subscriber_id,
+        label=payload.label,
+        scopes=tuple(payload.scopes),
+        is_active=payload.is_active,
+        last_used_at=payload.last_used_at,
+        expires_at=payload.expires_at,
+        revoked_at=payload.revoked_at,
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            issued = api_key_admin.create(command_db, command=command)
+        except api_key_admin.ApiKeyIssuanceError as exc:
+            raise HTTPException(
+                status_code=(
+                    404
+                    if exc.code.endswith(".subscriber_not_found")
+                    else 500
+                    if exc.code.endswith(".storage_unavailable")
+                    else 403
+                ),
+                detail=exc.message,
+            ) from exc
+    return ApiKeyRead.model_validate(issued)
 
 
 @router.post(
@@ -380,8 +420,47 @@ def generate_api_key(
     payload: ApiKeyGenerateRequest,
     request: Request,
     db: Session = Depends(get_db),
-):
-    return auth_service.api_keys.generate_with_rate_limit(db, payload, request)
+    auth: dict = Depends(require_role("admin")),
+) -> ApiKeyGenerateResponse:
+    from app.services import api_key_administration as api_key_admin
+    from app.services.audit_adapter import AuditActor
+
+    # Preserve admission before generating material or opening the owner transaction.
+    auth_service.api_keys.enforce_generation_rate_limit(db, request=request)
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    command = api_key_admin.GenerateApiKeyCommand(
+        context=CommandContext.system(
+            actor=str(actor.actor_id),
+            scope=api_key_admin.GENERATE_SCOPE,
+            reason="Administrative API-key generation",
+        ),
+        actor=actor,
+        subscriber_id=payload.subscriber_id,
+        label=payload.label,
+        scopes=tuple(payload.scopes),
+        expires_at=payload.expires_at,
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            outcome = api_key_admin.generate(command_db, command=command)
+        except api_key_admin.ApiKeyIssuanceError as exc:
+            raise HTTPException(
+                status_code=(
+                    404
+                    if exc.code.endswith(".subscriber_not_found")
+                    else 500
+                    if exc.code.endswith(".storage_unavailable")
+                    else 403
+                ),
+                detail=exc.message,
+            ) from exc
+    return ApiKeyGenerateResponse(
+        key=outcome.key, api_key=ApiKeyRead.model_validate(outcome.api_key)
+    )
 
 
 @router.get(
@@ -424,8 +503,68 @@ def list_api_keys(
     tags=["api-keys"],
     dependencies=[_credential_admin],
 )
-def update_api_key(key_id: str, payload: ApiKeyUpdate, db: Session = Depends(get_db)):
-    return auth_service.api_keys.update(db, key_id, payload)
+def update_api_key(
+    key_id: str, payload: ApiKeyUpdate, auth: dict = Depends(require_role("admin"))
+) -> ApiKeyRead:
+    from pydantic import ValidationError
+
+    from app.services import api_key_administration as api_key_admin
+    from app.services.audit_adapter import AuditActor
+
+    try:
+        target = UUID(key_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=500, detail="Invalid API-key identifier."
+        ) from None
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    command = api_key_admin.UpdateApiKeyCommand(
+        context=CommandContext.system(
+            actor=str(actor.actor_id),
+            scope=api_key_admin.UPDATE_SCOPE,
+            reason="Administrative API-key update",
+        ),
+        key_id=target,
+        actor=actor,
+        fields=frozenset(
+            api_key_admin.ApiKeyUpdateField(name) for name in payload.model_fields_set
+        ),
+        subscriber_id=payload.subscriber_id,
+        label=payload.label,
+        supplied_secret=payload.key_hash,
+        scopes=tuple(payload.scopes) if payload.scopes is not None else None,
+        is_active=payload.is_active,
+        last_used_at=payload.last_used_at,
+        expires_at=payload.expires_at,
+        revoked_at=payload.revoked_at,
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            outcome = api_key_admin.update(command_db, command=command)
+        except api_key_admin.ApiKeyUpdateError as exc:
+            if exc.code.endswith(".busy"):
+                raise HTTPException(
+                    status_code=503, detail=exc.message, headers={"Retry-After": "5"}
+                ) from exc
+            raise HTTPException(
+                status_code=404
+                if exc.code.endswith((".not_found", ".subscriber_not_found"))
+                else 500
+                if exc.code.endswith(".storage_unavailable")
+                else 403,
+                detail=exc.message,
+            ) from exc
+    try:
+        return ApiKeyRead.model_validate(outcome)
+    except ValidationError:
+        # Legacy scopes=None commits JSON null but fails the non-null read schema.
+        raise HTTPException(
+            status_code=500, detail="API-key response unavailable."
+        ) from None
 
 
 @router.delete(
