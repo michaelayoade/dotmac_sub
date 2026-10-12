@@ -17,7 +17,7 @@ it, which is how an omitted family is caught before a writer hides in it.
 
 ## What counts as a write
 
-Four independent shapes, because no single one of them is complete:
+Five independent shapes, because no single one of them is complete:
 
 1. **ORM construction** — `Subscriber(...)`, `Party(...)`.
 2. **Tracked-entity mutation** — an attribute assignment on a local name that
@@ -29,6 +29,9 @@ Four independent shapes, because no single one of them is complete:
    `query(Model).update(...)`, `Model.__table__.insert()`.
 4. **Raw SQL** — an `INSERT INTO`/`UPDATE`/`DELETE FROM` naming a cohort table
    in any string literal, which is how migrations and repair scripts write.
+5. **Tracked ORM deletion** — `db.delete(row)` where the receiver is a
+   recognized session and `row` is a tracked cohort entity. An unrelated
+   object's `.delete()` or an untracked argument is not deletion evidence.
 
 Shape 2 is a heuristic and is documented as one. It is deliberately tuned to
 under-report an unrelated file rather than over-report: an uncounted writer is
@@ -421,6 +424,25 @@ class _ModuleWriteCounter(ast.NodeVisitor):
             named = _named_model(node.func.value, self.models) or _query_chain_model(
                 node.func.value, self.models
             )
+            if (
+                named is None
+                and node.func.attr == "delete"
+                and _receiver_tokens(node.func.value) & _SESSION_TOKENS
+            ):
+                instance = (
+                    node.args[0]
+                    if node.args
+                    else next(
+                        (
+                            keyword.value
+                            for keyword in node.keywords
+                            if keyword.arg == "instance"
+                        ),
+                        None,
+                    )
+                )
+                if isinstance(instance, ast.Name):
+                    named = self._bound.get(instance.id)
             if named is not None:
                 self._record(named)
         self.generic_visit(node)

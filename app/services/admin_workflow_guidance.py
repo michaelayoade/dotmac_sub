@@ -247,6 +247,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Search by name, phone, email, account number, business name, or known identifier.",
         "Use filters to narrow the list, then open the matching customer.",
         "Confirm contact details, billing account, service address, active service, and recent history.",
+        "For bulk deletion, review the preview and confirm the selected customers, eligible count, and skipped accounts before continuing. If the impact has changed, preview again before confirming.",
+        "Review the bulk result for each customer. Earlier successful deletions remain complete when a later customer is skipped or blocked; repeated selections and unknown customer types do not count as deletions.",
         notes=(
             "If records are similar, stop and compare the billing account and subscription before changing anything.",
         ),
@@ -287,8 +289,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "After confirming a customer message, use the send status panel to follow recipient preparation and delivery. If confirmation is lost, keep the send reference and choose Check status before submitting another send.",
         "If a prepaid funding quarantine banner appears, prepaid service cannot be created or activated until Finance captures the account's opening balance through the runbook the banner names. Only when the customer must be connected first, an admin may grant an activation override with a clear reason; revoke it once the opening is captured.",
         "To recover a customer's lost MFA device, confirm their identity and use Reset MFA in Account. A successful reset removes their factors and recovery codes and ends their active sessions; ask them to sign in again and set MFA up from the portal profile page.",
+        "Before permanently deleting a customer, confirm the account and deactivate it. Business accounts and bulk deletions also require all subscriptions to be removed through their proper workflow.",
+        "If deletion is blocked by linked financial, recovery, or history records, review those records with the responsible team. If the account is busy or changed during deletion, refresh it and retry; for bulk deletion, obtain a fresh preview and confirmation.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "A successful deletion removes the customer account and its login records, releases active IP assignments, retires active customer equipment, and saves the audit record together. If any part fails, these changes are all undone. Retained equipment and network history remain, along with the underlying person or organization record.",
+            "Deletion cannot be used to erase linked financial or retained history records. An individual customer with a remaining subscription is also blocked from deletion.",
             "An activation override only admits prepaid activation. The account stays funding-quarantined, excluded from balance-based suspension and restoration, and still counts in the quarantine alert until its opening is captured.",
             "Authorized staff can open Test Connection below the Invoice icon in All Subscriptions to grant temporary full service access for troubleshooting; review the configured system-wide duration and expiry before activation.",
             "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
@@ -1333,6 +1339,13 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     "find-customer": (
         _action("search-customers", "Search and filter customers", 0, 1),
         _action("open-customer", "Open and confirm a customer", 2),
+        _action(
+            "bulk-delete-customers",
+            "Preview and confirm bulk deletion",
+            3,
+            4,
+            permission="customer:delete",
+        ),
     ),
     "create-customer": (
         _action("choose-customer-type", "Choose the customer type", 0),
@@ -1379,6 +1392,13 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Recover a customer's lost MFA device",
             9,
             permission="customer:write",
+        ),
+        _action(
+            "delete-customer",
+            "Permanently delete an eligible customer",
+            10,
+            11,
+            permission="customer:delete",
         ),
     ),
     "subscription-test-connection": (

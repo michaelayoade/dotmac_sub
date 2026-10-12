@@ -199,7 +199,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: and four unit-only construction sites for fresh-owner and bounded-pool tests.
 #: Customer hard-delete characterization adds one migrated-clone engine and
 #: one Session; production construction allowances remain unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 304
+#: Customer atomic deletion adds ten migrated-PostgreSQL Session sites for
+#: physical lock/confirmation interleavings, six network participant fixtures,
+#: and two additional characterization Session sites for fresh owner isolation.
+#: These eighteen test-only sites do not expand production construction allowances.
+TEST_FIXTURE_BASELINE_TOTAL = 322
 
 
 def _baseline() -> dict[str, int]:

@@ -32,11 +32,14 @@ def _credential_administration_service(
 ) -> SOTService:
     input_name = f"{name} command and canonical state"
     customer_mfa = name == "auth.credential_administration"
+    customer_cleanup = name == "auth.credential_administration_mutation"
     return SOTService(
         name=name,
         module=module,
         owns=(concern, "administrative customer MFA reset")
         if customer_mfa
+        else (concern, "customer hard deletion auth cleanup")
+        if customer_cleanup
         else (concern,),
         depends_on=dependencies,
         contract=ServiceContract(
@@ -60,6 +63,18 @@ def _credential_administration_service(
                 )
                 if customer_mfa
                 else ()
+            )
+            + (
+                (
+                    ConcernContract(
+                        name="customer hard deletion auth cleanup",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(input_name,),
+                        canonical_writer=name,
+                    ),
+                )
+                if customer_cleanup
+                else ()
             ),
             authoritative_inputs=(
                 AuthorityInput(
@@ -73,7 +88,7 @@ def _credential_administration_service(
                 mode=TransactionMode.COORDINATOR_MANAGED
                 if coordinator
                 else TransactionMode.PARTICIPANT,
-                boundary="Public coordinator executes once on a transaction-free session; participants flush only. Credential, subscriber registration metadata, database session revocation, audit and outbox commit or roll back together. Preparation reads/hash occur on a separate session before locks.",
+                boundary="Public coordinator executes once on a transaction-free session; participants flush only. Customer cleanup admits only the exact customer.account_deletion/delete_customer_account definition, matching context and AuditActor; sorted credential/MFA/session NOWAIT locks, no recovery/Party/binding removal. Credential, subscriber registration metadata, database session revocation, audit and outbox commit or roll back together. Preparation reads/hash occur on a separate session before locks.",
                 locking="Principal FOR UPDATE precedes credential FOR UPDATE; creation and customer MFA reset serialize on refreshed Subscriber. MFA factors lock in UUID order before recovery and AuthSession updates. PostgreSQL per-lock wait is bounded at five seconds.",
                 idempotency="No durable command replay claim. Repeated deactivation is a no-op; unique credential identity arbitrates creation. Password reset is a fresh transition on each successful invocation. Customer MFA clean repeat audits only; live-factor removal or secret/counter/recovery residue cleanup revokes sessions and stages one event.",
                 retries="Lock timeout is retryable only after rollback and maps to 503 Retry-After. Unknown commit outcome is not automatically retried; inspect committed state before resubmission.",
@@ -474,6 +489,7 @@ DOMAIN = DomainSOT(
                 "administrative JSON API-key update",
                 "administrative web API-key creation revocation and rotation",
                 "local API-key authentication maintenance",
+                "customer hard deletion API-key cleanup",
             ),
             depends_on=("observability.audit_log",),
             notes=(
@@ -481,6 +497,12 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="customer hard deletion API-key cleanup",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("exact customer deletion key set",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
                     ConcernContract(
                         name="administrative JSON API-key revocation",
                         role=OwnerRole.COMMAND_WRITER,
@@ -516,6 +538,12 @@ DOMAIN = DomainSOT(
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
+                        name="exact customer deletion key set",
+                        owner="customer.account_deletion",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Exact active delete_customer_account definition, matching trusted actor/context, UUID target and pre-parent locked key IDs; current subscriber binding rechecked in DELETE.",
+                    ),
+                    AuthorityInput(
                         name="authorized revocation and ApiKey",
                         owner="auth.api_key_administration",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -548,7 +576,7 @@ DOMAIN = DomainSOT(
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
-                    boundary="authenticate enters once on a fresh session: hot snapshot has no writes; cold exact-version CAS maintains hash/timestamp and canonical hash-upgrade audit atomically, with post-update refusal rolling back. create/generate/update/revoke/web_create/web_mutate each enter execute_owner_command once on a fresh session; ApiKey and canonical AuditEvent commit or roll back together. Generation rate admission precedes the command. No external effects. Named stage_staff_key_deletion joins only the active auth.staff_provisioning deletion transaction and flushes API-key deletion plus per-key canonical audit; it does not enter the executor.",
+                    boundary="authenticate enters once on a fresh session: hot snapshot has no writes; cold exact-version CAS maintains hash/timestamp and canonical hash-upgrade audit atomically, with post-update refusal rolling back. create/generate/update/revoke/web_create/web_mutate each enter execute_owner_command once on a fresh session; ApiKey and canonical AuditEvent commit or roll back together. Generation rate admission precedes the command. No external effects. stage_customer_key_deletion is flush-only and admitted under the exact customer.account_deletion command; deletes only captured locked IDs still bound to target, never reacquires keys after parent. Named stage_staff_key_deletion joins only the active auth.staff_provisioning deletion transaction and flushes API-key deletion plus per-key canonical audit; it does not enter the executor.",
                     locking="Authentication uses scalar reads and a single same-ID/hash/standing CAS UPDATE; zero rows permits exactly one fresh same-ID/candidate verification read. No row lock or update on hot authentication. Maintenance has five-second lock_timeout, wall-clock expiry and a timestamp CASE preserving newer touches. Revocation and PATCH: ApiKey FOR UPDATE/populate_existing and PostgreSQL five-second lock timeout. Issuance: new row INSERT, unique hash and subscriber FK backstops; no existing-key lock. Web create: plain subscriber existence lookup and FK backstop; legacy cached cap checks are best-effort and race across concurrent creators or JSON updates. No cap lock or global cap guarantee. Web mutation: exact refreshed key FOR UPDATE, no principal/FK change.",
                     idempotency="Authentication accepts current snapshots; HMAC upgrade is one-time, timestamp touch at most once per five-minute window. CAS misses never retry maintenance or grant stale projections. Revocation stamps fresh state/audit each invocation. Issuance creates a new key; generated material is returned once after commit. PATCH applies supplied fields and audits every successful invocation, including empty/no-op payloads. Web creation creates a new key; rotation replaces the secret once after commit, repeated revocation stamps again. Missing/out-of-scope targets and inactive/revoked rotation return unchanged outcomes without audit. No durable replay or retry claim.",
                     retries="No automatic retry; lock timeout maps to 503 Retry-After 5 after rollback. Inspect state after unknown commit outcome.",

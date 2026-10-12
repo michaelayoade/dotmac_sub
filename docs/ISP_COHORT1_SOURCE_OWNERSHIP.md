@@ -188,11 +188,11 @@ already-baselined files looks like an ordinary shrink-and-grow pair.
 
 | Family | Files | Write sites |
 |---|---|---|
-| `service` | 20 | 93 |
+| `service` | 21 | 95 |
 | `web_presenter` | 5 | 13 |
 | `cli_script` | 5 | 12 |
-| `migration` | 8 | 11 |
-| **total** | **38** | **129** |
+| `migration` | 9 | 12 |
+| **total** | **40** | **132** |
 
 `api_route`, `webhook_handler`, `web_route`, `task_worker`, `scheduled_job`,
 `event_handler`, `websocket`, `importer`, `poller`, `app_module` and
@@ -366,7 +366,8 @@ account rows belong to cohort 1.
 | `app/services/party.py` | `party.registry` | 23 |
 | `app/services/customer_canonical_profile_patch.py` | `customer.canonical_profile_patch` | 20 |
 | `app/services/customer_registration_metadata.py` | `customer.registration_metadata` | 4 |
-| `app/services/subscriber.py` | `customer.accounts` | 14 |
+| `app/services/customer_account_deletion.py` | `customer.account_deletion` | 1 |
+| `app/services/subscriber.py` | `customer.accounts` | 15 |
 | `app/services/gis_sync.py` | `gis.spatial_sync` | 3 |
 | `app/services/customer_portal_profile_commands.py` | `customer.portal_profile_commands` | 2 |
 | `app/services/web_customer_actions.py` | `customer.profile_commands` | 7 |
@@ -379,6 +380,21 @@ customer portal profile POSTs now use the separately registered
 `customer.portal_profile_commands` owner. Both stay in the `web_presenter`
 family because that is where a reader will find them. Family is location;
 classification is authority.
+
+Customer hard deletion now has an exact coordinator,
+`customer.account_deletion` in `app/services/customer_account_deletion.py`.
+This relocates existing destructive writes from `subscriber.py` and the web
+presenter into an audited transaction; it does not add a new customer state
+transition or change the cohort's blocked status. The executable surface map
+records the coordinator as a declared internal owner. The census now also counts
+recognized session deletion of a tracked ORM entity. The previous detector
+missed three existing sites in the accepted source: two Subscriber deletions
+and one Address deletion in `subscriber.py`. With the same corrected detector,
+the accepted source measures 133 sites and this migration measures 132: the two
+parent-delete sites consolidate into one. The Address site is existing debt,
+not a new writer or a new runtime allowance. Positive and negative sensitivity
+tests cover this detection shape; the focused boundary guard separately retires
+legacy deletion methods. Other account and profile owners remain unchanged.
 
 ### Derived projections written onto cohort rows
 

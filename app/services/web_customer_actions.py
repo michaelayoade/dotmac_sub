@@ -18,8 +18,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.auth import ApiKey, MFAMethod, UserCredential
-from app.models.auth import Session as AuthSession
 from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.enforcement_lock import EnforcementLock
@@ -61,7 +59,7 @@ from app.services.account_billing_approval import (
     change_account_billing_approval,
 )
 from app.services.account_lifecycle import compute_account_status, derive_account_status
-from app.services.audit_adapter import record_audit_event, stage_audit_event
+from app.services.audit_adapter import AuditActor, record_audit_event, stage_audit_event
 from app.services.branding_config import get_brand
 from app.services.bulk_actions import (
     BulkSelection,
@@ -70,6 +68,7 @@ from app.services.bulk_actions import (
 )
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
+from app.services.customer_account_deletion import CustomerDeletionExpectation
 from app.services.customer_bulk_message_contracts import (
     BulkMessageEvaluation,
     BulkMessageSpec,
@@ -619,7 +618,7 @@ def _status_impact_token(
 
 def _delete_impact(
     db: Session, resolved: ResolvedCustomerBulkScope
-) -> tuple[dict[str, object], str]:
+) -> tuple[dict[str, object], str, tuple[CustomerDeletionExpectation, ...]]:
     """Return exact deletion eligibility and a token that detects state drift."""
     customer_ids = [customer.id for customer in resolved.customers]
     with_subscriptions = set(
@@ -645,17 +644,23 @@ def _delete_impact(
         "with_subscriptions": subscription_blocked,
         "destructive": True,
     }
+    expectations = tuple(
+        CustomerDeletionExpectation(
+            customer.id, bool(customer.is_active), customer.id in with_subscriptions
+        )
+        for customer in resolved.customers
+    )
     token = membership_scope_token(
         f"{resolved.scope}:customer_delete",
         [
             (
-                f"{customer.id}:{int(bool(customer.is_active))}:"
-                f"{int(customer.id in with_subscriptions)}"
+                f"{expectation.subscriber_id}:{int(expectation.is_active)}:"
+                f"{int(expectation.has_subscriptions)}"
             )
-            for customer in resolved.customers
+            for expectation in expectations
         ],
     )
-    return impact, token
+    return impact, token, expectations
 
 
 def bulk_update_customer_status_from_payload(
@@ -720,7 +725,7 @@ def bulk_update_customer_status_from_payload(
 
 
 def bulk_delete_customers_from_payload(
-    db: Session, payload: dict[str, Any]
+    db: Session, payload: dict[str, Any], *, actor: AuditActor
 ) -> dict[str, object]:
     resolved = resolve_bulk_customer_scope(db, payload)
     if not resolved.customers:
@@ -729,7 +734,7 @@ def bulk_delete_customers_from_payload(
     # Deletion is permanent: bind the preview not only to membership but to
     # each row's active/subscription eligibility so newly eligible rows cannot
     # be deleted under a stale impact statement.
-    impact, confirmation_token = _delete_impact(db, resolved)
+    impact, confirmation_token, expectations = _delete_impact(db, resolved)
 
     if bool(payload.get("preview_only")):
         return {
@@ -749,7 +754,10 @@ def bulk_delete_customers_from_payload(
         confirmation_token=confirmation_token,
     )
     result = bulk_delete_customers(
-        db=db, customer_ids=_bulk_id_refs(resolved.customers)
+        db=db,
+        customer_ids=_bulk_id_refs(resolved.customers),
+        actor=actor,
+        expectations=expectations,
     )
     return {
         **result,
@@ -3111,41 +3119,39 @@ def deactivate_business_customer(
     )
 
 
-def delete_person_customer(db: Session, customer_id: str) -> None:
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
-    if subscriber.is_active:
-        raise HTTPException(
-            status_code=409, detail="Deactivate customer before deleting."
+def delete_person_customer(db: Session, customer_id: str, *, actor: AuditActor) -> None:
+    from app.adapters.customer_account_deletion import (
+        delete_customer_from_adapter,
+        require_deleted,
+    )
+    from app.services.customer_account_deletion import CustomerDeletionPolicy
+
+    require_deleted(
+        delete_customer_from_adapter(
+            customer_id=customer_id,
+            actor=actor,
+            policy=CustomerDeletionPolicy.WEB_PERSON,
         )
-
-    db.query(UserCredential).filter(
-        UserCredential.subscriber_id == subscriber.id
-    ).delete(synchronize_session=False)
-    db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
     )
-    db.query(AuthSession).filter(AuthSession.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
-    )
-    db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
-    )
-    db.commit()
-    subscriber_service.subscribers.delete(db=db, subscriber_id=customer_id)
 
 
-def delete_business_customer(db: Session, customer_id: str) -> None:
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
-    if (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == subscriber.id)
-        .count()
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Delete subscriptions before deleting business customer.",
-        )
-    delete_person_customer(db, customer_id)
+def delete_business_customer(
+    db: Session, customer_id: str, *, actor: AuditActor
+) -> None:
+    from app.adapters.customer_account_deletion import (
+        delete_customer_from_adapter,
+        require_deleted,
+    )
+    from app.services.customer_account_deletion import CustomerDeletionPolicy
+
+    require_deleted(
+        delete_customer_from_adapter(
+            customer_id=customer_id,
+            actor=actor,
+            policy=CustomerDeletionPolicy.WEB_BUSINESS,
+        ),
+        business=True,
+    )
 
 
 def bulk_update_customer_status(
@@ -3219,97 +3225,49 @@ def bulk_update_customer_status(
 def bulk_delete_customers(
     db: Session,
     customer_ids: list[dict[str, str]],
+    *,
+    actor: AuditActor,
+    expectations: tuple[CustomerDeletionExpectation, ...],
 ) -> dict[str, Any]:
+    from app.adapters.customer_account_deletion import (
+        delete_customer_from_adapter,
+    )
+    from app.services.customer_account_deletion import (
+        CustomerDeletionPolicy,
+        CustomerDeletionStatus,
+    )
+
+    expected_by_id = {str(value.subscriber_id): value for value in expectations}
     deleted_count = 0
     skipped: list[dict[str, str]] = []
     for item in customer_ids:
-        customer_id = item.get("id")
-        customer_type = item.get("type")
-        try:
-            if customer_type in {"person", "subscriber"}:
-                subscriber = db.get(Subscriber, customer_id)
-                if not subscriber:
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Subscriber not found",
-                        }
-                    )
-                    continue
-                if subscriber.is_active:
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Customer is still active",
-                        }
-                    )
-                    continue
-                if (
-                    db.query(Subscription)
-                    .filter(Subscription.subscriber_id == subscriber.id)
-                    .count()
-                ):
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Has associated subscriptions",
-                        }
-                    )
-                    continue
-                db.query(UserCredential).filter(
-                    UserCredential.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(MFAMethod).filter(
-                    MFAMethod.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(AuthSession).filter(
-                    AuthSession.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(
-                    synchronize_session=False
+        customer_id = str(item.get("id") or "")
+        customer_type = str(item.get("type") or "")
+        reason = ""
+        if customer_type not in {"person", "subscriber", "business"}:
+            reason = "Unknown customer type"
+        else:
+            try:
+                outcome = delete_customer_from_adapter(
+                    customer_id=customer_id,
+                    actor=actor,
+                    policy=CustomerDeletionPolicy.WEB_BULK,
+                    expected_eligibility=expected_by_id.get(customer_id),
                 )
-                subscriber_service.subscribers.delete(
-                    db=db, subscriber_id=str(customer_id)
-                )
-                deleted_count += 1
-            elif customer_type == "business":
-                subscriber = db.get(Subscriber, customer_id)
-                if not subscriber:
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Business customer not found",
-                        }
-                    )
+                if outcome.status is CustomerDeletionStatus.DELETED:
+                    deleted_count += 1
                     continue
-                if (
-                    db.query(Subscription)
-                    .filter(Subscription.subscriber_id == subscriber.id)
-                    .count()
-                ):
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Has associated subscriptions",
-                        }
-                    )
-                    continue
-                delete_person_customer(db, str(customer_id))
-                deleted_count += 1
-        except Exception as exc:
-            skipped.append(
-                {"id": str(customer_id), "type": str(customer_type), "reason": str(exc)}
-            )
-    return {
-        "success": True,
-        "deleted_count": deleted_count,
-        "skipped": skipped,
-    }
+                reason = {
+                    CustomerDeletionStatus.MISSING: "Business customer not found"
+                    if customer_type == "business"
+                    else "Subscriber not found",
+                    CustomerDeletionStatus.ACTIVE: "Customer is still active",
+                    CustomerDeletionStatus.SUBSCRIBED: "Has associated subscriptions",
+                }[outcome.status]
+            except HTTPException as exc:
+                reason = str(exc.detail)
+        skipped.append({"id": customer_id, "type": customer_type, "reason": reason})
+    return {"success": True, "deleted_count": deleted_count, "skipped": skipped}
 
 
 def _status_from_legacy(

@@ -56,6 +56,12 @@
 # it does not add a runtime writer. Census 129 -> 130.
 #
 
+# 2026-10-12 — count tracked Session.delete(instance) writes as well. The
+# accepted tree had three previously uncounted subscriber.py deletions (133
+# total with this detector). Retiring two parent writers and adding the typed
+# deletion coordinator reduces that corrected census to 132. The remaining
+# address deletion is existing debt; no runtime write behavior was added.
+
 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 cli_script|scripts/migration/backfill_party_status.py
 cli_script|scripts/migration/import_crm_phase3.py
@@ -76,6 +82,7 @@ service|app/services/billing_cleanup_remediation.py
 service|app/services/brand_profiles.py
 service|app/services/crm_customer_name_repair.py
 service|app/services/crm_portal.py
+service|app/services/customer_account_deletion.py
 service|app/services/customer_canonical_profile_patch.py
 service|app/services/customer_location_requests.py
 service|app/services/customer_portal_contacts.py

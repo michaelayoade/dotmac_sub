@@ -1,30 +1,31 @@
 # Customer account hard deletion
 
-Status: characterization and proposed next cutover; no product change.
+Status: customer hard-deletion owner migration; hosted acceptance required.
 
-Source anchor: accepted #3571 main `a2878c1f380cbedcaa13553ddff2dbdc383103bc`,
-tree `4bc92ff199c4f56b33670c10e34b1c91aa84e52e`; normalized local source
-`87ac5fcab33e42edb8933c50c70c9b05b24e6d27`. Knowledge reference:
-`dotmac-sub-security-implementation-2026-10-11` version 34.
+Accepted characterization: #3576 main
+`a61237f38abcdf0e1975211a3fda4cee133a0939`, tree
+`dbd482b16636bb9505d0c5ada6f32cb77de4e24f`. All eighteen cases passed in
+hosted CI `38255912236`, PostgreSQL shard 2 job `114834251602`.
+Knowledge reference: `dotmac-sub-security-implementation-2026-10-11` version 46.
 
 This document proposes a bounded owner migration for existing administrative
 single/bulk customer deletion and JSON subscriber deletion. It does not authorize
 deleting accounts, changing retention policy, running migrations, or deploying.
 
-## Current behavior and evidence
+## Accepted pre-cutover behavior and evidence
 
 `tests/integration/test_customer_hard_delete_characterization_pg.py` uses the
 existing `cloned_database("heads")` fixture: the real Alembic template is cloned
 into a private writable PostgreSQL database. Actual committing entrypoints run
-against that clone. Collection is the only local validation; hosted migrated
-PostgreSQL execution is required before treating these expectations as accepted.
+against that clone. Local PostgreSQL validation is collection only; the eighteen
+expectations below were accepted by the hosted migrated PostgreSQL run above.
 The plural target includes Sub and kernel branch heads; singular `head` is
 ambiguous in this migration graph.
 Each Subscriber fixture owns an inert test Reseller: migration 116 requires
 `subscribers.reseller_id` even though the ORM permits null. Fixture review also
 checked baseline required columns and subsequent required-column additions for
 the inserted auth, network, subscription, invoice and communication records;
-hosted migrated execution remains the acceptance gate.
+future implementation changes require fresh hosted migrated execution.
 
 | Entry point | Current behavior |
 | --- | --- |
@@ -75,7 +76,7 @@ deletes a parent. Existing TR-069 integration setup removes CPE before parent
 cleanup. Neither proves this migrated parent-delete behavior. This PR deliberately
 does not repair the model, squashed snapshot, migration, or production schema.
 
-## Proposed coherent owner cutover
+## Coherent owner cutover
 
 Introduce a fully typed `customer.account_deletion` application coordinator and
 complete ServiceContract. Typed commands identify the exact account, trusted
@@ -92,10 +93,19 @@ participant savepoint or post-commit audit may split this boundary.
 Bulk remains one transaction per item, retaining earlier successful commits.
 Each item gets a fresh Session; a failed item rolls back before the next item.
 Do not change bulk to all-or-nothing. Preserve item order and existing inactive,
-missing and subscription eligibility results. Explicitly test duplicate targets,
-unknown item types and a failed middle item during implementation: they are not
-fully characterized here. Truthful duplicate/unknown results need documented
-compatibility decisions rather than silently inheriting misleading counts.
+missing and subscription eligibility results. Count a duplicate target only on
+its first successful deletion; a later occurrence is missing and skipped.
+Unknown item types are skipped with an explicit reason, never counted as
+deleted. A database-blocked middle item rolls back before processing the next
+item. These truthful results replace misleading legacy counts.
+
+Bulk commands carry immutable expected active/subscription eligibility facts
+from the confirmed impact. Recheck those facts under the Subscriber lock before
+any destructive staging. An item becoming eligible after confirmation must not
+be deleted under an impact statement that said it would be skipped: report a
+sanitized stale-impact result and continue with the remaining items. The same
+facts construct the confirmation token and the typed expectations; no separate
+unverified snapshot is substituted.
 
 Keep the existing distinctions between web and JSON: web may stage its existing
 auth-child cleanup; JSON must not gain implicit auth cascading or an inactive
@@ -130,9 +140,27 @@ connections, including stale captures. This is a bounded lock argument, not a
 claim of fleetwide deadlock freedom. Inventory auth-child concurrent writers
 before implementation and refuse unexplained inversions.
 
+The implementation inventory found principal-first credential administration,
+password reset, password/MFA login, customer MFA enrollment, credential Party
+binding and session revocation. Session refresh and legacy credential toggles
+can instead hold a child first: exact auth-child NOWAIT acquisition must refuse
+contention rather than wait while holding Subscriber. Referral credential
+enrollment takes Referral before Subscriber; its retained referred-subscriber
+FK is an additional blocker that must be checked without acquiring Referral
+after Subscriber. Hosted physical-connection tests must exercise these cases;
+source inspection alone is not concurrency acceptance.
+
+Preserve ORM parent deletion. Subscriber's ordinary addresses, custom fields,
+channels, contacts and NIN verification relationships cascade through the ORM;
+nullable ONT references detach. A direct SQL parent DELETE would introduce new
+blockers where the migrated FK lacks a database cascade. Lock the exact ORM
+consequence rows NOWAIT before staging deletion, including contact projection
+descendants and inactive network children. Retained financial, recovery and
+RBAC references remain blockers; no broader Party cleanup is authorized.
+
 ### Exact participants and ownership
 
-| Concern | Proposed owner boundary |
+| Concern | Owner boundary |
 | --- | --- |
 | Customer parent deletion and atomic orchestration | New `customer.account_deletion`; exact single-account command and per-item bulk adapter. |
 | Subscriber ApiKey removal | Extend `auth.api_key_administration` with a typed flush-only participant admitted only under the exact customer-deletion coordinator command. Preserve web cleanup policy and JSON compatibility. |
@@ -161,7 +189,7 @@ effect is invented solely to justify deletion.
 
 ## Implementation acceptance and open gaps
 
-The next PR must update registry/map, retired-writer and construction baselines,
+This slice updates registry/map, retired-writer and construction baselines,
 architecture guards, focused behavior tests and documentation together. Remove
 the legacy fallback for the migrated paths and prove adapters cannot own commits
 or invoke participants directly. Enforce exact participant command admission,
@@ -169,14 +197,32 @@ executor once, flush-only helpers and fresh per-item Sessions.
 
 Hosted migrated PostgreSQL must execute this characterization and the new
 atomic-rollback, audit-failure, exact lock-contention, key-transfer/create race,
-network NOWAIT and per-item failure-continuation cases. After cutover, replace
-the known-defect expectations with atomic behavior assertions in the same PR.
+network NOWAIT and per-item failure-continuation cases. The known-defect
+expectations are replaced with atomic behavior assertions in the same slice.
 Do not weaken an explicit schema assertion to accommodate the ORM conflict.
 
-This bounded suite does not prove every FK/history blocker, every auth child in
-isolation, inactive IP history timestamp stability, projected credentials,
-HTTP authorization, or concurrency. The bulk test proves partial success for
-eligibility skips; legacy continuation after an actual database failure remains
-an open characterization gap. Source/model discrepancy is recorded for a
-separately authorized schema investigation. No deployment, account deletion,
-local PostgreSQL/Docker run, RADIUS action or retention-policy change occurred.
+The implementation replaces the split-commit assertions with atomic rollback
+and preserves the existing explicit constraint diagnostics. Forty-five migrated
+PostgreSQL cases are collected: eighteen characterization, sixteen owner and
+eleven network participant cases. Local collection is not PostgreSQL acceptance;
+the exact published source must pass those cases in hosted CI before merge.
+The fixture census adds exactly eighteen test-only construction sites (ten
+owner, six network, and two additional characterization sessions), reaching 322.
+Production construction allowances do not grow. Four retired web-adapter
+rollbacks shrink that baseline from seventeen to thirteen in the customers
+route module.
+The cohort detector now recognizes tracked ORM instance deletion. Against the
+same detector, accepted source has 133 writer sites and the cutover has 132;
+two legacy parent-delete sites become one typed owner. Correcting the previously
+missed Address deletion records existing debt without authorizing a new writer.
+
+This bounded suite does not prove every FK/history blocker, projected credentials,
+every HTTP authentication mode, or all concurrency interleavings. Fast route
+tests exercise the real permission dependency and trusted user/API-key actor
+forwarding with upstream authentication isolated. Owner PostgreSQL cases cover
+failed-middle-item continuation, key capture interleavings, child contention,
+referral enrollment ordering, ordinary ORM cascades and confirmed-impact races;
+they do not prove fleetwide deadlock freedom or unknown-commit recovery.
+Source/model discrepancy is recorded for a separately authorized schema
+investigation. No deployment, production account deletion, local PostgreSQL or
+Docker run, RADIUS action or retention-policy change occurred.

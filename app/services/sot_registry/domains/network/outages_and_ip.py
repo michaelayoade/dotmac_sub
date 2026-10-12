@@ -214,6 +214,7 @@ SERVICES: tuple[SOTService, ...] = (
         name="network.ip_assignment_lifecycle",
         module="app.services.ip_assignment_lifecycle",
         owns=(
+            "subscriber hard-delete IPv4 and IPv6 assignment release",
             "exact service ownership of active IPv4 assignments",
             "reviewed exact-service IPv4 assignment lifecycle repair",
             "reviewed exact-service IPv4 served projection repair",
@@ -247,6 +248,15 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="subscriber hard-delete IPv4 and IPv6 assignment release",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical subscriber IP assignments",
+                        "exact customer hard-delete command",
+                    ),
+                    canonical_writer="network.ip_assignment_lifecycle",
+                ),
                 ConcernContract(
                     name="exact service ownership of active IPv4 assignments",
                     role=OwnerRole.RECONCILER,
@@ -284,6 +294,18 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical subscriber IP assignments",
+                    owner="network.ip_assignment_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Exact subscriber IPv4/IPv6 IPAssignment rows and authoritative is_active state",
+                ),
+                AuthorityInput(
+                    name="exact customer hard-delete command",
+                    owner="customer.account_deletion",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Exact delete_customer_account executor definition, same Session/context and trusted AuditActor",
+                ),
                 AuthorityInput(
                     name="canonical active IPv4 assignment",
                     owner="network.ip_assignment_lifecycle",
@@ -373,7 +395,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "Each public ownership, lifecycle, or served-projection "
                     "command enters "
                     "execute_owner_command once on a transaction-free "
-                    "session; the operator adapter owns session lifecycle."
+                    "session; the operator adapter owns session lifecycle. "
+                    "Subscriber hard-delete release is flush-only inside the "
+                    "exact customer.account_deletion command, with no executor, "
+                    "savepoint, event, projection, or transport work."
                 ),
                 locking=(
                     "The exact Subscription, Subscriber, selected "
@@ -381,7 +406,11 @@ SERVICES: tuple[SOTService, ...] = (
                     "all relevant assignment rows are locked. PostgreSQL "
                     "also holds routed-block and device-IP inventories in "
                     "SHARE mode for ledger repair; every command recomputes "
-                    "its complete evidence before mutation."
+                    "its complete evidence before mutation. Hard-delete release "
+                    "requires the coordinator's refreshed exact Subscriber FOR "
+                    "UPDATE lock first, then locks matching IPAssignment rows in "
+                    "UUID order FOR UPDATE NOWAIT with populate_existing. Only "
+                    "active rows change; existing FKs detach retained history."
                 ),
                 idempotency=(
                     "A durable audit row binds the idempotency key to the "
@@ -395,6 +424,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             errors=ErrorContract(
                 domain_codes=(
+                    "network.ip_assignment_lifecycle.invalid_customer_deletion_participant",
                     "network.ip_assignment_lifecycle.active_caller_transaction",
                     "network.ip_assignment_lifecycle.assignment_not_found",
                     "network.ip_assignment_lifecycle.command_contract_violation",
@@ -441,7 +471,10 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 replay=(
                     "The durable batch audit row and item audit rows reconstruct "
-                    "each ownership or lifecycle outcome. Served-projection "
+                    "each ownership or lifecycle outcome. Customer hard-delete "
+                    "release stages no event of its own; the coordinator's "
+                    "canonical customer.account.deleted audit shares its root. "
+                    "Served-projection "
                     "outcomes retain the exact durable event UUID; adapters "
                     "never infer success from the newest event."
                 ),
@@ -540,11 +573,14 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             steward="network operations",
             design_refs=(
+                "docs/designs/CUSTOMER_ACCOUNT_DELETION.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                 "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md",
             ),
             test_refs=(
+                "tests/test_customer_network_deletion_participants.py",
+                "tests/integration/test_customer_network_deletion_participants_pg.py",
                 "tests/test_ip_assignment_repair.py",
                 "tests/test_ip_assignment_lifecycle.py",
                 "tests/test_enforcement_terminal_polling.py",
@@ -552,6 +588,85 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_nas_session_ip_divergence_audit.py",
                 "tests/test_web_ipv4_projection_reconciliation.py",
                 "tests/architecture/test_ip_assignment_service_ownership.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="network.cpe_subscriber_retirement",
+        module="app.services.cpe_subscriber_retirement",
+        owns=("subscriber hard-delete active CPE retirement",),
+        depends_on=("observability.audit_log",),
+        notes=(
+            "Narrow flush-only active to retired transition during exact customer "
+            "hard deletion; no broader CPE inventory lifecycle takeover, repair, "
+            "projection, transport, RADIUS, provisioning, or transaction boundary."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="subscriber hard-delete active CPE retirement",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical subscriber CPE state",
+                        "exact customer hard-delete command",
+                    ),
+                    canonical_writer="network.cpe_subscriber_retirement",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical subscriber CPE state",
+                    owner="network.cpe_subscriber_retirement",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Exact CPEDevice subscriber_id and DeviceStatus.active state",
+                ),
+                AuthorityInput(
+                    name="exact customer hard-delete command",
+                    owner="customer.account_deletion",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Exact delete_customer_account executor definition, same Session/context and trusted AuditActor",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary="Flush only under exact customer.account_deletion; canonical audit and root completion belong to that coordinator.",
+                locking="Caller first locks and refreshes exact Subscriber FOR UPDATE; participant locks exact CPE rows in UUID order FOR UPDATE NOWAIT and refreshes authoritative state.",
+                idempotency="Only active rows become retired; repeat staging changes no retired or other nonactive history. Existing migrated FK detaches preserved rows after parent deletion.",
+                retries="Child 55P03 or later root failure requires complete coordinator rollback and a fresh-session retry; never continue after partial failure.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "network.cpe_subscriber_retirement.invalid_customer_deletion_participant",
+                ),
+                mapping_owner="customer.account_deletion and its web/JSON adapters",
+                fail_closed_on=(
+                    "wrong owner/definition/context/actor/target",
+                    "contended exact child lock",
+                ),
+            ),
+            events=EventContract(
+                event_types=("customer.account.deleted",),
+                schema_version=1,
+                delivery_owner="observability.audit_log",
+                compatibility="Coordinator stages canonical customer.account.deleted AuditEvent in the same root transaction. Participant stages no separate event or audit, and never sends or dispatches anything.",
+                replay="Audit is local evidence, not a delivery command. No external replay; a complete rollback restores CPE state and removes coordinator audit together.",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner="subscriber._release_subscriber_network_records active CPE writer",
+                new_owner="network.cpe_subscriber_retirement",
+                verification="Typed admission/unit tests plus hosted migrated PostgreSQL NOWAIT, freshness, rollback and retained-history checks.",
+                cutover_gate="Customer deletion coordinator is the sole participant caller and legacy helper is retired.",
+                fallback_retirement="No legacy active CPE retirement fallback remains for customer deletion.",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/designs/CUSTOMER_ACCOUNT_DELETION.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_customer_network_deletion_participants.py",
+                "tests/integration/test_customer_network_deletion_participants_pg.py",
             ),
         ),
     ),

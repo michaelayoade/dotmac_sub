@@ -28,6 +28,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.adapters.customer_account_deletion import customer_deletion_actor
 from app.db import get_db
 from app.models.party import PartyType
 from app.models.subscriber import Reseller, SubscriberCategory, UserType
@@ -3021,18 +3022,7 @@ def person_delete(
     """Delete a person."""
     try:
         web_customer_actions_service.delete_person_customer(
-            db=db, customer_id=customer_id
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="delete",
-            entity_type="subscriber",
-            entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            db=db, customer_id=customer_id, actor=customer_deletion_actor(request)
         )
         if request.headers.get("HX-Request"):
             return HTMLResponse(content="", headers={"HX-Redirect": "/admin/customers"})
@@ -3042,13 +3032,11 @@ def person_delete(
             return _htmx_error_response(str(exc.detail), status_code=200, reswap="none")
         raise
     except IntegrityError:
-        db.rollback()
         message = "Cannot delete customer. Linked records exist."
         if request.headers.get("HX-Request"):
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
-        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -3085,17 +3073,7 @@ def business_delete(
         web_customer_actions_service.delete_business_customer(
             db=db,
             customer_id=customer_id,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="delete",
-            entity_type="subscriber",
-            entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor=customer_deletion_actor(request),
         )
         if request.headers.get("HX-Request"):
             return HTMLResponse(content="", headers={"HX-Redirect": "/admin/customers"})
@@ -3105,13 +3083,11 @@ def business_delete(
             return _htmx_error_response(str(exc.detail), status_code=200, reswap="none")
         raise
     except IntegrityError:
-        db.rollback()
         message = "Cannot delete business customer. Linked records exist."
         if request.headers.get("HX-Request"):
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
-        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -3660,7 +3636,7 @@ def bulk_delete_customers(
     """Bulk delete customers (only inactive customers without subscribers)."""
     try:
         return web_customer_actions_service.bulk_delete_customers_from_payload(
-            db=db, payload=data
+            db=db, payload=data, actor=customer_deletion_actor(request)
         )
     except HTTPException:
         raise
