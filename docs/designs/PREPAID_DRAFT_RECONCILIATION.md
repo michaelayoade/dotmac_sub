@@ -623,8 +623,9 @@ ticket, and evidence digest. Preview is read-only and requires:
 - exactly one surviving entitlement ending at the replacement start and no
   competing invoice or entitlement overlapping the replacement interval;
 - exact current contract cadence, subtotal, tax, total, currency, payment
-  proof reference, account credit, allocation-release preview, and billing
-  anchor; and
+  proof reference, cutover-aware verified prepaid funding position,
+  allocation-release preview, and billing anchor; pre-opening mirror ledger
+  residue is not current customer credit; and
 - an active named Finance approver plus an authorized operator principal.
 
 Apply enters `execute_owner_command` once. It locks all evidence, recomputes the
@@ -633,9 +634,10 @@ its allocation, revokes only its entitlement, and retracts the anchor to the
 end of surviving coverage. It then invokes the canonical prepaid-renewal owner
 to create and settle the replacement invoice from the same selected Payment.
 The resulting entitlement, renewal event, final anchor, metadata, audit record,
-and idempotency reservation commit together. The expected customer credit must
-be identical before and after; any changed cent or ambiguous overlap rolls back
-the whole repair.
+and idempotency reservation commit together. The expected verified customer
+funding position (reviewed opening plus native post-boundary facts) must be
+identical before and after; any changed cent, unavailable opening, or ambiguous
+overlap rolls back the whole repair.
 
 The operator CLI is dry-run first. Deployment does not apply this repair; a
 production operator still needs separate authorization for the exact reviewed
