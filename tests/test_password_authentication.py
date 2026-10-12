@@ -1039,6 +1039,7 @@ def test_pppoe_gate_takes_a_row_share_lock(db_session, person):
         credential_version=None,
         access_credential_id=access.id,
         verified_hash=access.secret_hash,
+        access_credential_updated_at=access.updated_at,
     )
     db_session.execute = spy  # type: ignore[method-assign]
     try:

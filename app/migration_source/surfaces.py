@@ -1235,6 +1235,24 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
             "overwrites a typed value, and re-runs write nothing."
         ),
     ),
+    SourceSurface(
+        path="alembic/versions/671_customer_connection_type_definitions.py",
+        family=EntryPointFamily.MIGRATION,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="alembic migration lineage",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "The schema-lineage migration creates typed customer connection-type "
+            "definitions and its downgrade clears unsupported legacy subscriber "
+            "values before restoring the old constraint; each direction is bounded "
+            "to one migration execution."
+        ),
+    ),
 )
 
 

@@ -8018,8 +8018,6 @@ def _reviewed_paid_period_replacement_result(
         or _utc(entitlement.ends_at) != period_end
         or remaining_credit != round_money(query.expected_remaining_credit)
         or not isinstance(metadata, dict)
-        or metadata.get("superseded_invoice_id") != str(query.superseded_invoice_id)
-        or metadata.get("payment_id") != str(query.payment_id)
         or metadata.get("preview_fingerprint") != preview_fingerprint
     ):
         _error(

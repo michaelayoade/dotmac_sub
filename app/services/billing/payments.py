@@ -4472,10 +4472,6 @@ def _payment_prepaid_service_amount(db: Session, payment: Payment) -> Decimal:
                     ),
                     dict,
                 )
-                and allocation.invoice.metadata_[
-                    "legacy_payment_backed_renewal_invoice_repair"
-                ].get("payment_id")
-                == str(payment.id)
             ),
             Decimal("0.00"),
         )

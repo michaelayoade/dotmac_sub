@@ -1976,6 +1976,8 @@ def test_missing_invoice_documented_anniversary_preserves_reference_clock(
     )
     db_session.add(reference)
     db_session.commit()
+    reference.starts_at = reference.starts_at.replace(tzinfo=UTC)
+    reference.ends_at = reference.ends_at.replace(tzinfo=UTC)
 
     preview = preview_missing_paid_prepaid_invoice_repair(
         db_session,
@@ -2647,8 +2649,6 @@ def test_reviewed_paid_period_replacement_reuses_payment_and_preserves_credit(
     assert preview.superseded_allocation_id == old_allocation.id
     assert preview.superseded_entitlement_id == old_entitlement.id
     assert preview.payment_available_after_release == Decimal("100.00")
-    db_session.commit()
-
     command = ReplaceReviewedPaidPrepaidPeriodCommand(
         context=CommandContext.system(
             actor="pytest:billing-operator",
@@ -2661,6 +2661,7 @@ def test_reviewed_paid_period_replacement_reuses_payment_and_preserves_credit(
         permission_granted=True,
         actor_system_user_id=approver.id,
     )
+    db_session.commit()
     result = replace_reviewed_paid_prepaid_period(db_session, command)
     replay = replace_reviewed_paid_prepaid_period(db_session, command)
 

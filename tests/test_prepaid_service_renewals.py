@@ -585,7 +585,6 @@ def test_tax_inclusive_renewal_document_correction_is_zero_delta_and_replayable(
     )
     assert preview.credit_before == Decimal("0.50")
     assert preview.temporary_credit_after_reversal == Decimal("75250.50")
-    db_session.rollback()
     command = CorrectTaxInclusiveRenewalDocumentCommand(
         context=CommandContext.system(
             actor=f"user:{subscriber.id}",
@@ -597,6 +596,7 @@ def test_tax_inclusive_renewal_document_correction_is_zero_delta_and_replayable(
         preview_fingerprint=preview.fingerprint,
         permission_evidence="pytest active billing:ledger:write role",
     )
+    db_session.rollback()
     result = correct_tax_inclusive_renewal_document(db_session, command)
     replay = correct_tax_inclusive_renewal_document(db_session, command)
 

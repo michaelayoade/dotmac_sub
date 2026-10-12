@@ -429,7 +429,7 @@ def _mfa_enrollment_binding(
                 request=request,
             )
         )
-        raise ValueError("Invalid MFA enrollment token")
+        raise
     try:
         principal = staff_party_authentication.resolve_staff_principal_by_party(
             db,

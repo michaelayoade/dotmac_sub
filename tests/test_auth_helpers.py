@@ -25,6 +25,7 @@ from app.schemas.auth import (
 )
 from app.services import auth as auth_service
 from app.services import credential_administration as credential_admin
+from app.services import session_manager
 from app.services.audit_adapter import AuditActor
 from app.services.common import apply_ordering, apply_pagination, validate_enum
 from tests import credential_administration_fixtures as credential_commands
@@ -248,7 +249,8 @@ def test_mfa_list_delete(db_session, person):
 def test_sessions_get_delete_errors(db_session):
     with pytest.raises(HTTPException):
         auth_service.sessions.get(db_session, str(uuid.uuid4()))
-    with pytest.raises(HTTPException):
+    db_session.rollback()
+    with pytest.raises(session_manager.SessionRevocationError):
         auth_service.sessions.delete(
             db_session,
             str(uuid.uuid4()),

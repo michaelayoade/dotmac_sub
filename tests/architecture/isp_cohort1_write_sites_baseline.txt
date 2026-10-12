@@ -49,6 +49,11 @@
 # moved into the atomic metadata/login/audit/outbox coordinator, not four new
 # facts. Census 125 -> 129; cutover disposition RETIRE_AFTER_CUTOVER.
 #
+# 2026-10-11 â€” migration 671 adds one downgrade-only write site that clears
+# connection-type values outside the former closed vocabulary before restoring
+# its check constraint. Alembic owns this one-time schema lineage operation;
+# it does not add a runtime writer. Census 129 -> 130.
+#
 
 2 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 2 cli_script|scripts/migration/backfill_party_status.py
@@ -63,6 +68,7 @@
 2 migration|alembic/versions/383_replaceable_backoffice_boundary.py
 1 migration|alembic/versions/664_purge_retired_splynx_metadata_keys.py
 2 migration|alembic/versions/665_backfill_splynx_billing_email_contacts.py
+1 migration|alembic/versions/671_customer_connection_type_definitions.py
 1 service|app/services/account_deletion.py
 10 service|app/services/account_lifecycle.py
 1 service|app/services/billing_cleanup_remediation.py
@@ -88,4 +94,4 @@
 1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 129
+TOTAL 130

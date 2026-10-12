@@ -4352,10 +4352,13 @@ def _existing_tax_inclusive_document_invoice(
         db.scalars(
             select(Invoice)
             .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+            .join(PaymentAllocation, PaymentAllocation.invoice_id == Invoice.id)
             .where(
                 Invoice.account_id == query.account_id,
                 InvoiceLine.subscription_id == query.subscription_id,
                 InvoiceLine.is_active.is_(True),
+                PaymentAllocation.payment_id == query.payment_id,
+                PaymentAllocation.is_active.is_(True),
             )
             .distinct()
             .order_by(Invoice.created_at, Invoice.id)
@@ -4367,12 +4370,7 @@ def _existing_tax_inclusive_document_invoice(
         )
         if not isinstance(metadata, dict):
             continue
-        if (
-            metadata.get("adjustment_id") == str(query.adjustment_id)
-            and metadata.get("replaced_entitlement_id") == str(query.entitlement_id)
-            and metadata.get("payment_id") == str(query.payment_id)
-        ):
-            return invoice, metadata
+        return invoice, metadata
     return None
 
 
@@ -5255,10 +5253,13 @@ def _existing_legacy_payment_invoice_repair(
     rows = db.execute(
         select(Invoice, InvoiceLine)
         .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
+        .join(PaymentAllocation, PaymentAllocation.invoice_id == Invoice.id)
         .where(
             Invoice.account_id == query.account_id,
             InvoiceLine.subscription_id == query.subscription_id,
             InvoiceLine.is_active.is_(True),
+            PaymentAllocation.payment_id == query.payment_id,
+            PaymentAllocation.is_active.is_(True),
         )
         .order_by(Invoice.created_at, Invoice.id)
     ).all()
@@ -5267,12 +5268,6 @@ def _existing_legacy_payment_invoice_repair(
             _LEGACY_PAYMENT_INVOICE_REPAIR_METADATA_KEY
         )
         if not isinstance(metadata, dict):
-            continue
-        if (
-            metadata.get("payment_id") != str(query.payment_id)
-            or metadata.get("legacy_ledger_entry_id") != str(query.ledger_entry_id)
-            or metadata.get("replaced_entitlement_id") != str(query.entitlement_id)
-        ):
             continue
         return invoice, line, metadata
     return None

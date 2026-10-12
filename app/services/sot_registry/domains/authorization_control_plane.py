@@ -176,7 +176,6 @@ DOMAIN = DomainSOT(
     authentication_mechanisms=("local", "oidc"),
     setting_domains=("auth",),
     services=(
-        *CREDENTIAL_ADMINISTRATION_SERVICES,
         SOTService(
             name="auth.user_passwords",
             module="app.services.user_passwords",

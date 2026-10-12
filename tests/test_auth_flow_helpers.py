@@ -1,5 +1,6 @@
 import uuid
 import warnings
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pyotp
@@ -7,6 +8,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from jose import jwt
+from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.auth import AuthProvider, MFAMethod, MFAMethodType, UserCredential
@@ -14,6 +16,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.auth_flow import LogoutResponse, TokenResponse
 from app.services import auth_flow as auth_flow_service
+from app.services.db_session_adapter import db_session_adapter
 
 
 def _make_request(cookies: str | None = None):
@@ -28,6 +31,17 @@ def _make_request(cookies: str | None = None):
         "client": ("127.0.0.1", 12345),
     }
     return Request(scope)
+
+
+def _use_test_owner_session(db_session, monkeypatch):
+    @contextmanager
+    def fresh():
+        with Session(
+            bind=db_session.get_bind(), join_transaction_mode="create_savepoint"
+        ) as command_db:
+            yield command_db
+
+    monkeypatch.setattr(db_session_adapter, "owner_command_session", fresh)
 
 
 def test_env_helpers(monkeypatch):
@@ -521,7 +535,8 @@ def test_mfa_verify_response_success(db_session, person, monkeypatch):
     assert response.status_code == 200
 
 
-def test_refresh_logout_invalid_token(db_session):
+def test_refresh_logout_invalid_token(db_session, monkeypatch):
+    _use_test_owner_session(db_session, monkeypatch)
     with pytest.raises(HTTPException):
         auth_flow_service.AuthFlow.refresh(db_session, "invalid", _make_request())
     with pytest.raises(HTTPException):
@@ -529,6 +544,7 @@ def test_refresh_logout_invalid_token(db_session):
 
 
 def test_refresh_and_logout_responses_success(db_session, person, monkeypatch):
+    _use_test_owner_session(db_session, monkeypatch)
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     credential = UserCredential(
         person_id=person.id,
