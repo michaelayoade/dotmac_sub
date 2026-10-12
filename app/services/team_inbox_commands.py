@@ -3479,35 +3479,35 @@ def create_ai_route(
     return _commit(db, action)
 
 
+@dataclass(frozen=True, slots=True)
+class UpdateAiRouteCommand:
+    context: CommandContext
+    patch: team_inbox_routing.AiRoutePatch
+    actor: AuditActor
+
+
 def update_ai_route(
-    db: Session,
-    *,
-    route_id: str | UUID,
-    service_team_id: str | UUID | None = None,
-    display_name: str | None = None,
-    confidence_threshold: float | None = None,
-    priority: int | None = None,
-    is_active: bool | None = None,
-) -> None:
-    def action() -> None:
-        team_inbox_routing.update_ai_route(
+    db: Session, *, command: UpdateAiRouteCommand
+) -> team_inbox_routing.AiRouteUpdateOutcome:
+    def action() -> team_inbox_routing.AiRouteUpdateOutcome:
+        outcome = team_inbox_routing.update_ai_route(db, patch=command.patch)
+        stage_audit_event(
             db,
-            route_id,
-            service_team_id=service_team_id,
-            display_name=display_name,
-            confidence_threshold=confidence_threshold,
-            priority=priority,
-            is_active=is_active,
+            action="team_inbox.ai_route_updated",
+            entity_type="team_inbox_ai_route",
+            entity_id=str(outcome.route_id),
+            actor=command.actor,
+            request_id=str(command.context.command_id),
+            metadata={
+                "service_team_id": str(outcome.service_team_id),
+                "is_active": outcome.is_active,
+            },
         )
+        return outcome
 
-    _commit(db, action)
-
-
-def delete_ai_route(db: Session, *, route_id: str | UUID) -> None:
-    def action() -> None:
-        team_inbox_routing.delete_ai_route(db, route_id)
-
-    _commit(db, action)
+    return execute_owner_command(
+        db, definition=_ADMIN_MUTATION, context=command.context, operation=action
+    )
 
 
 def stage_attachments(

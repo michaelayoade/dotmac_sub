@@ -3313,6 +3313,7 @@ DOMAIN = DomainSOT(
                 "agent presence transitions",
                 "immutable agent presence transition evidence",
                 "expired WhatsApp assignment and FIFO release",
+                "AI intake route configuration",
             ),
             depends_on=(
                 "ai.intake",
@@ -3327,6 +3328,7 @@ DOMAIN = DomainSOT(
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_routing",
                 concerns=(
+                    ("AI intake route configuration", OwnerRole.COMMAND_WRITER),
                     ("routing assignment and escalation policy", OwnerRole.POLICY),
                     (
                         "routing assignment and escalation transitions",
@@ -3473,6 +3475,12 @@ DOMAIN = DomainSOT(
                 projections=(
                     "team admission sequence, current visible FIFO position, "
                     "agent capacity and notification due state",
+                ),
+                domain_error_codes=(
+                    "communications.team_inbox_routing.invalid_route_threshold",
+                    "communications.team_inbox_routing.route_not_found",
+                    "communications.team_inbox_routing.route_changed",
+                    "communications.team_inbox_routing.invalid_route_team",
                 ),
                 test_refs=(
                     "tests/test_admin_inbox_slice4_workflows.py",

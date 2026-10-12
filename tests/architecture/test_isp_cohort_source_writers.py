@@ -375,6 +375,39 @@ def test_detector_sees_raw_sql_against_a_cohort_table(tmp_path: Path) -> None:
     assert counts.get("cli_script|scripts/one_off/repair.py") == 1
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def remove(db):\n    row = db.get(Subscriber, 'id')\n    db.delete(row)\n",
+        "def remove(db):\n    row = db.query(Subscriber).first()\n    db.delete(row)\n",
+        "def remove(db, row: Subscriber):\n    db.delete(instance=row)\n",
+        "def remove(db):\n    row: Subscriber | None = db.scalars(select(Subscriber)).first()\n    db.delete(row)\n",
+    ],
+)
+def test_detector_sees_tracked_orm_instance_deletion(
+    tmp_path: Path, source: str
+) -> None:
+    _synthetic_tree(
+        tmp_path,
+        "app/services/deletion.py",
+        "from app.models.subscriber import Subscriber\n" + source,
+    )
+    assert _counts(tmp_path) == {"service|app/services/deletion.py": 1}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def remove(db, row):\n    db.delete(row)\n",
+        "def remove(db):\n    row = db.get(Ticket, 'id')\n    db.delete(row)\n",
+        "def remove(cache, row: Subscriber):\n    cache.delete(row)\n",
+    ],
+)
+def test_detector_ignores_unproven_orm_deletion(tmp_path: Path, source: str) -> None:
+    _synthetic_tree(tmp_path, "app/services/unrelated.py", source)
+    assert _counts(tmp_path) == {}
+
+
 def test_detector_ignores_a_same_named_attribute_on_another_entity(
     tmp_path: Path,
 ) -> None:

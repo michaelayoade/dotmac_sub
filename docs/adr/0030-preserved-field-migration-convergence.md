@@ -143,3 +143,14 @@ and upgrade from the already validated field 684 database, including schema
 equality of the router-health evidence tables/index and preserved lifecycle
 objects. Run canonical repository gates on the final source. This amendment
 authorizes source convergence only; it does not authorize deployment.
+
+
+### Non-migration main reconciliation
+
+The exact pinned base advances to
+`81c4b4ccd032959de6f455991c123a83bdccd674`. The five main commits since the
+accepted router-health base add authentication, customer-deletion, Inbox and
+coverage changes. The complete `alembic/` and `app/models/` trees are unchanged.
+All preserved revision IDs, parents, bodies, bridge bytes and source-artifact
+hashes remain unchanged; only the exact base and declaration digest advance.
+This rebase adds no migration admission or deployment authority.

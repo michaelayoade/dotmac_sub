@@ -205,7 +205,7 @@ def _system_command_context(
     )
 
 
-def _web_api_key_actor(context: CommandContext) -> AuditActor:
+def _system_command_actor(context: CommandContext) -> AuditActor:
     actor_type, actor_id = context.actor.split(":", 1)
     return (
         AuditActor.api_key(actor_id)
@@ -228,6 +228,24 @@ def _web_api_key_http_error(exc: DomainError) -> HTTPException:
     busy = exc.code.endswith(".busy")
     return HTTPException(
         status_code=503 if busy else 500,
+        detail=exc.message,
+        headers={"Retry-After": "5"} if busy else None,
+    )
+
+
+def _staff_deletion_http_error(exc: DomainError) -> HTTPException:
+    busy = exc.code.endswith(".deletion_busy")
+    status = (
+        404
+        if exc.code.endswith(".staff_account_not_found")
+        else 409
+        if exc.code.endswith(".linked_records")
+        else 503
+        if busy
+        else 500
+    )
+    return HTTPException(
+        status_code=status,
         detail=exc.message,
         headers={"Retry-After": "5"} if busy else None,
     )
@@ -1968,6 +1986,7 @@ def users_bulk_set_user_type(
     "/users/bulk/delete", dependencies=[Depends(require_permission("rbac:assign"))]
 )
 def users_bulk_delete(
+    request: Request,
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
 ):
@@ -1975,10 +1994,22 @@ def users_bulk_delete(
     if not user_ids or not isinstance(user_ids, list):
         raise HTTPException(status_code=400, detail="user_ids is required")
 
-    deleted, skipped = web_system_user_mutations_service.bulk_delete_user_records(
-        db,
-        user_ids=[str(item) for item in user_ids],
+    context = _system_command_context(
+        request, reason="Delete inactive staff accounts", idempotency_key=str(uuid4())
     )
+    try:
+        command = staff_provisioning_service.BulkDeleteStaffAccountsCommand(
+            context=context,
+            actor=_system_command_actor(context),
+            user_ids=tuple(UUID(str(value)) for value in user_ids),
+        )
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = staff_provisioning_service.bulk_delete_staff_accounts(
+                command_db, command=command
+            )
+    except DomainError as exc:
+        raise _staff_deletion_http_error(exc) from None
+    deleted, skipped = len(outcome.deleted_user_ids), outcome.skipped_count
     return {
         "message": f"Deleted {deleted} users. Skipped {skipped}.",
         "deleted_count": deleted,
@@ -2756,32 +2787,21 @@ def user_create(
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def user_delete(request: Request, user_id: str, db: Session = Depends(get_db)):
-    system_user = web_system_user_edit_service.get_subscriber_or_none(db, user_id)
-    if not system_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if system_user.is_active:
-        return web_system_common_service.blocked_delete_response(
-            request, [], detail="Deactivate user before deleting."
-        )
-    deleted_metadata = {
-        "email": system_user.email,
-        "display_name": system_user.display_name
-        or f"{system_user.first_name or ''} {system_user.last_name or ''}".strip(),
-    }
+    context = _system_command_context(
+        request, reason="Delete inactive staff account", idempotency_key=str(uuid4())
+    )
+    command = staff_provisioning_service.DeleteStaffAccountCommand(
+        context=context, actor=_system_command_actor(context), user_id=UUID(user_id)
+    )
     try:
-        web_system_user_mutations_service.delete_user_records(db, user_id=user_id)
-        _log_system_user_event(
-            db,
-            request,
-            action="delete",
-            user_id=user_id,
-            metadata=deleted_metadata,
-        )
-    except IntegrityError:
-        db.rollback()
-        return web_system_common_service.blocked_delete_response(
-            request, [], detail="User cannot be deleted due to linked records."
-        )
+        with db_session_adapter.owner_command_session() as command_db:
+            staff_provisioning_service.delete_staff_account(command_db, command=command)
+    except DomainError as exc:
+        if exc.code.endswith((".active_staff_deletion", ".linked_records")):
+            return web_system_common_service.blocked_delete_response(
+                request, [], detail=exc.message
+            )
+        raise _staff_deletion_http_error(exc) from None
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Redirect": "/admin/system/users"})
     return RedirectResponse(url="/admin/system/users", status_code=303)
@@ -3332,7 +3352,7 @@ def api_key_create(
         )
         command = api_key_admin.WebCreateApiKeyCommand(
             context=command_context,
-            actor=_web_api_key_actor(command_context),
+            actor=_system_command_actor(command_context),
             subscriber_id=UUID(owner_id) if owner_id else None,
             label=label,
             expires_in_days=int(expires_in) if expires_in else None,
@@ -3395,7 +3415,7 @@ def api_key_revoke(request: Request, key_id: str, db: Session = Depends(get_db))
     )
     command = api_key_admin.WebMutateApiKeyCommand(
         context=command_context,
-        actor=_web_api_key_actor(command_context),
+        actor=_system_command_actor(command_context),
         key_id=UUID(key_id),
         caller_scope=_web_api_key_scope(person_id),
         action=api_key_admin.WebApiKeyAction.REVOKE,
@@ -3428,7 +3448,7 @@ def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db))
     )
     command = api_key_admin.WebMutateApiKeyCommand(
         context=command_context,
-        actor=_web_api_key_actor(command_context),
+        actor=_system_command_actor(command_context),
         key_id=UUID(key_id),
         caller_scope=_web_api_key_scope(person_id),
         action=api_key_admin.WebApiKeyAction.ROTATE,

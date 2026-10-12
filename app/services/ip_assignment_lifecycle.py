@@ -24,7 +24,7 @@ import ipaddress
 import json
 import secrets
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NoReturn
 from uuid import UUID
@@ -47,13 +47,16 @@ from app.models.radius import RadiusClient
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.router_management import Router
 from app.models.subscriber import Subscriber
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
+    current_command_context,
+    current_command_definition,
     execute_owner_command,
+    owner_command_active,
 )
 
 _OWNER = "network.ip_assignment_lifecycle"
@@ -1745,7 +1748,72 @@ def apply_service_ipv4_projection_participant(
     return _repair_service_ipv4_projection(db, command)
 
 
+@dataclass(frozen=True, slots=True)
+class ReleaseSubscriberIPAssignmentsCommand:
+    context: CommandContext = field(repr=False)
+    subscriber_id: UUID
+    actor: AuditActor = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberIPAssignmentReleaseOutcome:
+    released_assignment_ids: tuple[UUID, ...]
+
+
+def stage_subscriber_ip_assignment_release(
+    db: Session, *, command: ReleaseSubscriberIPAssignmentsCommand
+) -> SubscriberIPAssignmentReleaseOutcome:
+    """Release active IPv4/IPv6 rows within exact customer hard deletion.
+
+    The coordinator must first lock and refresh the exact Subscriber. Child
+    locks never wait while holding that parent; a lock error aborts the entire
+    root command. History stays attached until the migrated SET NULL FK runs.
+    No projection, transport, repair, audit, or transaction is owned here.
+    """
+    if (
+        not isinstance(command, ReleaseSubscriberIPAssignmentsCommand)
+        or not isinstance(command.subscriber_id, UUID)
+        or not isinstance(command.context, CommandContext)
+        or not isinstance(command.actor, AuditActor)
+        or command.actor.actor_type not in {AuditActorType.user, AuditActorType.api_key}
+        or command.context.actor
+        != f"{command.actor.actor_type.value}:{command.actor.actor_id}"
+        or not owner_command_active(db, owner="customer.account_deletion")
+        or current_command_definition(db)
+        != OwnerCommandDefinition(
+            owner="customer.account_deletion",
+            concern="customer account hard deletion",
+            name="delete_customer_account",
+        )
+        or current_command_context(db) != command.context
+    ):
+        raise IPv4AssignmentLifecycleError(
+            code=f"{_OWNER}.invalid_customer_deletion_participant",
+            message="Exact trusted customer deletion command required.",
+        )
+    with db.no_autoflush:
+        assignments = tuple(
+            db.scalars(
+                select(IPAssignment)
+                .where(IPAssignment.subscriber_id == command.subscriber_id)
+                .order_by(IPAssignment.id)
+                .with_for_update(nowait=True)
+                .execution_options(populate_existing=True)
+            )
+        )
+    released: list[UUID] = []
+    for assignment in assignments:
+        if assignment.is_active:
+            assignment.is_active = False
+            released.append(assignment.id)
+    db.flush()
+    return SubscriberIPAssignmentReleaseOutcome(tuple(released))
+
+
 __all__ = [
+    "ReleaseSubscriberIPAssignmentsCommand",
+    "SubscriberIPAssignmentReleaseOutcome",
+    "stage_subscriber_ip_assignment_release",
     "ActiveIPv4AssignmentEvidence",
     "IPAssignmentOwnershipDecision",
     "IPAssignmentOwnershipError",

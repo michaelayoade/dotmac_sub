@@ -38,6 +38,9 @@ from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_RECEIVE_CAPABILITY,
 )
 from tests.integration_platform_helpers import enable_capability
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 WRITE_TOKEN = "integrator-write-token"
 MIRROR_TOKEN = "integrator-mirror-token"

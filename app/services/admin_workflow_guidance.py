@@ -247,6 +247,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Search by name, phone, email, account number, business name, or known identifier.",
         "Use filters to narrow the list, then open the matching customer.",
         "Confirm contact details, billing account, service address, active service, and recent history.",
+        "For bulk deletion, review the preview and confirm the selected customers, eligible count, and skipped accounts before continuing. If the impact has changed, preview again before confirming.",
+        "Review the bulk result for each customer. Earlier successful deletions remain complete when a later customer is skipped or blocked; repeated selections and unknown customer types do not count as deletions.",
         notes=(
             "If records are similar, stop and compare the billing account and subscription before changing anything.",
         ),
@@ -287,8 +289,12 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "After confirming a customer message, use the send status panel to follow recipient preparation and delivery. If confirmation is lost, keep the send reference and choose Check status before submitting another send.",
         "If a prepaid funding quarantine banner appears, prepaid service cannot be created or activated until Finance captures the account's opening balance through the runbook the banner names. Only when the customer must be connected first, an admin may grant an activation override with a clear reason; revoke it once the opening is captured.",
         "To recover a customer's lost MFA device, confirm their identity and use Reset MFA in Account. A successful reset removes their factors and recovery codes and ends their active sessions; ask them to sign in again and set MFA up from the portal profile page.",
+        "Before permanently deleting a customer, confirm the account and deactivate it. Business accounts and bulk deletions also require all subscriptions to be removed through their proper workflow.",
+        "If deletion is blocked by linked financial, recovery, or history records, review those records with the responsible team. If the account is busy or changed during deletion, refresh it and retry; for bulk deletion, obtain a fresh preview and confirmation.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "A successful deletion removes the customer account and its login records, releases active IP assignments, retires active customer equipment, and saves the audit record together. If any part fails, these changes are all undone. Retained equipment and network history remain, along with the underlying person or organization record.",
+            "Deletion cannot be used to erase linked financial or retained history records. An individual customer with a remaining subscription is also blocked from deletion.",
             "An activation override only admits prepaid activation. The account stays funding-quarantined, excluded from balance-based suspension and restoration, and still counts in the quarantine alert until its opening is captured.",
             "Authorized staff can open Test Connection below the Invoice icon in All Subscriptions to grant temporary full service access for troubleshooting; review the configured system-wide duration and expiry before activation.",
             "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
@@ -867,7 +873,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "To link the sender to an existing Customer, open Contact details and click Existing Customer to load likely matches. If none is right, type at least two characters to search all active Customers by name, email, phone, company, account number, subscriber number, or Customer ID, then choose the exact result before selecting Link Customer.",
         "Keep the Inbox visible while available; its authenticated heartbeat refreshes your routing presence but never overrides Away, On break, or Offline.",
         "Open the conversation or linked ticket before acting, then return to the same filtered queue context.",
-        "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and customer-wait handoff interval.",
+        "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and customer-wait handoff interval. When editing an existing AI route, review its team, confidence, priority, and active state; Keep current preserves an inactive team unless you explicitly choose an active replacement. Use Disable or Reactivate for state changes; if the route changed since the page loaded, reload before trying again.",
         "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
             "Inbox overview counts reflect the last full page load. Choose Refresh counts when you need current totals; the filtered list updates separately.",
@@ -1185,6 +1191,8 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use the specific user, role, module, scheduler, import, export, restore, or maintenance workflow.",
         "Verify the result and audit record; use destructive tools only with an approved operational plan.",
         notes=(
+            "Deactivate a staff account before deleting it. Delete removes its credentials, factors, sessions, grants and staff-bound API keys only when linked history permits it; its native identity history is retained. A failed deletion leaves the selected accounts and keys unchanged.",
+            "Bulk Delete skips active or missing users and repeated selections. Its deleted count reports distinct accounts; one linked-record blocker prevents the whole batch from being deleted. Review the blocked records before trying again.",
             "For API keys, choose a clear purpose, narrow scopes and an expiry. System-owned keys are shared with permissioned administrators; subscriber-owned keys appear alongside those shared keys for their owner.",
             "Create and Rotate show the secret once in the submitted page. Copy it securely before leaving; it is never included in a redirect URL. Rotation replaces the old secret immediately; revocation disables the key.",
             "A failed save does not present a new secret or a successful change. Review current state and audit evidence before retrying an uncertain request. Creation limits guide web requests and can be exceeded by concurrent or other administration requests.",
@@ -1331,6 +1339,13 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     "find-customer": (
         _action("search-customers", "Search and filter customers", 0, 1),
         _action("open-customer", "Open and confirm a customer", 2),
+        _action(
+            "bulk-delete-customers",
+            "Preview and confirm bulk deletion",
+            3,
+            4,
+            permission="customer:delete",
+        ),
     ),
     "create-customer": (
         _action("choose-customer-type", "Choose the customer type", 0),
@@ -1377,6 +1392,13 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Recover a customer's lost MFA device",
             9,
             permission="customer:write",
+        ),
+        _action(
+            "delete-customer",
+            "Permanently delete an eligible customer",
+            10,
+            11,
+            permission="customer:delete",
         ),
     ),
     "subscription-test-connection": (

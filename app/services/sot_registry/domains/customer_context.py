@@ -165,6 +165,101 @@ DOMAIN = DomainSOT(
     services=(
         CUSTOMER_FIELD_IDENTITY_SERVICE,
         SOTService(
+            name="customer.account_deletion",
+            module="app.services.customer_account_deletion",
+            owns=("customer account hard deletion",),
+            depends_on=(
+                "customer.accounts",
+                "auth.api_key_administration",
+                "auth.credential_administration_mutation",
+                "network.ip_assignment_lifecycle",
+                "network.cpe_subscriber_retirement",
+                "observability.audit_log",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer account hard deletion",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "authorized exact customer deletion",
+                            "canonical customer and retained relationships",
+                            "subscriber-bound API keys",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authorized exact customer deletion",
+                        owner="customer.account_deletion",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed UUID, trusted administrative AuditActor/context, explicit adapter policy and confirmed bulk eligibility expectations.",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer and retained relationships",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Subscriber refreshed under its exact lock, existing subscription references, ORM cascades and database retention blockers; no linked financial or history ownership is migrated.",
+                    ),
+                    AuthorityInput(
+                        name="subscriber-bound API keys",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed pre-parent key capture and lock outcome, fresh post-parent membership check and exact still-bound deletion participant.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary="Exactly one execute_owner_command on a fresh per-item Session; auth/network/parent/canonical audit atomically commit or roll back.",
+                    locking="Sorted captured ApiKey IDs NOWAIT before refreshed Subscriber NOWAIT; fresh nonlocking post-parent key query refuses uncaptured keys. Auth and network children NOWAIT; never acquire new key after parent.",
+                    idempotency="Missing returns missing; repeats and bulk duplicates never count as another deletion. No durable replay claim.",
+                    retries="Retry entire command on a new Session after rollback. Unknown commit outcome requires inspection.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "customer.account_deletion"
+                        ),
+                        "customer.account_deletion.invalid_command",
+                        "customer.account_deletion.invalid_participant",
+                        "customer.account_deletion.blocked",
+                        "customer.account_deletion.stale_impact",
+                        "customer.account_deletion.busy",
+                        "customer.account_deletion.unavailable",
+                    ),
+                    mapping_owner="customer HTTP/session adapters",
+                    retryable_codes=("customer.account_deletion.busy",),
+                    fail_closed_on=(
+                        "linked financial, recovery or history records",
+                        "unexplained concurrency",
+                        "audit failure",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("customer.account.deleted",),
+                    schema_version=1,
+                    delivery_owner="observability.audit_log",
+                    compatibility="Local canonical AuditEvent only: identifiers, policy and command correlation; no outbox or external event.",
+                    replay="Audit evidence commits once with each actual deletion; no delivery side effect.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    new_owner="customer.account_deletion",
+                    old_owner="web_customer_actions split commits and Subscribers/Accounts.delete",
+                    verification="Focused fast owner guards and hosted migrated PostgreSQL deletion tests.",
+                    cutover_gate="All administrative hard deletion adapters use one fresh Session per item.",
+                    fallback_retirement="Legacy parent deletion and network helper removed; exact typed auth/network participants are flush-only.",
+                ),
+                steward="customer operations and platform security",
+                design_refs=("docs/designs/CUSTOMER_ACCOUNT_DELETION.md",),
+                test_refs=(
+                    "tests/test_customer_account_deletion.py",
+                    "tests/integration/test_customer_hard_delete_characterization_pg.py",
+                    "tests/integration/test_customer_account_deletion_pg.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.period_purchase_finance_review",
             module="app.services.web_billing_period_reviews",
             owns=("period purchase Finance review projection",),

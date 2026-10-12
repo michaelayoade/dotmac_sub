@@ -1,4 +1,43 @@
-# Fiber website patch bundle
+# Fiber website entry: WhatsApp-first
+
+## Current coverage journey
+
+On 2026-10-12 Michael authorized replacing `/coverage/` with a WhatsApp-first
+Sales page pointing to +234 812 117 9536. `fiber-coverage-page.html` records that
+published static page. The home and business links open distinct prepared
+enquiries; the visitor must press Send in WhatsApp. No form submission, GPS
+collection, automated coverage verdict or browser Lead conversion is performed.
+Customers share their address or location pin in WhatsApp and continue replies
+there after leaving the website. Existing-customer Support has a separate
+prepared message on the same number.
+
+The native WhatsApp integration, Inbox routing and canonical Sales Lead owner
+handle the received message. A link click is not an enquiry or saved Lead.
+The configured WhatsApp account must be matched to the website number and a
+synthetic journey verified. The existing canonical `coverage_request` route
+still needs reviewed reassignment to Sales after the route-editing fix deploys.
+Do not describe enabled integration status as proof of end-to-end delivery.
+
+The separate Fiber inquiry HMAC/binding is not used by this page. Its credentials
+remain private; no secret or binding was changed during website publication.
+The prepared message includes the public source page, but that text is not
+verified campaign attribution. Incoming Leads belong to the WhatsApp cohort;
+website UTM and Meta website-Lead CAPI handling must not be inferred from a click.
+
+### Publication and rollback evidence
+
+Both the live static `/coverage/index.html` and WordPress page 1783 were updated.
+The maintained `/home/dotmac/projects/fiber-site/pages/fiber-coverage-page.html`
+and `dist/coverage/index.html` copies were synchronized with source backups.
+Live originals are outside the public document root in
+`/home1/ursvvkte/coverage-backups/whatsapp-first-20261012/`:
+`static-before.html` and `wordpress-before.json`.
+An authorized operator can restore both corresponding originals after checking
+whether newer changes exist. Do not restore only one served representation.
+The live page was visually inspected and all WhatsApp link destinations checked;
+no message was sent and no production Lead was created during verification.
+
+## Legacy signed-form bundle (not used by the current coverage page)
 
 This is a reviewable snapshot of the website corrections recovered from the
 earlier website investigation. These files are not loaded by Selfcare. Merging
@@ -35,7 +74,7 @@ Run `php test-producer.php` in this directory for the isolated contract harness.
 It uses fake credentials, mocked WordPress, and no network or customer records.
 It does not prove a complete WordPress installation or real server integration.
 
-## Outstanding reliability implementation and acceptance
+## Legacy signed-form reliability implementation and acceptance
 
 This snapshot is a contract correction, not a completed durable relay. Before
 launch, the follow-up must satisfy every item below:

@@ -265,3 +265,65 @@ def disable_locked_principal_factors(
         method.locked_until = None
     db.flush()
     return FactorDisableResult(len(live), codes, cleaned)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CustomerAuthDeletionCommand:
+    context: CommandContext
+    actor: AuditActor
+    subscriber_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerAuthDeletionOutcome:
+    credential_ids: tuple[UUID, ...]
+    mfa_method_ids: tuple[UUID, ...]
+    session_ids: tuple[UUID, ...]
+
+
+def stage_customer_auth_deletion(
+    db: Session, *, command: CustomerAuthDeletionCommand
+) -> CustomerAuthDeletionOutcome:
+    """Exact flush-only cleanup; recovery, Party and binding records remain blockers."""
+    from sqlalchemy import delete
+
+    from app.services.customer_account_deletion import (
+        require_customer_deletion_participant,
+    )
+
+    if not isinstance(command, CustomerAuthDeletionCommand) or not isinstance(
+        command.subscriber_id, UUID
+    ):
+        raise error("invalid_participant", "Typed customer auth deletion required.")
+    require_customer_deletion_participant(
+        db, context=command.context, actor=command.actor
+    )
+    credential_ids = tuple(
+        db.scalars(
+            select(UserCredential.id)
+            .where(UserCredential.subscriber_id == command.subscriber_id)
+            .order_by(UserCredential.id)
+            .with_for_update(nowait=True)
+        )
+    )
+    mfa_ids = tuple(
+        db.scalars(
+            select(MFAMethod.id)
+            .where(MFAMethod.subscriber_id == command.subscriber_id)
+            .order_by(MFAMethod.id)
+            .with_for_update(nowait=True)
+        )
+    )
+    session_ids = tuple(
+        db.scalars(
+            select(AuthSession.id)
+            .where(AuthSession.subscriber_id == command.subscriber_id)
+            .order_by(AuthSession.id)
+            .with_for_update(nowait=True)
+        )
+    )
+    db.execute(delete(UserCredential).where(UserCredential.id.in_(credential_ids)))
+    db.execute(delete(MFAMethod).where(MFAMethod.id.in_(mfa_ids)))
+    db.execute(delete(AuthSession).where(AuthSession.id.in_(session_ids)))
+    db.flush()
+    return CustomerAuthDeletionOutcome(credential_ids, mfa_ids, session_ids)

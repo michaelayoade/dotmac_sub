@@ -25,6 +25,9 @@ from app.services.owner_commands import OwnerCommandError
 from tests.api_key_update_fixtures import update_command
 from tests.support.tx_trace import assert_protected_tx, trace_transactions
 from tests.test_api_key_administration import key_fixture
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 
 def audits(db: Session, key_id: UUID) -> list[AuditEvent]:

@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 from uuid import UUID
 
@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.db import finish_read_transaction
 from app.db import get_db as _get_db
-from app.models.auth import ApiKey, SessionStatus
 from app.models.auth import Session as AuthSession
+from app.models.auth import SessionStatus
 from app.models.rbac import (
     Permission,
     Role,
@@ -21,16 +21,13 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.services.auth import (
-    hash_api_key,
-    hash_api_key_candidates,
-    is_legacy_api_key_hash,
-)
+from app.services import api_key_administration as api_key_owner
 from app.services.auth_flow import (
     _load_rbac_claims,
     decode_access_token,
     hash_session_token,
 )
+from app.services.db_session_adapter import db_session_adapter
 from app.services.permission_admission import PermissionAdmission
 from app.services.permission_authorization import (
     PermissionPrincipal,
@@ -154,33 +151,27 @@ def _is_jwt(token: str) -> bool:
     return token.count(".") == 2
 
 
-# "Last used" is observability, not an audit trail: refresh at most once per
-# window so hot keys don't pay a DB write (and commit) on every request.
-_API_KEY_LAST_USED_REFRESH = timedelta(minutes=5)
-
-
-def _touch_api_key_last_used(db: Session, api_key: ApiKey, now: datetime) -> None:
-    last_used = _as_utc(api_key.last_used_at)
-    if last_used is not None and now - last_used < _API_KEY_LAST_USED_REFRESH:
-        return
-    api_key.last_used_at = now
-    db.commit()
-
-
-def _maybe_upgrade_api_key_hash(db: Session, api_key: ApiKey, raw_key: str) -> None:
-    """Rehash a legacy (unsalted-sha256) key to HMAC on successful auth.
-
-    One-time per key: after the upgrade the stored hash is no longer legacy, so
-    later requests skip this. Committed unconditionally (not subject to the
-    last-used throttle) so the upgrade always persists.
-    """
-    if not is_legacy_api_key_hash(api_key.key_hash):
-        return
-    upgraded = hash_api_key(raw_key)
-    if is_legacy_api_key_hash(upgraded):
-        return  # no server secret configured (dev/test) — nothing to upgrade to
-    api_key.key_hash = upgraded
-    db.commit()
+def _authenticate_local_api_key(
+    raw_key: str, *, audience: api_key_owner.ApiKeyAuthenticationAudience
+) -> api_key_owner.AuthenticatedApiKey | None:
+    """Adapt local authentication to an independent owner command session."""
+    try:
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = api_key_owner.authenticate(
+                command_db,
+                command=api_key_owner.AuthenticateApiKeyCommand(raw_key, audience),
+            )
+        return outcome.principal
+    except api_key_owner.ApiKeyAuthenticationError as exc:
+        if exc.code.endswith(".authentication_busy"):
+            raise HTTPException(
+                status_code=503,
+                detail="API-key authentication unavailable",
+                headers={"Retry-After": "5"},
+            ) from None
+        raise HTTPException(
+            status_code=503, detail="API-key authentication unavailable"
+        ) from None
 
 
 def _has_audit_scope(payload: dict) -> bool:
@@ -213,6 +204,7 @@ def require_audit_auth(
     request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(_get_db),
 ):
+    caller_transaction = db.in_transaction()
     token = _extract_bearer_token(authorization) or x_session_token
     now = datetime.now(UTC)
     if token:
@@ -261,22 +253,16 @@ def require_audit_auth(
     # same gate JWTs must pass (`_has_audit_scope`). A key with no/other scopes is
     # rejected, closing the historical unscoped-key bypass.
     if x_api_key:
-        api_key = (
-            db.query(ApiKey)
-            .filter(ApiKey.key_hash.in_(hash_api_key_candidates(x_api_key)))
-            .filter(ApiKey.is_active.is_(True))
-            .filter(ApiKey.revoked_at.is_(None))
-            .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
-            .first()
-        )
-        if api_key and _has_audit_scope({"scopes": list(api_key.scopes or [])}):
-            _maybe_upgrade_api_key_hash(db, api_key, x_api_key)
-            _touch_api_key_last_used(db, api_key, now)
-            if request is not None:
-                request.state.actor_id = str(api_key.id)
-                request.state.actor_type = "api_key"
+        if not caller_transaction:
             finish_read_transaction(db)
-            return {"actor_type": "api_key", "actor_id": str(api_key.id)}
+        api_key = _authenticate_local_api_key(
+            x_api_key, audience=api_key_owner.ApiKeyAuthenticationAudience.AUDIT
+        )
+        if api_key is not None:
+            if request is not None:
+                request.state.actor_id = str(api_key.key_id)
+                request.state.actor_type = "api_key"
+            return {"actor_type": "api_key", "actor_id": str(api_key.key_id)}
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -371,24 +357,21 @@ def _api_key_principal(
     branch is the legacy half of a bounded migration and goes away with the
     last unreissued credential.
     """
+    caller_transaction = db.in_transaction()
     machine = _machine_principal(db, raw_key, request)
     if machine is not None:
         return machine
 
-    now = datetime.now(UTC)
-    api_key = (
-        db.query(ApiKey)
-        .filter(ApiKey.key_hash.in_(hash_api_key_candidates(raw_key)))
-        .filter(ApiKey.is_active.is_(True))
-        .filter(ApiKey.revoked_at.is_(None))
-        .filter((ApiKey.expires_at.is_(None)) | (ApiKey.expires_at > now))
-        .first()
+    # Release a clean failed machine-probe read before checking out the
+    # independent command connection. Pending caller mutations remain intact.
+    if not caller_transaction:
+        finish_read_transaction(db)
+    api_key = _authenticate_local_api_key(
+        raw_key, audience=api_key_owner.ApiKeyAuthenticationAudience.GENERAL
     )
-    if not api_key:
+    if api_key is None:
         return None
-    _maybe_upgrade_api_key_hash(db, api_key, raw_key)
-    _touch_api_key_last_used(db, api_key, now)
-    actor_id = str(api_key.id)
+    actor_id = str(api_key.key_id)
     owner = str(api_key.subscriber_id) if api_key.subscriber_id else actor_id
     auth = {
         "subscriber_id": owner,
@@ -408,7 +391,6 @@ def _api_key_principal(
         request.state.actor_id = actor_id
         request.state.actor_type = "api_key"
         request.state.auth = auth
-    finish_read_transaction(db)
     return auth
 
 

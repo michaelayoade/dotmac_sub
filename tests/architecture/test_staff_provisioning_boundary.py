@@ -121,3 +121,60 @@ def test_login_credential_card_uses_owner_status_and_eligibility() -> None:
     detail_calls = _function_calls(PROFILE_READ_ADAPTER, "get_user_detail_data")
 
     assert "get_staff_login_identity_view" in detail_calls
+
+
+def test_staff_deletion_uses_fresh_typed_owner_and_retires_helpers() -> None:
+    from app.services import web_system_user_mutations as legacy
+
+    assert not hasattr(legacy, "delete_user_records")
+    assert not hasattr(legacy, "bulk_delete_user_records")
+    for name in ("user_delete", "users_bulk_delete"):
+        calls = _function_calls(ADMIN_ROUTE, name)
+        assert "owner_command_session" in calls and "_system_command_context" in calls
+        assert (
+            not {
+                "add",
+                "add_all",
+                "flush",
+                "commit",
+                "rollback",
+                "_log_system_user_event",
+            }
+            & calls
+        )
+        tree = ast.parse(ADMIN_ROUTE.read_text())
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        source = ast.unparse(function)
+        assert "db.delete(" not in source and "db.execute(" not in source
+        expected = (
+            "delete_staff_account"
+            if name == "user_delete"
+            else "bulk_delete_staff_accounts"
+        )
+        assert (
+            f"staff_provisioning_service.{expected}(command_db, command=command)"
+            in source
+        )
+    for name in ("delete_staff_account", "bulk_delete_staff_accounts"):
+        tree = ast.parse(OWNER.read_text())
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        assert ast.unparse(function).count("execute_owner_command(") == 1
+    participant_calls = _function_calls(
+        PROJECT_ROOT / "app/services/api_key_administration.py",
+        "stage_staff_key_deletion",
+    )
+    assert {
+        "owner_command_active",
+        "current_command_context",
+        "stage_audit_event",
+        "flush",
+    } <= participant_calls
+    assert not {"execute_owner_command", "commit", "rollback"} & participant_calls

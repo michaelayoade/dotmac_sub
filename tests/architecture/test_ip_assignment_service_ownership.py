@@ -45,7 +45,7 @@ _IP_ASSIGNMENT_WRITERS = {
 }
 
 # Modules that retire an allocation (`assignment.is_active = False`). This set
-# is LARGER than the constructor set and only partly overlaps it: four modules
+# is LARGER than the constructor set and only partly overlaps it: three modules
 # retire an address without ever creating one. Pinning constructors alone would
 # have left retirement -- reclaiming a live customer address -- unguarded.
 _IP_ASSIGNMENT_DEACTIVATORS = {
@@ -54,7 +54,6 @@ _IP_ASSIGNMENT_DEACTIVATORS = {
     "app/services/network/ip.py",  # debt: provisioning allocation/reactivation
     "app/services/network/subscriber_wan_ipam.py",  # debt: ONT WAN claims
     "app/services/provisioning_helpers.py",  # debt: provisioning reclaim
-    "app/services/subscriber.py",  # debt: subscriber deletion cleanup
     "app/services/web_system_restore_tool.py",  # debt: restore tooling
 }
 
@@ -66,9 +65,39 @@ def test_ipam_ownership_owner_has_complete_transaction_contract() -> None:
     assert service.contract is not None
     assert service.contract.transaction.mode is TransactionMode.OWNER_MANAGED
     assert service.contract.migration.state is AuthorityMigrationState.SHADOWING
-    assert service.contract.concerns[0].role is OwnerRole.RECONCILER
-    assert service.contract.concerns[1].role is OwnerRole.COMMAND_WRITER
-    assert service.contract.concerns[2].role is OwnerRole.COMMAND_WRITER
+    concerns = {concern.name: concern for concern in service.contract.concerns}
+    assert set(concerns) == {
+        "exact service ownership of active IPv4 assignments",
+        "reviewed exact-service IPv4 assignment lifecycle repair",
+        "reviewed exact-service IPv4 served projection repair",
+        "subscriber hard-delete IPv4 and IPv6 assignment release",
+    }
+    assert (
+        concerns["exact service ownership of active IPv4 assignments"].role
+        is OwnerRole.RECONCILER
+    )
+    for name in (
+        "reviewed exact-service IPv4 assignment lifecycle repair",
+        "reviewed exact-service IPv4 served projection repair",
+        "subscriber hard-delete IPv4 and IPv6 assignment release",
+    ):
+        assert concerns[name].role is OwnerRole.COMMAND_WRITER
+        assert concerns[name].canonical_writer == "network.ip_assignment_lifecycle"
+    deletion = concerns["subscriber hard-delete IPv4 and IPv6 assignment release"]
+    assert deletion.input_names == (
+        "canonical subscriber IP assignments",
+        "exact customer hard-delete command",
+    )
+    inputs = {value.name: value for value in service.contract.authoritative_inputs}
+    assert (
+        inputs["exact customer hard-delete command"].owner
+        == "customer.account_deletion"
+    )
+    assert "FOR UPDATE NOWAIT" in service.contract.transaction.locking
+    assert (
+        "network.ip_assignment_lifecycle.invalid_customer_deletion_participant"
+        in service.contract.errors.domain_codes
+    )
 
 
 def test_legacy_projection_authority_and_partial_commit_paths_are_retired() -> None:
@@ -245,7 +274,7 @@ def test_ip_assignment_deactivators_are_pinned_during_shadowing() -> None:
 
     Creation and retirement are different consequences with different blast
     radii: a parallel deactivator silently reclaims a live customer address
-    without entering the fingerprint-gated command. Seven modules retire an
+    without entering the fingerprint-gated command. Six modules retire an
     allocation against four that create one, so pinning constructors alone
     would have left the larger surface unguarded.
     """

@@ -26,6 +26,7 @@ from app.services.prepaid_draft_reconciliation import (
     replace_reviewed_paid_prepaid_period,
 )
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _uuid(value: str) -> UUID:
@@ -109,6 +110,7 @@ def main() -> int:
     parser.add_argument("--actor-system-user-id", type=_uuid)
     parser.add_argument("--reason")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     query = _query(args)
     if not args.apply:

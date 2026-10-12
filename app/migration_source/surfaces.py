@@ -794,6 +794,26 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         ),
     ),
     SourceSurface(
+        path="app/services/customer_account_deletion.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.account_deletion",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "Exact relocation of existing Subscriber hard deletion into one "
+            "audited coordinator transaction. Web and JSON retain their distinct "
+            "eligibility and auth-cleanup policies. The cohort census counts the "
+            "typed ORM instance deletion, while the boundary guard retires the "
+            "two legacy parent-delete paths. Other subscriber and profile writes "
+            "retain their existing owners."
+        ),
+    ),
+    SourceSurface(
         path="app/services/subscriber.py",
         family=EntryPointFamily.SERVICE,
         authority=AuthorityRole.DECLARED_OWNER,

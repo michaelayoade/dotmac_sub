@@ -6,6 +6,7 @@ from pathlib import Path
 from app.api.auth import router
 from app.services import auth
 from app.services.api_key_administration import (
+    AUTHENTICATION_CONCERN,
     CONCERN,
     ISSUANCE_CONCERN,
     OWNER,
@@ -21,7 +22,14 @@ from tests.architecture.test_credential_minting_route_guards import (
 
 def test_exact_owner_and_retired_fallback() -> None:
     service = service_relationship(OWNER)
-    assert service.owns == (CONCERN, ISSUANCE_CONCERN, UPDATE_CONCERN, WEB_CONCERN)
+    assert service.owns == (
+        CONCERN,
+        ISSUANCE_CONCERN,
+        UPDATE_CONCERN,
+        WEB_CONCERN,
+        AUTHENTICATION_CONCERN,
+        "customer hard deletion API-key cleanup",
+    )
     assert service.contract is not None
     assert not hasattr(auth.ApiKeys, "delete")
     assert not hasattr(auth.ApiKeys, "revoke")
@@ -48,7 +56,15 @@ def test_delete_adapter_uses_fresh_session_and_admin_actor() -> None:
 def test_owner_has_one_executor_and_no_transaction_completion() -> None:
     tree = ast.parse(Path("app/services/api_key_administration.py").read_text())
     calls = [node.func for node in ast.walk(tree) if isinstance(node, ast.Call)]
-    for name in ("create", "generate", "revoke", "update", "web_create", "web_mutate"):
+    for name in (
+        "create",
+        "generate",
+        "revoke",
+        "update",
+        "web_create",
+        "web_mutate",
+        "authenticate",
+    ):
         public = next(
             node
             for node in tree.body
@@ -169,3 +185,27 @@ def test_web_writers_retired_and_routes_keep_permission_guards() -> None:
         assert "require_permission('system:settings:write')" in source
         assert "owner_command_session" in source and "_system_command_context" in source
         assert "db.commit(" not in source and "db.rollback(" not in source
+
+
+def test_local_authentication_has_no_orm_writer_or_stale_fallback() -> None:
+    from app.services import auth_dependencies
+
+    assert not hasattr(auth_dependencies, "_maybe_upgrade_api_key_hash")
+    assert not hasattr(auth_dependencies, "_touch_api_key_last_used")
+    source = Path("app/services/auth_dependencies.py").read_text()
+    assert "db.query(ApiKey)" not in source
+    tree = ast.parse(source)
+    adapter = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_authenticate_local_api_key"
+    )
+    assert "owner_command_session" in ast.unparse(adapter)
+    assert "api_key_owner.authenticate(command_db, command=" in ast.unparse(adapter)
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"commit", "rollback", "flush", "delete", "add"}
+        for node in ast.walk(adapter)
+    )

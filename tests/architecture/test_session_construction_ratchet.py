@@ -245,7 +245,21 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: JSON issuance +5, JSON PATCH +5, web key administration +3, and accepted
 #: router-health evidence +2. The canonical AST inventory is 677 sites across
 #: 147 test files; production remains 17 with its exact baseline unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 677
+#: Staff deletion adds fourteen migrated-PostgreSQL Session sites for pinned
+#: workers, FK/lock blockers and independent rollback observers; production is unchanged.
+#: API-key authentication maintenance adds ten migrated-PG Session sites
+#: and four unit-only construction sites for fresh-owner and bounded-pool tests.
+#: Customer hard-delete characterization adds one migrated-clone engine and
+#: one Session; production construction allowances remain unchanged.
+#: Customer atomic deletion adds ten migrated-PostgreSQL Session sites for
+#: physical lock/confirmation interleavings, six network participant fixtures,
+#: and two additional characterization Session sites for fresh owner isolation.
+#: These eighteen test-only sites do not expand production construction allowances.
+#: Reconciliation with main 81c4b4ccd preserves these 48 additional fixture
+#: sites alongside the lifecycle acceptance fixtures: the canonical AST scanner
+#: measures 725 sites across 153 test files. Production remains 17 sites across
+#: 15 files, with its exact per-file baseline unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 725
 
 
 def _baseline() -> dict[str, int]:
