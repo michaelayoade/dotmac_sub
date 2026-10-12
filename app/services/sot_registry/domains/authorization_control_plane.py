@@ -182,9 +182,11 @@ DOMAIN = DomainSOT(
             owns=(
                 "user password representation verification",
                 "explicit Argon2id hash parameters",
+                "explicit native password admission",
             ),
             notes=(
-                "User-only stateless foundation. Existing adapters default COMPAT; REFUSE "
+                "User-only foundation with dormant explicitly configured process-local admission. "
+                "Existing adapters default COMPAT; REFUSE "
                 "is explicit and is not connected to settings. Service-secret compatibility "
                 "remains in auth_flow. No rehash, notices, or persistence."
             ),
@@ -203,6 +205,11 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.POLICY,
                         input_names=("explicit password policy and parameters",),
                     ),
+                    ConcernContract(
+                        name="explicit native password admission",
+                        role=OwnerRole.POLICY,
+                        input_names=("explicit native password admission budget",),
+                    ),
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
@@ -217,21 +224,34 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="ReversiblePasswordPolicy, Argon2idParameters and explicit Argon2idVerificationLimits; absent verification limits deny Argon2, COMPAT adapter default, no production parameter default.",
                     ),
+                    AuthorityInput(
+                        name="explicit native password admission budget",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Immutable LimiterConfiguration explicitly supplies native capacity, bounded waiters, finite admission timeout, threadpool tokens and reserved tokens; no default or installed runtime caller.",
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.NOT_APPLICABLE,
-                    boundary="Stateless verification and hashing; never writes or completes a transaction.",
-                    locking="No database locks; credential standing remains the authentication owner's responsibility.",
+                    boundary="Verification, hashing and process-local admission never write or complete a database transaction.",
+                    locking="No database locks. A per-instance condition protects bounded active and waiting counters; no FIFO guarantee. Credential standing remains the authentication owner's responsibility.",
                     idempotency="Verification repeats the same decision; hashing intentionally generates a fresh random salt.",
                     retries="No automatic retries; compatibility secret-resolution failures retain their existing error boundary.",
                 ),
                 errors=ErrorContract(
-                    domain_codes=("auth.user_passwords.invalid_argon2id_parameters",),
+                    domain_codes=(
+                        "auth.user_passwords.invalid_argon2id_parameters",
+                        "auth.user_passwords.invalid_admission_configuration",
+                        "auth.user_passwords.admission_saturated",
+                        "auth.user_passwords.admission_timed_out",
+                    ),
                     mapping_owner="auth_flow compatibility adapter and future password creation owners",
                     fail_closed_on=(
                         "malformed or unsupported hashes",
                         "REFUSE reversible material before resolution",
                         "bcrypt input above 72 UTF-8 bytes",
+                        "invalid explicit admission budget",
+                        "full waiter budget or expired admission timeout",
                     ),
                 ),
                 migration=MigrationContract(
@@ -242,6 +262,7 @@ DOMAIN = DomainSOT(
                 design_refs=("docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md",),
                 test_refs=(
                     "tests/test_user_password_policy.py",
+                    "tests/test_user_password_admission.py",
                     "tests/test_auth_legacy_bcrypt.py",
                 ),
             ),

@@ -143,3 +143,22 @@ def test_access_login_uses_service_verifier_only() -> None:
     }
     assert "verify_service_secret" in calls
     assert "verify_user_password" not in calls
+
+
+def test_native_password_admission_remains_uninstalled() -> None:
+    """Adoption must explicitly retire this guard with its reviewed runtime wiring."""
+    dormant = {"NativePasswordAdmission", "LimiterConfiguration"}
+    for directory in ("app", "scripts"):
+        for path in (ROOT / directory).rglob("*.py"):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            aliases = set(dormant)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    aliases.update(
+                        alias.asname or alias.name
+                        for alias in node.names
+                        if alias.name in dormant
+                    )
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    assert _called_name(node) not in aliases, path
