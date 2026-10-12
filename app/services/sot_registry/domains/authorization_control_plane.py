@@ -473,6 +473,7 @@ DOMAIN = DomainSOT(
                 "administrative JSON API-key issuance",
                 "administrative JSON API-key update",
                 "administrative web API-key creation revocation and rotation",
+                "local API-key authentication maintenance",
             ),
             depends_on=("observability.audit_log",),
             notes=(
@@ -506,6 +507,12 @@ DOMAIN = DomainSOT(
                         ),
                         canonical_writer="auth.api_key_administration",
                     ),
+                    ConcernContract(
+                        name="local API-key authentication maintenance",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("presented local API key and current standing",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
@@ -532,12 +539,18 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="Typed command and trusted system-route actor context; explicit caller subscriber scope, legacy cached auth caps and refreshed locked target.",
                     ),
+                    AuthorityInput(
+                        name="presented local API key and current standing",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Frozen raw-key command with fixed presented-key provenance and GENERAL/AUDIT audience; owner hashes candidates and verifies scalar current ApiKey standing. No claimed key ID or actor input.",
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
-                    boundary="create/generate/update/revoke/web_create/web_mutate each enter execute_owner_command once on a fresh session; ApiKey and canonical AuditEvent commit or roll back together. Generation rate admission precedes the command. No external effects. Named stage_staff_key_deletion joins only the active auth.staff_provisioning deletion transaction and flushes API-key deletion plus per-key canonical audit; it does not enter the executor.",
-                    locking="Revocation and PATCH: ApiKey FOR UPDATE/populate_existing and PostgreSQL five-second lock timeout. Issuance: new row INSERT, unique hash and subscriber FK backstops; no existing-key lock. Web create: plain subscriber existence lookup and FK backstop; legacy cached cap checks are best-effort and race across concurrent creators or JSON updates. No cap lock or global cap guarantee. Web mutation: exact refreshed key FOR UPDATE, no principal/FK change.",
-                    idempotency="Revocation stamps fresh state/audit each invocation. Issuance creates a new key; generated material is returned once after commit. PATCH applies supplied fields and audits every successful invocation, including empty/no-op payloads. Web creation creates a new key; rotation replaces the secret once after commit, repeated revocation stamps again. Missing/out-of-scope targets and inactive/revoked rotation return unchanged outcomes without audit. No durable replay or retry claim.",
+                    boundary="authenticate enters once on a fresh session: hot snapshot has no writes; cold exact-version CAS maintains hash/timestamp and canonical hash-upgrade audit atomically, with post-update refusal rolling back. create/generate/update/revoke/web_create/web_mutate each enter execute_owner_command once on a fresh session; ApiKey and canonical AuditEvent commit or roll back together. Generation rate admission precedes the command. No external effects. Named stage_staff_key_deletion joins only the active auth.staff_provisioning deletion transaction and flushes API-key deletion plus per-key canonical audit; it does not enter the executor.",
+                    locking="Authentication uses scalar reads and a single same-ID/hash/standing CAS UPDATE; zero rows permits exactly one fresh same-ID/candidate verification read. No row lock or update on hot authentication. Maintenance has five-second lock_timeout, wall-clock expiry and a timestamp CASE preserving newer touches. Revocation and PATCH: ApiKey FOR UPDATE/populate_existing and PostgreSQL five-second lock timeout. Issuance: new row INSERT, unique hash and subscriber FK backstops; no existing-key lock. Web create: plain subscriber existence lookup and FK backstop; legacy cached cap checks are best-effort and race across concurrent creators or JSON updates. No cap lock or global cap guarantee. Web mutation: exact refreshed key FOR UPDATE, no principal/FK change.",
+                    idempotency="Authentication accepts current snapshots; HMAC upgrade is one-time, timestamp touch at most once per five-minute window. CAS misses never retry maintenance or grant stale projections. Revocation stamps fresh state/audit each invocation. Issuance creates a new key; generated material is returned once after commit. PATCH applies supplied fields and audits every successful invocation, including empty/no-op payloads. Web creation creates a new key; rotation replaces the secret once after commit, repeated revocation stamps again. Missing/out-of-scope targets and inactive/revoked rotation return unchanged outcomes without audit. No durable replay or retry claim.",
                     retries="No automatic retry; lock timeout maps to 503 Retry-After 5 after rollback. Inspect state after unknown commit outcome.",
                 ),
                 errors=ErrorContract(
@@ -545,6 +558,9 @@ DOMAIN = DomainSOT(
                         "auth.api_key_administration"
                     )
                     + (
+                        "auth.api_key_administration.invalid_authentication_command",
+                        "auth.api_key_administration.authentication_busy",
+                        "auth.api_key_administration.authentication_unavailable",
                         "auth.api_key_administration.invalid_participant",
                         "auth.api_key_administration.invalid_actor",
                         "auth.api_key_administration.not_found",
@@ -556,7 +572,7 @@ DOMAIN = DomainSOT(
                         "auth.api_key_administration.ttl_exceeded",
                         "auth.api_key_administration.invalid_scope",
                     ),
-                    mapping_owner="app.api.auth JSON API-key routes and app.web.admin.system web API-key routes",
+                    mapping_owner="app.services.auth_dependencies authentication adapter, app.api.auth JSON API-key routes and app.web.admin.system web API-key routes",
                     fail_closed_on=(
                         "missing trusted actor",
                         "active caller transaction",
@@ -571,23 +587,29 @@ DOMAIN = DomainSOT(
                         "auth.api_key.updated",
                         "auth.api_key.rotated",
                         "auth.api_key.deleted",
+                        "auth.api_key.hash_upgraded",
                     ),
                     schema_version=1,
                     delivery_owner="observability.audit_log",
-                    compatibility="Canonical AuditEvent only: target/actor identifiers, old/new active/revoked state for JSON revocation, active state only for web mutations and issuance, allowlisted requested field names/hash-change boolean for PATCH and command/correlation identifiers. No external event or secret payload.",
+                    compatibility="Hash upgrade audit contains verified key actor/target IDs, scheme names, fixed scope/reason and command IDs, never hash/raw/label/scope values; timestamp-only maintenance has no per-auth audit. Canonical AuditEvent only: target/actor identifiers, old/new active/revoked state for JSON revocation, active state only for web mutations and issuance, allowlisted requested field names/hash-change boolean for PATCH and command/correlation identifiers. No external event or secret payload.",
                     replay="Audit records are evidence, not delivery commands; no external dispatch or automatic replay. Database immutability is outside this slice.",
                 ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.COMPLETE,
                     new_owner="auth.api_key_administration",
-                    old_owner="auth.ApiKeys JSON writers and web_system_api_key_forms/create and web_system_api_key_mutations",
+                    old_owner="auth_dependencies last-used/hash-upgrade ORM helpers, auth.ApiKeys JSON writers and web_system_api_key_forms/create and web_system_api_key_mutations",
                     verification="Focused typed behavior, transaction trace and architecture tests; migrated PostgreSQL locking acceptance is hosted-only.",
-                    cutover_gate="JSON POST create/generate, PATCH and DELETE use fresh owner command sessions and existing route-local admin guards. Generation preserves Redis admission ordering. Web POST create/revoke/rotate retain inherited admin and route settings-write guards, typed trusted actor context, caller scope and one-time POST rendering.",
-                    fallback_retirement="Legacy issuance/update/revocation writers removed after repository-wide consumer search; limiter retained as admission-only helper. Web writer helpers retired after all consumers migrated; Inactive staff key deletion now delegates to the named participant; customer deletion and telemetry remain outside this slice.",
+                    cutover_gate="Both local authentication branches consume immutable owner projections through fresh command sessions; machine-first general auth remains outside. JSON POST create/generate, PATCH and DELETE use fresh owner command sessions and existing route-local admin guards. Generation preserves Redis admission ordering. Web POST create/revoke/rotate retain inherited admin and route settings-write guards, typed trusted actor context, caller scope and one-time POST rendering.",
+                    fallback_retirement="Legacy issuance/update/revocation writers removed after repository-wide consumer search; limiter retained as admission-only helper. Web writer helpers retired after all consumers migrated; Inactive staff key deletion now delegates to the named participant; customer deletion remains outside this slice. Both legacy authentication mutation helpers are retired with no fallback.",
                 ),
                 steward="platform security",
-                design_refs=("docs/designs/API_KEY_REVOCATION.md",),
+                design_refs=(
+                    "docs/designs/API_KEY_REVOCATION.md",
+                    "docs/designs/API_KEY_AUTHENTICATION_MAINTENANCE.md",
+                ),
                 test_refs=(
+                    "tests/test_api_key_authentication_maintenance.py",
+                    "tests/integration/test_api_key_authentication_maintenance_pg.py",
                     "tests/test_staff_account_deletion.py",
                     "tests/integration/test_staff_account_deletion_pg.py",
                     "tests/test_api_key_administration.py",

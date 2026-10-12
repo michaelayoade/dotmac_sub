@@ -1715,7 +1715,6 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
 
     result = verify_and_record_topup(
         db_session,
@@ -1815,7 +1814,6 @@ def test_verify_and_record_topup_preserves_paystack_gross_and_fee(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
 
     result = verify_and_record_topup(
         db_session,
@@ -1861,7 +1859,6 @@ def test_verify_preserves_pre_migration_intent_policy(
             metadata={},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
 
     result = verify_and_record_topup(
         db_session,
@@ -2117,7 +2114,6 @@ def test_verify_and_record_topup_is_idempotent_and_preserves_summary(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
 
     first = verify_and_record_topup(
         db_session,
@@ -2164,7 +2160,6 @@ def test_verify_and_record_topup_omits_available_balance_when_lookup_fails(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.get_available_balance",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
