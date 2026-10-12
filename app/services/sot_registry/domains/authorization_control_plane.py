@@ -411,14 +411,25 @@ DOMAIN = DomainSOT(
         SOTService(
             name="auth.credential_security_inventory",
             module="app.services.credential_security_inventory",
-            owns=("credential security aggregate census",),
-            depends_on=("auth.password_authentication",),
+            owns=(
+                "credential security aggregate census",
+                "reversible credential recovery prerequisite aggregate",
+            ),
+            depends_on=("auth.password_authentication", "auth.credential_recovery"),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
                         name="credential security aggregate census",
                         role=OwnerRole.RESOLVER,
                         input_names=("stored user credential security state",),
+                    ),
+                    ConcernContract(
+                        name="reversible credential recovery prerequisite aggregate",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "stored user credential security state",
+                            "exact recovery prerequisite interpretation",
+                        ),
                     ),
                 ),
                 authoritative_inputs=(
@@ -427,6 +438,12 @@ DOMAIN = DomainSOT(
                         owner="auth.password_authentication",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="user_credentials format prefixes, principal links, provider, activity and timestamps",
+                    ),
+                    AuthorityInput(
+                        name="exact recovery prerequisite interpretation",
+                        owner="auth.credential_recovery",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Typed recovery-owned SQL projection of exact local binding, principal activity/cancellation and contact presence; no delivery or support claim.",
                     ),
                 ),
                 transaction=TransactionContract(
@@ -455,6 +472,8 @@ DOMAIN = DomainSOT(
                 design_refs=("docs/runbooks/CREDENTIAL_SECURITY_INVENTORY.md",),
                 test_refs=(
                     "tests/test_credential_security_inventory.py",
+                    "tests/test_credential_recovery_readiness.py",
+                    "tests/integration/test_credential_recovery_readiness_snapshot.py",
                     "tests/architecture/test_credential_security_inventory_boundary.py",
                 ),
             ),
@@ -1465,6 +1484,7 @@ DOMAIN = DomainSOT(
                 "password recovery request and delivery intent",
                 "password reset credential transition",
                 "credential recovery session projection invalidation",
+                "exact recovery prerequisite interpretation",
             ),
             depends_on=(
                 "auth.token_signing",
@@ -1484,6 +1504,11 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="exact recovery prerequisite interpretation",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("canonical recoverable principal state",),
+                    ),
                     ConcernContract(
                         name="password recovery request and delivery intent",
                         role=OwnerRole.COMMAND_WRITER,
