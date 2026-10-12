@@ -1214,6 +1214,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "You must hold the admin role and the reseller-write permission, and the user must belong to the reseller whose page you are on; you cannot remove your own MFA.",
             "The action appears only for reseller users, not for customers linked to the reseller.",
+            "If removal fails unexpectedly, the page shows a safe general message; use the protected logs and audit evidence for investigation instead of exposing internal details to the user.",
         ),
     ),
     _guide(
