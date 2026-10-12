@@ -197,7 +197,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: workers, FK/lock blockers and independent rollback observers; production is unchanged.
 #: API-key authentication maintenance adds ten migrated-PG Session sites
 #: and four unit-only construction sites for fresh-owner and bounded-pool tests.
-TEST_FIXTURE_BASELINE_TOTAL = 302
+#: Customer hard-delete characterization adds one migrated-clone engine and
+#: one Session; production construction allowances remain unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 304
 
 
 def _baseline() -> dict[str, int]:
