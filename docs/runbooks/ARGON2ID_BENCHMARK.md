@@ -1,4 +1,4 @@
-# Argon2id benchmark harness (source only)
+# Argon2id benchmark harness and explicit CI measurement
 
 Owner: Sub auth. This standalone evidence tool does not change application
 hashing, authentication, credential state, limiter policy, or production parameters.
@@ -24,6 +24,22 @@ benchmarks on pull requests. The harness needs only the already locked
 `argon2-cffi` dependency; it imports no app, DB, settings, network or secret loader.
 Use the repository's locked environment. The report records Python, OS, machine
 architecture and both Argon2 package versions, avoiding hostnames and account IDs.
+
+The `Argon2id single-operation benchmark` workflow prepares that same locked
+environment on a GitHub-hosted Linux runner. Dispatch it from `main` only, with
+`execute=true` and an explicitly reviewed sample count (default 10, accepted
+range 1..100). Ordinary pushes, pull requests and schedules never run it. The
+job refuses an absent execution acknowledgement or another branch, grants only
+read access to source, and has no staging, production or application credential
+inputs. The existing Forgejo read token is scoped to the dependency installation
+step; measurement and artifact steps do not receive it.
+The artifact name records the exact checked-out Git revision and workflow run
+ID. A measurement failure or timeout prevents artifact upload; the internal
+120-second budget is backed by an external 130-second process timeout and a
+15-minute job timeout. Native hashing is serial and retains the bounded grid
+below. This workflow enables an authorized CI run; it does not select production
+parameters or establish staging acceptance. Its cgroup counters retain the
+availability and lifetime-peak limitations below.
 
 The default grid is m={19,32,46,64} MiB × t={2,3}, p=1. Explicit
 `--include-p2-control` adds only m=64MiB,t=2,p=2. Argon2id v19 uses 32-byte

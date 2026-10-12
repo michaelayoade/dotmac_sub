@@ -273,6 +273,7 @@ def _credential_row(factory, account):
                 UserCredential.locked_until,
                 UserCredential.last_login_at,
                 UserCredential.password_hash,
+                UserCredential.password_updated_at,
             ).where(UserCredential.id == account.credential_id)
         ).one()
 
@@ -450,17 +451,23 @@ def test_t6_representation_only_rehash_does_not_void_challenge(
     token = _password_step(factory, account)
     before = _credential_row(factory, account)
     with factory() as session:
-        assert pa.replace_password_representation(
-            session,
-            credential_id=account.credential_id,
-            expected_version=before.credential_version,
-            expected_hash=before.password_hash,
-            new_hash=hash_password("secret"),
+        assert (
+            pa.replace_password_representation(
+                session,
+                replacement=pa.PasswordRepresentationReplacement(
+                    credential_id=account.credential_id,
+                    expected_version=before.credential_version,
+                    expected_hash=before.password_hash,
+                    new_hash=hash_password("secret"),
+                ),
+            )
+            is pa.PasswordRepresentationOutcome.REPLACED
         )
         session.commit()
     after = _credential_row(factory, account)
     assert after.credential_version == before.credential_version
     assert after.password_hash != before.password_hash
+    assert after.password_updated_at == before.password_updated_at
 
     outcome = _mfa_verify(factory, token, pyotp.TOTP(secret).now())
 
@@ -630,12 +637,17 @@ def test_t11_trigger_matrix(engine, factory, account):
                 UserCredential.password_hash, UserCredential.credential_version
             ).where(UserCredential.id == cid)
         ).one()
-        assert pa.replace_password_representation(
-            session,
-            credential_id=cid,
-            expected_version=row.credential_version,
-            expected_hash=row.password_hash,
-            new_hash=hash_password("third"),
+        assert (
+            pa.replace_password_representation(
+                session,
+                replacement=pa.PasswordRepresentationReplacement(
+                    credential_id=cid,
+                    expected_version=row.credential_version,
+                    expected_hash=row.password_hash,
+                    new_hash=hash_password("third"),
+                ),
+            )
+            is pa.PasswordRepresentationOutcome.REPLACED
         )
         # Same transaction, next hash change: the switch is already cleared.
         session.execute(
@@ -1428,3 +1440,141 @@ def test_t18_external_gate_holds_source_lock_until_session_commit(
         assert login.result(timeout=WAIT).kind == "session"
         changed.result(timeout=WAIT)
     assert _session_count(factory, account) == 1
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_representation_does_not_autoflush_unrelated_secret_change(
+    factory, account, conflict
+):
+    """Migrated PG regression: a dirty peer must bump after the marker clears.
+
+    Before isolation, the ORM CAS autoflushes the peer under the representation
+    marker, and its real secret change incorrectly retains version 1.
+    """
+    with factory() as session:
+        target = session.get(UserCredential, account.credential_id)
+        peer = UserCredential(
+            subscriber_id=account.subscriber_id,
+            provider=AuthProvider.local,
+            username=f"peer-{uuid.uuid4().hex}@example.test",
+            password_hash=hash_password("peer-before"),
+            is_active=True,
+        )
+        session.add(peer)
+        session.commit()
+        peer.password_hash = hash_password("peer-after")
+        pending_hash = peer.password_hash
+        outcome = pa.replace_password_representation(
+            session,
+            replacement=pa.PasswordRepresentationReplacement(
+                credential_id=target.id,
+                expected_version=target.credential_version + int(conflict),
+                expected_hash=target.password_hash,
+                new_hash=hash_password("secret"),
+            ),
+        )
+        assert outcome is (
+            pa.PasswordRepresentationOutcome.CONFLICT
+            if conflict
+            else pa.PasswordRepresentationOutcome.REPLACED
+        )
+        assert peer in session.dirty
+        session.flush()
+        session.refresh(peer)
+        assert peer.password_hash == pending_hash
+        assert peer.credential_version == 2
+        session.commit()
+
+
+@pytest.mark.parametrize("after_sql", [False, True])
+@pytest.mark.parametrize("dbapi_client_failure", [False, True])
+def test_representation_client_failure_clears_marker_before_later_secret_change(
+    factory, account, monkeypatch, after_sql, dbapi_client_failure
+):
+    from sqlalchemy.exc import DBAPIError
+
+    with factory() as session:
+        credential = session.get(UserCredential, account.credential_id)
+        replacement = pa.PasswordRepresentationReplacement(
+            credential_id=credential.id,
+            expected_version=credential.credential_version,
+            expected_hash=credential.password_hash,
+            new_hash=hash_password("secret"),
+        )
+        execute = session.execute
+        original = (
+            DBAPIError("synthetic", None, RuntimeError("client failure"))
+            if dbapi_client_failure
+            else RuntimeError("synthetic client failure")
+        )
+
+        def fail_update(statement, *args, **kwargs):
+            if getattr(statement, "is_update", False):
+                if after_sql:
+                    execute(statement, *args, **kwargs)
+                raise original
+            return execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "execute", fail_update)
+        with pytest.raises(type(original)) as raised:
+            pa.replace_password_representation(session, replacement=replacement)
+        assert raised.value is original
+        monkeypatch.setattr(session, "execute", execute)
+        assert (
+            session.scalar(
+                text("SELECT current_setting('app.credential_change_kind', true)")
+            )
+            == ""
+        )
+        session.execute(
+            update(UserCredential)
+            .where(UserCredential.id == account.credential_id)
+            .values(password_hash=hash_password("later-secret"))
+        )
+        session.commit()
+    assert _credential_row(factory, account).credential_version == 2
+
+
+def test_representation_aborted_transaction_preserves_database_failure(
+    factory, account, monkeypatch
+):
+    from sqlalchemy.exc import DBAPIError
+
+    with factory() as session:
+        credential = session.get(UserCredential, account.credential_id)
+        replacement = pa.PasswordRepresentationReplacement(
+            credential_id=credential.id,
+            expected_version=credential.credential_version,
+            expected_hash=credential.password_hash,
+            new_hash=hash_password("secret"),
+        )
+        execute = session.execute
+        failures: list[DBAPIError] = []
+
+        def abort_update(statement, *args, **kwargs):
+            try:
+                if getattr(statement, "is_update", False):
+                    return execute(text("SELECT 1 / 0"))
+                return execute(statement, *args, **kwargs)
+            except DBAPIError as failure:
+                failures.append(failure)
+                raise
+
+        monkeypatch.setattr(session, "execute", abort_update)
+        with pytest.raises(DBAPIError) as raised:
+            pa.replace_password_representation(session, replacement=replacement)
+        assert raised.value is failures[0]
+        assert getattr(raised.value.orig, "sqlstate", None) == "22012"
+        assert len(failures) == 2  # Secondary cleanup is refused by aborted PG.
+        assert getattr(failures[1].orig, "sqlstate", None) == "25P02"
+        monkeypatch.setattr(session, "execute", execute)
+        # Transaction completion belongs to the caller, never the participant.
+        session.rollback()
+        assert (
+            session.scalar(
+                select(UserCredential.credential_version).where(
+                    UserCredential.id == account.credential_id
+                )
+            )
+            == replacement.expected_version
+        )

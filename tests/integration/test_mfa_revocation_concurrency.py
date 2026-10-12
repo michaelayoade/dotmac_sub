@@ -54,7 +54,7 @@ def test_disable_vs_recovery_redemption_has_no_deadlock(engine, factory, account
         redeem.scalar(
             select(Subscriber)
             .where(Subscriber.id == account.subscriber_id)
-            .with_for_update(key_share=True)
+            .with_for_update(read=True, key_share=True)
         )
         redeem.scalar(
             select(MFARecoveryCode.id)
@@ -66,8 +66,13 @@ def test_disable_vs_recovery_redemption_has_no_deadlock(engine, factory, account
             try:
                 # The admin must be queued behind the principal lock, not
                 # holding the method row.
-                with engine.connect() as observer:
+                # PostgreSQL keeps pg_stat_activity query information stable
+                # within a transaction. Each poll must get a fresh snapshot.
+                with engine.connect().execution_options(
+                    isolation_level="AUTOCOMMIT"
+                ) as observer:
                     deadline = time.monotonic() + 5
+                    waiting = 0
                     while time.monotonic() < deadline:
                         waiting = observer.scalar(
                             text(
@@ -78,6 +83,11 @@ def test_disable_vs_recovery_redemption_has_no_deadlock(engine, factory, account
                         )
                         if waiting:
                             break
+                        if result.done():
+                            result.result()
+                            pytest.fail(
+                                "MFA removal completed before principal release"
+                            )
                         time.sleep(0.05)
                     assert waiting
                 redeem.execute(

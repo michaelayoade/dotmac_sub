@@ -91,7 +91,9 @@ def test_removal_queues_behind_principal_lock_without_deadlock(engine, factory, 
     with factory() as redeem:
         redeem_pid = redeem.scalar(text("SELECT pg_backend_pid()"))
         redeem.scalar(
-            select(model).where(model.id == pid).with_for_update(key_share=True)
+            select(model)
+            .where(model.id == pid)
+            .with_for_update(read=True, key_share=True)
         )
         redeem.scalar(
             select(MFARecoveryCode.id)
@@ -101,7 +103,10 @@ def test_removal_queues_behind_principal_lock_without_deadlock(engine, factory, 
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = pool.submit(_remove, factory, kind, admin, pid, reseller_id)
             try:
-                with engine.connect() as observer:
+                # Poll live activity instead of reusing a transaction snapshot.
+                with engine.connect().execution_options(
+                    isolation_level="AUTOCOMMIT"
+                ) as observer:
                     deadline = time.monotonic() + 5
                     waiting = 0
                     while time.monotonic() < deadline:
@@ -114,6 +119,11 @@ def test_removal_queues_behind_principal_lock_without_deadlock(engine, factory, 
                         )
                         if waiting:
                             break
+                        if result.done():
+                            result.result()
+                            pytest.fail(
+                                "MFA removal completed before principal release"
+                            )
                         time.sleep(0.05)
                     assert waiting
                 redeem.execute(

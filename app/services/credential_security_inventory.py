@@ -12,6 +12,10 @@ from sqlalchemy.sql import Select
 from sqlalchemy.sql.elements import ColumnElement, SQLColumnExpression
 
 from app.models.auth import AuthProvider, UserCredential
+from app.services.credential_recovery import (
+    RecoveryReadinessReason,
+    recovery_readiness_projection,
+)
 from app.services.domain_errors import DomainError
 
 
@@ -127,9 +131,9 @@ def _age_band(
     )
 
 
-def credential_inventory_statement(
+def _inventory_dimensions(
     *, query: CredentialInventoryQuery
-) -> Select[tuple[str, str, str, str, str, bool, int]]:
+) -> Select[tuple[str, str, str, str, str, bool]]:
     """Only CASE labels and COUNT cross the database boundary; never raw rows.
 
     Prefix families intentionally include malformed values. This is a stored
@@ -171,7 +175,7 @@ def credential_inventory_statement(
         (credential.system_user_id.is_not(None), PrincipalType.STAFF.value),
         else_=PrincipalType.RESELLER.value,
     )
-    dimensions = select(
+    return select(
         principal.label("principal"),
         case(
             (credential.provider == AuthProvider.local, ProviderGroup.LOCAL.value),
@@ -183,7 +187,13 @@ def credential_inventory_statement(
         ),
         _age_band(credential.last_login_at, query.observed_at).label("last_login_age"),
         credential.is_active.label("active"),
-    ).subquery()
+    )
+
+
+def credential_inventory_statement(
+    *, query: CredentialInventoryQuery
+) -> Select[tuple[str, str, str, str, str, bool, int]]:
+    dimensions = _inventory_dimensions(query=query).subquery()
     columns = tuple(dimensions.c)
     return (
         select(*columns, func.count().label("count"))
@@ -198,6 +208,27 @@ def read_credential_inventory(
     query: CredentialInventoryQuery,
 ) -> CredentialInventoryResult:
     """Read from the adapter's PostgreSQL read-only snapshot, fail closed."""
+    _require_snapshot(db)
+    with db.no_autoflush:
+        rows = db.execute(credential_inventory_statement(query=query)).all()
+    return CredentialInventoryResult(
+        observed_at=query.observed_at,
+        cohorts=tuple(
+            CredentialCohort(
+                principal=PrincipalType(row[0]),
+                provider=ProviderGroup(row[1]),
+                format=CredentialFormat(row[2]),
+                password_age=AgeBand(row[3]),
+                last_login_age=AgeBand(row[4]),
+                active=bool(row[5]),
+                count=int(row[6]),
+            )
+            for row in rows
+        ),
+    )
+
+
+def _require_snapshot(db: Session) -> None:
     if db.new or db.dirty or db.deleted or db.get_bind().dialect.name != "postgresql":
         raise DomainError(
             code="auth.credential_security_inventory.read_only_required",
@@ -214,19 +245,70 @@ def read_credential_inventory(
             message="A clean PostgreSQL read-only snapshot is required.",
             retryable=False,
         )
+
+
+@dataclass(frozen=True)
+class RecoveryReadinessQuery(CredentialInventoryQuery):
+    """Observation time for a reversible USER credential prerequisite census."""
+
+
+@dataclass(frozen=True)
+class RecoveryReadinessCohort:
+    principal: PrincipalType
+    provider: ProviderGroup
+    reason: RecoveryReadinessReason
+    count: int
+
+
+@dataclass(frozen=True)
+class RecoveryReadinessResult:
+    observed_at: datetime
+    cohorts: tuple[RecoveryReadinessCohort, ...]
+
+    @property
+    def reversible_count(self) -> int:
+        return sum(row.count for row in self.cohorts)
+
+
+def recovery_readiness_statement(
+    *, query: RecoveryReadinessQuery
+) -> Select[tuple[str, str, str, int]]:
+    """Aggregate only; eligibility interpretation belongs to credential_recovery."""
+    base = _inventory_dimensions(query=query)
+    policy = recovery_readiness_projection()
+    dimensions = base.add_columns(policy.reason.label("reason")).subquery()
+    columns = (dimensions.c.principal, dimensions.c.provider, dimensions.c.reason)
+    return (
+        select(*columns, func.count().label("count"))
+        .where(
+            dimensions.c.format.in_(
+                (
+                    CredentialFormat.PLAIN.value,
+                    CredentialFormat.ENCRYPTED.value,
+                    CredentialFormat.SECRET_REFERENCE.value,
+                )
+            )
+        )
+        .group_by(*columns)
+        .order_by(*columns)
+    )
+
+
+def read_recovery_readiness(
+    *, db: Session, query: RecoveryReadinessQuery
+) -> RecoveryReadinessResult:
+    """Counts are snapshot prerequisites, never campaign or enforcement approval."""
+    _require_snapshot(db)
     with db.no_autoflush:
-        rows = db.execute(credential_inventory_statement(query=query)).all()
-    return CredentialInventoryResult(
+        rows = db.execute(recovery_readiness_statement(query=query)).all()
+    return RecoveryReadinessResult(
         observed_at=query.observed_at,
         cohorts=tuple(
-            CredentialCohort(
+            RecoveryReadinessCohort(
                 principal=PrincipalType(row[0]),
                 provider=ProviderGroup(row[1]),
-                format=CredentialFormat(row[2]),
-                password_age=AgeBand(row[3]),
-                last_login_age=AgeBand(row[4]),
-                active=bool(row[5]),
-                count=int(row[6]),
+                reason=RecoveryReadinessReason(row[2]),
+                count=int(row[3]),
             )
             for row in rows
         ),
