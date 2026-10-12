@@ -13,6 +13,9 @@ from app.models.network import CPEDevice, DeviceType
 from app.models.subscriber import Subscriber
 from app.services import radio_registration, unmatched_radio_queue
 from app.services.auth import hash_api_key
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 MAC = "24:A4:3C:AA:BB:01"
 MAC_COMPACT = "24a43caabb01"

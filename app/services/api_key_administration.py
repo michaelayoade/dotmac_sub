@@ -1,15 +1,16 @@
-"""Typed, audited owner of the administrative JSON API-key issuance, update and revocation."""
+"""Typed owner of API-key administration and local authentication maintenance."""
 
 from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import Row, case, delete, false, func, or_, select, text, true
+from sqlalchemy import update as sql_update
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -943,3 +944,274 @@ def stage_staff_key_deletion(
         )
     db.flush()
     return StaffKeyDeletionOutcome(actual)
+
+
+AUTHENTICATION_CONCERN = "local API-key authentication maintenance"
+_AUTHENTICATION_DEFINITION = OwnerCommandDefinition(
+    owner=OWNER, concern=AUTHENTICATION_CONCERN, name="authenticate"
+)
+_AUTHENTICATION_REFRESH = timedelta(minutes=5)
+
+
+class ApiKeyAuthenticationAudience(StrEnum):
+    GENERAL = "general"
+    AUDIT = "audit"
+
+
+class ApiKeyAuthenticationProvenance(StrEnum):
+    PRESENTED_API_KEY = "presented_api_key"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticateApiKeyCommand:
+    raw_key: str = field(repr=False)
+    audience: ApiKeyAuthenticationAudience
+    provenance: ApiKeyAuthenticationProvenance = field(
+        default=ApiKeyAuthenticationProvenance.PRESENTED_API_KEY, init=False
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedApiKey:
+    key_id: UUID
+    subscriber_id: UUID | None
+    scopes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyAuthenticationOutcome:
+    principal: AuthenticatedApiKey | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthenticationRow:
+    key_id: UUID
+    key_hash: str = field(repr=False)
+    is_active: bool
+    revoked_at: datetime | None
+    expires_at: datetime | None
+    subscriber_id: UUID | None
+    scopes: tuple[str, ...]
+    last_used_at: datetime | None
+
+
+class ApiKeyAuthenticationError(DomainError):
+    """Sanitized authentication storage or command refusal."""
+
+
+class _AuthenticationDenied(Exception):
+    """Rollback any staged maintenance before returning a denied outcome."""
+
+
+_AUTHENTICATION_COLUMNS = (
+    ApiKey.id,
+    ApiKey.key_hash,
+    ApiKey.is_active,
+    ApiKey.revoked_at,
+    ApiKey.expires_at,
+    ApiKey.subscriber_id,
+    ApiKey.scopes,
+    ApiKey.last_used_at,
+)
+
+
+def _authentication_row(
+    row: Row[
+        tuple[
+            UUID,
+            str,
+            bool,
+            datetime | None,
+            datetime | None,
+            UUID | None,
+            list[str],
+            datetime | None,
+        ]
+    ],
+) -> _AuthenticationRow:
+    return _AuthenticationRow(
+        key_id=cast(UUID, row[0]),
+        key_hash=cast(str, row[1]),
+        is_active=cast(bool, row[2]),
+        revoked_at=cast(datetime | None, row[3]),
+        expires_at=cast(datetime | None, row[4]),
+        subscriber_id=cast(UUID | None, row[5]),
+        scopes=tuple(cast(list[str] | None, row[6]) or ()),
+        last_used_at=cast(datetime | None, row[7]),
+    )
+
+
+def _authentication_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def _authentication_allowed(
+    row: _AuthenticationRow, audience: ApiKeyAuthenticationAudience
+) -> bool:
+    return (
+        row.is_active
+        and row.revoked_at is None
+        and (
+            row.expires_at is None
+            or _authentication_utc(row.expires_at) > datetime.now(UTC)
+        )
+        and (
+            audience is ApiKeyAuthenticationAudience.GENERAL
+            or bool({"audit:read", "audit:*"}.intersection(row.scopes))
+        )
+    )
+
+
+def authenticate(
+    db: Session, *, command: AuthenticateApiKeyCommand
+) -> ApiKeyAuthenticationOutcome:
+    """Verify a presented local key and conditionally maintain its exact version.
+
+    Read projections never load an ORM credential. The single CAS arbitrates
+    rotation/revocation; a miss permits one fresh same-ID verification read.
+    """
+    from app.services.auth import hash_api_key_candidates, is_legacy_api_key_hash
+
+    if (
+        not isinstance(command, AuthenticateApiKeyCommand)
+        or not isinstance(command.raw_key, str)
+        or not command.raw_key
+        or not isinstance(command.audience, ApiKeyAuthenticationAudience)
+        or command.provenance is not ApiKeyAuthenticationProvenance.PRESENTED_API_KEY
+    ):
+        raise ApiKeyAuthenticationError(
+            code=f"{OWNER}.invalid_authentication_command",
+            message="Invalid API-key authentication command.",
+        )
+    context = CommandContext.system(
+        actor="system:api_key_authentication",
+        scope="api_key:authenticate",
+        reason="local_api_key_authentication_maintenance",
+    )
+
+    def operation() -> ApiKeyAuthenticationOutcome:
+        candidates = tuple(hash_api_key_candidates(command.raw_key))
+        preferred = candidates[0]
+        now = datetime.now(UTC)
+        valid = (
+            ApiKey.is_active.is_(True),
+            ApiKey.revoked_at.is_(None),
+            or_(ApiKey.expires_at.is_(None), ApiKey.expires_at > now),
+        )
+        observed = db.execute(
+            select(*_AUTHENTICATION_COLUMNS)
+            .where(ApiKey.key_hash.in_(candidates), *valid)
+            .limit(1)
+        ).first()
+        if observed is None:
+            return ApiKeyAuthenticationOutcome(None)
+        row = _authentication_row(observed)
+        if not _authentication_allowed(row, command.audience):
+            return ApiKeyAuthenticationOutcome(None)
+        upgrade = is_legacy_api_key_hash(row.key_hash) and not is_legacy_api_key_hash(
+            preferred
+        )
+        due = row.last_used_at is None or (
+            now - _authentication_utc(row.last_used_at) >= _AUTHENTICATION_REFRESH
+        )
+        if not upgrade and not due:
+            return ApiKeyAuthenticationOutcome(
+                AuthenticatedApiKey(row.key_id, row.subscriber_id, row.scopes)
+            )
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(text("SELECT set_config('lock_timeout', '5s', true)"))
+        # The timestamp CASE is evaluated against CURRENT row values after a
+        # concurrent updater releases its lock. Never regress a newer touch.
+        due_predicate = or_(
+            ApiKey.last_used_at.is_(None),
+            ApiKey.last_used_at <= now - _AUTHENTICATION_REFRESH,
+        )
+        statement = (
+            sql_update(ApiKey)
+            .where(
+                ApiKey.id == row.key_id,
+                ApiKey.key_hash == row.key_hash,
+                ApiKey.is_active.is_(True),
+                ApiKey.revoked_at.is_(None),
+                or_(
+                    ApiKey.expires_at.is_(None),
+                    ApiKey.expires_at
+                    > (
+                        func.clock_timestamp()
+                        if db.get_bind().dialect.name == "postgresql"
+                        else now
+                    ),
+                ),
+                or_(true() if upgrade else false(), due_predicate),
+            )
+            .values(last_used_at=case((due_predicate, now), else_=ApiKey.last_used_at))
+            .returning(*_AUTHENTICATION_COLUMNS)
+            .execution_options(synchronize_session=False)
+        )
+        if upgrade:
+            statement = statement.values(key_hash=preferred)
+        changed = db.execute(statement).first()
+        if changed is None:
+            # Exactly one fresh scalar read; a rotated/revoked/deleted key must
+            # never reuse the pre-CAS snapshot. Equivalent upgrade is accepted.
+            fresh = db.execute(
+                select(*_AUTHENTICATION_COLUMNS).where(
+                    ApiKey.id == row.key_id,
+                    ApiKey.key_hash.in_(candidates),
+                    ApiKey.is_active.is_(True),
+                    ApiKey.revoked_at.is_(None),
+                    or_(
+                        ApiKey.expires_at.is_(None),
+                        ApiKey.expires_at > datetime.now(UTC),
+                    ),
+                )
+            ).first()
+            if fresh is None:
+                return ApiKeyAuthenticationOutcome(None)
+            row = _authentication_row(fresh)
+        else:
+            row = _authentication_row(changed)
+        if not _authentication_allowed(row, command.audience):
+            # Returning None here would COMMIT a maintenance write for an
+            # expired or no-longer-audit-authorized principal.
+            raise _AuthenticationDenied
+        if changed is not None and upgrade:
+            stage_audit_event(
+                db,
+                action="auth.api_key.hash_upgraded",
+                entity_type="api_key",
+                entity_id=str(row.key_id),
+                actor=AuditActor.api_key(str(row.key_id)),
+                details={
+                    "schema_version": 1,
+                    "old_scheme": "sha256",
+                    "new_scheme": "hmac256",
+                    "scope": "api_key:authenticate",
+                    "reason": "local_api_key_authentication_maintenance",
+                    "command_id": str(context.command_id),
+                    "correlation_id": str(context.correlation_id),
+                },
+            )
+        if not _authentication_allowed(row, command.audience):
+            raise _AuthenticationDenied
+        return ApiKeyAuthenticationOutcome(
+            AuthenticatedApiKey(row.key_id, row.subscriber_id, row.scopes)
+        )
+
+    try:
+        return execute_owner_command(
+            db,
+            definition=_AUTHENTICATION_DEFINITION,
+            context=context,
+            operation=operation,
+        )
+    except _AuthenticationDenied:
+        return ApiKeyAuthenticationOutcome(None)
+    except SQLAlchemyError as exc:
+        sqlstate = getattr(exc.orig, "sqlstate", None) if hasattr(exc, "orig") else None
+        raise ApiKeyAuthenticationError(
+            code=f"{OWNER}.authentication_busy"
+            if sqlstate == "55P03"
+            else f"{OWNER}.authentication_unavailable",
+            message="API-key authentication unavailable.",
+        ) from None

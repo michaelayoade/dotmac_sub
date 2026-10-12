@@ -13,6 +13,7 @@ convenient one would be the bug.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 
 import pytest
@@ -77,13 +78,40 @@ def test_machine_key_is_optional_only_while_the_legacy_verifier_exists() -> None
     its key was still allowed to be missing.
     """
 
-    source = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "app"
-        / "services"
-        / "auth_dependencies.py"
-    ).read_text()
-    legacy_verifier_present = "ApiKey.key_hash.in_(hash_api_key_candidates(" in source
+    services = pathlib.Path(__file__).resolve().parents[2] / "app" / "services"
+
+    def calls(path: pathlib.Path, function: str) -> set[str]:
+        module = ast.parse(path.read_text())
+        definition = next(
+            (
+                node
+                for node in module.body
+                if isinstance(node, ast.FunctionDef) and node.name == function
+            ),
+            None,
+        )
+        return (
+            {
+                ast.unparse(node.func)
+                for node in ast.walk(definition)
+                if isinstance(node, ast.Call)
+            }
+            if definition is not None
+            else set()
+        )
+
+    adapter = services / "auth_dependencies.py"
+    owner = services / "api_key_administration.py"
+    # Local admission now crosses a fresh-session adapter into the typed owner.
+    # Follow executable calls rather than the retired inline query's spelling.
+    legacy_verifier_present = (
+        {"_machine_principal", "_authenticate_local_api_key"}
+        <= calls(adapter, "_api_key_principal")
+        and "api_key_owner.authenticate"
+        in calls(adapter, "_authenticate_local_api_key")
+        and {"hash_api_key_candidates", "ApiKey.key_hash.in_"}
+        <= calls(owner, "authenticate")
+    )
 
     if "machine_credential_hmac_key" in kss.OPTIONAL_SECRET_REFS:
         assert legacy_verifier_present, (

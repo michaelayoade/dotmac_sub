@@ -11,6 +11,9 @@ from app.models.auth import ApiKey
 from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_audit_auth
 from app.services.web_system_api_key_forms import parse_scopes
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 from tests.web_api_key_fixtures import create_api_key
 
 

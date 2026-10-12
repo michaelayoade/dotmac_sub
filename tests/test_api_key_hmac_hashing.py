@@ -15,6 +15,9 @@ from app.services.auth import (
     is_legacy_api_key_hash,
 )
 from app.services.auth_dependencies import require_user_auth
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 _TEST_SECRET = b"0" * 44  # stand-in Fernet-length key
 

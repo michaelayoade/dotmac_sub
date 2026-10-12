@@ -34,6 +34,9 @@ from app.web.auth.dependencies import (
     validate_session_token,
 )
 from tests.staff_identity_fixtures import add_bound_staff_user, project_staff_login
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 
 def _make_access_token(
