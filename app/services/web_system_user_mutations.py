@@ -10,15 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.db import finish_read_transaction
 from app.models.auth import (
-    ApiKey,
-    MFAMethod,
     UserCredential,
 )
-from app.models.auth import Session as AuthSession
 from app.models.domain_settings import SettingDomain
 from app.models.system_user import SystemUser
 from app.services import auth_cache, credential_recovery, staff_provisioning
-from app.services import system_user_assignments as assignment_service
 from app.services import web_system_users as web_system_users_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
@@ -271,30 +267,6 @@ def send_password_reset_link_for_user(
     return "Password reset link could not be queued."
 
 
-def delete_user_records(db: Session, *, user_id: str) -> SystemUser:
-    """Delete system user and linked auth/RBAC rows."""
-    system_user = db.get(SystemUser, coerce_uuid(user_id))
-    if not system_user:
-        raise ValueError("User not found")
-
-    db.query(UserCredential).filter(
-        UserCredential.system_user_id == system_user.id
-    ).delete(synchronize_session=False)
-    db.query(MFAMethod).filter(MFAMethod.system_user_id == system_user.id).delete(
-        synchronize_session=False
-    )
-    db.query(AuthSession).filter(AuthSession.system_user_id == system_user.id).delete(
-        synchronize_session=False
-    )
-    db.query(ApiKey).filter(ApiKey.system_user_id == system_user.id).delete(
-        synchronize_session=False
-    )
-    assignment_service.remove_all_for_system_user(db, system_user.id)
-    db.delete(system_user)
-    db.commit()
-    return system_user
-
-
 def set_device_login(
     db: Session,
     *,
@@ -349,37 +321,3 @@ def revoke_device_login(
     else:
         db.flush()
     return u
-
-
-def bulk_delete_user_records(db: Session, *, user_ids: list[str]) -> tuple[int, int]:
-    """Delete inactive system users that have no linked records.
-
-    Returns (deleted_count, skipped_count).
-    """
-    deleted_count = 0
-    skipped_count = 0
-
-    for user_id in user_ids:
-        system_user = db.get(SystemUser, coerce_uuid(user_id))
-        if not system_user or system_user.is_active:
-            skipped_count += 1
-            continue
-
-        db.query(UserCredential).filter(
-            UserCredential.system_user_id == system_user.id
-        ).delete(synchronize_session=False)
-        db.query(MFAMethod).filter(MFAMethod.system_user_id == system_user.id).delete(
-            synchronize_session=False
-        )
-        db.query(AuthSession).filter(
-            AuthSession.system_user_id == system_user.id
-        ).delete(synchronize_session=False)
-        db.query(ApiKey).filter(ApiKey.system_user_id == system_user.id).delete(
-            synchronize_session=False
-        )
-        assignment_service.remove_all_for_system_user(db, system_user.id)
-        db.delete(system_user)
-        deleted_count += 1
-
-    db.commit()
-    return deleted_count, skipped_count

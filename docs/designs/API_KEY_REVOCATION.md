@@ -27,7 +27,7 @@ five-second lock_timeout; the adapter maps 55P03 to 503/Retry-After: 5. No autom
 retry; uncertain commit outcomes require inspecting state before resubmission.
 The old ApiKeys.delete/revoke methods and all their consumers are retired.
 
-Customer/system deletion participants and
+Customer deletion participants and
 last_used/hash-upgrade telemetry remain outside this bounded migration. No scope,
 capability, update or ambiguous web scope policy changes are included.
 
@@ -88,7 +88,7 @@ inspection rather than blind resubmission.
 Repository-wide consumer search found the two JSON routes and tests as the only
 callers of `ApiKeys.create/generate/generate_with_rate_limit`. Those legacy writers
 are removed; existing tests now use typed owner fixtures. The admission-only
-`enforce_generation_rate_limit` helper retains Redis behavior. Customer/system-user deletion participants and authentication last_used/hash
+`enforce_generation_rate_limit` helper retains Redis behavior. Customer deletion participants and authentication last_used/hash
 upgrades remain separate ownership debt, not alternate issuance fallbacks.
 
 `tests/test_api_key_issuance.py` covers protected-table transaction traces,
@@ -147,10 +147,9 @@ request PATCH event remains separate supplementary evidence.
 Locking is target-first and existing subscriber existence lookup remains a plain
 read; a changed subscriber_id invokes PostgreSQL's normal FK key-share check.
 Unique hash/FK constraints remain authoritative backstops. No locks or writes to
-system_user_id are introduced. Customer deletion participants in
-web_customer_actions and system-user deletion participants in
-web_system_user_mutations still delete ApiKey rows independently, while auth
-telemetry remains a separate writer. This bounded slice
+system_user_id are introduced. Customer deletion participants in web_customer_actions still delete ApiKey rows
+independently, while auth telemetry remains a separate writer. Staff deletion
+now uses the named participant described below. This bounded slice
 proves target PATCH/revoke serialization, not all deletion/owner-transfer races.
 
 Repository-wide search found only the JSON route plus two tests calling
@@ -229,3 +228,24 @@ owner fixtures. SQLite is fast unit evidence only. Four new cases in
 PostgreSQL acceptance: exact-key web rotation/JSON revoke serialization in both
 orders, lock-timeout rollback and creation/audit rollback. Local collection is
 not deployed-schema acceptance.
+
+
+## Staff hard-delete participant
+
+`stage_staff_key_deletion` is a named, typed, flush-only collaborator of the
+registered `auth.staff_provisioning` inactive deletion coordinator. Public
+API-key commands retain owner-managed transaction mode. The participant requires
+the active named parent, exact current CommandContext and a matching trusted
+administrative actor, fixed provenance and typed staff UUID targets. It does
+not enter the executor or complete a transaction. It locks staff-bound ApiKey
+IDs in UUID order, deletes those exact rows using RETURNING, and stages one
+canonical `auth.api_key.deleted` audit per actual deletion. Details contain only
+command/correlation IDs, schema version 1 and fixed `scope=rbac:assign` and
+`reason=inactive_staff_account_deletion`; target/actor IDs are canonical fields.
+Caller-supplied context reasons are excluded. It never selects
+or records key hashes, labels, scopes or raw material. Double-bound keys still
+follow their existing staff FK for deletion; no Subscriber is locked or deleted.
+Parent rollback, including a late history FK or audit failure, restores all keys
+and removes staged audit evidence. See `STAFF_ACCOUNT_DELETION.md` for lock order
+and whole-batch behavior. Customer deletion and authentication telemetry remain
+outside this bounded participant migration.

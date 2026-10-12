@@ -342,6 +342,17 @@ def current_command_context(db: Session) -> CommandContext:
     return context
 
 
+def current_command_definition(db: Session) -> OwnerCommandDefinition:
+    """Return the active typed definition for narrowly authorized participants."""
+    definition = db.info.get(_ACTIVE_COMMAND_KEY)
+    if not isinstance(definition, OwnerCommandDefinition):
+        raise OwnerCommandError(
+            code="owner_command.no_active_definition",
+            message="No active owner command definition on this session.",
+        )
+    return definition
+
+
 def owner_command_active(db: Session, *, owner: str | None = None) -> bool:
     """Return whether ``db`` is inside the requested public owner command.
 
