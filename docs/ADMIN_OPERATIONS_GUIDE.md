@@ -186,6 +186,22 @@ Keep branding minimal until operations are stable. Invoice identity, contact det
 - TOTP issuer name configurable (default: `dotmac_sm`)
 - Admin can disable MFA for a locked-out user via User Management
 
+### API Keys
+
+Open `/admin/system/api-keys` with administrative access. Creation, rotation and
+revocation require `system:settings:write`. Use a descriptive purpose, narrow
+scopes and an expiry. System-owned keys are shared with permissioned admins;
+subscriber-owned keys are shown to their owner alongside shared keys. Staff
+accounts without a subscriber identity should select System-owned when creating.
+
+Create and Rotate reveal the secret once in the submitted page, never in the
+redirect URL. Store it securely before leaving. Rotation replaces the previous
+secret immediately; revocation disables the key. Successful changes have audit
+evidence. A failed save presents no new secret; inspect current state and audit
+evidence before retrying an uncertain request. Web creation checks the configured
+owner count and lifetime caps; concurrent requests and other administrative
+surfaces can exceed the owner count, so it is not a global quota.
+
 ### Security Baseline for Production
 
 - Enable secure cookies under HTTPS

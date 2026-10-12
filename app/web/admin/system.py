@@ -39,6 +39,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
+from app.services import api_key_administration as api_key_admin
 from app.services import (
     billing as billing_service,
 )
@@ -63,9 +64,6 @@ from app.services import system_user_assignments as assignment_service
 from app.services import web_control_plane as web_control_plane_service
 from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
-from app.services import (
-    web_system_api_key_mutations as web_system_api_key_mutations_service,
-)
 from app.services import web_system_api_keys as web_system_api_keys_service
 from app.services import web_system_audit as web_system_audit_service
 from app.services import web_system_billing_forms as web_system_billing_forms_service
@@ -95,6 +93,7 @@ from app.services import web_system_user_edit as web_system_user_edit_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services import web_system_users as web_system_users_service
 from app.services import web_walled_garden_settings as walled_garden_settings_service
+from app.services.audit_adapter import AuditActor
 from app.services.audit_helpers import (
     build_audit_activities,
     build_audit_activities_for_types,
@@ -203,6 +202,34 @@ def _system_command_context(
         scope=scope,
         reason=reason,
         idempotency_key=idempotency_key,
+    )
+
+
+def _web_api_key_actor(context: CommandContext) -> AuditActor:
+    actor_type, actor_id = context.actor.split(":", 1)
+    return (
+        AuditActor.api_key(actor_id)
+        if actor_type == "api_key"
+        else AuditActor.user(actor_id)
+    )
+
+
+def _web_api_key_scope(person_id: str | None) -> api_key_admin.WebApiKeyCallerScope:
+    # Preserve the legacy empty staff UUID failure only for subscriber targets.
+    try:
+        return api_key_admin.WebApiKeyCallerScope(
+            UUID(person_id) if person_id else None, person_id == ""
+        )
+    except ValueError:
+        return api_key_admin.WebApiKeyCallerScope(None, True)
+
+
+def _web_api_key_http_error(exc: DomainError) -> HTTPException:
+    busy = exc.code.endswith(".busy")
+    return HTTPException(
+        status_code=503 if busy else 500,
+        detail=exc.message,
+        headers={"Retry-After": "5"} if busy else None,
     )
 
 
@@ -3297,13 +3324,23 @@ def api_key_create(
         return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
     try:
-        raw_key = web_system_api_key_forms_service.create_api_key(
-            db,
-            subscriber_id=owner_id,
-            label=label,
-            expires_in=expires_in,
-            scopes=web_system_api_key_forms_service.parse_scopes(scopes),
+        command_context = _system_command_context(
+            request,
+            reason="Create API key",
+            idempotency_key=str(uuid4()),
+            scope=api_key_admin.WEB_CREATE_SCOPE,
         )
+        command = api_key_admin.WebCreateApiKeyCommand(
+            context=command_context,
+            actor=_web_api_key_actor(command_context),
+            subscriber_id=UUID(owner_id) if owner_id else None,
+            label=label,
+            expires_in_days=int(expires_in) if expires_in else None,
+            scopes=tuple(web_system_api_key_forms_service.parse_scopes(scopes)),
+        )
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = api_key_admin.web_create(command_db, command=command)
+        raw_key = outcome.secret
 
         # Show the raw secret exactly once, in the POST response body — NOT in a
         # redirect URL (which leaks into access logs / history / Referer and
@@ -3324,15 +3361,16 @@ def api_key_create(
                 "now": datetime.now(UTC),
             },
         )
-    except Exception as e:
-        db.rollback()
+    except (DomainError, ValueError, OverflowError) as e:
         context = {
             "request": request,
             "active_page": "api-keys",
             "active_menu": "system",
             "current_user": current_user,
             "sidebar_stats": get_sidebar_stats(db),
-            "error": str(e),
+            "error": e.message
+            if isinstance(e, DomainError)
+            else "Invalid API-key creation input.",
         }
         return templates.TemplateResponse("admin/system/api_key_form.html", context)
 
@@ -3349,9 +3387,24 @@ def api_key_revoke(request: Request, key_id: str, db: Session = Depends(get_db))
     person_id = current_user.get("person_id") if current_user else None
     # Scope the revoke to the caller's own keys so a staffer can't revoke another
     # principal's key by guessing/enumerating ids.
-    web_system_api_key_mutations_service.revoke_api_key(
-        db, key_id=key_id, subscriber_id=person_id
+    command_context = _system_command_context(
+        request,
+        reason="Revoke API key",
+        idempotency_key=str(uuid4()),
+        scope=api_key_admin.WEB_REVOKE_SCOPE,
     )
+    command = api_key_admin.WebMutateApiKeyCommand(
+        context=command_context,
+        actor=_web_api_key_actor(command_context),
+        key_id=UUID(key_id),
+        caller_scope=_web_api_key_scope(person_id),
+        action=api_key_admin.WebApiKeyAction.REVOKE,
+    )
+    try:
+        with db_session_adapter.owner_command_session() as command_db:
+            api_key_admin.web_mutate(command_db, command=command)
+    except DomainError as exc:
+        raise _web_api_key_http_error(exc) from None
     # No secret to surface on a revoke, so use PRG + a query flag the list page
     # renders as a "revoked" banner (create/rotate keep the secret out of URLs).
     return RedirectResponse(url="/admin/system/api-keys?revoked=1", status_code=303)
@@ -3367,9 +3420,25 @@ def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db))
 
     current_user = get_current_user(request)
     person_id = current_user.get("person_id") if current_user else None
-    raw_key = web_system_api_key_mutations_service.rotate_api_key(
-        db, key_id=key_id, subscriber_id=person_id
+    command_context = _system_command_context(
+        request,
+        reason="Rotate API key",
+        idempotency_key=str(uuid4()),
+        scope=api_key_admin.WEB_ROTATE_SCOPE,
     )
+    command = api_key_admin.WebMutateApiKeyCommand(
+        context=command_context,
+        actor=_web_api_key_actor(command_context),
+        key_id=UUID(key_id),
+        caller_scope=_web_api_key_scope(person_id),
+        action=api_key_admin.WebApiKeyAction.ROTATE,
+    )
+    try:
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = api_key_admin.web_mutate(command_db, command=command)
+    except DomainError as exc:
+        raise _web_api_key_http_error(exc) from None
+    raw_key = outcome.secret
     api_keys = web_system_api_keys_service.list_api_keys_for_subscriber(db, person_id)
     if not raw_key:
         # Missing / out-of-scope / already-revoked key: no secret to show.

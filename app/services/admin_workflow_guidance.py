@@ -1184,6 +1184,11 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review current health, effective settings, permissions, audit evidence, or job state before changing anything.",
         "Use the specific user, role, module, scheduler, import, export, restore, or maintenance workflow.",
         "Verify the result and audit record; use destructive tools only with an approved operational plan.",
+        notes=(
+            "For API keys, choose a clear purpose, narrow scopes and an expiry. System-owned keys are shared with permissioned administrators; subscriber-owned keys appear alongside those shared keys for their owner.",
+            "Create and Rotate show the secret once in the submitted page. Copy it securely before leaving; it is never included in a redirect URL. Rotation replaces the old secret immediately; revocation disables the key.",
+            "A failed save does not present a new secret or a successful change. Review current state and audit evidence before retrying an uncertain request. Creation limits guide web requests and can be exceeded by concurrent or other administration requests.",
+        ),
         excluded_route_prefixes=("/admin/system/email",),
     ),
     _guide(

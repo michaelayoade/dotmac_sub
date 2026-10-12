@@ -4,11 +4,12 @@ import pytest
 
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
-from app.services import web_system_api_key_forms as api_key_forms_service
-from app.services import web_system_api_key_mutations as api_key_mutations_service
 from app.services import web_system_api_keys as api_keys_service
+from app.services.api_key_administration import WebApiKeyError
 from app.services.auth import hash_api_key
 from app.services.settings_cache import SettingsCache
+from tests import web_api_key_fixtures as api_key_forms_service
+from tests import web_api_key_fixtures as api_key_mutations_service
 
 
 def _set_auth_cap(db_session, key: str, value: int) -> None:
@@ -119,7 +120,7 @@ def test_max_ttl_cap_rejects_and_defaults(db_session, subscriber):
     _set_auth_cap(db_session, "api_key_max_ttl_days", 30)
 
     # Requesting a longer lifetime than the cap is rejected with a clear message.
-    with pytest.raises(api_key_forms_service.ApiKeyLimitError) as exc:
+    with pytest.raises(WebApiKeyError) as exc:
         api_key_forms_service.create_api_key(
             db_session,
             subscriber_id=str(subscriber.id),
@@ -157,7 +158,7 @@ def test_max_keys_per_owner_cap(db_session, subscriber):
         expires_in=None,
     )
 
-    with pytest.raises(api_key_forms_service.ApiKeyLimitError) as exc:
+    with pytest.raises(WebApiKeyError) as exc:
         api_key_forms_service.create_api_key(
             db_session,
             subscriber_id=str(subscriber.id),

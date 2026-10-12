@@ -10,6 +10,7 @@ from app.services.api_key_administration import (
     ISSUANCE_CONCERN,
     OWNER,
     UPDATE_CONCERN,
+    WEB_CONCERN,
 )
 from app.services.sot_registry.registry import service_relationship
 from tests.architecture.test_credential_minting_route_guards import (
@@ -20,7 +21,7 @@ from tests.architecture.test_credential_minting_route_guards import (
 
 def test_exact_owner_and_retired_fallback() -> None:
     service = service_relationship(OWNER)
-    assert service.owns == (CONCERN, ISSUANCE_CONCERN, UPDATE_CONCERN)
+    assert service.owns == (CONCERN, ISSUANCE_CONCERN, UPDATE_CONCERN, WEB_CONCERN)
     assert service.contract is not None
     assert not hasattr(auth.ApiKeys, "delete")
     assert not hasattr(auth.ApiKeys, "revoke")
@@ -47,7 +48,7 @@ def test_delete_adapter_uses_fresh_session_and_admin_actor() -> None:
 def test_owner_has_one_executor_and_no_transaction_completion() -> None:
     tree = ast.parse(Path("app/services/api_key_administration.py").read_text())
     calls = [node.func for node in ast.walk(tree) if isinstance(node, ast.Call)]
-    for name in ("create", "generate", "revoke", "update"):
+    for name in ("create", "generate", "revoke", "update", "web_create", "web_mutate"):
         public = next(
             node
             for node in tree.body
@@ -143,3 +144,28 @@ def test_update_owner_uses_closed_field_allowlist_and_refreshed_lock() -> None:
         "expires_at",
         "revoked_at",
     }
+
+
+def test_web_writers_retired_and_routes_keep_permission_guards() -> None:
+    from app.services import web_system_api_key_forms as forms
+    from app.web.admin.system import router as web_router
+
+    assert not hasattr(forms, "create_api_key")
+    assert not Path("app/services/web_system_api_key_mutations.py").exists()
+    tree = ast.parse(Path("app/web/admin/system.py").read_text())
+    for name, path in (
+        ("api_key_create", "/system/api-keys"),
+        ("api_key_revoke", "/system/api-keys/{key_id}/revoke"),
+        ("api_key_rotate", "/system/api-keys/{key_id}/rotate"),
+    ):
+        route = _find_route(web_router, "POST", path)
+        assert route.dependant.dependencies
+        endpoint = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        source = ast.unparse(endpoint)
+        assert "require_permission('system:settings:write')" in source
+        assert "owner_command_session" in source and "_system_command_context" in source
+        assert "db.commit(" not in source and "db.rollback(" not in source
