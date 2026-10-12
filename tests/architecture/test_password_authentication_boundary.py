@@ -227,3 +227,50 @@ def test_customer_cache_adapter_converts_to_typed_standing_query() -> None:
     assert "resolve_customer_session_standing" in _name_calls(
         _function(tree, "_has_auth_session_standing")
     )
+
+
+def test_representation_participant_has_typed_isolated_transaction_boundary() -> None:
+    function = _function(_tree(OWNER), "replace_password_representation")
+    assert [argument.arg for argument in function.args.kwonlyargs] == ["replacement"]
+    assert ast.unparse(function.args.kwonlyargs[0].annotation) == (
+        "PasswordRepresentationReplacement"
+    )
+    assert ast.unparse(function.returns) == "PasswordRepresentationOutcome"
+    assert not {"commit", "rollback", "flush", "begin", "begin_nested"} & _attr_calls(
+        function
+    )
+    assert "execute_owner_command" not in _name_calls(function)
+    windows = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.With)
+        and any(
+            ast.unparse(item.context_expr) == "db.no_autoflush" for item in node.items
+        )
+    ]
+    assert len(windows) == 1
+    all_executes = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "execute"
+    ]
+    assert all_executes
+    assert all(node in list(ast.walk(windows[0])) for node in all_executes)
+    values_calls = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "values"
+    ]
+    assert len(values_calls) == 1
+    assert [keyword.arg for keyword in values_calls[0].keywords] == ["password_hash"]
+    assert not {
+        "hash_password",
+        "hash_user_password",
+        "verify_user_password",
+        "complete_password_step",
+        "complete_mfa",
+    } & _name_calls(function)

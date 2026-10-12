@@ -1851,7 +1851,12 @@ DOMAIN = DomainSOT(
                 "carry the credential binding and re-run the gate. PPPoE "
                 "(access credential) authentication never touches "
                 "user_credentials. The hash-representation hook "
-                "replace_password_representation is built but not called by "
+                "replace_password_representation is a dormant non-public participant "
+                "accepting redacted PasswordRepresentationReplacement and returning "
+                "PasswordRepresentationOutcome.REPLACED or CONFLICT. Its exact UUID, "
+                "positive version and hash CAS changes only password_hash, preserves "
+                "password_updated_at and credential_version, and disables autoflush "
+                "throughout the transaction-local marker window. It is not called by "
                 "login. UserCredential verification uses verify_user_password; "
                 "AccessCredential verification uses verify_service_secret and "
                 "retains its existing bcrypt refusal. Reversible user material "
@@ -1988,7 +1993,14 @@ DOMAIN = DomainSOT(
                         "The optional atomic counter update and failed AuditEvent commit "
                         "or roll back together. Session-open, staging, flush, commit, close "
                         "and telemetry failures preserve the original denial; no counter-only fallback. "
-                        "Pending and flushed request writes are never released to record failure."
+                        "Pending and flushed request writes are never released to record failure. "
+                        "The dormant representation replacement is a non-public participant "
+                        "in its caller's transaction, never a command or transaction owner. "
+                        "It performs no flush, commit, rollback or savepoint; pending unrelated "
+                        "ORM writes stay pending until after its marker is cleared. Recoverable "
+                        "client failures attempt marker cleanup with autoflush still disabled. "
+                        "An aborted PostgreSQL transaction can refuse cleanup; the original "
+                        "failure propagates unchanged to the owner for rollback."
                     ),
                     locking=(
                         "No SELECT FOR UPDATE and no lock while hashing. PPPoE "
@@ -2022,7 +2034,10 @@ DOMAIN = DomainSOT(
                     retries=(
                         "A deadlock (40P01) retries the whole phase B once; "
                         "the gate re-evaluates the version so phase A stays "
-                        "valid. Zero gate rows are never retried or re-verified."
+                        "valid. Zero gate rows are never retried or re-verified. "
+                        "Representation CAS loss returns CONFLICT without retry or a "
+                        "secret, hash or version in the outcome. The caller owns all "
+                        "database error rollback and retry."
                     ),
                 ),
                 errors=ErrorContract(
@@ -2112,6 +2127,7 @@ DOMAIN = DomainSOT(
                     "docs/adr/0002-owner-command-transaction-boundary.md",
                     "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
                     "docs/security/AUTHENTICATION_DENIAL_AUDIT.md",
+                    "docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md",
                 ),
                 test_refs=(
                     "tests/test_password_authentication.py",
