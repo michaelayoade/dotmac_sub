@@ -4656,26 +4656,43 @@ def team_inbox_ai_route_create(
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
 def team_inbox_ai_route_update(
+    request: Request,
     route_id: UUID,
     display_name: str | None = Form(default=None),
-    service_team_id: str | None = Form(default=None, alias="ai_service_team_id"),
+    service_team_id: UUID | None = Form(default=None, alias="ai_service_team_id"),
     confidence_threshold: float | None = Form(default=None),
     priority: int | None = Form(default=None),
     is_active: bool | None = Form(default=None),
+    expected_updated_at: datetime | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
+    actor_id = _actor_id_from_request(request)
+    if actor_id is None:
+        return _routes_redirect(
+            status="error", message="An authenticated staff actor is required."
+        )
     try:
         team_inbox_commands.update_ai_route(
             db,
-            route_id=route_id,
-            display_name=display_name,
-            service_team_id=service_team_id,
-            confidence_threshold=confidence_threshold,
-            priority=priority,
-            is_active=is_active,
+            command=team_inbox_commands.UpdateAiRouteCommand(
+                context=CommandContext.system(
+                    actor=f"person:{actor_id}",
+                    scope="team-inbox:ai-route-edit",
+                    reason="staff edited an existing Inbox AI route",
+                ),
+                patch=team_inbox_routing.AiRoutePatch(
+                    route_id=route_id,
+                    display_name=display_name,
+                    service_team_id=service_team_id,
+                    confidence_threshold=confidence_threshold,
+                    priority=priority,
+                    is_active=is_active,
+                    expected_updated_at=expected_updated_at,
+                ),
+            ),
         )
-    except (team_inbox_routing.EmailRouteError, ValueError) as exc:
+    except (DomainError, ValueError) as exc:
         return _routes_redirect(status="error", message=str(exc))
     return _routes_redirect(status="success", message="AI intake route updated.")
 
@@ -4691,7 +4708,7 @@ def team_inbox_ai_route_delete(
     _prepare_mutation(db)
     try:
         team_inbox_commands.delete_ai_route(db, route_id=route_id)
-    except (team_inbox_routing.EmailRouteError, ValueError) as exc:
+    except (DomainError, ValueError) as exc:
         return _routes_redirect(status="error", message=str(exc))
     return _routes_redirect(status="success", message="AI intake route deactivated.")
 
