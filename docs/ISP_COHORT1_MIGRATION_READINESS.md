@@ -280,7 +280,7 @@ held until all unrelated cohort writers reach zero.
 ## First preparation candidate: Brand Profiles
 
 This is the first bounded packet to complete, not a claim of adoption or an
-approved switch. Source evidence is Sub `b69f1b4a6d088522ce5834aa57ccd94a3530606d`;
+approved switch. Mapping/census evidence is Sub `0ab045878aaa9df8144b8a380cc4d210a57fe9ef`;
 module evidence is Starter `0aa465446794ae03abc743f9e288e9f3831be3aa`.
 The scope is the `brand_profile` entity (`brand_profiles`, `BrandProfile`) and
 `customer.branding`'s profile commands and display resolver. It excludes legal
@@ -294,25 +294,154 @@ permission to compose the platform control-plane profile/host-binding lineage.
 `control.domain_settings`; prove the relevant relation contracts without
 requiring unrelated Party/Customers cohort completion.
 
-### Mapping decisions and evidence still required
+### Pinned source contract and candidate field mapping
 
-| Source concern | Required target contract or disposition | Status |
-|---|---|---|
-| Source UUID and platform/reseller/organization scope | Stable source correlation; explicit tenant default and reseller/organization identity links; source `scope_id` has no FK | open |
-| Brand/product/legal names and active flag | Map to required `profile_code`/`display_name`, field provenance/locks and DRAFT/ACTIVE/RETIRED semantics without inventing legal authority | open |
-| Organization > reseller > platform > legacy resolution | Prove target selection and per-field fallback precedence for every source scope; no legacy fallback after switch | open |
-| Primary/accent colors | Map typed values and compare rendered output against the released UI token contract | open |
-| Five `metadata.semantic_colors` overrides | Dossier classifies these as `OWNED_BY_PUBLISHED_TOKEN`; enumerate actual values and explicit unsupported-value dispositions | open |
-| Logo, favicon and other asset URLs/static paths | Map to opaque file references owned by the file capability; prove byte/reference and deletion behavior rather than assuming URL equivalence | open |
-| `tagline`, `app_url`, `portal_domain` | No direct target tenant-profile fields established; assign typed retention, migration or retirement outcomes, never silently drop | open |
-| Sender/support fields and `legal_address` | Map each field's actual meaning and owner; existing opaque-address evidence is not a structured address contract | open |
+This is a source-code census, not a population census or approved migration
+contract. All 23 mapped columns of `app/models/branding.py::BrandProfile` are
+covered below. The source export is
+`app/services/migration_source_export.py::_brand_profile_record` and
+`app/migration_source/snapshot.py::BrandProfileRecord`; its `source_id` is the
+source row UUID. `legal_address` and `metadata_` cross that boundary as
+`OpaqueBlob` key inventory/digest, so the existing export cannot reconstruct
+those values or enumerate actual semantic overrides for a backfill. Their
+value-bearing, typed extraction and provenance remain an acceptance gate.
 
-The inspected module has different tenant/platform models and migration
-prerequisites, including tenant scope catalog, idempotency and database roles.
-Record exact plane selection and dependency lineage from the chosen verified
-release; source compatibility is not demonstrated merely by the package name.
-The historical a1 release is currently non-pinnable. No exact artifact graph
-or migration/backfill/shadow acceptance is established for this candidate.
+Target paths below are under
+`packages/dotmac-brand-profiles/src/dotmac_brand_profiles/` at the Starter SHA
+above: `models.py` defines storage, `ports.py::ProfileFields` defines inbound
+values, `service.py` defines commands/resolution, and `brand_values.py` defines
+color translation. A matching column is a candidate destination, not a grant
+of legal, support-routing or sender authority.
+
+| Source column(s) | Candidate destination / explicit unresolved outcome |
+|---|---|
+| `id` | Stable source correlation to target UUID returned by `upsert_tenant_profile`; that command allocates its own UUID and accepts no source UUID. Approve a durable correlation owner/key and collision policy; do not claim identity preservation. Candidate deterministic `profile_code = sub-brand-<source UUID>` fits 120 chars but remains unapproved. |
+| `scope_type`, `scope_id` | Target `tenant_id` plus registered scope chain. Source `platform` with null ID is a tenant-default candidate; reseller/organization UUIDs need explicit identity links/existence checks. No cross-lineage FK or invented sentinel. Scope spelling and tenant assignment require approval. |
+| `brand_name` | `display_name` (source 120 chars, target 160). Source nullable/empty inherits, target required: approve fallback/materialization with provenance; never expose generated `profile_code` as an accidental display name. |
+| `product_name` | `product_name` (160). Preserve null/empty inheritance and source company-name fallback semantics; explicit clear is blocked below. |
+| `legal_name` | `legal_name` (200), as presentation of the existing legal fact only. Company-info/identity owner and permitted scope overrides must be declared; importing a lock list does not establish legal ownership. |
+| `tagline` | No `ProfileFields` destination. Explicit typed product retention or approved retirement required; no silent drop and no generic metadata bucket. |
+| `primary_color` | `primary_hex` → assembly maps to `dotmac_ui.BrandOverride.primary`. Same hex value does not imply same ramp/rendered result. |
+| `secondary_color` | `accent_hex` → `BrandOverride.accent`. An accent-only source layer is valid today but target validates each command payload as requiring primary alongside accent; approve a parity-preserving translation/provenance strategy. |
+| `logo_url`, `dark_logo_url`, `favicon_url` | `logo_file_ref`, `dark_logo_file_ref`, `icon_file_ref` (200 each). Each source URL class needs a file-owner disposition and correlation; a URL or `StoredFile` UUID is not proven to be a target file reference. See asset matrix. |
+| `support_email`, `support_phone` | Same target names (255 / 40). Retain actual support owner and inherited company-info provenance; scope policy remains open. |
+| `from_email`, `from_name` | `sender_email`, `sender_name` (255 / 160), presentation only. Connector authorization, SMTP configuration and consent stay with their current owners. |
+| `app_url` | No equivalent tenant-profile field. Do not rename to `support_url`: application origin and support endpoint have different meanings. Declare typed product retention and origin-owner contract. |
+| `portal_domain` | No equivalent tenant-profile field. Do not create platform host bindings or bypass Kernel host-to-tenant ownership. Declare product retention/link/retirement outcome. |
+| `legal_address` | Target `legal_address` exists as JSON, not a structured address contract. Source applies a nonempty object as a whole replacement. Existing exporter carries only keys/digest. Approve value-bearing shape/provenance and address/legal owner; no inferred transfer to Brand Profiles. |
+| `metadata_` | No generic target metadata field. Known `semantic_colors` is addressed below; every other measured key requires explicit typed retention or approved retirement. Existing key/digest export is insufficient for a value census. |
+| `is_active` | Target DRAFT/ACTIVE/RETIRED state requires a lifecycle contract. New upsert is DRAFT, activation is separate; no tenant retirement command is exposed. Source upsert reactivates, source DELETE deactivates. Do not equate inactive with permanently retired or draft without approval. |
+| `created_at`, `updated_at` | Target timestamps exist, but public upsert exposes no historic timestamp input. Preserve source timestamps in approved migration provenance or obtain an explicit historical-time disposition; do not silently replace history with migration time. |
+
+Target-only `support_url`, `enabled_surfaces`, `default_locale`,
+`default_timezone`, `mobile_build_profile_ref`, `locked_fields` and
+`record_version` have no direct source column. Leave optional values unset until
+an owner supplies them; do not infer locale, signing profiles or legal locks.
+`record_version` is target mutation history, not a source timestamp/version.
+
+The five known semantic keys are `positive`, `info`, `warning`, `negative` and
+`neutral`. They occur in `metadata_["semantic_colors"]`, legacy comms
+`brand_semantic_<tone>_color`, and deployment-static
+`semantic_<tone>_color`. Starter `EXTRACTION.toml::shadow_and_drift` records
+Michael's 2026-08-19 ruled reduction: UI publishes these tokens and profile
+values are not carried. Flatten each value into
+`translate_legacy_brand_values` and retain its `UnsupportedBrandValue` with
+`OWNED_BY_PUBLISHED_TOKEN`, source row/scope and reviewed rendered difference.
+This ruling does not authorize dropping unrelated metadata or treating a
+key-only digest as an actual-value receipt. No population values were read.
+
+### Scope, resolver and command compatibility gates
+
+Source constraints allow only `platform`, `reseller`, `organization` with
+null ID iff platform, and one row per scope regardless of active state.
+Source upsert checks reseller/organization existence. Resolution infers both
+links from `Subscriber`, unless explicit IDs were supplied, then applies legacy,
+platform, reseller and organization in that order. Scalars override only when
+neither null nor empty; nonempty legal address replaces the whole object;
+semantic colors merge by recognized tone. Source `source_scope` records the
+last applied profile even when it contributes no scalar, rather than each
+field's real provenance. Preserve the externally consumed provenance contract
+or approve an explicit compatibility change.
+
+The proposed target chain is organization, reseller, tenant default, all on
+TENANT with an already resolved real tenant. Exact default scope spelling is
+open. `resolve_for_tenant` selects ACTIVE rows, then `resolve` takes first
+non-null per field and reports per-field `sources`. Prove these differences
+against the selected release before composition:
+
+- Target empty strings/empty address objects count as supplied; source empty
+  strings/empty objects inherit. Upsert `ProfileFields.as_dict` removes `None`
+  (leave unchanged), while source upsert assigns an explicitly supplied `None`
+  or empty value. Define typed unset/clear/inherit outcomes for create/update
+  and admin asset removal; blanking a value is not a safe substitute.
+- Required target display name, static/company legacy fallback and no-profile
+  cases need explicit materialization or product-owned inputs. Never retain
+  `_legacy_brand` as a second live profile authority after the switch.
+- Source primary and secondary may be independently absent. Target
+  `validate_brand_values` refuses accent without primary in the submitted
+  payload, even when a primary already exists on the row. Define handling for
+  partial edits and inherited colors without falsifying source provenance.
+- Source deactivation and reactivation need equivalent typed commands. The
+  inspected service has activation but no tenant retirement/deactivation
+  command; a direct ORM status write would invent another owner.
+- Target model/migration uniqueness includes `profile_code`; it does **not**
+  enforce the comment's claimed one ACTIVE profile per tenant/scope. The
+  resolver iterates all matching rows without ordering. Multiple codes at one
+  scope can make output order-dependent, including a null tenant-default ID.
+  Require a demonstrated uniqueness/admission contract before backfill/switch.
+- Target `resolve` aggregates locks and `resolvable_by` exposes their union;
+  this is not a write permission/legal-owner check. No source lock data exists.
+  Approve identity-field override permissions separately; do not silently
+  introduce new legal authority or choose locks in this packet.
+- Source commands have commit wrappers; target upsert/activation use Kernel
+  `execute_once` and flush-only handlers. The assembly must define one command
+  transaction, stable idempotency identities, audit actor/record version,
+  in-flight fencing and rollback. Target tenant commands do not write audit
+  events themselves. Existing company-info save commits before and after its
+  profile sync; preserve its owner while proving the replacement consequence.
+
+### Asset mapping and actual secret requirements
+
+| Source class / path | Candidate handling and outstanding proof |
+|---|---|
+| `/branding/assets/<UUID>` | `branding_storage.py` parses a `StoredFile` ID; prove file-owner correlation, tenant/authorization/lifecycle, MIME and byte digest before producing an opaque target reference. `public/branding.py::branding_asset` serves only undeleted `branding_asset` records through the current storage owner. |
+| `/static/...` | Product-packaged asset, including generated favicons. Decide explicit retained product reference versus governed file import; prove content and serving behavior. Target does not fetch these paths. |
+| HTTP(S) URL | External locator, not byte identity or file reference. Decide authorized file ingestion versus explicitly typed product locator retention; no remote fetch or credentials were used here. |
+| Null / empty / removed asset | Preserve inheritance/clear semantics. Source settings handler can delete local files or hard-delete managed objects; prove replacement/delete/reference sharing and failure atomicity before changing that flow. |
+| Invoice-only `data:` fallback | `billing_invoice_pdf.py::_logo_src` supports inline data and settings/StoredFile/static fallback, beyond profile-upsert's accepted URL classes. Classify actual use before retiring this presentation path; not an extra accepted profile URL class. |
+
+Brand Profiles stores references and never reads bytes. Its Python dependencies
+contain no Files package or provider credential. File capability is an assembly
+integration requirement if preserving uploaded/managed assets, not a sibling
+package dependency to add to Brand. The existing Sub file-storage/provider
+configuration may require object-store credentials at runtime; approve the
+selected file graph and credential owner separately. SMTP/sender credentials,
+registry access, database-role credentials and mobile signing material are not
+brand-profile values. No credential reads, provider calls, byte downloads,
+registry census or secret-custody operation occurred in this preparation.
+
+### Candidate artifact graph and proof frontier
+
+The graph below names source-declared edges and lineage requirements, not an
+installable lock. Exact package hashes and compatibility must close independently
+before this module's switch; unrelated Party/Customers completion is not a hold.
+
+| Node / edge | Pinned evidence and unresolved proof |
+|---|---|
+| `dotmac-brand-profiles` 0.1.0a1 | `pyproject.toml`: Python >=3.11,<3.14; Kernel >=0.1.0a77, UI >=0.1.0a7, SQLAlchemy ^2.0. `module-release-legacy-unverified.json` names tag object `17e3140170ebcbb9810a67b6b97256cbbf9be6d1`, peeled source `ed69f9dfdeea493dab7d7ba25c04e940f0870545`; historical/non-pinnable. No verified row or wheel hash established. Source inspection at current Starter SHA is not proof of those historical bytes. |
+| Kernel candidate 0.1.0a104 | `kernel-release-verifications/0.1.0a104.json`: source `bf16e30efc3321ca9a495de31570bb5f9a02e9e3`, wheel SHA256 `183e0aa003db22fc2cfd8a846df14589027e34a9632180b018222d5eac0d6076`, publish run `35360556616`, verify run `35360926284`. Range satisfaction alone is not exact released-byte module compatibility. Current unpublished `+dev` is not a substitute. |
+| UI candidate 0.1.0a8 | `release-record-kernel-a99-ui-a8.md`: source `8c92943062dbfe7f17bfa35264243709ec3d92c3`, run `33361250324`, bundle SHA256 `1997fe0ca07c058056cefc6ef8a01d4355c4c9c95d678e251b4b2ae08b8abd24`. Per-file wheel digest/readback still needed. Assembly maps primary/accent into UI and reviews both rendered pipelines. |
+| `brand_profiles` TENANT lineage | `manifest.py`: `short_code=brand`, prefix `bp`, branch `brand_profiles`; `bp_0001_brand_profiles` creates `mod_brand.brand_profiles`. Common prerequisites `module_database_roles.v1`, `idempotency_ledger.v1`; TENANT `tenant_scope_catalog.v1`. Resolve their exact released migration revisions and prove ENABLE/FORCE RLS, tenant function and app-role behavior on hosted disposable PostgreSQL. Exclude platform profile/host-binding tables and platform audit prerequisite from this selection. |
+| File integration, if selected | `dotmac-files` current source declares 0.1.0a5, Kernel >=0.1.0a98 and SQLAlchemy ^2.0. These are source coordinates only; no Files wheel/release/proof was inspected or selected. Prove a compatible TENANT file owner/adapter and its migration/runtime provider graph before any opaque ref claims. |
+| Other dependencies | Freeze exact Python/SQLAlchemy and transitive versions with the chosen verified artifacts; a broad version range is not a reproducible graph. |
+
+Kernel smoke SHA beginning `545` is recorded for a local smoke recipe that
+omits the CSS-generation step; the release recipe associated with SHA beginning
+`183e` runs that step before packaging. Recipe tracing does not verify retained
+direct bytes, and the two hashes are not
+interchangeable identities. Obtain exact released-byte compatibility receipts;
+never rebuild an existing tag. No package build/install/download, release/tag,
+lineage execution, backfill, shadow, or cutover was performed here.
 
 ### Switch-time path checklist
 
@@ -334,13 +463,42 @@ packet records these paths rather than scheduling source cleanup beforehand:
 - `alembic/versions/267_brand_profiles.py`: preserve applied schema history;
   it is not a live writer to refactor or delete.
 
-Reader census and parity must include customer/reseller/public/portal branding,
-admin/auth contexts and `app/api/me.py`; invoices, sales quotes, support,
-notifications/tasks, inbox projections and catalog presentation. Inspect direct
-bypasses in `app/services/email.py`, invoice logo settings/StoredFile fallbacks,
-theme/static/favicon lookups, and direct profile-table reads. Repoint only the
-profile concern; retain each unrelated fact's actual owner. This grouped list
-is a starting inventory, not proof that all callers have been enumerated.
+### Bounded reader and writer census at the source SHA
+
+AST import census over tracked Python under `app`, `scripts`, `alembic` finds
+17 importers of the profile service, 12 importers of deployment-static
+`branding_config`, and four importers of the profile ORM. The sets overlap;
+these are path counts, not writer counts or total template reach. Together
+with direct symbol/URL/key searches, they give these concrete cutover paths:
+
+| Paths | Observed concern / switch disposition |
+|---|---|
+| `app/services/brand_profiles.py` | Runtime row writer/selector and legacy resolver: `upsert_brand_profile`, `sync_platform_brand_from_legacy_settings`, both commit wrappers, `deactivate_brand_profile_committed`, `list_brand_profiles`, `resolve_brand`. Replace selected profile owner and fence legacy paths at switch. |
+| `app/api/branding.py` | Resolve/list GET, PUT upsert, DELETE deactivate adapters; preserve typed response and clear/lifecycle semantics through new owner. |
+| `app/web/admin/system.py`, `app/services/web_system_company_info.py`, `scripts/one_off/backfill_brand_profiles.py` | The other three service importers delegate profile sync; settings/assets/company ownership differs. Retire/repoint profile consequence only, including the script's dry-run flush/rollback path. |
+| `app/api/me.py`, `app/web_home.py` | Subscriber-scoped API read and default landing-page read. |
+| `app/web/customer/branding.py`, `app/services/web_reseller_routes.py`, `app/services/web_admin.py` | Default/subscriber/reseller resolution; sidebar/auth consumers use these projections. |
+| `app/web/public/branding.py` | Default theme CSS and manifest reads; login-hero remains a separate settings concern; asset serving is a separate file concern. |
+| `app/services/billing_invoice_pdf.py`, `app/services/sales/quote_documents.py` | Scoped document presentation. Invoice logo can bypass the selected profile through settings/StoredFile/static fallback. Retain financial and legal fact owners. |
+| `app/services/notification_adapter.py`, `app/services/support.py`, `app/tasks/notifications.py` | Scoped brand in customer communications; delivery/consent remains outside profile ownership. |
+| `app/services/team_inbox_projection.py`, `app/services/web_catalog_subscriptions.py` | Inbox company-name projection and subscriber catalog presentation. |
+| `app/services/public_branding.py` | Direct ORM active-favicon lookup plus legacy comms-setting lookup; repoint the profile read and retire displaced profile fallback. |
+| `app/services/migration_source_export.py` | Direct ORM read-only source export; retain historical source-artifact meaning and declare post-switch availability/retention. |
+| `app/models/__init__.py` | ORM registration import, not an independent reader or writer. |
+| `app/web/brand_globals.py`, `app/services/email_template.py` | Static template brand default, with explicit supplied brand able to override the email default. Declare remaining product defaults after switch. |
+| `app/services/email.py` | Static from/support/legal fields plus company-info and comms-logo bypasses. Separate presentation from connector authorization; do not transfer SMTP authority. |
+| `app/web/public/invoice_checkout.py`, `app/services/web_customer_actions.py`, `app/services/events/handlers/notification.py`, `app/services/ncc_report_email.py`, `app/services/nextcloud_talk_staff.py`, `app/services/staff_notifications.py`, `app/services/ticket_mentions.py`, `app/services/web_system_export_tool.py` | Deployment-static importers using application origin and/or presentation. Keep origin/export/delivery ownership explicit; replacing all `get_brand` calls blindly would move unrelated authority. |
+| `app/web/portal_branding.py`, `app/web/reseller/branding.py` | Indirect sidebar/request-state projections; context/cache invalidation and scope parity must be tested. |
+| `templates/base.html`, `templates/auth/*.html`, `templates/index.html` | Indirect brand/context consumers and static favicon/PWA/theme defaults; compare actual rendered output and failure defaults. |
+| `scripts/utils/settings_sync.py`, `app/services/settings_spec.py` | Generic settings writer and specs for `sidebar_logo_url`, `sidebar_logo_dark_url`, `favicon_url`, primary/secondary and five semantic override keys; classify/gate these branding-key writes at switch, preserve unrelated settings. No script was executed. |
+| `alembic/versions/267_brand_profiles.py`, successor `268_sot_safety_closure.py` | Applied schema/seed history and its lineage link. Preserve history; not runtime writer cleanup. |
+
+Search boundary: imports and direct references in this pinned repository, plus
+named indirect context/templates and settings/asset bypasses. Dynamic imports,
+external scripts, deployed jobs and actual configured data are not proved by
+this census; in-flight writer admission, hosted runtime tracing and the final
+candidate's scanner/architecture receipt must close that frontier. This does
+not schedule pre-cutover refactors or claim all legacy writers are retired.
 
 ### Acceptance receipts for this candidate
 
