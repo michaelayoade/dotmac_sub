@@ -43,6 +43,9 @@ PATH_BGP_CONNECTIONS = (
 )
 PATH_BGP_SESSIONS = "/routing/bgp/session?.proplist=name,remote.address,established"
 PATH_OSPF = "/routing/ospf/neighbor?.proplist=router-id,address,state,interface"
+# Minimal proplist; RouterOS REST also accepts ``&type=ether`` query filtering,
+# but that is unproven on this estate's firmware, so ether rows are filtered
+# client-side (see ``_ether_rows``) and the request stays unfiltered.
 PATH_INTERFACES = "/interface?.proplist=name,type,running,disabled,link-downs"
 PATH_PPP_ACTIVE = "/ppp/active?.proplist=.id"
 PATH_USERS = "/user?.proplist=name,group,address,disabled"
@@ -77,12 +80,19 @@ class ReaderLimits:
     router_deadline: float = 45.0
 
 
+_CREDENTIAL_FAILURES = frozenset({RestFailure.auth_failed, RestFailure.forbidden})
+
+
 class _AccessFailure(Exception):
     """Internal: the router cannot be read (auth, forbidden, transport)."""
 
     def __init__(self, failure: RestFailure) -> None:
         super().__init__(failure.value)
         self.failure = failure
+
+
+class _TransportAbort(Exception):
+    """Internal: transport failed after the first success; keep data, stop polling."""
 
 
 class _EndpointUnavailable(Exception):
@@ -107,12 +117,21 @@ def _rows(payload: RouterResponse) -> tuple[RuntimeRow, ...]:
     return ()
 
 
+def _ether_rows(rows: tuple[RuntimeRow, ...]) -> tuple[RuntimeRow, ...]:
+    return tuple(r for r in rows if r.get("type", "").strip().lower() == "ether")
+
+
 def sfp_interface_names(interfaces: tuple[RuntimeRow, ...]) -> list[str]:
-    """Enabled interfaces whose name marks them as SFP/QSFP cages (bounded)."""
+    """Enabled ethernet interfaces named like SFP/QSFP cages (bounded).
+
+    Only ``type=ether`` rows qualify, so a VLAN or bridge that merely carries an
+    ``sfp`` name is never sent to the optics monitor.
+    """
     names = [
         row["name"]
         for row in interfaces
         if row.get("name")
+        and row.get("type", "").strip().lower() == "ether"
         and _SFP_NAME_RE.match(row["name"])
         and row.get("disabled", "").lower() != "true"
     ]
@@ -154,32 +173,46 @@ class RouterOSRuntimeReader:
         server_time: datetime | None = None
         failure: RestFailure | None = None
         try:
-            collected["resource"] = self._get_one(
-                router, PATH_RESOURCE, deadline, first=True
-            )
-            before = self._clock()
-            collected["clock"] = self._get_optional_one(router, PATH_CLOCK, deadline)
-            after = self._clock()
-            server_time = before + (after - before) / 2
-            collected["ntp"] = self._get_optional_one(router, PATH_NTP, deadline)
-            collected["bgp_connections"] = self._get_optional_rows(
-                router, PATH_BGP_CONNECTIONS, deadline
-            )
-            collected["bgp_sessions"] = self._get_optional_rows(
-                router, PATH_BGP_SESSIONS, deadline
-            )
-            collected["ospf_neighbors"] = self._get_optional_rows(
-                router, PATH_OSPF, deadline
-            )
-            interfaces = self._get_optional_rows(router, PATH_INTERFACES, deadline)
-            collected["interfaces"] = interfaces
-            ppp = self._get_optional_rows(router, PATH_PPP_ACTIVE, deadline)
-            collected["ppp_active_count"] = None if ppp is None else len(ppp)
-            collected["users"] = self._get_optional_rows(router, PATH_USERS, deadline)
-            if include_optics and interfaces:
-                collected["optics"] = self._read_optics(
-                    router, sfp_interface_names(interfaces), deadline
+            try:
+                collected["resource"] = self._get_one(
+                    router, PATH_RESOURCE, deadline, first=True
                 )
+                before = self._clock()
+                collected["clock"] = self._get_optional_one(
+                    router, PATH_CLOCK, deadline
+                )
+                after = self._clock()
+                server_time = before + (after - before) / 2
+                collected["ntp"] = self._get_optional_one(router, PATH_NTP, deadline)
+                collected["bgp_connections"] = self._get_optional_rows(
+                    router, PATH_BGP_CONNECTIONS, deadline
+                )
+                collected["bgp_sessions"] = self._get_optional_rows(
+                    router, PATH_BGP_SESSIONS, deadline
+                )
+                collected["ospf_neighbors"] = self._get_optional_rows(
+                    router, PATH_OSPF, deadline
+                )
+                interfaces = self._get_optional_rows(router, PATH_INTERFACES, deadline)
+                if interfaces is not None:
+                    interfaces = _ether_rows(interfaces)
+                collected["interfaces"] = interfaces
+                ppp = self._get_optional_rows(router, PATH_PPP_ACTIVE, deadline)
+                collected["ppp_active_count"] = None if ppp is None else len(ppp)
+                collected["users"] = self._get_optional_rows(
+                    router, PATH_USERS, deadline
+                )
+                if include_optics and interfaces:
+                    # Marked attempted before the POST so a failure still
+                    # counts against the hourly bound.
+                    collected["optics_attempted"] = True
+                    collected["optics"] = self._read_optics(
+                        router, sfp_interface_names(interfaces), deadline
+                    )
+            except _TransportAbort:
+                # The router answered at least once: keep what was collected;
+                # anything missing stays None (unjudged, findings carry forward).
+                logger.info("router health runtime poll cut short by transport")
         except _AccessFailure as exc:
             failure = exc.failure
             collected = {}
@@ -230,9 +263,13 @@ class RouterOSRuntimeReader:
             )
         except Exception as exc:  # noqa: BLE001 - classified, text discarded
             failure = classify_exception(exc)
-            if failure is not None:
+            if failure is None:
+                raise _EndpointUnavailable from None
+            if first or failure in _CREDENTIAL_FAILURES:
                 raise _AccessFailure(failure) from None
-            raise _EndpointUnavailable from None
+            # Transport trouble after the router already answered is not a
+            # reachability verdict: stop here and keep the data collected.
+            raise _TransportAbort from None
 
     def _get_one(
         self, router: Router, path: str, deadline: float, *, first: bool = False
@@ -278,7 +315,9 @@ class RouterOSRuntimeReader:
                 deadline,
                 payload={"numbers": ",".join(names), "once": ""},
             )
-        except _EndpointUnavailable:
+        except (_EndpointUnavailable, _TransportAbort, _AccessFailure):
+            # Optics is best effort: any failure (including a 403 on the POST)
+            # leaves optics unjudged and never discards the GET data.
             return None
         readings: dict[str, float | None] = {}
         for row in _rows(payload):

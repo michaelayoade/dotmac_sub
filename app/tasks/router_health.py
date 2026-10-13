@@ -172,6 +172,7 @@ def observe_router_runtime() -> dict[str, Any]:
             "opened": stats.opened,
             "resolved": stats.resolved,
             "capped": stats.capped,
+            "deferred": stats.deferred,
         }
 
     return _run(TASK_RUNTIME, runtime_poll.CONTROL_RUNTIME, body)

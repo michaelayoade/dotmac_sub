@@ -333,3 +333,107 @@ def test_task_adapter_gates_on_its_control_and_calls_one_function(
     assert tasks.observe_router_runtime.run() == {"skipped": "control_disabled"}
     assert tasks.TASK_RUNTIME == "app.tasks.router_health.observe_router_runtime"
     assert tasks.SOFT_LIMIT_SECONDS[tasks.TASK_RUNTIME] <= 8 * 60
+
+
+# ------------------------------------------------------------------ time budget
+
+
+def test_run_budget_defers_routers_that_would_overrun(db_session, monkeypatch) -> None:
+    routers = [add_router(db_session, f"rt-{i}") for i in range(4)]
+    reader = ScriptedReader({r.id: healthy(r.id) for r in routers})
+    monkeypatch.setattr(
+        runtime_poll,
+        "load_settings",
+        lambda db: runtime_poll.RouterHealthSettings(runtime_concurrency=1),
+    )
+    clock = {"t": 0.0}
+
+    def monotonic() -> float:
+        return clock["t"]
+
+    original = reader.poll
+
+    def advancing(router, *, router_id, include_optics):
+        clock["t"] += 100.0  # each router "takes" 100 s
+        return original(router, router_id=router_id, include_optics=include_optics)
+
+    reader.poll = advancing  # type: ignore[method-assign]
+    stats = runtime_poll.poll_router_runtime(
+        db_session,
+        task_name="t",
+        now=NOW,
+        reader=reader,
+        budget_seconds=250.0,
+        monotonic=monotonic,
+    )
+    # deadline 45 s: starts at t=0, 100 (ok), 200 (200+45<=250 ok), 300 (refused)
+    assert stats.polled == 3 and stats.deferred == 1
+    assert len(reader.optics_requested) == 3
+
+
+def test_deferred_routers_are_polled_first_next_run(db_session) -> None:
+    first = add_router(db_session, "aaa")
+    second = add_router(db_session, "bbb")
+    reader = ScriptedReader(
+        {first.id: healthy(first.id), second.id: healthy(second.id)}
+    )
+    runtime_poll.poll_router_runtime(
+        db_session, task_name="t", now=NOW, reader=reader, budget_seconds=0.0
+    )
+    assert reader.optics_requested == {}  # nothing fits a zero budget
+    stats = runtime_poll.poll_router_runtime(
+        db_session, task_name="t", now=NOW, reader=reader
+    )
+    assert stats.polled == 2 and stats.deferred == 0
+
+
+def test_timing_settings_are_clamped_to_safe_maxima() -> None:
+    limits = runtime_poll._limits(
+        runtime_poll.RouterHealthSettings(
+            runtime_connect_timeout_seconds=900,
+            runtime_read_timeout_seconds=900,
+            runtime_router_deadline_seconds=900,
+        )
+    )
+    assert limits.router_deadline <= runtime_poll.MAX_ROUTER_DEADLINE
+    assert limits.connect_timeout <= runtime_poll.MAX_CONNECT_TIMEOUT
+    assert limits.read_timeout <= runtime_poll.MAX_READ_TIMEOUT
+    assert (
+        runtime_poll.RUN_BUDGET_SECONDS + runtime_poll.MAX_ROUTER_DEADLINE
+        < (tasks.SOFT_LIMIT_SECONDS[tasks.TASK_RUNTIME])
+    )
+
+
+def test_optics_attempt_marker_is_persisted_and_gates_the_next_poll(
+    db_session,
+) -> None:
+    OPTICS["on"] = True
+    router = add_router(db_session, "rt-opt")
+    attempted = healthy(
+        router.id,
+        interfaces=({"name": "ether1", "type": "ether", "disabled": "false"},),
+        optics={},
+        optics_attempted=True,
+    )
+    runtime_poll.poll_router_runtime(
+        db_session,
+        task_name="t",
+        now=NOW,
+        reader=ScriptedReader({router.id: attempted}),
+    )
+    marker = (
+        db_session.query(RouterHealthSignal)
+        .filter_by(router_id=router.id, signal="sfp_optics_attempt")
+        .one()
+    )
+    assert marker.scope == "router"
+    soon = ScriptedReader({router.id: healthy(router.id)})
+    runtime_poll.poll_router_runtime(
+        db_session, task_name="t", now=NOW + timedelta(minutes=15), reader=soon
+    )
+    assert soon.optics_requested[router.id] is False
+    later = ScriptedReader({router.id: healthy(router.id)})
+    runtime_poll.poll_router_runtime(
+        db_session, task_name="t", now=NOW + timedelta(minutes=60), reader=later
+    )
+    assert later.optics_requested[router.id] is True

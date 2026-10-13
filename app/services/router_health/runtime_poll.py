@@ -14,7 +14,9 @@ The runtime layer never writes ``Router.status`` or ``last_seen_at``.
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,6 +45,8 @@ from app.services.router_health.policy import (
 )
 from app.services.router_health.runtime_checks import (
     RUNTIME_SIGNALS,
+    SCOPE_ROUTER,
+    SIGNAL_ACCESS,
     RuntimeRouter,
     evaluate_runtime,
     optics_due,
@@ -57,6 +61,16 @@ logger = logging.getLogger(__name__)
 
 CONTROL_RUNTIME = "network.router_health_runtime_poll"
 CONTROL_OPTICS = "network.router_health_optics"
+
+#: Run-wide wall-clock budget. The Celery soft limit is 8 minutes
+#: (``app.tasks.router_health.SOFT_LIMIT_SECONDS``); this leaves room to evaluate
+#: and commit. No router is started unless its full deadline still fits.
+RUN_BUDGET_SECONDS = 300.0
+#: Safe ceilings applied to the (operator-editable) timing settings.
+MAX_CONNECT_TIMEOUT = 15.0
+MAX_READ_TIMEOUT = 30.0
+MAX_ROUTER_DEADLINE = 60.0
+MAX_CONCURRENCY = 16
 
 
 class RuntimeReader(Protocol):
@@ -74,6 +88,9 @@ class RuntimeRunStats:
     opened: int
     resolved: int
     capped: int = 0
+    #: Routers not started because the run budget would be exceeded; they carry
+    #: their state forward and are polled first next run.
+    deferred: int = 0
 
 
 def _as_float(value: Decimal | None) -> float | None:
@@ -116,11 +133,22 @@ def _prior_signals(
     return prior
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 def _limits(settings: RouterHealthSettings) -> ReaderLimits:
+    deadline = _clamp(
+        float(settings.runtime_router_deadline_seconds), 5.0, MAX_ROUTER_DEADLINE
+    )
     return ReaderLimits(
-        connect_timeout=float(settings.runtime_connect_timeout_seconds),
-        read_timeout=float(settings.runtime_read_timeout_seconds),
-        router_deadline=float(settings.runtime_router_deadline_seconds),
+        connect_timeout=_clamp(
+            float(settings.runtime_connect_timeout_seconds), 1.0, MAX_CONNECT_TIMEOUT
+        ),
+        read_timeout=_clamp(
+            float(settings.runtime_read_timeout_seconds), 1.0, MAX_READ_TIMEOUT
+        ),
+        router_deadline=deadline,
     )
 
 
@@ -130,9 +158,12 @@ def poll_router_runtime(
     task_name: str,
     now: datetime | None = None,
     reader: RuntimeReader | None = None,
+    budget_seconds: float = RUN_BUDGET_SECONDS,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> RuntimeRunStats:
     """Layer 2: poll, evaluate and project runtime health (see module docstring)."""
     moment = now or datetime.now(UTC)
+    run_deadline = monotonic() + budget_seconds
     settings = load_settings(db)
     loaded = load_policy(db)
     optics_enabled = control_registry.is_enabled(db, CONTROL_OPTICS)
@@ -151,28 +182,41 @@ def poll_router_runtime(
     skipped = len(rows) - len(pollable)
     identities = reconciler.router_identities(db)
     prior = _prior_signals(db, [r.id for r in pollable])
+
+    def last_polled(router: Router) -> datetime:
+        access = prior.get(router.id, {}).get((SIGNAL_ACCESS, SCOPE_ROUTER))
+        return access.last_observed_at if access else datetime.min.replace(tzinfo=UTC)
+
+    # Least recently polled first, so routers deferred by the budget lead the
+    # next run instead of starving behind the same alphabetical head.
+    pollable.sort(key=lambda r: (last_polled(r), r.name))
     active_ids = {
         r.id
         for r in db.execute(select(Router).where(Router.is_active.is_(True))).scalars()
     }
     open_subjects = reconciler.open_subjects(db, HealthLayer.runtime)
-    meta = [(r.id, r.name, r.rest_api_username) for r in pollable]
+    meta = [(r.id, r.name) for r in pollable]
     for router in pollable:
         if router.jump_host is not None:
             db.expunge(router.jump_host)
         db.expunge(router)
     db.rollback()  # end the read transaction before any network I/O
 
-    poller: RuntimeReader = reader or RouterOSRuntimeReader(_limits(settings))
+    limits = _limits(settings)
+    poller: RuntimeReader = reader or RouterOSRuntimeReader(limits)
     due = {
         rid: optics_enabled and optics_due(prior.get(rid, {}), moment)
-        for rid, _, _ in meta
+        for rid, _ in meta
     }
 
-    def poll_one(router: Router) -> RuntimeObservation:
+    def poll_one(router: Router) -> RuntimeObservation | None:
+        if monotonic() + limits.router_deadline > run_deadline:
+            return None  # would overrun the run budget: defer to the next run
         return poller.poll(router, router_id=router.id, include_optics=due[router.id])
 
-    workers = max(1, min(settings.runtime_concurrency, len(pollable) or 1))
+    workers = max(
+        1, min(settings.runtime_concurrency, MAX_CONCURRENCY, len(pollable) or 1)
+    )
     with ThreadPoolExecutor(
         max_workers=workers, thread_name_prefix="rh-runtime"
     ) as pool:
@@ -183,7 +227,11 @@ def poll_router_runtime(
     scopes: list[findings_service.Scope] = []
     results: list[commands.RouterRuntimeResult] = []
     failed = 0
-    for (rid, name, username), observation in zip(meta, observations, strict=True):
+    deferred = 0
+    for (rid, name), observation in zip(meta, observations, strict=True):
+        if observation is None:
+            deferred += 1
+            continue  # nothing judged, nothing resolved: state carries forward
         eff = effective_policy(
             loaded.policy,
             identity=identities.get(rid),
@@ -192,7 +240,7 @@ def poll_router_runtime(
             today=today,
         )
         evaluation = evaluate_runtime(
-            router=RuntimeRouter(router_id=rid, name=name, rest_username=username),
+            router=RuntimeRouter(router_id=rid, name=name),
             observation=observation,
             prior=prior.get(rid, {}),
             policy=eff,
@@ -240,13 +288,14 @@ def poll_router_runtime(
         ),
     )
     return RuntimeRunStats(
-        polled=len(pollable),
+        polled=len(pollable) - deferred,
         failed=failed,
         skipped=skipped,
         findings=len(kept),
         opened=outcome.opened,
         resolved=outcome.resolved,
         capped=dropped,
+        deferred=deferred,
     )
 
 

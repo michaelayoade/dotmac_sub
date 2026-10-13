@@ -117,8 +117,11 @@ counters; do not read those as bad requests.
 Every `router_health_runtime_interval_minutes` the poll reads each active,
 non-maintenance router that has REST credentials, with bounded concurrency and a
 per-router deadline. It uses `RouterConnectionService.execute_once` with a fixed
-allowlist of nine `GET` paths (a test pins this) and stops a router at the first
-auth or transport failure. It never reads PPP usernames (`/ppp/active` count
+allowlist of nine `GET` paths (a test pins this) and treats only a 401/403 or a
+failure of the first request as an access failure (which discards the poll's
+data). A transport error after the first successful `GET` (for example a read
+timeout) stops the remaining requests but keeps what was collected; the
+sections not read are unjudged, so their findings carry forward. It never reads PPP usernames (`/ppp/active` count
 only) and never writes `Router.status` or `last_seen_at`.
 
 | Check | Priority | Meaning |
@@ -131,7 +134,7 @@ only) and never writes `Router.status` or `last_seen_at`.
 | `bgp-session-down` | high | an enabled BGP connection is not established beyond the grace; policy exceptions (check `bgp-session-down`, scope = peer address) suppress |
 | `ospf-neighbor-lost` | high | a neighbour seen Full at least 4 times is not Full beyond the grace; forgotten after 7 days absent |
 | `link-flapping` | medium / high | physical interface link-down counter delta over 24 h; a reboot or counter reset restarts the baseline |
-| `ppp-drop` | high | active PPPoE count below the baseline (median of samples 30-150 min ago) by the configured share and by at least 10, on two consecutive polls. A sustained drop stops being flagged once the baseline window rolls past it (about 2.5 h) |
+| `ppp-drop` | high, critical after 24 h | active PPPoE count below the baseline (median of samples 30-150 min before the drop began) by the configured share and by at least 10, on two consecutive polls. While a drop is open the baseline is frozen at the pre-drop samples (abnormal samples are not recorded), so a sustained outage never renews the baseline and the finding is never auto-cleared by time; it stays open until sessions recover to the threshold, and escalates to critical after 24 hours unrecovered |
 | `ops-user` | high / medium | the snapshot login (policy `ops_user`) is missing, blocks the sub-prod address, or is in a different group than expected (full instead of read) |
 | `rest-user-missing` / `rest-user-full` | high / medium | the REST login (policy `rest_user`) is not in the router's user list, or is in a forbidden group |
 | `full-users-unrestricted` | low | users in group `full` with no address limit (names listed, no passwords) |
@@ -145,20 +148,46 @@ likewise not judged.
 Assumptions to confirm from the first real polls (marked [I] in the design):
 the RouterOS 7 `status` field values of `/system/ntp/client` (`synchronized`),
 the `/system/clock` field names, and the BGP `remote.address` / `established`
-representations. When `status` is absent only `enabled` is judged.
+representations. An NTP client that is enabled but reports no `status` is unjudged (any existing
+finding carries forward); it is never treated as healthy.
 
 ### Optical power (`network.router_health_optics`, off)
 
 RouterOS has no GET for SFP diagnostics. With the control on, once per router
-per hour (55 minute minimum), Sub sends `POST /interface/ethernet/monitor`
+per hour (55 minute minimum, gated on a router-level `sfp_optics_attempt`
+signal written on every attempt whether it succeeded, returned nothing or
+failed), Sub sends `POST /interface/ethernet/monitor`
 with `numbers` set to that router's SFP/QSFP interface names (at most 16, found
-from `/interface`) and `once`. This samples the module and changes nothing.
+from `/interface`; only `type=ether` interfaces qualify, so a VLAN named like
+an SFP is never probed) and `once`. This samples the module and changes nothing.
 `sfp-rx-low` (medium below `router_health_sfp_rx_low_dbm`, high below the
 critical level, high for dark fibre: -40 dBm or lower with the link down) and
 `sfp-overload` (high above `router_health_sfp_overload_dbm`) are judged only
 from those readings. Turning the control off resolves the optics findings.
 Michael approved enabling optics on 2026-10-12; it is a rollout step, not a
-default.
+default. A failed or rejected optics POST (including a 403) leaves optics
+unjudged and never discards the other runtime data.
+
+Optics is a feature control (`system:settings:write`, audited), a deliberate
+deviation from the design's owner-command-only rule, approved alongside
+Michael's optics approval.
+
+### Run budget and payload
+
+The task's Celery soft limit is 8 minutes. The poll has a run-wide budget of
+300 seconds: a router is started only if its full per-router deadline still fits
+in the remaining budget; the rest are deferred (reported as `deferred`, state
+carried forward) and, because routers are polled least recently polled first,
+lead the next run. The timing settings are clamped to safe maxima (connect 15 s,
+read 30 s, per-router deadline 60 s, concurrency 16) whatever is configured.
+
+`/interface` asks for `name,type,running,disabled,link-downs` only and the
+reader keeps `type=ether` rows. RouterOS REST documents `?type=ether` query
+filtering, but that is unproven on this estate's firmware, so the filter is
+applied client-side until a read-only check on a router proves it. Signal scopes
+built from interface names or neighbour IDs are bounded to 120 characters (long
+names keep a prefix plus a short hash). BGP alert titles carry a short peer
+hash, not the peer address, which is in the evidence (`router:read`).
 
 ## Rollback
 

@@ -179,8 +179,15 @@ def test_ntp_disabled_counts_and_synchronized_is_clean() -> None:
     assert CheckId.ntp_unsynced in healthy.judged
 
 
-def test_ntp_without_status_field_judges_enabled_only() -> None:
-    assert CheckId.ntp_unsynced not in checks(run(observation(ntp={"enabled": "yes"})))
+def test_ntp_enabled_without_status_is_unjudged_never_healthy() -> None:
+    ev = run(observation(ntp={"enabled": "yes"}))
+    assert CheckId.ntp_unsynced not in ev.judged
+    assert not [s for s in ev.signals if s.signal == "ntp"]
+
+
+def test_ntp_disabled_without_status_is_still_judged() -> None:
+    ev = run(observation(ntp={"enabled": "false"}))
+    assert CheckId.ntp_unsynced in ev.judged
 
 
 def test_clock_skew_medium_high_and_inside_threshold() -> None:
@@ -526,12 +533,64 @@ def test_optics_thresholds_are_configurable() -> None:
     assert not run(optics_obs(-28.0), optics_enabled=True, settings=settings).findings
 
 
-def test_optics_due_is_hourly() -> None:
+def test_optics_due_is_hourly_on_the_router_level_marker() -> None:
     assert rc.optics_due({}, NOW)
-    recent = keyed(state("sfp_optics", "sfp1", observed=minutes_ago(30)))
+    recent = keyed(state("sfp_optics_attempt", observed=minutes_ago(30)))
     assert not rc.optics_due(recent, NOW)
-    old = keyed(state("sfp_optics", "sfp1", observed=minutes_ago(56)))
+    old = keyed(state("sfp_optics_attempt", observed=minutes_ago(56)))
     assert rc.optics_due(old, NOW)
+    # Per-interface readings alone no longer gate the bound.
+    assert rc.optics_due(keyed(state("sfp_optics", "sfp1", observed=NOW)), NOW)
+
+
+@pytest.mark.parametrize("optics", [{"sfp1": -9.0}, {}, None])
+def test_every_optics_attempt_writes_the_marker(optics) -> None:
+    obs = observation(interfaces=(SFP,), optics=optics, optics_attempted=True)
+    ev = run(obs, optics_enabled=True)
+    marker = [s for s in ev.signals if s.signal == "sfp_optics_attempt"]
+    assert len(marker) == 1 and marker[0].scope == "router"
+    assert marker[0].last_observed_at == NOW
+
+
+def test_no_marker_when_optics_was_not_attempted() -> None:
+    ev = run(observation(interfaces=(SFP,)), optics_enabled=True)
+    assert not [s for s in ev.signals if s.signal == "sfp_optics_attempt"]
+
+
+def test_failed_optics_attempt_is_unjudged_and_keeps_findings() -> None:
+    obs = observation(interfaces=(SFP,), optics=None, optics_attempted=True)
+    ev = run(obs, optics_enabled=True)
+    assert not (set(rc.OPTICS_CHECKS) & ev.judged)
+
+
+def test_long_interface_names_fit_the_scope_column() -> None:
+    long_name = "sfp-" + "x" * 196
+    other = "sfp-" + "x" * 195 + "y"
+    row = {**SFP, "name": long_name}
+    obs = observation(
+        interfaces=(row, {**SFP, "name": other}),
+        optics={long_name: -30.0, other: -9.0},
+        optics_attempted=True,
+    )
+    ev = run(obs, optics_enabled=True)
+    scopes = [s.scope for s in ev.signals]
+    assert scopes and all(len(sc) <= 120 for sc in scopes)
+    assert len({s.scope for s in ev.signals if s.signal == "sfp_optics"}) == 2
+    assert all(len(f.title) < 200 for f in ev.findings)
+    link = [s for s in ev.signals if s.signal == "iface_link"]
+    assert len(link) == 2 and all(len(s.scope) <= 120 for s in link)
+    assert rc.bounded_scope("ether1") == "ether1"
+    assert rc.bounded_scope(long_name) == rc.bounded_scope(long_name)
+
+
+def test_non_ether_sfp_named_interface_is_never_probed() -> None:
+    from app.services.router_health.runtime_reader import sfp_interface_names
+
+    rows = (
+        {"name": "sfp-vlan100", "type": "vlan", "disabled": "false"},
+        {"name": "sfp1", "type": "ether", "disabled": "false"},
+    )
+    assert sfp_interface_names(rows) == ["sfp1"]
 
 
 # ------------------------------------------------------------------------ PPP
@@ -794,3 +853,118 @@ def test_sentinel_secrets_in_router_rows_never_reach_findings_or_signals() -> No
     assert ev.findings  # the planted rows did produce findings to inspect
     rendered = repr(ev.findings) + repr(ev.signals)
     assert sentinel not in rendered
+
+
+# ------------------------------------------------- PPP baseline freeze / escalate
+
+
+def ppp_state_after(ev):
+    return next(s for s in ev.signals if s.signal == "ppp_active")
+
+
+def test_ppp_baseline_is_frozen_while_abnormal_and_finding_stays_open() -> None:
+    first_drop = NOW - timedelta(hours=6)
+    base_ts = int((first_drop - timedelta(minutes=90)).timestamp())
+    samples = tuple((base_ts + i * 900, 200.0) for i in range(5))
+    prior = keyed(
+        state(
+            "ppp_active",
+            status="abnormal",
+            value=40,
+            streak=24,
+            samples=samples,
+            first_abnormal_at=first_drop,
+        )
+    )
+    ev = run(observation(ppp_active_count=40), prior=prior)
+    finding = find(ev, CheckId.ppp_drop)[0]
+    assert finding.evidence["baseline_sessions"] == 200  # not renewed to 40
+    new_state = ppp_state_after(ev)
+    assert new_state.samples == samples  # abnormal sample not appended
+    assert new_state.first_abnormal_at == first_drop
+
+
+def test_ppp_drop_stays_open_through_50h_of_outage() -> None:
+    first_drop = NOW - timedelta(hours=60)
+    base_ts = int((first_drop - timedelta(minutes=90)).timestamp())
+    samples = tuple((base_ts + i * 900, 200.0) for i in range(5))
+    prior = keyed(
+        state(
+            "ppp_active",
+            status="abnormal",
+            value=40,
+            streak=200,
+            samples=samples,
+            first_abnormal_at=first_drop,
+        )
+    )
+    ev = run(observation(ppp_active_count=40), prior=prior)
+    assert find(ev, CheckId.ppp_drop)
+
+
+def test_ppp_drop_escalates_after_24h_hold_and_not_before() -> None:
+    def at(hours: float):
+        first_drop = NOW - timedelta(hours=hours)
+        base_ts = int((first_drop - timedelta(minutes=90)).timestamp())
+        prior = keyed(
+            state(
+                "ppp_active",
+                status="abnormal",
+                value=40,
+                streak=10,
+                samples=tuple((base_ts + i * 900, 200.0) for i in range(5)),
+                first_abnormal_at=first_drop,
+            )
+        )
+        return find(
+            run(observation(ppp_active_count=40), prior=prior), CheckId.ppp_drop
+        )[0]
+
+    assert at(23).priority is HealthPriority.high
+    assert at(25).priority is HealthPriority.critical
+
+
+def test_ppp_drop_clears_only_when_sessions_recover_to_the_threshold() -> None:
+    first_drop = NOW - timedelta(hours=3)
+    base_ts = int((first_drop - timedelta(minutes=90)).timestamp())
+    prior = keyed(
+        state(
+            "ppp_active",
+            status="abnormal",
+            value=40,
+            streak=12,
+            samples=tuple((base_ts + i * 900, 200.0) for i in range(5)),
+            first_abnormal_at=first_drop,
+        )
+    )
+    still = run(observation(ppp_active_count=99), prior=prior)  # < 50% of 200
+    assert find(still, CheckId.ppp_drop)
+    recovered = run(observation(ppp_active_count=100), prior=prior)
+    assert not find(recovered, CheckId.ppp_drop)
+    assert CheckId.ppp_drop in recovered.judged
+    assert ppp_state_after(recovered).status == "ok"
+
+
+# ------------------------------------------------------------- BGP alert titles
+
+
+def test_bgp_title_does_not_carry_the_peer_address() -> None:
+    prior = keyed(
+        state(
+            "bgp_peer",
+            "203.0.113.9",
+            status="abnormal",
+            first_abnormal_at=minutes_ago(60),
+            streak=4,
+        )
+    )
+    ev = run(
+        observation(
+            bgp_connections=({"name": "up", "remote.address": "203.0.113.9"},),
+            bgp_sessions=(),
+        ),
+        prior=prior,
+    )
+    finding = find(ev, CheckId.bgp_session_down)[0]
+    assert "203.0.113.9" not in finding.title
+    assert finding.evidence["peer"] == "203.0.113.9"

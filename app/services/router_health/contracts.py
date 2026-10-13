@@ -259,6 +259,9 @@ class RuntimeObservation:
     #: SFP interface name -> receive power in dBm (None: module reports none).
     #: ``None`` for the whole mapping means optics were not polled this run.
     optics: Mapping[str, float | None] | None = None
+    #: The optics POST was tried this poll (whatever its outcome); drives the
+    #: hourly bound so a failing or empty attempt is not retried every poll.
+    optics_attempted: bool = False
     #: Which login Sub used (its configured REST username); informational only.
     polled_as: str | None = None
 

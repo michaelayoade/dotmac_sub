@@ -46,6 +46,7 @@ SIGNAL_BGP = "bgp_peer"
 SIGNAL_OSPF = "ospf_neighbor"
 SIGNAL_LINK = "iface_link"
 SIGNAL_OPTICS = "sfp_optics"
+SIGNAL_OPTICS_ATTEMPT = "sfp_optics_attempt"
 SIGNAL_PPP = "ppp_active"
 SIGNAL_USERS = "users"
 RUNTIME_SIGNALS = (
@@ -57,6 +58,7 @@ RUNTIME_SIGNALS = (
     SIGNAL_OSPF,
     SIGNAL_LINK,
     SIGNAL_OPTICS,
+    SIGNAL_OPTICS_ATTEMPT,
     SIGNAL_PPP,
     SIGNAL_USERS,
 )
@@ -65,6 +67,10 @@ OSPF_BASELINE_FULL_SAMPLES = 4
 OSPF_FORGET_AFTER = timedelta(days=7)
 REBOOT_FINDING_WINDOW = timedelta(hours=24)
 PPP_BASELINE_WINDOW = (timedelta(minutes=30), timedelta(minutes=150))
+#: A PPP drop that has not recovered after this long is escalated (never cleared).
+PPP_ESCALATE_AFTER = timedelta(hours=24)
+SCOPE_MAX_LENGTH = 120
+_SCOPE_KEEP = 96
 PPP_MIN_ABSOLUTE_DROP = 10
 PPP_CONSECUTIVE_POLLS = 2
 OPTICS_MIN_INTERVAL = timedelta(minutes=55)
@@ -85,8 +91,6 @@ _SAFE_TEXT_RE = re.compile(r"[^a-z0-9._ -]")
 class RuntimeRouter:
     router_id: UUID
     name: str
-    #: The login Sub uses for REST (its configured username), when known.
-    rest_username: str | None = None
 
 
 @dataclass
@@ -103,6 +107,23 @@ class RuntimeEvaluation:
 def safe_text(value: str | None, *, limit: int = 40) -> str:
     """Short enum-like text for evidence (lower-case, no punctuation surprises)."""
     return _SAFE_TEXT_RE.sub("", (value or "").lower())[:limit]
+
+
+def bounded_scope(name: str) -> str:
+    """A signal scope that always fits ``String(120)``.
+
+    Short names pass through unchanged; long ones keep a prefix and a short hash
+    of the full name so distinct interfaces never collide.
+    """
+    if len(name) <= SCOPE_MAX_LENGTH:
+        return name
+    digest = hashlib.sha1(name.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
+    return f"{name[:_SCOPE_KEEP]}~{digest}"
+
+
+def display_name(name: str, limit: int = 60) -> str:
+    """Interface name for titles and evidence (bounded; full text is not kept)."""
+    return name if len(name) <= limit else f"{name[: limit - 1]}…"
 
 
 def truthy(value: str | None) -> bool:
@@ -364,14 +385,14 @@ def evaluate_runtime(
 
 
 def optics_due(prior: Mapping[tuple[str, str], SignalState], now: datetime) -> bool:
-    """Optics sample at most hourly per router (``OPTICS_MIN_INTERVAL``)."""
-    latest = [
-        _utc(state.last_observed_at)
-        for (signal, _scope), state in prior.items()
-        if signal == SIGNAL_OPTICS
-    ]
-    newest = max((s for s in latest if s is not None), default=None)
-    return newest is None or now - newest >= OPTICS_MIN_INTERVAL
+    """Optics are attempted at most hourly per router (``OPTICS_MIN_INTERVAL``).
+
+    Gated on the router-level attempt marker, which is written on every attempt
+    (reading, empty result or failure), not on per-interface readings.
+    """
+    marker = prior.get((SIGNAL_OPTICS_ATTEMPT, SCOPE_ROUTER))
+    last = _utc(marker.last_observed_at) if marker else None
+    return last is None or now - last >= OPTICS_MIN_INTERVAL
 
 
 # -- access ----------------------------------------------------------------------
@@ -579,11 +600,15 @@ def _ntp(
 ) -> None:
     if obs.ntp is None:
         return
-    b.out.judged.add(CheckId.ntp_unsynced)
     enabled = truthy(obs.ntp.get("enabled"))
     status = safe_text(obs.ntp.get("status")) or None
-    # ``status`` is a RouterOS 7 field; when absent only ``enabled`` is judged.
-    unsynced = (not enabled) or (status is not None and status != "synchronized")
+    if enabled and status is None:
+        # An enabled client that reports no status cannot be judged either way
+        # (missing field, older firmware): carry the finding forward, never
+        # call it healthy.
+        return
+    b.out.judged.add(CheckId.ntp_unsynced)
+    unsynced = (not enabled) or status != "synchronized"
     state = advance_signal(
         prior.get((SIGNAL_NTP, SCOPE_ROUTER)),
         signal=SIGNAL_NTP,
@@ -642,9 +667,9 @@ def _bgp(
     for peer, name in sorted(expected.items()):
         down = peer not in established
         state = advance_signal(
-            prior.get((SIGNAL_BGP, peer)),
+            prior.get((SIGNAL_BGP, bounded_scope(peer))),
             signal=SIGNAL_BGP,
-            scope=peer,
+            scope=bounded_scope(peer),
             abnormal=down,
             value=0.0 if down else 1.0,
             text=name or None,
@@ -660,7 +685,9 @@ def _bgp(
         b.add(
             CheckId.bgp_session_down,
             priority=HealthPriority.high,
-            title=f"BGP session to {peer} is down",
+            # The peer address lives in the evidence (router:read), not the title,
+            # which also reaches wider alert channels.
+            title=f"BGP session {_peer_qualifier(peer)[:6]} is down",
             impact="Routing redundancy or customer transit is lost.",
             evidence={"peer": peer, "connection": name, "down_minutes": minutes},
             fix=(
@@ -669,8 +696,9 @@ def _bgp(
             ),
             qualifier=_peer_qualifier(peer),
         )
+    expected_scopes = {bounded_scope(p) for p in expected}
     for signal, scope in prior:
-        if signal == SIGNAL_BGP and scope not in expected:
+        if signal == SIGNAL_BGP and scope not in expected_scopes:
             b.out.retire.append((signal, scope))
 
 
@@ -688,6 +716,7 @@ def _ospf(
         rid = row.get("router-id", "").strip()
         if rid:
             seen[rid] = row.get("state", "").strip()
+    seen = {bounded_scope(rid): text for rid, text in seen.items()}
     scopes = {scope for (signal, scope) in prior if signal == SIGNAL_OSPF} | set(seen)
     for rid in sorted(scopes):
         prev = prior.get((SIGNAL_OSPF, rid))
@@ -778,8 +807,9 @@ def _links(
             or counter is None
         ):
             continue
-        current.add(name)
-        prev = prior.get((SIGNAL_LINK, name))
+        scope = bounded_scope(name)
+        current.add(scope)
+        prev = prior.get((SIGNAL_LINK, scope))
         history = list(prev.samples) if prev else []
         if reboot or (history and counter < history[-1][1]):
             history = []  # counter reset: the baseline restarts here
@@ -796,7 +826,7 @@ def _links(
         state = advance_signal(
             prev,
             signal=SIGNAL_LINK,
-            scope=name,
+            scope=scope,
             abnormal=flapping,
             value=float(counter),
             text=None,
@@ -809,15 +839,15 @@ def _links(
             b.add(
                 CheckId.link_flapping,
                 priority=HealthPriority.high if high else HealthPriority.medium,
-                title=f"{name}: link went down {delta} times in 24 h",
+                title=f"{display_name(name)}: link went down {delta} times in 24 h",
                 impact="A flapping link drops customer and transit traffic repeatedly.",
                 evidence={
-                    "interface": name,
+                    "interface": display_name(name),
                     "link_downs": delta,
                     "observed_hours": round((_epoch(b.now) - base[0]) / 3600, 1),
                 },
                 fix="Check the cable, optic and far-end port; replace the weakest part.",
-                qualifier=name.lower(),
+                qualifier=scope.lower(),
             )
     for signal, scope in prior:
         if signal == SIGNAL_LINK and scope not in current:
@@ -836,8 +866,23 @@ def _optics(
         # Control off: judge with no findings so open optics findings resolve.
         b.out.judged.update(OPTICS_CHECKS)
         return
+    if obs.optics_attempted:
+        # Router-level marker, written on every attempt so the hourly bound
+        # holds even when the attempt failed or returned nothing.
+        b.out.signals.append(
+            advance_signal(
+                prior.get((SIGNAL_OPTICS_ATTEMPT, SCOPE_ROUTER)),
+                signal=SIGNAL_OPTICS_ATTEMPT,
+                scope=SCOPE_ROUTER,
+                abnormal=False,
+                value=1.0 if obs.optics is not None else 0.0,
+                text=None,
+                now=b.now,
+                append_sample=False,
+            )
+        )
     if obs.optics is None:
-        return  # not polled this run (hourly bound or unsupported): carry forward
+        return  # not polled, failed or unsupported: carry forward
     b.out.judged.update(OPTICS_CHECKS)
     running = {
         row.get("name", ""): truthy(row.get("running")) for row in obs.interfaces or ()
@@ -845,6 +890,7 @@ def _optics(
     for name in sorted(
         set(obs.optics) & set(sfp_interface_names(obs.interfaces or ()))
     ):
+        scope = bounded_scope(name)
         rx = obs.optics[name]
         if rx is None:
             continue
@@ -865,9 +911,9 @@ def _optics(
             priority = HealthPriority.medium
         b.out.signals.append(
             advance_signal(
-                prior.get((SIGNAL_OPTICS, name)),
+                prior.get((SIGNAL_OPTICS, scope)),
                 signal=SIGNAL_OPTICS,
-                scope=name,
+                scope=scope,
                 abnormal=priority is not None,
                 value=rx,
                 text=safe_text(note) if priority else None,
@@ -879,14 +925,14 @@ def _optics(
         b.add(
             check,
             priority=priority,
-            title=f"{name}: optical receive level {rx:g} dBm ({note})",
+            title=f"{display_name(name)}: optical receive level {rx:g} dBm ({note})",
             impact=(
                 "The optical link is outside its safe range and may drop or damage the module."
                 if check == CheckId.sfp_overload
                 else "The optical link is marginal or dark and may drop traffic."
             ),
             evidence={
-                "interface": name,
+                "interface": display_name(name),
                 "rx_dbm": rx,
                 "low_dbm": settings.sfp_rx_low_dbm,
                 "link_up": running.get(name, False),
@@ -896,10 +942,11 @@ def _optics(
                 if check == CheckId.sfp_overload
                 else "Clean and reseat the fibre and optic; check the far end and the splice."
             ),
-            qualifier=name.lower(),
+            qualifier=scope.lower(),
         )
+    optic_scopes = {bounded_scope(n) for n in obs.optics}
     for signal, scope in prior:
-        if signal == SIGNAL_OPTICS and scope not in obs.optics:
+        if signal == SIGNAL_OPTICS and scope not in optic_scopes:
             b.out.retire.append((signal, scope))
 
 
@@ -917,8 +964,18 @@ def _ppp(
     count = obs.ppp_active_count
     prev = prior.get((SIGNAL_PPP, SCOPE_ROUTER))
     samples = list(prev.samples) if prev else []
-    lo = _epoch(b.now - PPP_BASELINE_WINDOW[1])
-    hi = _epoch(b.now - PPP_BASELINE_WINDOW[0])
+    # While a drop is open the baseline stays frozen at the samples taken before
+    # it began: the window is anchored on the first abnormal poll, and abnormal
+    # samples are never appended, so a sustained outage cannot renew the baseline.
+    ongoing = (
+        prev is not None
+        and prev.status == "abnormal"
+        and _utc(prev.first_abnormal_at) is not None
+    )
+    anchor = _utc(prev.first_abnormal_at) if ongoing and prev else None
+    anchor = anchor or b.now
+    lo = _epoch(anchor - PPP_BASELINE_WINDOW[1])
+    hi = _epoch(anchor - PPP_BASELINE_WINDOW[0])
     window = [value for ts, value in samples if lo <= ts <= hi]
     baseline = statistics.median(window) if window else None
     dropped = (
@@ -935,6 +992,7 @@ def _ppp(
         value=float(count),
         text=None,
         now=b.now,
+        append_sample=not dropped,
     )
     b.out.signals.append(state)
     b.out.judged.add(CheckId.ppp_drop)
@@ -942,20 +1000,25 @@ def _ppp(
         return  # judged with no findings, so a role change resolves old ones
     if dropped and state.consecutive_abnormal >= PPP_CONSECUTIVE_POLLS:
         assert baseline is not None
+        held = _minutes_since(state.first_abnormal_at, b.now)
+        escalated = held >= PPP_ESCALATE_AFTER.total_seconds() // 60
         b.add(
             CheckId.ppp_drop,
-            priority=HealthPriority.high,
-            title=f"PPPoE sessions fell from {int(baseline)} to {count}",
+            priority=HealthPriority.critical if escalated else HealthPriority.high,
+            title=f"PPPoE sessions fell from {int(baseline)} to {count}"
+            + (" (unrecovered for 24 h)" if escalated else ""),
             impact="A large share of customers on this router lost their session.",
             evidence={
                 "baseline_sessions": int(baseline),
                 "active_sessions": count,
                 "drop_pct": int(round(100 * (baseline - count) / baseline)),
                 "consecutive_polls": state.consecutive_abnormal,
+                "dropped_minutes": held,
             },
             fix=(
                 "Check the uplink, the PPPoE server and RADIUS reachability. "
-                "The baseline renews after about 2.5 hours of a sustained drop."
+                "The pre-drop baseline is held until sessions recover; this "
+                "stays open (and escalates after 24 hours) until they do."
             ),
         )
 

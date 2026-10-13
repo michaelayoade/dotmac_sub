@@ -254,3 +254,82 @@ def test_reader_never_raises_and_stores_no_exception_text() -> None:
     obs = _poll(_FakeTransport(errors={rr.PATH_RESOURCE: Boom("secret-token-xyz")}))
     assert obs.failure is RestFailure.other
     assert "secret-token-xyz" not in repr(obs)
+
+
+# --------------------------------------- transport failure after first success
+
+
+def test_read_timeout_after_first_get_keeps_collected_data() -> None:
+    transport = _FakeTransport(
+        _GOOD, errors={rr.PATH_BGP_CONNECTIONS: httpx.ReadTimeout("t")}
+    )
+    obs = _poll(transport)
+    assert obs.failure is None  # not "unreachable"
+    assert obs.resource is not None and obs.clock is not None and obs.ntp is not None
+    # The missing sections are unjudged (None) and the poll stopped there.
+    assert obs.bgp_connections is None and obs.bgp_sessions is None
+    assert obs.ospf_neighbors is None and obs.interfaces is None
+    assert obs.ppp_active_count is None and obs.users is None
+    called = [c["path"] for c in transport.calls]
+    assert called[-1] == rr.PATH_BGP_CONNECTIONS
+    assert rr.PATH_BGP_SESSIONS not in called
+
+
+@pytest.mark.parametrize("exc", [httpx.ConnectError("refused"), httpx.ReadTimeout("t")])
+def test_transport_errors_after_first_success_are_not_access_failures(exc) -> None:
+    obs = _poll(_FakeTransport(_GOOD, errors={rr.PATH_USERS: exc}))
+    assert obs.failure is None
+    assert obs.users is None and obs.interfaces is not None
+
+
+def test_first_request_transport_failure_is_still_unreachable() -> None:
+    obs = _poll(_FakeTransport(errors={rr.PATH_RESOURCE: httpx.ReadTimeout("t")}))
+    assert obs.failure is RestFailure.unreachable and obs.resource is None
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_credential_failure_after_first_success_still_discards(code) -> None:
+    obs = _poll(_FakeTransport(_GOOD, errors={rr.PATH_USERS: _status_error(code)}))
+    assert obs.failure in {RestFailure.auth_failed, RestFailure.forbidden}
+    assert obs.resource is None
+
+
+@pytest.mark.parametrize(
+    "exc", [httpx.ReadTimeout("t"), httpx.ConnectError("x"), _status_error(403)]
+)
+def test_optics_post_failure_keeps_everything_else_and_marks_attempt(exc) -> None:
+    obs = _poll(
+        _FakeTransport(_GOOD, errors={rr.OPTICS_PATH: exc}), include_optics=True
+    )
+    assert obs.failure is None
+    assert obs.optics is None and obs.optics_attempted is True
+    assert obs.users is not None and obs.interfaces is not None
+
+
+def test_empty_optics_result_still_counts_as_an_attempt() -> None:
+    obs = _poll(_FakeTransport(_GOOD), include_optics=True)
+    assert obs.optics == {} and obs.optics_attempted is True
+
+
+def test_optics_not_requested_is_not_an_attempt() -> None:
+    assert _poll(_FakeTransport(_GOOD)).optics_attempted is False
+
+
+def test_interfaces_are_filtered_to_ether_and_sfp_probe_requires_ether() -> None:
+    responses = {
+        **_GOOD,
+        rr.PATH_INTERFACES: [
+            {"name": "ether1", "type": "ether", "disabled": "false"},
+            {"name": "sfp-vlan", "type": "vlan", "disabled": "false"},
+            {"name": "bridge1", "type": "bridge", "disabled": "false"},
+        ],
+    }
+    obs = _poll(_FakeTransport(responses), include_optics=True)
+    assert [r["name"] for r in obs.interfaces or ()] == ["ether1"]
+    assert obs.optics == {}
+    assert (
+        rr.sfp_interface_names(
+            ({"name": "sfp-vlan", "type": "vlan", "disabled": "false"},)
+        )
+        == []
+    )
