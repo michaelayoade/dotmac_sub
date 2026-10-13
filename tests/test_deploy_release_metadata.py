@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -123,6 +124,22 @@ def _run_deploy(
         text=True,
     ).stdout.strip()
     reported_source_tree = image_source_tree or release_source_tree
+    # Resolved Compose is the source of the candidate component plan. Bind
+    # the image to the real deploy invocation's APP_IMAGE, including digest
+    # selectors, instead of returning an empty success for the new gate.
+    candidate_service_graph = json.dumps(
+        {
+            "services": {
+                name: {
+                    "image": "__candidate_image__",
+                    "working_dir": "/app",
+                    "environment": {"PYTHONPATH": "/app"},
+                    "volumes": [],
+                }
+                for name in declared_services
+            }
+        }
+    )
     _write_executable(
         bin_dir / "docker",
         f"""#!/usr/bin/env bash
@@ -184,6 +201,19 @@ if [[ "$*" == *" up -d "* ]]; then
   if [[ "$attempts" == "1" && "{int(not rollback_recreate_success)}" == "1" ]]; then
     exit 1
   fi
+fi
+if [[ "$*" == *"config --format json"* ]]; then
+  config='{candidate_service_graph}'
+  printf '%s\\n' "${{config//__candidate_image__/${{APP_IMAGE:?}}}}"
+  exit 0
+fi
+if [[ "$*" == *"--entrypoint /opt/venv/bin/python"* && "$*" == *"-m scripts.setup.verify_openbao_boot_secrets"* ]]; then
+  printf 'OpenBao boot-secret fixture: ready\\n'
+  exit 0
+fi
+if [[ "$*" == *"--entrypoint /opt/venv/bin/python"* && "$*" == *"-m scripts.setup.verify_deployment_secret_requirements"* ]]; then
+  printf 'Declared secret requirements satisfied.\\n'
+  exit 0
 fi
 if [[ "$*" == *"config --services"* ]]; then
   printf '%s\\n' {declared_services_literal}
@@ -264,7 +294,7 @@ exec /usr/bin/sed "$@"
 set -eu
 printf 'host-python cwd=%s args=%s\\n' "$PWD" "$*" >> "$DOCKER_LOG"
 # Pure, stdlib-only deploy helpers run for real against the test's files.
-if [[ "$*" == *"-m scripts.deploy_config_freshness"* ]]; then
+if [[ "$*" == *"-m scripts.deploy_config_freshness"* || "$*" == *"-m scripts.deployment_secret_readiness"* ]]; then
   exec "{sys.executable}" "$@"
 fi
 if [[ "$*" == *"-m scripts.release_candidate_evidence verify-production"* ]]; then
@@ -351,12 +381,43 @@ exit 0
 
 
 def test_deploy_pins_git_sha_from_image_revision(tmp_path: Path) -> None:
-    result, env_file, _docker_log = _run_deploy(tmp_path)
+    result, env_file, docker_log = _run_deploy(tmp_path)
 
     assert result.returncode == 0, result.stderr
     env_text = env_file.read_text()
     assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" in env_text
     assert f"GIT_SHA={REVISION}" in env_text
+    commands = docker_log.read_text().splitlines()
+    # The shared harness must exercise the real component parser and both
+    # candidate module gates, rather than globally skipping readiness.
+    graph = next(
+        index
+        for index, command in enumerate(commands)
+        if "config --format json" in command
+    )
+    parser = next(
+        index
+        for index, command in enumerate(commands)
+        if "-m scripts.deployment_secret_readiness" in command
+    )
+    boot = next(
+        index
+        for index, command in enumerate(commands)
+        if "-m scripts.setup.verify_openbao_boot_secrets" in command
+    )
+    features = [
+        index
+        for index, command in enumerate(commands)
+        if "-m scripts.setup.verify_deployment_secret_requirements" in command
+    ]
+    migration = next(
+        index
+        for index, command in enumerate(commands)
+        if "alembic upgrade heads" in command
+    )
+    # The config writer and parser are concurrent sides of one pipeline.
+    assert max(graph, parser) < boot < features[0] < migration < features[1]
+    assert "--require-installed-schema" in commands[features[1]]
 
 
 def test_deploy_pins_exact_oci_digest(tmp_path: Path) -> None:

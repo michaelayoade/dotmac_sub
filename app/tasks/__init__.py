@@ -178,6 +178,7 @@ from app.tasks.radius_population import refresh_radius_from_subs, sync_device_lo
 from app.tasks.referrals import reconcile_referral_mirror
 from app.tasks.reports import send_scheduled_ncc_report
 from app.tasks.router_health import (
+    observe_router_runtime,
     reconcile_router_posture,
     reconcile_service_path,
     reprobe_coa_canary,
@@ -418,6 +419,7 @@ __all__ = [
     "capture_scheduled_snapshots",
     "reconcile_router_posture",
     "reconcile_service_path",
+    "observe_router_runtime",
     "reprobe_coa_canary",
     "run_coa_canary",
     "audit_sot_drift",

@@ -1381,6 +1381,7 @@ SERVICES: tuple[SOTService, ...] = (
             "router config export evidence",
             "router health findings projection",
             "CoA canary operation",
+            "router runtime observations",
         ),
         depends_on=(
             "network.identity",
@@ -1395,9 +1396,11 @@ SERVICES: tuple[SOTService, ...] = (
         notes=(
             "Read-only router health reconciler. Judges stored router "
             "configuration snapshots, snapshot freshness, CoA outcome counters, "
-            "enforcement-path failures and the daily no-op CoA canary, and "
-            "projects findings into admin alerts (shadow mode by default). It "
-            "never writes to a router and never changes the policy."
+            "enforcement-path failures, the daily no-op CoA canary and a "
+            "periodic read-only REST runtime poll (reachability, NTP and clock, "
+            "BGP/OSPF, link flaps, PPPoE drop, service users, optional SFP "
+            "optics), and projects findings into admin alerts (shadow mode by "
+            "default). It never writes to a router and never changes the policy."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1408,11 +1411,21 @@ SERVICES: tuple[SOTService, ...] = (
                     canonical_writer="network.router_health",
                 ),
                 ConcernContract(
+                    name="router runtime observations",
+                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    input_names=(
+                        "router inventory",
+                        "router runtime REST observations",
+                    ),
+                    canonical_writer="network.router_health",
+                ),
+                ConcernContract(
                     name="router health findings projection",
                     role=OwnerRole.PROJECTION_WRITER,
                     input_names=(
                         "router inventory",
                         "router configuration export snapshots",
+                        "router runtime REST observations",
                         "snapshot export outcomes",
                         "CoA outcome counters",
                         "enforcement application evidence",
@@ -1446,6 +1459,17 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "latest router_config_snapshots /export text captured by "
                         "the scheduled router snapshot task"
+                    ),
+                ),
+                AuthorityInput(
+                    name="router runtime REST observations",
+                    owner="external:mikrotik_routeros",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "fixed-path GET reads of /system, /routing, /interface, "
+                        "/ppp/active (count only) and /user over the RouterOS "
+                        "REST API; the optional SFP optics sample is one "
+                        "read-only POST to /interface/ethernet/monitor with once"
                     ),
                 ),
                 AuthorityInput(
@@ -1525,6 +1549,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "unparseable or low-coverage snapshot (posture carried forward)",
                     "invalid stored policy (strictest defaults apply)",
                     "canary username collision (packet aborted)",
+                    "unreadable router (runtime findings carried forward; only the access check is judged)",
                     "database errors",
                     "soft time limit",
                 ),
@@ -1545,6 +1570,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "router inventory",
                         "router configuration export snapshots",
+                        "router runtime REST observations",
                         "snapshot export outcomes",
                         "CoA outcome counters",
                         "enforcement application evidence",
@@ -1554,7 +1580,8 @@ SERVICES: tuple[SOTService, ...] = (
                     writer="network.router_health",
                     freshness=(
                         "recomputed every router_health_posture_interval_hours and "
-                        "service-path interval; snapshot staleness is itself a finding"
+                        "service-path interval and router_health_runtime_interval_minutes; "
+                        "snapshot staleness is itself a finding"
                     ),
                     stale_behavior=(
                         "an unparsed router keeps its prior posture findings and "
@@ -1581,6 +1608,10 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/services/router_health/test_real_fixtures.py",
                 "tests/services/router_health/test_findings.py",
                 "tests/services/router_health/test_canary.py",
+                "tests/services/router_health/test_runtime_checks.py",
+                "tests/services/router_health/test_runtime_reader.py",
+                "tests/services/router_health/test_runtime_poll.py",
+                "tests/services/router_health/test_read_models.py",
                 "tests/architecture/test_router_health_single_writer.py",
             ),
         ),
