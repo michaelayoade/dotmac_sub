@@ -3155,6 +3155,269 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="financial.backdated_service_invoicing",
+        module="app.services.backdated_service_invoicing",
+        owns=(
+            "reviewed backdated subscription-service invoice construction",
+            "reviewed existing invoice service-period reconstruction",
+        ),
+        depends_on=(
+            "access.subscription_lifecycle",
+            "auth.permission_gate",
+            "events.dispatcher",
+            "financial.invoices",
+            "financial.payments",
+            "financial.prepaid_service_renewals",
+            "network.radius_sessions",
+            "observability.audit_log",
+            "service_intent.subscription_change_execution",
+        ),
+        notes=(
+            "This permission-gated coordinator binds one exact prepaid "
+            "subscription, historically evidenced monthly contract charge, reviewed Lagos "
+            "service period, and exact subscription-bound RADIUS usage to a "
+            "new draft invoice or one eligible existing periodless invoice. "
+            "Created or reconstructed drafts are sealed by the coordinator and "
+            "their complete documentary identity is revalidated at issuance. "
+            "It fails closed on missing or conflicting historical price, tax, "
+            "usage, contract, invoice, "
+            "entitlement, overlap, permission, or fingerprint ambiguity. "
+            "Payment remains an ordinary allocation to the issued invoice; "
+            "the persisted line provenance selects historical-entitlement-only "
+            "finalization, which neither restores current access nor moves the "
+            "subscription billing anchor."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name=(
+                        "reviewed backdated subscription-service invoice construction"
+                    ),
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "permission grant",
+                        "subscription contract and plan",
+                        "applied subscription plan-change history",
+                        "canonical monthly charge and calendar",
+                        "historical adjacent invoice terms evidence",
+                        "unchanged subscription charge source evidence",
+                        "subscription-bound usage observations",
+                        "invoice overlap facts",
+                        "entitlement overlap facts",
+                    ),
+                ),
+                ConcernContract(
+                    name=("reviewed existing invoice service-period reconstruction"),
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "permission grant",
+                        "subscription contract and plan",
+                        "applied subscription plan-change history",
+                        "canonical monthly charge and calendar",
+                        "historical adjacent invoice terms evidence",
+                        "unchanged subscription charge source evidence",
+                        "subscription-bound usage observations",
+                        "invoice overlap facts",
+                        "entitlement overlap facts",
+                        "selected periodless invoice facts",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="permission grant",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "request principal grant for the exact create or "
+                        "reconstruction permission"
+                    ),
+                ),
+                AuthorityInput(
+                    name="subscription contract and plan",
+                    owner="access.subscription_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "account-bound prepaid subscription, contract bounds, "
+                        "offer identity, and contracted unit price"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical monthly charge and calendar",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "typed monthly price, tax, currency, cadence, and "
+                        "reviewed Africa/Lagos service-period resolvers"
+                    ),
+                ),
+                AuthorityInput(
+                    name="historical adjacent invoice terms evidence",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "immutable immediately adjacent issued invoice header, "
+                        "single subscription line, and tax snapshot"
+                    ),
+                ),
+                AuthorityInput(
+                    name="unchanged subscription charge source evidence",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "current canonical monthly charge whose account, "
+                        "subscription, offer, and tax source records were last "
+                        "updated no later than the selected period start"
+                    ),
+                ),
+                AuthorityInput(
+                    name="applied subscription plan-change history",
+                    owner="service_intent.subscription_change_execution",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "applied change effective dates and prior/target offer "
+                        "identities for the selected subscription"
+                    ),
+                ),
+                AuthorityInput(
+                    name="subscription-bound usage observations",
+                    owner="network.radius_sessions",
+                    kind=AuthorityKind.OBSERVATION,
+                    source=(
+                        "positive exact-subscription accounting intervals "
+                        "within the selected half-open period"
+                    ),
+                ),
+                AuthorityInput(
+                    name="invoice overlap facts",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=("active period-bound invoice lines for the subscription"),
+                ),
+                AuthorityInput(
+                    name="entitlement overlap facts",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active paid prepaid service entitlements for the subscription"
+                    ),
+                ),
+                AuthorityInput(
+                    name="selected periodless invoice facts",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "operator-selected active invoice status, currency, "
+                        "totals, period fields, and sole unlinked line"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary=(
+                    "One execute_owner_command transaction stages invoice "
+                    "identity, idempotency receipt, audit, and event together."
+                ),
+                locking=(
+                    "Lock the billing account and subscription; invoice "
+                    "participants lock the selected document and line."
+                ),
+                idempotency=(
+                    "Unique action-scoped idempotency receipt returns the exact "
+                    "prior invoice; deterministic billing-line identity blocks duplicates."
+                ),
+                retries=(
+                    "Replay the same idempotency key; changed preview facts fail "
+                    "closed and require a new operator review."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "financial.backdated_service_invoicing"
+                    ),
+                    "financial.backdated_service_invoicing.permission_denied",
+                    "financial.backdated_service_invoicing.stale_preview",
+                    "financial.backdated_service_invoicing.not_actionable",
+                    "financial.backdated_service_invoicing.account_not_found",
+                    "financial.backdated_service_invoicing.subscription_not_found",
+                    "financial.backdated_service_invoicing.subscription_not_prepaid",
+                    "financial.backdated_service_invoicing.plan_not_found",
+                    "financial.backdated_service_invoicing.historical_plan_ambiguous",
+                    "financial.backdated_service_invoicing.historical_terms_ambiguous",
+                    "financial.backdated_service_invoicing.historical_terms_unproven",
+                    "financial.backdated_service_invoicing.charge_unavailable",
+                    "financial.backdated_service_invoicing.calendar_resolution_failed",
+                    "financial.backdated_service_invoicing.invalid_service_period",
+                    "financial.backdated_service_invoicing.service_period_not_consumed",
+                    "financial.backdated_service_invoicing.period_outside_contract",
+                    "financial.backdated_service_invoicing.invoice_required",
+                    "financial.backdated_service_invoicing.invoice_not_reconstructable",
+                    "financial.backdated_service_invoicing.invoice_amount_mismatch",
+                    "financial.backdated_service_invoicing.invoice_already_entitled",
+                    "financial.backdated_service_invoicing.invoice_participant_rejected",
+                    "financial.backdated_service_invoicing.constructed_total_mismatch",
+                    "financial.backdated_service_invoicing.idempotency_required",
+                    "financial.backdated_service_invoicing.idempotency_conflict",
+                    "financial.backdated_service_invoicing.idempotency_evidence_missing",
+                ),
+                mapping_owner="admin billing web adapter",
+                fail_closed_on=(
+                    "missing permission",
+                    "stale preview",
+                    "ambiguous price, tax, usage, invoice, or coverage evidence",
+                    "overlapping invoice or entitlement",
+                ),
+            ),
+            events=EventContract(
+                event_types=(
+                    "backdated_service_invoice.created",
+                    "backdated_service_invoice.reconstructed",
+                ),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Additive PII-free schema; invoice and subscription UUIDs "
+                    "are stable correlation identities."
+                ),
+                replay=(
+                    "Consumers deduplicate by durable event identity; command "
+                    "replay returns the original invoice without a second event."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUT_OVER,
+                old_owner=(
+                    "generic admin invoice form without subscription-period identity"
+                ),
+                new_owner="financial.backdated_service_invoicing",
+                verification=(
+                    "Focused owner, payment-finalization, permission, route, "
+                    "overlap, and architecture tests."
+                ),
+                cutover_gate=(
+                    "Permission-assigned operators use the controlled form for "
+                    "consumed prepaid subscription service."
+                ),
+                fallback_retirement=(
+                    "Generic invoices remain for non-subscription charges but "
+                    "cannot silently assert prepaid service identity."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/designs/BACKDATED_SUBSCRIPTION_SERVICE_INVOICING.md",
+                "docs/runbooks/BACKDATED_SUBSCRIPTION_SERVICE_INVOICING.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+                "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+            ),
+            test_refs=(
+                "tests/test_backdated_service_invoicing.py",
+                "tests/architecture/test_backdated_service_invoicing_ownership.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.prepaid_draft_reconciliation",
         module="app.services.prepaid_draft_reconciliation",
         owns=(
