@@ -260,7 +260,17 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: one migrated-clone engine and two Session constructions for location-read
 #: preservation: the canonical scanner measures 728 sites across 154 files.
 #: Production remains 17 sites across 15 files with its baseline unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 728
+#: Numbering composition adds eight reviewed migrated-PostgreSQL fixture sites:
+#: one disposable engine and seven Sessions for tenant configuration, allocation
+#: and exact replay, caller rollback, post-rollback retry, incumbent-role parity,
+#: repeated upgrade/preview, and populated-table tenant isolation. The canonical
+#: scanner now measures 736 sites across 155 test files. This reviewed test-only
+#: fixture growth does not allow production debt to grow: production remains
+#: exactly 17 sites across 15 files, with its per-file baseline unchanged.
+#: +2 from the read-only numbering census: one unbound fast-unit Session and
+#: one migrated-PostgreSQL session factory using the existing migrated engine. These
+#: observe snapshots and forbidden writes; production remains 17 sites/15 files.
+TEST_FIXTURE_BASELINE_TOTAL = 738
 
 
 def _baseline() -> dict[str, int]:
