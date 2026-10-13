@@ -20,10 +20,47 @@ The canonical record is the **service `Address`** (`app/models/subscriber.py`,
 | New location capture | `customer.location_capture` (`app/services/location_capture.py`) | Field-arrival GPS, portal pin, agent. Feature-gated. |
 | Capture adjudication | `customer.location_verification` (`app/services/geocode_reconciler.py`) | Adjudicates a pin against the claimed location; writes the verification ledger. |
 | Customer portal mutation coordination | `customer.portal_location_commands` (`app/services/customer_portal_location_commands.py`) | Owns the transaction for direct updates, confirmation, and snooze commands while delegating each fact to its canonical owner. |
+| Retained inline address display | `customer.legacy_address_display` (`app/services/customer_legacy_address_display.py`) | Pure immutable response projection used only when the detail page has no Address row. Stored legacy coordinates are unverified display evidence. No geocoding, writes, cache effects, or transaction completion. |
 
 Coordinates and spatial projection stay with `gis.spatial_sync`; the customer
 domain owns what the address is. A captured pin flows capture → verification
 ledger → the subscriber owner projects it onto the canonical `Address`.
+
+## Customer detail read-time writer retirement
+
+The admin customer detail location fallback must not create location facts or
+complete the caller's transaction. Previously this fallback automatically
+geocoded the text, copied coordinates into `Subscriber.metadata`, and committed
+the supplied Session. A read could therefore commit unrelated caller changes.
+That geocoding and persistence path is retired rather than moved to a helper.
+
+Canonical Address rows still take precedence. If none exist, the presenter
+captures typed legacy facts and the pure display resolver builds an immutable
+snapshot. Existing valid legacy coordinates may display; blank, malformed,
+non-finite, out-of-range or incomplete coordinates never invent a map pin.
+Without coordinates the real template displays **Location not set**. The GET
+does not invoke a geocoding provider or alter its cache or throttle state.
+
+New coordinates require an explicit action. The existing manual-coordinate
+save can create a canonical Address from inline text. Its legacy admin writer
+is unchanged by this slice; that is not acceptance of its transaction contract
+or proof of GIS geometry projection. The fully contracted portal location
+coordinator remains a separate existing workflow. The admin search-result
+selection handler's empty-address-ID limitation is pre-existing follow-up debt;
+manual coordinate saving is the supported inline-only action for this slice.
+
+No schema change, production backfill, geometry repair or authority switch is
+performed. Existing inline values are not deleted or promoted into canonical
+facts. Retire this display fallback after evidenced address backfill and reader
+cutover. A source revert would restore the GET writer and withdraw retirement
+acceptance; it needs no data reversal. Focused unit/render, architecture and
+migrated-PostgreSQL tests prove source behavior; hosted CI supplies PostgreSQL
+acceptance.
+
+This is an exact location-fallback retirement, not acceptance of the whole
+legacy presenter. In particular, its unrelated notification-query failure
+branch still calls rollback; caller-transaction preservation tests here cover
+the composed successful location read, not every possible page failure.
 
 Consumers (OSP/network map, field services, billing, installation, NCC) read the
 canonical `Address` or its `geo_locations` projection. `app/services/field/

@@ -128,6 +128,8 @@ def _confirm(
     command: owner.SetupSubscriberMfaCommand,
     setup: owner.SubscriberMfaSetupOutcome,
     pids: Queue[int] | None = None,
+    *,
+    for_time: datetime | None = None,
 ) -> owner.SubscriberMfaConfirmationOutcome:
     with factory() as db:
         _capture_pid(db, pids)
@@ -137,7 +139,11 @@ def _confirm(
                 context=replace(command.context, command_id=uuid4()),
                 subscriber_id=command.subscriber_id,
                 method_id=setup.method_id,
-                code=pyotp.TOTP(setup.secret).now(),
+                code=(
+                    pyotp.TOTP(setup.secret).at(for_time)
+                    if for_time is not None
+                    else pyotp.TOTP(setup.secret).now()
+                ),
                 provenance=command.provenance,
                 session=command.session,
                 recovery_delivery=owner.RecoveryCodeDelivery.NONE,
@@ -290,6 +296,30 @@ def test_real_refresh_releases_session_without_later_principal_lock(
     from app.services.owner_commands import CommandContext
 
     setup = _setup(factory, enrollment)
+    totp_time = datetime(2026, 1, 1, 12, 0, 15, tzinfo=UTC)
+    if transition == "confirm":
+        # This proof deliberately holds row locks between code generation and
+        # verification. Pin only the TOTP clock so crossing a real 30s boundary
+        # cannot turn a lock-order test into an expired-code test. The original
+        # verifier and the owner's exact-current-step policy still execute.
+        real_verify = pyotp.TOTP.verify
+
+        def verify_at_fixed_time(
+            totp: pyotp.TOTP,
+            otp: str,
+            for_time: datetime | None = None,
+            valid_window: int = 0,
+        ) -> bool:
+            assert for_time is None
+            assert valid_window == 0
+            return real_verify(totp, otp, for_time=totp_time, valid_window=valid_window)
+
+        monkeypatch.setattr(pyotp.TOTP, "verify", verify_at_fixed_time)
+        verifier = pyotp.TOTP(setup.secret)
+        valid_code = verifier.at(totp_time)
+        invalid_code = f"{(int(valid_code) + 1) % 1_000_000:06d}"
+        assert verifier.verify(valid_code, valid_window=0)
+        assert not verifier.verify(invalid_code, valid_window=0)
     refresh_token = uuid4().hex
     with factory() as seed:
         session = seed.get(AuthSession, enrollment.session.session_id)
@@ -333,7 +363,9 @@ def test_real_refresh_releases_session_without_later_principal_lock(
         second = (
             second_pool.submit(_setup, factory, enrollment, second_pids)
             if transition == "setup"
-            else second_pool.submit(_confirm, factory, enrollment, setup, second_pids)
+            else second_pool.submit(
+                _confirm, factory, enrollment, setup, second_pids, for_time=totp_time
+            )
         )
         try:
             _wait_until_a_session_is_blocked(

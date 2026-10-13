@@ -40,9 +40,9 @@ that write nothing: a route that reads a customer account has to come from
 somewhere after that account lives in another application.
 
 `Disposition.UNDECIDED` is a real state and carries a required `open_question`.
-Three surfaces hold one today. They are enumerable through
-`undecided_surfaces()` precisely so they cannot be lost between here and
-`ctl-isp-006`.
+The three original questions were answered at the pinned Governance decision
+revision. Any future undecided surface remains enumerable through
+`undecided_surfaces()` so it cannot be lost between here and `ctl-isp-006`.
 
 ## The classification is a finding, not a plan
 
@@ -102,8 +102,8 @@ class BoundaryRole(StrEnum):
 
     #: Issues the write itself.
     PERSISTS = "persists"
-    #: Validates, authorises and calls an owner. Owns the transaction and
-    #: decides nothing — which is what `db.commit()` in a route means here.
+    #: Validates, authorises and calls an owner. Manages Session lifecycle;
+    #: the registered command owner controls the business transaction.
     DELEGATES = "delegates"
     #: Records an external fact as an observation, deciding nothing.
     OBSERVES = "observes"
@@ -902,17 +902,19 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
     SourceSurface(
         path="app/services/web_customer_details.py",
         family=EntryPointFamily.WEB_PRESENTER,
-        authority=AuthorityRole.PARALLEL_WRITER,
-        boundary=BoundaryRole.PERSISTS,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.READS,
         reachability=Reachability.INTERNAL_ONLY,
-        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
         open_question=None,
         note=(
-            "An undeclared detail presenter initialises the account `metadata` blob "
-            "in place."
+            "The detail presenter reads canonical Address rows first and delegates "
+            "retained inline-address display to customer.legacy_address_display. "
+            "Read-time geocoding, metadata writes and transaction completion are "
+            "retired; missing coordinates remain missing until an explicit action."
         ),
     ),
     SourceSurface(
