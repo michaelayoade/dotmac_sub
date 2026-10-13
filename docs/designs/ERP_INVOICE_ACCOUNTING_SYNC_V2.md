@@ -55,8 +55,14 @@ mismatch is preserved. Revision 434 stays frozen. The hosted migration canary
 archives that immutable old source, migrates its real old model/enum chain in
 an explicitly disposable database, asserts the new label is absent, then runs
 the candidate upgrade and preserves an old export. The hosted integration
-checkout includes full history and verifies that this immutable source is an
-ancestor of the candidate before the canary runs. This avoids describing a
+checkout acquires the exact predecessor SHA from `origin` if it is missing,
+then verifies a commit object with pinned tree
+`0b9f9efe2b4d780bd5530c89828ee8ca41333504` before the canary runs. The shared
+typed owner is `scripts.ci.immutable_predecessor`; the fixture independently
+verifies the same local pin before archiving it and never fetches. Commit/tree
+identity is required even when a squash merge leaves the old source outside the
+candidate's ancestry. Missing objects, failed acquisition, non-commit objects
+and tree mismatches refuse; no branch/tag or current-model rebuild substitutes. This avoids describing a
 current-metadata predecessor rebuild as evidence of the old enum. Current-main
 revision collision and all hosted acceptance checks remain required before
 publication; no migration has been executed by this implementation session.

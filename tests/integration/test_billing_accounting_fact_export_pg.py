@@ -47,6 +47,10 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
+from scripts.ci.immutable_predecessor import (
+    ERP_ACCOUNTING_FACT_PREDECESSOR,
+    verify_predecessor,
+)
 from scripts.ci.migrated_test_database import parse_test_database_target
 
 INSTANT = datetime(2026, 10, 13, 12, tzinfo=UTC)
@@ -264,6 +268,10 @@ def test_owner_rollback_removes_fact_and_export_and_delivery_failure_keeps_fact(
 def historical_predecessor_database(template_base_url: URL) -> Iterator[URL]:
     """Build real old source, including its old enum, without Git ref mutations."""
     parse_test_database_target(template_base_url.render_as_string(hide_password=False))
+    repository = Path(__file__).resolve().parents[2]
+    predecessor = verify_predecessor(
+        repository=repository, source=ERP_ACCOUNTING_FACT_PREDECESSOR
+    )
     name = f"dotmac_test_erp_fact_predecessor_{uuid4().hex}"
     maintenance = template_base_url.set(database="postgres", drivername="postgresql")
     url = template_base_url.set(database=name)
@@ -279,8 +287,9 @@ def historical_predecessor_database(template_base_url: URL) -> Iterator[URL]:
                     "git",
                     "archive",
                     "--format=tar",
-                    "f3a18e7ff2d89821eb410760bd326253fb5c36af",
+                    predecessor.source.commit,
                 ],
+                cwd=repository,
                 check=True,
                 capture_output=True,
                 timeout=30,
