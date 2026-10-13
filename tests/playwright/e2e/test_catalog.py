@@ -57,7 +57,9 @@ class TestServices:
                 catalog_requests.append(request.url)
 
         admin_page.on("request", capture_catalog_request)
-        admin_page.get_by_label("Status").select_option("active")
+        admin_page.locator("#catalog-grid-search-form").get_by_label(
+            "Status"
+        ).select_option("active")
         search_input = admin_page.get_by_label("Search tariffs")
         search_input.fill("catalog-submit-probe")
         admin_page.wait_for_timeout(450)

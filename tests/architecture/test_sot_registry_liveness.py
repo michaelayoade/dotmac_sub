@@ -161,6 +161,13 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
     # alongside retained legacy boundaries. Pin the exact split so a third
     # authority cannot enter through a broad module exemption.
     split_boundaries = {
+        # Account commands and the typed dashboard projections are distinct
+        # contracts implemented by the same legacy Subscribers service. Pin
+        # both names so this cannot become a broad third-owner exemption.
+        "app.services.subscriber": {
+            "customer.accounts",
+            "customer.dashboard_overview",
+        },
         "app.services.customer_experience_communications": {
             "communications.work_order_assignment_updates",
             "communications.customer_experience_intents",

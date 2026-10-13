@@ -40,6 +40,10 @@ def customer_client(db_session: Session, monkeypatch: pytest.MonkeyPatch):
 
 
 def _credential(db: Session, subscriber: Subscriber) -> UserCredential:
+    # Customer JSON authentication is deliberately customer-only.  The shared
+    # subscriber fixture has a legacy system-user default, so these adapter
+    # cases classify their principal explicitly instead of relaxing admission.
+    subscriber.user_type = UserType.customer
     credential = UserCredential(
         subscriber_id=subscriber.id,
         username="CUSTOMER-API-100",
@@ -108,8 +112,9 @@ def test_customer_endpoint_rejects_provider_and_never_runs_general_login(
 def test_customer_endpoint_rejects_reseller_without_a_session(
     customer_client: TestClient, db_session: Session, subscriber: Subscriber
 ) -> None:
-    subscriber.user_type = UserType.reseller
     _credential(db_session, subscriber)
+    subscriber.user_type = UserType.reseller
+    db_session.commit()
     response = customer_client.post(
         "/api/v1/customer/auth/login",
         json={"username": "CUSTOMER-API-100", "password": "customer-password"},

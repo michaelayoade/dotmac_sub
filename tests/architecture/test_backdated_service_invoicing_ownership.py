@@ -47,10 +47,13 @@ def test_permission_migration_extends_current_head_without_default_grants():
     upgrade_source = migration.split("def downgrade()", 1)[0]
 
     assert 'revision: str = "690_backdated_invoice_permissions"' in migration
-    assert 'down_revision: str | None = "689_forward_service_invoice_permission"' in migration
+    assert (
+        'down_revision: str | None = "689_forward_service_invoice_permission"'
+        in migration
+    )
     assert (
         'down_revision: str | None = "686_field_lifecycle_router_health_merge"'
-        in migration
+        not in migration
     )
     assert "is_ui_assignable=True" in upgrade_source
     assert "role_permissions" not in upgrade_source

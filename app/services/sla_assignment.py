@@ -79,7 +79,7 @@ def ticket_attention_summary(
     unassigned_count = int(
         active_ticket_ids.filter(Ticket.assigned_to_person_id.is_(None))
         .filter(
-            ~db.query(TicketAssignee.id)
+            ~db.query(TicketAssignee.ticket_id)
             .filter(TicketAssignee.ticket_id == Ticket.id)
             .exists()
         )

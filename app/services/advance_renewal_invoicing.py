@@ -1007,7 +1007,7 @@ def create_manual_subscription_service_invoice(
                 ),
                 reason="manual_subscription_service_invoice",
             )
-        db.flush()
+        invoice = Invoices.recalculate_totals_for_owner(db, invoice.id)
         actor_type, actor_id = _audit_actor(command.context)
         AuditEvents.stage(
             db,

@@ -35,6 +35,11 @@ def _query(
 
 
 def _credential(db: Session, subscriber: Subscriber, username: str) -> UserCredential:
+    # The repository-wide subscriber fixture intentionally defaults to the
+    # legacy system-user classification.  These parity cases exercise a real
+    # customer principal, so make that admission fact explicit in their local
+    # setup rather than weakening the production customer-only policy.
+    subscriber.user_type = UserType.customer
     credential = UserCredential(
         subscriber_id=subscriber.id,
         username=username,
@@ -114,6 +119,7 @@ def test_native_preserves_portal_access_fallback_and_password_bytes(
     representation: str,
 ) -> None:
     password = "  reversible password  "
+    subscriber.user_type = UserType.customer
     db_session.add(
         AccessCredential(
             subscriber_id=subscriber.id,
@@ -164,8 +170,9 @@ def test_wrong_customer_email_password_never_tries_radius(
 def test_native_rejects_reseller_before_session_issuance(
     db_session: Session, subscriber: Subscriber
 ) -> None:
-    subscriber.user_type = UserType.reseller
     _credential(db_session, subscriber, "reseller-is-not-customer")
+    subscriber.user_type = UserType.reseller
+    db_session.commit()
     with pytest.raises(owner.CustomerLoginError) as refusal:
         owner.prepare_customer_login(
             db_session,
