@@ -37,7 +37,14 @@ persisted installation environment. The immutable path is
 Only the typed creator writes the `app_password` field plus a nonsecret configuration fingerprint using KV2 CAS=0. The fingerprint binds approved configuration, manifest, original references, actor/scope, expected revision/installation, and binding scope/policy so changed same-operation configuration also conflicts after a SQL rollback.
 Generic secret edit/delete reject this reserved prefix and canonicalized aliases.
 One bounded readback verifies exact bytes with a constant-time comparison.
-Denied/unavailable/malformed responses return a fixed safe error with a durable
+A POST 403 also triggers this same-path readback: OpenBao requires update
+permission to POST an existing KV2 key, even when CAS0 would refuse an overwrite.
+With the narrow create/read grant, an exact password and mandatory configuration
+fingerprint match therefore establishes replay without update permission. A
+missing or denied GET remains a safe storage failure; either mismatch is a
+conflict. There is no second POST, alternate path, overwrite, or broader grant.
+See the official [OpenBao KV put capability contract](https://openbao.org/docs/commands/kv/put/).
+Denied/unavailable/malformed readbacks return a fixed safe error with a durable
 failure audit/event and no installation configuration change. No credentials are
 logged, echoed through framework form validation, stored in SQL/outbox, or
 captured in credential-route telemetry events.

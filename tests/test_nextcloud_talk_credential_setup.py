@@ -248,6 +248,8 @@ def _store(
     *,
     post_status=200,
     read_password=PASSWORD,
+    read_digest="f" * 64,
+    get_status=200,
     malformed=False,
     ambiguous=False,
 ):
@@ -259,34 +261,36 @@ def _store(
     )
 
     def post(url, **kwargs):
-        calls.append(kwargs)
+        calls.append({"method": "POST", "url": url, **kwargs})
         if ambiguous:
             raise httpx.ReadTimeout("test timeout")
         return httpx.Response(post_status)
 
     monkeypatch.setattr(secrets.httpx, "post", post)
-    monkeypatch.setattr(
-        secrets.httpx,
-        "get",
-        lambda *args, **kwargs: httpx.Response(
-            200,
+
+    def get(url, **kwargs):
+        calls.append({"method": "GET", "url": url, **kwargs})
+        return httpx.Response(
+            get_status,
             json={
                 "data": {
                     "data": []
                     if malformed
                     else {
                         "app_password": read_password,
-                        "configuration_digest": "f" * 64,
+                        "configuration_digest": read_digest,
                     }
                 }
             },
-        ),
-    )
+        )
+
+    monkeypatch.setattr(secrets.httpx, "get", get)
     return calls
 
 
 @pytest.mark.parametrize(
-    "post_status,ambiguous", [(200, False), (400, False), (409, False), (200, True)]
+    "post_status,ambiguous",
+    [(200, False), (400, False), (403, False), (409, False), (200, True)],
 )
 def test_immutable_store_uses_cas0_and_exact_bounded_readback(
     monkeypatch, post_status, ambiguous
@@ -297,6 +301,9 @@ def test_immutable_store_uses_cas0_and_exact_bounded_readback(
     )
     result = secrets.create_talk_credential(command)
     assert calls[0]["json"]["options"] == {"cas": 0}
+    assert [call["method"] for call in calls] == ["POST", "GET"]
+    assert calls[0]["url"] == calls[1]["url"]
+    assert result.replayed is (post_status in (400, 403, 409) or ambiguous)
     assert result.reference.endswith(
         f"/{command.installation_id}/{command.operation_id}#app_password"
     )
@@ -306,13 +313,18 @@ def test_immutable_store_uses_cas0_and_exact_bounded_readback(
 @pytest.mark.parametrize(
     "kwargs,code",
     [
-        ({"post_status": 403}, "denied"),
+        ({"post_status": 403, "get_status": 403}, "denied"),
+        ({"post_status": 403, "get_status": 404}, "unavailable"),
+        ({"post_status": 403, "read_password": "different"}, "conflict"),
+        ({"post_status": 403, "read_digest": "e" * 64}, "conflict"),
+        ({"post_status": 403, "read_digest": None}, "conflict"),
+        ({"post_status": 403, "malformed": True}, "unavailable"),
         ({"read_password": "different"}, "conflict"),
         ({"malformed": True}, "unavailable"),
     ],
 )
 def test_immutable_store_failures_are_safe(monkeypatch, kwargs, code):
-    _store(monkeypatch, **kwargs)
+    calls = _store(monkeypatch, **kwargs)
     with pytest.raises(secrets.ImmutableSecretError) as error:
         secrets.create_talk_credential(
             secrets.CreateTalkCredential(
@@ -320,6 +332,8 @@ def test_immutable_store_failures_are_safe(monkeypatch, kwargs, code):
             )
         )
     assert error.value.code.endswith(code) and PASSWORD not in str(error.value)
+    assert [call["method"] for call in calls] == ["POST", "GET"]
+    assert calls[0]["url"] == calls[1]["url"]
 
 
 def test_credential_route_telemetry_retains_no_payload_or_exception():

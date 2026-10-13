@@ -563,11 +563,12 @@ def create_talk_credential(command: CreateTalkCredential) -> ImmutableCredential
             },
             timeout=5.0,
         )
-        if response.status_code == 403:
-            raise _immutable_error("denied")
-        if response.status_code not in (200, 204, 400, 409):
+        # A create/read-only token cannot POST an existing KV2 key: OpenBao
+        # requires update permission before CAS0 can reject that retry. Read
+        # the exact immutable path once and accept only verified replay.
+        if response.status_code not in (200, 204, 400, 403, 409):
             raise _immutable_error("unavailable")
-        replayed = response.status_code in (400, 409)
+        replayed = response.status_code in (400, 403, 409)
     except httpx.HTTPError:
         # The write may have succeeded. One bounded readback resolves ambiguity.
         replayed = True
