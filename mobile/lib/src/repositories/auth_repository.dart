@@ -5,23 +5,25 @@ import '../core/token_storage.dart';
 import '../models/auth.dart';
 import '../models/session.dart';
 
-/// Uses customer login endpoints and the shared session/profile endpoints.
+/// Wraps the /auth/* endpoints (app/api/auth_flow.py).
 class AuthRepository {
   AuthRepository({required this.dio, required this.storage});
 
   final Dio dio;
   final TokenStorage storage;
 
-  /// POST /customer/auth/login — may return an MFA challenge instead of tokens.
+  /// POST /auth/login — may return an MFA challenge instead of tokens.
   Future<LoginResult> login({
     required String username,
     required String password,
+    String? provider, // 'local' | 'radius'
   }) async {
     final data = await guard(() => dio.post(
-          '/customer/auth/login',
+          '/auth/login',
           data: {
             'username': username,
             'password': password,
+            if (provider != null) 'provider': provider,
           },
           options: Options(extra: {'skipAuth': true}),
         ));
@@ -38,13 +40,13 @@ class AuthRepository {
     return result;
   }
 
-  /// POST /customer/auth/mfa/verify — exchange the challenge + TOTP code.
+  /// POST /auth/mfa/verify — exchange the MFA challenge token + TOTP code.
   Future<TokenPair> verifyMfa({
     required String mfaToken,
     required String code,
   }) async {
     final data = await guard(() => dio.post(
-          '/customer/auth/mfa/verify',
+          '/auth/mfa/verify',
           data: {'mfa_token': mfaToken, 'code': code},
           options: Options(extra: {'skipAuth': true}),
         ));

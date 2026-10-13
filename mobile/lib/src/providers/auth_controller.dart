@@ -192,10 +192,6 @@ class AuthController extends StateNotifier<AuthState> {
 
     final locked = await _shouldLockOnLaunch();
     final cached = await _readCachedProfile();
-    if (cached != null && !cached.isCustomer) {
-      await _wipe.wipe(SessionWipeReason.credentialsRevoked);
-      return;
-    }
     if (cached != null) {
       state = AuthState(
         status: AuthStatus.authenticated,
@@ -245,14 +241,6 @@ class AuthController extends StateNotifier<AuthState> {
   /// and onto the response cache (so this account's bodies land in their own
   /// partition). Fenced — a late `/auth/me` from a dead session writes nothing.
   Future<void> _adoptIdentity(Me me, int generation) async {
-    if (!me.isCustomer) {
-      await _wipe.wipe(SessionWipeReason.credentialsRevoked);
-      throw ApiException(
-        'Only customer accounts can sign in to this app.',
-        statusCode: 403,
-        code: 'CUSTOMER_ACCOUNT_REQUIRED',
-      );
-    }
     final scope = MobileDataScope(tenant: Env.apiBaseUrl, principal: me.id);
     await _storage.adoptScope(generation: generation, scope: scope);
     _cache.useScope(scope);
@@ -263,10 +251,7 @@ class AuthController extends StateNotifier<AuthState> {
     final raw = await _storage.readProfile();
     if (raw == null) return null;
     try {
-      final profile = Me.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-      // Older caches omitted user_type. Keep their credentials while /auth/me
-      // establishes eligibility, but never render an unclassified profile.
-      return profile.userType == 'unknown' ? null : profile;
+      return Me.fromJson(jsonDecode(raw) as Map<String, dynamic>);
     } catch (_) {
       return null;
     }
@@ -384,20 +369,22 @@ class AuthController extends StateNotifier<AuthState> {
   }
 
   /// Returns the [LoginResult] so the UI can branch into the MFA flow.
-  /// Breadcrumbs the attempt/outcome without credentials.
+  /// Breadcrumbs the attempt/outcome (provider only — never the credentials).
   Future<LoginResult> login({
     required String username,
     required String password,
+    String? provider,
   }) async {
     Log.breadcrumb('login attempt',
-        category: 'auth', data: {'context': 'customer'});
+        category: 'auth', data: {'provider': provider ?? 'local'});
     try {
       final result = await _repo.login(
         username: username,
         password: password,
+        provider: provider,
       );
       if (result.isAuthenticated) {
-        await completeLoginProfile();
+        await _loadMe();
         Log.breadcrumb('login success', category: 'auth');
       } else if (result.mfaRequired) {
         Log.breadcrumb('login -> mfa required', category: 'auth');
@@ -414,37 +401,10 @@ class AuthController extends StateNotifier<AuthState> {
     }
   }
 
-  Future<void> completeLoginProfile() async {
-    try {
-      await _loadMe();
-    } on ApiException catch (error) {
-      if (error.code == 'CUSTOMER_ACCOUNT_REQUIRED') rethrow;
-      if (await _storage.readBundle() == null) {
-        throw ApiException(
-          'Login was accepted, but your session ended. Please sign in again.',
-          statusCode: 409,
-          code: 'LOGIN_SESSION_ENDED',
-          requestId: error.requestId,
-        );
-      }
-      throw ApiException(
-        'Login accepted, but your account could not be loaded. Please retry.',
-        statusCode: error.statusCode,
-        code: 'LOGIN_PROFILE_UNAVAILABLE',
-        requestId: error.requestId,
-      );
-    } catch (_) {
-      throw ApiException(
-        'Login accepted, but your account could not be loaded. Please retry.',
-        code: 'LOGIN_PROFILE_UNAVAILABLE',
-      );
-    }
-  }
-
   Future<void> verifyMfa(
       {required String mfaToken, required String code}) async {
     await _repo.verifyMfa(mfaToken: mfaToken, code: code);
-    await completeLoginProfile();
+    await _loadMe();
     Log.breadcrumb('mfa verified', category: 'auth');
   }
 
@@ -453,15 +413,13 @@ class AuthController extends StateNotifier<AuthState> {
     // verify). Adopt its generation before any request goes out, so everything
     // from here on is fenced to THIS session.
     final generation = (await _storage.readBundle())?.generation;
-    if (generation == null) {
-      throw ApiException('Session ended. Please sign in again.',
-          statusCode: 409, code: 'LOGIN_SESSION_ENDED');
-    }
-    _fence.open(generation);
+    if (generation != null) _fence.open(generation);
 
     final me = await _repo.me();
-    if (!_fence.holds(generation)) return;
-    await _adoptIdentity(me, generation);
+    if (generation != null) {
+      if (!_fence.holds(generation)) return;
+      await _adoptIdentity(me, generation);
+    }
     // Re-sync the cached opt-in: it survives a session-expiry token wipe, so a
     // fresh password login must re-arm the resume lock without a cold start.
     _biometricArmed = await _storage.isBiometricEnabled();

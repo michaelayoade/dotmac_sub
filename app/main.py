@@ -133,7 +133,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.catalog", "admission_router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
     ("app.api.auth_flow", "router", "api", "none"),
-    ("app.api.customer_auth", "router", "api", "none"),
     # Pre-authentication continuation, same class as `POST /auth/login`, so the
     # router-level mode is "none". The gate is the `auth.oidc_mobile_federation`
     # control, which the owning service reads first and which fails closed.
@@ -1476,7 +1475,6 @@ _LOGIN_RATE_LIMIT_PATHS = frozenset(
         "/portal/auth/login",
         "/reseller/auth/login",
         "/api/v1/auth/login",
-        "/api/v1/customer/auth/login",
         # The field app's vendor login. Same credential-stuffing exposure as
         # the staff login above: the per-account lockout never trips for a
         # spray of one attempt across many usernames.
@@ -1492,7 +1490,6 @@ def _client_ip(request: Request) -> str:
 _API_SYNC_PRESSURE_DEFAULT_PREFIXES = ("/api/v1/",)
 _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
     "/api/v1/auth/login",
-    "/api/v1/customer/auth/login",
     # Exempt for the same reason as the staff login: the login throttle above
     # is the right brake for a credential endpoint, and a crew behind one
     # site NAT must not be pushed into the generic per-IP burst bucket.

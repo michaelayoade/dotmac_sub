@@ -1141,10 +1141,10 @@ def _portal_login(factory, account):
 
 
 def test_t16_portal_reset_between_verify_and_gate(monkeypatch, factory, account):
-    from app.services import customer_authentication
+    from app.services import web_customer_auth
 
     pause = _Pause()
-    real = customer_authentication.verify_user_password
+    real = web_customer_auth.verify_user_password
 
     def verifier(password, password_hash):
         valid = real(password, password_hash)
@@ -1152,7 +1152,7 @@ def test_t16_portal_reset_between_verify_and_gate(monkeypatch, factory, account)
             pause.hit()
         return valid
 
-    monkeypatch.setattr(customer_authentication, "verify_user_password", verifier)
+    monkeypatch.setattr(web_customer_auth, "verify_user_password", verifier)
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(_portal_login, factory, account)
         try:
@@ -1185,35 +1185,6 @@ def test_t16_portal_mfa_reset_rejects_challenge(factory, account):
         assert denied.status_code == 401
         assert session.get(MFAMethod, method_id).last_used_at == before
     assert _session_count(factory, account) == 0
-
-
-def test_customer_native_reset_after_preparation_mints_no_session(factory, account):
-    from app.services import customer_authentication as customer_auth
-
-    with factory() as session:
-        prepared = customer_auth.prepare_customer_login(
-            db=session,
-            query=customer_auth.PrepareCustomerLogin(
-                identifier=account.username,
-                password=CORRECT,
-                evidence=customer_auth.CustomerLoginEvidence(
-                    correlation_id=uuid.uuid4(),
-                    trusted_ip=None,
-                    surface=pa.DenialSurface.CUSTOMER_API,
-                ),
-                audience=customer_auth.CustomerLoginAudience.NATIVE_CUSTOMER,
-            ),
-        )
-    _reset(factory, account)
-    with factory() as session:
-        with pytest.raises(pa.PasswordAuthenticationError) as denied:
-            pa.complete_password_step(
-                db=session, verified=prepared.verified, request=_make_request()
-            )
-    assert denied.value.kind == "credential_changed"
-    assert _session_count(factory, account) == 0
-    assert _credential_row(factory, account).last_login_at is None
-    assert _audit_count(factory, account, "auth.login_succeeded") == 0
 
 
 def test_t16_portal_reset_synchronously_revokes_before_epoch(

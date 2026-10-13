@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RETIRED_VERIFIER = "verify_" + "password"
 USER_MODULES = (
     "auth_flow",
-    "customer_authentication",
+    "web_customer_auth",
     "web_system_profiles",
     "web_system_db_inspector",
 )
@@ -47,14 +47,14 @@ def test_real_user_authentication_modules_use_user_verifier() -> None:
         expected_calls = {
             "auth_flow": 3,  # Login, password change, and typed policy delegation.
             "web_system_db_inspector": 2,
-            "customer_authentication": 1,
+            "web_customer_auth": 1,
             "web_system_profiles": 1,
         }[module]
         assert (
             sum(_called_name(node) == "verify_user_password" for node in calls)
             == expected_calls
         ), path
-        if module not in {"auth_flow", "customer_authentication"}:
+        if module not in {"auth_flow", "web_customer_auth"}:
             assert all(
                 _called_name(node) != "verify_service_secret" for node in calls
             ), path
@@ -109,7 +109,7 @@ def test_typed_user_policy_facade_delegates_only_to_user_password_owner() -> Non
 
 
 def test_portal_verifiers_are_bound_to_their_credential_sources() -> None:
-    path = ROOT / "app" / "services" / "customer_authentication.py"
+    path = ROOT / "app" / "services" / "web_customer_auth.py"
     tree = ast.parse(path.read_text())
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
     users = [node for node in calls if _called_name(node) == "verify_user_password"]
