@@ -29,8 +29,11 @@ from app.models.billing import (
     LedgerEntry,
     Payment,
     PaymentAllocation,
+    PaymentProviderEvent,
     PaymentRefund,
     PaymentReversal,
+    PaymentSettlement,
+    TopupIntent,
 )
 from app.models.billing_contract import BillingRecordAuthority
 from app.models.customer_subledger import (
@@ -38,6 +41,8 @@ from app.models.customer_subledger import (
     CustomerPostingGroup,
     CustomerSubledgerOpeningPosition,
 )
+from app.models.integration_platform import IntegrationInbox
+from app.models.payment_proof import PaymentProof, PaymentProofCorrection
 from app.models.prepaid_funding import (
     PrepaidFundingBaseline,
     PrepaidOpeningFundingConsumption,
@@ -50,7 +55,20 @@ from app.services.billing.customer_subledger import (
 )
 from app.services.billing.opening_export_contracts import (
     BillingOpeningExportPreview,
+    BillingOpeningExportPreviewV2,
     CaptureEvidence,
+    CashEvidencePopulation,
+    CashInboxEvidence,
+    CashPaymentEvidence,
+    CashProofCorrectionEvidence,
+    CashProofEvidence,
+    CashProviderEventEvidence,
+    CashRefundEvidence,
+    CashReversalEvidence,
+    CashSettlementEvidence,
+    CashSourceCount,
+    CashSourceKind,
+    CashTopupEvidence,
     ExceptionCode,
     ExclusionReason,
     FinancialSourceEvidence,
@@ -158,7 +176,8 @@ def _settlement_ledger_matches(
 def _capture(db: Session, query: PreviewBillingOpeningExportQuery) -> CaptureEvidence:
     if (
         re.fullmatch(r"[0-9a-f]{40}", query.source_repository_sha) is None
-        or query.population_version != "sub-billing-opening-census-v1"
+        or query.population_version
+        not in {"sub-billing-opening-census-v1", "sub-billing-opening-census-v2"}
         or query.economic_cutoff.tzinfo is None
         or len(dict(query.currency_precisions)) != len(query.currency_precisions)
         or any(
@@ -688,7 +707,7 @@ def preview_billing_opening_export(
             )
         )
         cutover = authority_cutover(db)
-        return _classify(
+        report = _classify(
             db,
             query,
             capture,
@@ -702,6 +721,27 @@ def preview_billing_opening_export(
             if cutover is not None and _utc(cutover.cutover_at) <= query.economic_cutoff
             else None,
         )
+
+        if query.population_version == "sub-billing-opening-census-v1":
+            return report
+        cash = _cash_evidence(db, query=query, report=report)
+        extended = BillingOpeningExportPreviewV2(
+            report.capture,
+            report.subscriber_ids,
+            report.invoices,
+            report.lines,
+            report.settlements,
+            report.financial_sources,
+            report.lanes,
+            report.effects,
+            report.eligible_invoice_ids,
+            report.exclusions,
+            report.blocking_exceptions,
+            report.controls,
+            "",
+            cash,
+        )
+        return replace(extended, content_fingerprint=_fingerprint(extended))
 
 
 def _classify(
@@ -1372,3 +1412,555 @@ def _classify(
         "",
     )
     return replace(result, content_fingerprint=_fingerprint(result))
+
+
+def _cash_evidence(
+    db: Session,
+    *,
+    query: PreviewBillingOpeningExportQuery,
+    report: BillingOpeningExportPreview,
+) -> CashEvidencePopulation:
+    """Capture whole raw receipt populations in the existing caller snapshot."""
+    payments = tuple(
+        CashPaymentEvidence(*row)
+        for row in db.execute(
+            select(
+                Payment.id,
+                Payment.account_id,
+                Payment.billing_account_id,
+                Payment.provider_id,
+                Payment.external_id,
+                Payment.amount,
+                Payment.provider_fee,
+                Payment.refunded_amount,
+                Payment.currency,
+                Payment.status,
+                Payment.is_active,
+                Payment.paid_at,
+                Payment.reserved_for_purchase_id,
+                Payment.import_run_id,
+                Payment.created_at,
+                Payment.updated_at,
+            ).order_by(Payment.id)
+        )
+    )
+    payment_settlements = tuple(
+        CashSettlementEvidence(*row)
+        for row in db.execute(
+            select(
+                PaymentSettlement.id,
+                PaymentSettlement.payment_id,
+                PaymentSettlement.origin,
+                PaymentSettlement.amount,
+                PaymentSettlement.unallocated_amount,
+                PaymentSettlement.prepaid_amount,
+                PaymentSettlement.currency,
+                PaymentSettlement.unallocated_ledger_entry_id,
+                PaymentSettlement.prepaid_ledger_entry_id,
+                PaymentSettlement.billing_account_ledger_entry_id,
+                PaymentSettlement.preview_fingerprint,
+                PaymentSettlement.idempotency_key,
+                PaymentSettlement.created_at,
+            ).order_by(PaymentSettlement.id)
+        )
+    )
+    provider_events = tuple(
+        CashProviderEventEvidence(*row)
+        for row in db.execute(
+            select(
+                PaymentProviderEvent.id,
+                PaymentProviderEvent.provider_id,
+                PaymentProviderEvent.payment_id,
+                PaymentProviderEvent.invoice_id,
+                PaymentProviderEvent.external_id,
+                PaymentProviderEvent.event_type,
+                PaymentProviderEvent.idempotency_key,
+                PaymentProviderEvent.source,
+                PaymentProviderEvent.status,
+                PaymentProviderEvent.observed_payment_status,
+                PaymentProviderEvent.amount,
+                PaymentProviderEvent.provider_fee,
+                PaymentProviderEvent.net_amount,
+                PaymentProviderEvent.currency,
+                PaymentProviderEvent.provider_reference,
+                PaymentProviderEvent.financial_effect,
+                PaymentProviderEvent.observation_digest,
+                PaymentProviderEvent.error_code,
+                PaymentProviderEvent.received_at,
+                PaymentProviderEvent.processed_at,
+            ).order_by(PaymentProviderEvent.id)
+        )
+    )
+    refunds = tuple(
+        CashRefundEvidence(*row)
+        for row in db.execute(
+            select(
+                PaymentRefund.id,
+                PaymentRefund.payment_id,
+                PaymentRefund.provider_event_id,
+                PaymentRefund.ledger_entry_id,
+                PaymentRefund.billing_account_ledger_entry_id,
+                PaymentRefund.credit_consumption_ledger_entry_id,
+                PaymentRefund.amount,
+                PaymentRefund.currency,
+                PaymentRefund.origin,
+                PaymentRefund.preview_fingerprint,
+                PaymentRefund.created_at,
+            ).order_by(PaymentRefund.id)
+        )
+    )
+    reversals = tuple(
+        CashReversalEvidence(*row)
+        for row in db.execute(
+            select(
+                PaymentReversal.id,
+                PaymentReversal.payment_id,
+                PaymentReversal.provider_event_id,
+                PaymentReversal.ledger_entry_id,
+                PaymentReversal.billing_account_ledger_entry_id,
+                PaymentReversal.credit_consumption_ledger_entry_id,
+                PaymentReversal.amount,
+                PaymentReversal.currency,
+                PaymentReversal.origin,
+                PaymentReversal.preview_fingerprint,
+                PaymentReversal.created_at,
+            ).order_by(PaymentReversal.id)
+        )
+    )
+    proofs = tuple(
+        CashProofEvidence(*row)
+        for row in db.execute(
+            select(
+                PaymentProof.id,
+                PaymentProof.account_id,
+                PaymentProof.billing_account_id,
+                PaymentProof.payment_id,
+                PaymentProof.amount,
+                PaymentProof.gross_amount,
+                PaymentProof.wht_amount,
+                PaymentProof.verified_amount,
+                PaymentProof.currency,
+                PaymentProof.status,
+                PaymentProof.paid_at,
+                PaymentProof.created_at,
+                PaymentProof.updated_at,
+            ).order_by(PaymentProof.id)
+        )
+    )
+    proof_corrections = tuple(
+        CashProofCorrectionEvidence(*row)
+        for row in db.execute(
+            select(
+                PaymentProofCorrection.id,
+                PaymentProofCorrection.duplicate_proof_id,
+                PaymentProofCorrection.original_proof_id,
+                PaymentProofCorrection.duplicate_payment_id,
+                PaymentProofCorrection.payment_reversal_id,
+                PaymentProofCorrection.ledger_entry_id,
+                PaymentProofCorrection.preview_fingerprint,
+                PaymentProofCorrection.idempotency_key,
+                PaymentProofCorrection.created_at,
+            ).order_by(PaymentProofCorrection.id)
+        )
+    )
+    topups = tuple(
+        CashTopupEvidence(*row)
+        for row in db.execute(
+            select(
+                TopupIntent.id,
+                TopupIntent.account_id,
+                TopupIntent.billing_account_id,
+                TopupIntent.invoice_id,
+                TopupIntent.completed_payment_id,
+                TopupIntent.provider_id,
+                TopupIntent.capability_binding_id,
+                TopupIntent.currency,
+                TopupIntent.requested_amount,
+                TopupIntent.actual_amount,
+                TopupIntent.external_id,
+                TopupIntent.status,
+                TopupIntent.completed_at,
+                TopupIntent.created_at,
+                TopupIntent.updated_at,
+            ).order_by(TopupIntent.id)
+        )
+    )
+    inbox_rows: list[CashInboxEvidence] = []
+    for inbox_row in db.execute(
+        select(
+            IntegrationInbox.id,
+            IntegrationInbox.installation_id,
+            IntegrationInbox.capability_binding_id,
+            IntegrationInbox.provider_event_id,
+            IntegrationInbox.event_type,
+            IntegrationInbox.payload_digest,
+            IntegrationInbox.state,
+            IntegrationInbox.consequence_json["provider_event_id"].as_string(),
+            IntegrationInbox.consequence_json["payment_id"].as_string(),
+            IntegrationInbox.consequence_json["provider_id"].as_string(),
+            IntegrationInbox.error_code,
+            IntegrationInbox.received_at,
+            IntegrationInbox.processed_at,
+            IntegrationInbox.created_at,
+            IntegrationInbox.updated_at,
+        ).order_by(IntegrationInbox.id)
+    ):
+        event_id, event_valid = _cash_consequence_id(inbox_row[7])
+        payment_id, payment_valid = _cash_consequence_id(inbox_row[8])
+        provider_id, provider_valid = _cash_consequence_id(inbox_row[9])
+        inbox_rows.append(
+            CashInboxEvidence(
+                *inbox_row[:7],
+                event_id,
+                payment_id,
+                provider_id,
+                event_valid and payment_valid and provider_valid,
+                *inbox_row[10:],
+            )
+        )
+    population = CashEvidencePopulation(
+        payments,
+        payment_settlements,
+        provider_events,
+        tuple(inbox_rows),
+        refunds,
+        reversals,
+        proofs,
+        proof_corrections,
+        topups,
+        (
+            CashSourceCount(CashSourceKind.payments, len(payments)),
+            CashSourceCount(
+                CashSourceKind.payment_settlements, len(payment_settlements)
+            ),
+            CashSourceCount(
+                CashSourceKind.payment_provider_events, len(provider_events)
+            ),
+            CashSourceCount(CashSourceKind.integration_inbox, len(inbox_rows)),
+            CashSourceCount(CashSourceKind.payment_refunds, len(refunds)),
+            CashSourceCount(CashSourceKind.payment_reversals, len(reversals)),
+            CashSourceCount(CashSourceKind.payment_proofs, len(proofs)),
+            CashSourceCount(
+                CashSourceKind.payment_proof_corrections, len(proof_corrections)
+            ),
+            CashSourceCount(CashSourceKind.topup_intents, len(topups)),
+        ),
+        (),
+    )
+    return _classify_cash(population, query=query, report=report)
+
+
+def _cash_consequence_id(value: object) -> tuple[UUID | None, bool]:
+    """Only the known consequence ID scalars are selected; no raw JSON export."""
+    if value is None:
+        return None, True
+    if not isinstance(value, str):
+        return None, False
+    try:
+        return UUID(value), True
+    except ValueError:
+        return None, False
+
+
+def _classify_cash(
+    cash: CashEvidencePopulation,
+    *,
+    query: PreviewBillingOpeningExportQuery,
+    report: BillingOpeningExportPreview,
+) -> CashEvidencePopulation:
+    """Record structural gaps without qualifying a single external cash source."""
+    exceptions: list[OpeningException] = []
+    payment_map = {p.id: p for p in cash.payments}
+    event_map = {e.id: e for e in cash.provider_events}
+    proof_map = {p.id: p for p in cash.proofs}
+    reversal_map = {r.id: r for r in cash.reversals}
+    ledger_map = {
+        s.id: s for s in report.financial_sources if s.kind == SourceKind.ledger
+    }
+    event_counts = Counter(
+        e.payment_id for e in cash.provider_events if e.payment_id is not None
+    )
+    subscribers = set(report.subscriber_ids)
+
+    def block(
+        code: ExceptionCode, identifier: UUID, payment_id: UUID | None, detail: str
+    ) -> None:
+        payment = payment_map.get(payment_id) if payment_id is not None else None
+        exceptions.append(
+            OpeningException(
+                code,
+                payment.account_id if payment else None,
+                payment.currency if payment else None,
+                identifier,
+                detail,
+            )
+        )
+
+    def observe(
+        identifier: UUID,
+        payment_id: UUID | None,
+        times: tuple[datetime | None, ...],
+        amounts: tuple[Decimal | None, ...] = (),
+    ) -> None:
+        _finite(*amounts)
+        if any(
+            t is not None and (t.tzinfo is None or t.utcoffset() is None) for t in times
+        ):
+            raise _fail(
+                "schema_evidence_missing", "Cash evidence timestamps must be aware."
+            )
+        if any(t is not None and t > query.economic_cutoff for t in times):
+            block(
+                ExceptionCode.source_after_cutoff,
+                identifier,
+                payment_id,
+                "Current cash evidence crosses cutoff; no historical reconstruction.",
+            )
+        block(
+            ExceptionCode.cash_unqualified,
+            identifier,
+            payment_id,
+            "Raw receipt evidence has no trusted external-cash attestation or live namespace mapping.",
+        )
+
+    def payment_link(
+        identifier: UUID, payment_id: UUID | None, currency: str | None
+    ) -> None:
+        payment = payment_map.get(payment_id) if payment_id is not None else None
+        if (
+            payment is None
+            or payment.account_id not in subscribers
+            or (currency is not None and payment.currency != currency)
+        ):
+            block(
+                ExceptionCode.settlement_mapping,
+                identifier,
+                payment_id,
+                "Cash source has no exact same-currency subscriber/payment mapping.",
+            )
+
+    def ledger_link(identifier: UUID, payment_id: UUID, ledger_id: UUID | None) -> None:
+        if ledger_id is None:
+            return
+        ledger = ledger_map.get(ledger_id)
+        payment = payment_map.get(payment_id)
+        if (
+            ledger is None
+            or payment is None
+            or (ledger.payment_id, ledger.account_id, ledger.currency)
+            != (payment_id, payment.account_id, payment.currency)
+        ):
+            block(
+                ExceptionCode.settlement_provenance,
+                identifier,
+                payment_id,
+                "Cash ledger reference is absent or crosses payment/account/currency.",
+            )
+
+    for cash_payment in cash.payments:
+        observe(
+            cash_payment.id,
+            cash_payment.id,
+            (cash_payment.created_at, cash_payment.updated_at, cash_payment.paid_at),
+            (
+                cash_payment.amount,
+                cash_payment.provider_fee,
+                cash_payment.refunded_amount,
+            ),
+        )
+        payment_link(cash_payment.id, cash_payment.id, cash_payment.currency)
+        if event_counts[cash_payment.id] != 1:
+            block(
+                ExceptionCode.cash_event_ambiguity,
+                cash_payment.id,
+                cash_payment.id,
+                "Payment has zero or multiple provider observations; no event is selected as proof.",
+            )
+        if (
+            cash_payment.billing_account_id is not None
+            or cash_payment.reserved_for_purchase_id is not None
+            or cash_payment.import_run_id is not None
+        ):
+            block(
+                ExceptionCode.unbacked_lane,
+                cash_payment.id,
+                cash_payment.id,
+                "Billing-account, purchase reservation or imported cash requires separate reviewed consumption/provenance mapping.",
+            )
+    for settlement in cash.payment_settlements:
+        observe(
+            settlement.id,
+            settlement.payment_id,
+            (settlement.created_at,),
+            (
+                settlement.amount,
+                settlement.unallocated_amount,
+                settlement.prepaid_amount,
+            ),
+        )
+        payment_link(settlement.id, settlement.payment_id, settlement.currency)
+        ledger_link(
+            settlement.id, settlement.payment_id, settlement.unallocated_ledger_entry_id
+        )
+        ledger_link(
+            settlement.id, settlement.payment_id, settlement.prepaid_ledger_entry_id
+        )
+        if settlement.billing_account_ledger_entry_id is not None:
+            block(
+                ExceptionCode.unbacked_lane,
+                settlement.id,
+                settlement.payment_id,
+                "Billing-account ledger namespace is retained without qualification.",
+            )
+    for event in cash.provider_events:
+        observe(
+            event.id,
+            event.payment_id,
+            (event.received_at, event.processed_at),
+            (event.amount, event.provider_fee, event.net_amount),
+        )
+        payment_link(event.id, event.payment_id, event.currency)
+        event_payment = (
+            payment_map.get(event.payment_id) if event.payment_id is not None else None
+        )
+        if event_payment is not None and event_payment.provider_id != event.provider_id:
+            block(
+                ExceptionCode.settlement_mapping,
+                event.id,
+                event.payment_id,
+                "Provider observation and payment provider identities differ.",
+            )
+    for receipt in cash.inbox_receipts:
+        observe(
+            receipt.id,
+            receipt.consequence_payment_id,
+            (
+                receipt.received_at,
+                receipt.processed_at,
+                receipt.created_at,
+                receipt.updated_at,
+            ),
+        )
+        payment_link(receipt.id, receipt.consequence_payment_id, None)
+        linked_event = (
+            event_map.get(receipt.consequence_provider_event_id)
+            if receipt.consequence_provider_event_id is not None
+            else None
+        )
+        if (
+            not receipt.consequence_identifiers_valid
+            or linked_event is None
+            or linked_event.payment_id != receipt.consequence_payment_id
+            or (
+                receipt.consequence_provider_id is not None
+                and linked_event.provider_id != receipt.consequence_provider_id
+            )
+        ):
+            block(
+                ExceptionCode.settlement_mapping,
+                receipt.id,
+                receipt.consequence_payment_id,
+                "Inbox consequence IDs are invalid, absent or disagree with exact event/payment/provider links.",
+            )
+    for movement in (*cash.refunds, *cash.reversals):
+        observe(
+            movement.id, movement.payment_id, (movement.created_at,), (movement.amount,)
+        )
+        payment_link(movement.id, movement.payment_id, movement.currency)
+        for ledger_id in (
+            movement.ledger_entry_id,
+            movement.credit_consumption_ledger_entry_id,
+        ):
+            ledger_link(movement.id, movement.payment_id, ledger_id)
+        linked_event = (
+            event_map.get(movement.provider_event_id)
+            if movement.provider_event_id is not None
+            else None
+        )
+        if movement.provider_event_id is not None and (
+            linked_event is None or linked_event.payment_id != movement.payment_id
+        ):
+            block(
+                ExceptionCode.settlement_mapping,
+                movement.id,
+                movement.payment_id,
+                "Refund/reversal provider observation is absent or belongs to another payment.",
+            )
+    for proof in cash.proofs:
+        observe(
+            proof.id,
+            proof.payment_id,
+            (proof.created_at, proof.updated_at, proof.paid_at),
+            (proof.amount, proof.gross_amount, proof.wht_amount, proof.verified_amount),
+        )
+        payment_link(proof.id, proof.payment_id, proof.currency)
+        proof_payment = (
+            payment_map.get(proof.payment_id) if proof.payment_id is not None else None
+        )
+        if proof_payment is not None and (
+            proof.account_id,
+            proof.billing_account_id,
+        ) != (
+            proof_payment.account_id,
+            proof_payment.billing_account_id,
+        ):
+            block(
+                ExceptionCode.settlement_mapping,
+                proof.id,
+                proof.payment_id,
+                "Proof and payment structural account identities differ.",
+            )
+    for correction in cash.proof_corrections:
+        observe(
+            correction.id, correction.duplicate_payment_id, (correction.created_at,)
+        )
+        payment_link(correction.id, correction.duplicate_payment_id, None)
+        ledger_link(
+            correction.id, correction.duplicate_payment_id, correction.ledger_entry_id
+        )
+        duplicate = proof_map.get(correction.duplicate_proof_id)
+        reversal = reversal_map.get(correction.payment_reversal_id)
+        if (
+            duplicate is None
+            or duplicate.payment_id != correction.duplicate_payment_id
+            or correction.original_proof_id not in proof_map
+            or reversal is None
+            or reversal.payment_id != correction.duplicate_payment_id
+        ):
+            block(
+                ExceptionCode.settlement_mapping,
+                correction.id,
+                correction.duplicate_payment_id,
+                "Proof correction lacks exact proof/payment/reversal structural links.",
+            )
+    for topup in cash.topups:
+        observe(
+            topup.id,
+            topup.completed_payment_id,
+            (topup.created_at, topup.updated_at, topup.completed_at),
+            (topup.requested_amount, topup.actual_amount),
+        )
+        payment_link(topup.id, topup.completed_payment_id, topup.currency)
+        topup_payment = (
+            payment_map.get(topup.completed_payment_id)
+            if topup.completed_payment_id is not None
+            else None
+        )
+        if topup_payment is not None and (
+            topup.account_id,
+            topup.billing_account_id,
+            topup.provider_id,
+        ) != (
+            topup_payment.account_id,
+            topup_payment.billing_account_id,
+            topup_payment.provider_id,
+        ):
+            block(
+                ExceptionCode.settlement_mapping,
+                topup.id,
+                topup.completed_payment_id,
+                "Topup and completed payment structural account/provider identities differ.",
+            )
+    return replace(
+        cash, blocking_exceptions=tuple(exceptions), qualified_payment_ids=()
+    )

@@ -33,7 +33,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.customer_subledger",
             "customer.accounts",
         ),
-        notes="Read-only invoice-domain evidence; incumbent owners retain every mutation and authority decision. No import or activation command.",
+        notes="Read-only invoice-domain evidence; incumbent owners retain every mutation and authority decision. V2 separately captures unqualified cash receipts; V1 output remains unchanged. No import or activation command.",
         contract=ServiceContract(
             concerns=(
                 ConcernContract(
@@ -52,7 +52,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="current financial source population",
                     owner="financial.invoices",
                     kind=AuthorityKind.OBSERVATION,
-                    source="All subscriber, invoice/line, payment/refund/reversal/allocation, credit/application, ledger, opening/funding baseline and posting/effect rows in one caller-owned current snapshot; no creation window or subscription join.",
+                    source="All subscriber, invoice/line, payment/refund/reversal/allocation, credit/application, ledger, opening/funding baseline and posting/effect rows in one caller-owned current snapshot; no creation window or subscription join. Explicit V2 additionally retains typed payment settlement/provider-event, safe inbox consequence-ID metadata, proof/correction and topup populations as unqualified cash evidence.",
                 ),
                 AuthorityInput(
                     name="canonical invoice settlement",

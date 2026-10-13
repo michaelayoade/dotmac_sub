@@ -283,3 +283,158 @@ def test_read_committed_and_pending_writes_are_rejected(
             preview_billing_opening_export(db, query=query(census_rows.cutoff))
         assert error.value.code.endswith("snapshot_required")
         assert db.new
+
+
+def test_v2_raw_receipts_preserve_gross_net_orphans_and_same_snapshot(
+    census_factory: sessionmaker[Session],
+    census_rows: SeededCensus,
+) -> None:
+    from dataclasses import asdict, replace
+
+    from app.models.billing import (
+        PaymentProvider,
+        PaymentProviderEvent,
+        PaymentProviderEventSource,
+        PaymentProviderEventStatus,
+        PaymentSettlement,
+        PaymentSettlementOrigin,
+    )
+    from app.models.integration_platform import (
+        IntegrationCapabilityBinding,
+        IntegrationInbox,
+        IntegrationInstallation,
+    )
+    from app.services.billing.opening_export_contracts import (
+        BillingOpeningExportPreviewV2,
+    )
+    from scripts.migration.billing_opening_export import _json_value
+
+    with census_factory() as writer:
+        provider = PaymentProvider(name=f"Census cash {uuid4().hex}")
+        installation = IntegrationInstallation(
+            connector_key="cash-census-test",
+            connector_version="1",
+            manifest_digest="d" * 64,
+            name=f"Cash {uuid4().hex}",
+            environment="test",
+        )
+        writer.add_all([provider, installation])
+        writer.flush()
+        binding = IntegrationCapabilityBinding(
+            installation_id=installation.id, capability_id="payment.test"
+        )
+        payments = [
+            Payment(
+                account_id=census_rows.subscriber_id,
+                provider_id=provider.id,
+                amount=Decimal("100.00"),
+                provider_fee=Decimal("2.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+            )
+            for _ in range(2)
+        ]
+        writer.add_all([binding, *payments])
+        writer.flush()
+        receipts = [
+            PaymentSettlement(
+                payment_id=p.id,
+                amount=Decimal("100.00") if i == 0 else Decimal("98.00"),
+                unallocated_amount=Decimal("100.00") if i == 0 else Decimal("98.00"),
+                currency="NGN",
+                origin=PaymentSettlementOrigin.manual
+                if i == 0
+                else PaymentSettlementOrigin.provider_event,
+            )
+            for i, p in enumerate(payments)
+        ]
+        events = [
+            PaymentProviderEvent(
+                provider_id=provider.id,
+                payment_id=payments[1].id if i < 2 else None,
+                event_type="charge.success",
+                external_id=f"cash-census-{uuid4().hex}",
+                source=PaymentProviderEventSource.verified_webhook,
+                status=PaymentProviderEventStatus.processed,
+                amount=Decimal("100.00"),
+                provider_fee=Decimal("2.00"),
+                net_amount=Decimal("98.00"),
+                currency="NGN",
+                observation_digest="e" * 64,
+                payload={"private-test-sentinel": "never-export"},
+            )
+            for i in range(3)
+        ]
+        writer.add_all([*receipts, *events])
+        writer.flush()
+        inbox = IntegrationInbox(
+            installation_id=installation.id,
+            capability_binding_id=binding.id,
+            provider_event_id="cash-receipt",
+            event_type="charge.success",
+            payload_digest="f" * 64,
+            state="processed",
+            payload_json={"private-test-sentinel": "never-export"},
+            headers_json={"private-test-sentinel": "never-export"},
+            consequence_json={
+                "provider_event_id": str(events[0].id),
+                "payment_id": str(payments[1].id),
+                "provider_id": str(provider.id),
+                "private-test-sentinel": "never-export",
+            },
+        )
+        writer.add(inbox)
+        writer.flush()
+        payment_ids = tuple(p.id for p in payments)
+        event_ids = tuple(e.id for e in events)
+        inbox_id = inbox.id
+        writer.commit()
+        cutoff = writer.execute(text("SELECT clock_timestamp()")).scalar_one()
+    requested = replace(
+        query(cutoff), population_version="sub-billing-opening-census-v2"
+    )
+    with app_db.read_only_snapshot_session() as db:
+        first = preview_billing_opening_export(db, query=requested)
+        assert isinstance(first, BillingOpeningExportPreviewV2)
+        cash = first.cash_evidence
+        stored = {s.payment_id: s for s in cash.payment_settlements}
+        assert stored[payment_ids[0]].amount == Decimal("100.00")
+        assert stored[payment_ids[1]].amount == Decimal("98.00")
+        assert set(event_ids) <= {e.id for e in cash.provider_events}
+        assert any(
+            e.id == event_ids[2] and e.payment_id is None for e in cash.provider_events
+        )
+        assert any(
+            r.id == inbox_id and r.consequence_provider_event_id == event_ids[0]
+            for r in cash.inbox_receipts
+        )
+        assert any(
+            e.source_id == event_ids[2] and e.code == ExceptionCode.settlement_mapping
+            for e in cash.blocking_exceptions
+        )
+        assert any(
+            e.source_id == payment_ids[1]
+            and e.code == ExceptionCode.cash_event_ambiguity
+            for e in cash.blocking_exceptions
+        )
+        assert cash.qualified_payment_ids == ()
+        assert "private-test-sentinel" not in str(_json_value(asdict(first)))
+        counts = {c.table.value: c.count for c in cash.source_counts}
+        assert counts["payment_provider_events"] == len(cash.provider_events)
+        with census_factory() as writer:
+            changed = writer.get(PaymentProviderEvent, event_ids[0])
+            assert changed is not None
+            changed.processed_at = writer.execute(
+                text("SELECT clock_timestamp()")
+            ).scalar_one()
+            writer.commit()
+        second = preview_billing_opening_export(db, query=requested)
+        assert first.content_fingerprint == second.content_fingerprint
+    with app_db.read_only_snapshot_session() as db:
+        fresh = preview_billing_opening_export(db, query=requested)
+        assert isinstance(fresh, BillingOpeningExportPreviewV2)
+        assert fresh.content_fingerprint != first.content_fingerprint
+        assert any(
+            e.source_id == event_ids[0] and e.code == ExceptionCode.source_after_cutoff
+            for e in fresh.cash_evidence.blocking_exceptions
+        )
