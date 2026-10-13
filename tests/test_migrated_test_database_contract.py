@@ -119,9 +119,11 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
             "bi_0001_billing",
             "cl_0001_collections",
             "ib_0001_conversations",
+            "nu_0001_numbering",
             "pm_0001_payment_intents",
             "so_0001_service_delivery_orders",
             "su_0003_billing_treatments",
             "ts_0002_notify_identity",
+            "tx_0003_result_fingerprint",
         }
     )
