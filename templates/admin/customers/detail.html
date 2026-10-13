@@ -1529,16 +1529,13 @@
                                     <span x-text="restoringSubscriptionId === '{{ subscription.id }}' ? 'Restoring…' : 'Restore'">Restore</span>
                                 </button>
                                 {% endif %}
-                                {% if sub_status == 'active' %}
-                                <form method="POST" action="/admin/billing/invoices/generate-from-subscription" class="inline">
-                                    {% include "components/forms/csrf_input.html" %}
-                                    <input type="hidden" name="subscriber_id" value="{{ customer.id }}">
-                                    <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
-                                    <button type="submit" title="Generate Invoice" class="w-24 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
-                                        <svg class="inline h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                        Invoice
-                                    </button>
-                                </form>
+                                {% if sub_status == 'active' and can(request, 'billing:invoice:create_subscription_service') %}
+                                <a href="/admin/billing/invoices/subscription-service?account_id={{ subscription.subscriber_id }}&subscription_id={{ subscription.id }}"
+                                   title="Review the exact next service period before issuing an invoice"
+                                   class="inline-flex w-24 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/40 dark:focus:ring-offset-slate-900">
+                                    <svg class="mr-1 inline h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                    Invoice
+                                </a>
                                 {% endif %}
                                 {% if show_service_assignments %}
                                 {% set sub_conn = (connection_by_subscription or {}).get(subscription.id|string, {}) %}
