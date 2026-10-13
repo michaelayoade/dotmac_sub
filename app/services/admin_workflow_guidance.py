@@ -691,6 +691,23 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "subscription-service-invoice",
+        "Billing",
+        "Issue the next subscription service invoice",
+        "Billing staff with the subscription-service invoice permission",
+        "Issue one reviewed invoice for the subscription's exact next service period.",
+        ("/admin/billing/invoices/subscription-service",),
+        "Confirm the customer, billing account, subscription, plan, billing mode, and exact next service period shown by the preview.",
+        "Review the recurring charge, tax, total, eligibility, duplicate checks, and any excluded prepaid add-ons or unresolved postpaid components before continuing.",
+        "Enter a clear reason, choose whether to send the existing renewal-ready notification, tick the confirmation, and issue only the current preview.",
+        "Open the issued invoice and verify that its line remains linked to the subscription and exact service period; if the preview became stale, reload and review again.",
+        notes=(
+            "This workflow issues a receivable; it does not record a payment, consume account credit, move the billing date, or grant service access by itself.",
+            "When payment is later allocated through the normal payment workflow, the linked prepaid invoice can grant that exact period once without creating a second service charge.",
+            "Use the separate backdated service-period workflow for already consumed historical periods.",
+        ),
+    ),
+    _guide(
         "invoice",
         "Billing",
         "Create, issue, and correct invoices",
@@ -1732,6 +1749,16 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("verify-billing-mode", "Verify the billing-mode change", 3),
     ),
+    "subscription-service-invoice": (
+        _action("review-service-period", "Review the next service period", 0, 1),
+        _action(
+            "issue-service-invoice",
+            "Issue the reviewed service invoice",
+            2,
+            permission="billing:invoice:create_subscription_service",
+        ),
+        _action("verify-service-invoice", "Verify the issued invoice", 3),
+    ),
     "invoice": (
         _action(
             "create-review-invoice",
@@ -2410,6 +2437,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         (
             "billing-overview",
             "billing-accounts",
+            "subscription-service-invoice",
             "invoice",
             "credit",
             "service-extension",
@@ -2533,6 +2561,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 # Other pages inherit their Admin-sidebar section's visibility.
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "billing-accounts": ("billing:account:read",),
+    "subscription-service-invoice": ("billing:invoice:read",),
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),
