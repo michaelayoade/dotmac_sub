@@ -1610,12 +1610,24 @@ def _cash_evidence(
         provider_id, provider_valid = _cash_consequence_id(inbox_row[9])
         inbox_rows.append(
             CashInboxEvidence(
-                *inbox_row[:7],
-                event_id,
-                payment_id,
-                provider_id,
-                event_valid and payment_valid and provider_valid,
-                *inbox_row[10:],
+                id=inbox_row[0],
+                installation_id=inbox_row[1],
+                capability_binding_id=inbox_row[2],
+                provider_event_id=inbox_row[3],
+                event_type=inbox_row[4],
+                payload_digest=inbox_row[5],
+                state=inbox_row[6],
+                consequence_provider_event_id=event_id,
+                consequence_payment_id=payment_id,
+                consequence_provider_id=provider_id,
+                consequence_identifiers_valid=event_valid
+                and payment_valid
+                and provider_valid,
+                error_code=inbox_row[10],
+                received_at=inbox_row[11],
+                processed_at=inbox_row[12],
+                created_at=inbox_row[13],
+                updated_at=inbox_row[14],
             )
         )
     population = CashEvidencePopulation(
@@ -1862,7 +1874,11 @@ def _classify_cash(
                 receipt.consequence_payment_id,
                 "Inbox consequence IDs are invalid, absent or disagree with exact event/payment/provider links.",
             )
-    for movement in (*cash.refunds, *cash.reversals):
+    movement_records: tuple[CashRefundEvidence | CashReversalEvidence, ...] = (
+        *cash.refunds,
+        *cash.reversals,
+    )
+    for movement in movement_records:
         observe(
             movement.id, movement.payment_id, (movement.created_at,), (movement.amount,)
         )
