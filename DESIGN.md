@@ -550,6 +550,22 @@ Tables: text-sm, py-2.5 rows, tabular-nums for numbers
 Badges: rounded-full, px-2.5 py-0.5, text-xs font-medium
 ```
 
+### Controlled financial repair workspaces
+
+- Use the incumbent admin detail header and card language; do not introduce a
+  separate finance visual system.
+- The first viewport carries account identity, the exact object selector,
+  action mode, and one Review action.
+- After preview, lead with an explicit actionable/blocked verdict, then show
+  current and proposed financial facts, evidence counts, conflicts, and one
+  confirmation action.
+- High-impact confirmation requires a reason and plain-language acknowledgement
+  of the money and service consequences. Create/repair permissions are shown
+  independently; role names never stand in for capabilities.
+- On wide screens the evidence form and verdict occupy the main column, with
+  financial consequence and workflow explanation in a narrow side column. On
+  small screens every region stacks in reading order.
+
 ### Dark Mode Classes
 
 Always pair light and dark:
