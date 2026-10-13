@@ -155,6 +155,12 @@
         "fingerprint": "d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582"
       },
       {
+        "path": "tests/test_nextcloud_talk_credential_setup.py",
+        "symbol": "<module>",
+        "category": "outbound_transport",
+        "fingerprint": "c31304ba674a0781dc6e33990d28f68e19dda55814387eb4f4ed5929c6c59346"
+      },
+      {
         "path": "tests/test_nextcloud_talk_staff_notifications.py",
         "symbol": "<module>",
         "category": "delivery_retry",

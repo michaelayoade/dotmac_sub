@@ -547,3 +547,13 @@ def test_router_health_guidance_covers_badge_shadow_and_read_only_boundary() -> 
     assert drift is not None
     assert drift.id == "cross-app-drift"
     assert "router posture" in " ".join(drift.steps).lower()
+
+
+def test_installed_talk_guide_explains_save_validation_and_unchanged_delivery():
+    guide = guidance_for_path("/admin/integrations/nextcloud-talk/installation-id")
+    assert guide is not None and guide.id == "integrations"
+    content = " ".join((*guide.steps, *guide.notes))
+    assert "existing notifier username and app password" in content
+    assert "both settings and secrets write access" in content
+    assert "without sending a notification" in content
+    assert "global notification setting unchanged" in content

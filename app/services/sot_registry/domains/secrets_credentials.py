@@ -28,6 +28,71 @@ DOMAIN = DomainSOT(
                 "OpenBao read/write boundary",
                 "bounded secret cache lifecycle",
             ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="secret reference parsing and resolution",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("reference policy", "OpenBao response"),
+                    ),
+                    ConcernContract(
+                        name="OpenBao read/write boundary",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=("reference policy", "OpenBao response"),
+                    ),
+                    ConcernContract(
+                        name="bounded secret cache lifecycle",
+                        role=OwnerRole.POLICY,
+                        input_names=("reference policy", "OpenBao response"),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="reference policy",
+                        owner="secrets.reference_store",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Trusted deployment store namespace/configuration, bounded URI parsing, cache TTL and integration-owned immutable prefix policy.",
+                    ),
+                    AuthorityInput(
+                        name="OpenBao response",
+                        owner="external:openbao",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="KV read responses and KV2 CAS0 create responses; credentials remain transient.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="External transport only; SQL transaction authority remains with the command owner.",
+                    locking="KV2 CAS0 serializes immutable creates; generic writers/deleters reject managed prefix and aliases.",
+                    idempotency="Same server-derived installation/operation path requires constant-time exact password readback; different material conflicts.",
+                    retries="One bounded readback resolves ambiguous creates. Never overwrite/delete; SQL failure may leave an immutable orphan for same-operation retry or owner review.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "secrets.reference_store.unavailable",
+                        "secrets.reference_store.denied",
+                        "secrets.reference_store.kv2_required",
+                        "secrets.reference_store.conflict",
+                    ),
+                    mapping_owner="integration.installations and secret admin adapters",
+                    fail_closed_on=(
+                        "unavailable or denied store",
+                        "non-KV2 store",
+                        "mismatched or malformed readback",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner="generic mutable admin secret writes for integration credentials",
+                    new_owner="secrets.reference_store",
+                    verification="Immutable creator and generic mutation-denial tests.",
+                    cutover_gate="Talk setup calls only typed CAS0 creator; existing references stay readable.",
+                    fallback_retirement="No mutable writer fallback for Talk credential setup.",
+                ),
+                steward="platform security",
+                design_refs=("docs/designs/NEXTCLOUD_TALK_CREDENTIAL_SETUP.md",),
+                test_refs=("tests/test_nextcloud_talk_credential_setup.py",),
+            ),
         ),
         SOTService(
             name="secrets.deployment_readiness",
