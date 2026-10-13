@@ -381,11 +381,17 @@ starts at the effective lifecycle commit time, not at Ticket creation or the
 start of the SLA window.
 
 The linked cause becomes administratively resume-eligible only while the
-Ticket is `pending_confirmation` or `closed`. Resume uses a fingerprinted
-preview and remains a subscription-lifecycle command; changing the Ticket,
+effective Ticket is `pending_confirmation` or `closed`. When the cause points
+to an immutable merged source, the consequence resolver follows the complete
+`merged_into_ticket_id` chain and uses the final destination's lifecycle state.
+The original Ticket remains the cause evidence and is never reopened or
+rewritten. Missing destinations, merge cycles, or a customer-account mismatch
+at any hop fail closed and remain visible in the preview. Resume uses a
+fingerprinted preview containing every merge hop and remains a
+subscription-lifecycle command; changing the source, destination, chain,
 pause, billing anchor, or restriction evidence makes the preview stale. A
-reopened, disputed, or otherwise unresolved Ticket cannot be resumed through
-this path.
+reopened, disputed, or otherwise unresolved effective Ticket cannot be resumed
+through this path.
 
 ## Cutover and repair
 

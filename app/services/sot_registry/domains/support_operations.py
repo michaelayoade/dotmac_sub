@@ -1323,7 +1323,9 @@ DOMAIN = DomainSOT(
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "current Ticket status, customer link, and resolution state"
+                            "cause-linked Ticket identity and immutable merge relation; "
+                            "the complete same-account merged_into_ticket_id chain and "
+                            "final destination status determine effective resolution state"
                         ),
                     ),
                     AuthorityInput(
@@ -1383,10 +1385,11 @@ DOMAIN = DomainSOT(
                         "flush-only participants."
                     ),
                     locking=(
-                        "The Ticket, exact prior pause cause, and active service "
-                        "candidates are selected with row locks. Prepaid coverage "
-                        "is re-resolved from exact entitlement and applied-extension "
-                        "evidence after the subscription lock is held."
+                        "The cause-linked Ticket, every existing merge-chain Ticket, "
+                        "exact prior pause cause, and active service candidates are "
+                        "selected with row locks. Prepaid coverage is re-resolved from "
+                        "exact entitlement and applied-extension evidence after the "
+                        "subscription lock is held."
                     ),
                     idempotency=(
                         "The event, rule version, and step derive one stable pause-cause "
@@ -1445,6 +1448,7 @@ DOMAIN = DomainSOT(
                     mapping_owner="automation action adapter",
                     fail_closed_on=(
                         "missing Ticket or customer account link",
+                        "missing merge destination, merge cycle, or merge-chain customer mismatch",
                         "zero or multiple active linked services",
                         "conflicting replay evidence",
                         "missing, discontinuous, or anchor-inconsistent prepaid coverage",
@@ -1492,6 +1496,7 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_ticket_sla_service_automation.py",
                     "tests/test_subscription_pause_lifecycle.py",
+                    "tests/test_subscription_lifecycle_ui.py",
                     "tests/test_sla_assignment.py",
                     "tests/test_automation_ticket_assignment_drafts.py",
                     "tests/architecture/test_automation_runtime_boundary.py",
