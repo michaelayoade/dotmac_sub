@@ -77,9 +77,21 @@ The runtime caller inventory for the future one-writer switch is:
   `Invoices.create`, `Invoices.create_for_subscription`.
 - `billing_automation.run_invoice_cycle`,
   `billing_automation.generate_prorated_invoice`.
-- `crm_api.create_installation_invoice`.
+- The unique top-level `create_installation_invoice` helper used by
+  [`sales_orders.ensure_installation_invoice_for_sales_order`](../../app/services/sales_orders.py),
+  following the existing [Sales-to-Service owner chain](SALES_TO_SERVICE_LIFECYCLE_SOT.md).
 - `invoice_draft_authoring` proforma conversion.
 - `CreditNotes.create`, `CreditNotes.issue_with_evidence`.
+
+The architecture audit scans every service Python file, records every function
+definition with its lexical qualified name and occurrence, and compares the
+complete actual caller inventory with nine exact file/function pins plus the
+uniquely discovered top-level installation helper. Its diagnostics report the
+discovered path. N7's current file identity is evidenced by the canonical owner
+chain above and this dynamic audit; the tenth helper's filename affinity is not
+pinned. This limitation does not authorize a file move or claim completed
+retirement. Duplicate top-level definitions, including non-allocating duplicates,
+and class or nested substitutes cannot satisfy the unique helper identity.
 
 Future allocation must use stable document UUID identity minted before
 allocation, an explicit authoritative document reference date, and the owning
