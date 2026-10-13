@@ -62,6 +62,10 @@ instead of treating these labels as interchangeable.
 5. The customer receives a durable notification; network projection denies new
    sessions and disconnects current sessions after commit.
 6. At `pending_confirmation` or `closed`, an administrator previews resume.
+   If the cause-linked Ticket was merged, the preview preserves that source as
+   evidence and derives eligibility from the final same-account merge
+   destination. The complete chain is fingerprinted; missing targets, cycles,
+   and account mismatches fail closed.
 7. Confirmation rechecks the fingerprint, releases the cause, moves the
    billing anchor by the exact interval once, and restores access if eligible.
    For prepaid service, the same transaction creates one zero-value
