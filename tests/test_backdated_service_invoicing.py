@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.models.billing import (
     Invoice,
+    InvoiceDueDateBasis,
     InvoiceLine,
     InvoiceStatus,
     PaymentStatus,
@@ -53,6 +54,11 @@ from app.services.billing.payments import (
 )
 from app.services.owner_commands import CommandContext
 from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
+
+
+def _utc(value: datetime | None) -> datetime:
+    assert value is not None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _prepare_subscription(db_session, subscription) -> None:
@@ -151,8 +157,13 @@ def test_create_builds_linked_draft_and_historical_payment_consequence(
     assert invoice is not None
     assert line is not None
     assert invoice.status is InvoiceStatus.draft
-    assert invoice.billing_period_start == preview.period_start
-    assert invoice.billing_period_end == preview.period_end
+    assert _utc(invoice.billing_period_start) == preview.period_start
+    assert _utc(invoice.billing_period_end) == preview.period_end
+    assert invoice.issued_at is not None
+    assert invoice.due_at is not None
+    assert invoice.due_date_basis is InvoiceDueDateBasis.contract_terms
+    assert invoice.due_date_basis_ref == f"subscription:{subscription.id}"
+    assert invoice.due_date_policy_version == "billing-payment-terms-v1"
     assert line.subscription_id == subscription.id
     assert line.metadata_[MARKER_KEY] is True
     assert line.metadata_["payment_consequence"] == "historical_entitlement_only"
@@ -199,8 +210,8 @@ def test_create_builds_linked_draft_and_historical_payment_consequence(
         .one()
     )
 
-    assert entitlement.starts_at == preview.period_start
-    assert entitlement.ends_at == preview.period_end
+    assert _utc(entitlement.starts_at) == preview.period_start
+    assert _utc(entitlement.ends_at) == preview.period_end
     assert subscription.next_billing_at == original_anchor
 
     refund_request = PaymentRefundPreviewRequest(
@@ -385,8 +396,8 @@ def test_existing_matching_invoice_blocks_create_and_can_be_reconstructed(
     repaired_invoice = db_session.get(Invoice, result.invoice_id)
     repaired_line = db_session.get(InvoiceLine, line.id)
 
-    assert repaired_invoice.billing_period_start == preview.period_start
-    assert repaired_invoice.billing_period_end == preview.period_end
+    assert _utc(repaired_invoice.billing_period_start) == preview.period_start
+    assert _utc(repaired_invoice.billing_period_end) == preview.period_end
     assert repaired_line.subscription_id == subscription.id
     assert repaired_line.metadata_["reviewed_prepaid_sequence_ref"].startswith(
         RECONSTRUCTION_REF_PREFIX

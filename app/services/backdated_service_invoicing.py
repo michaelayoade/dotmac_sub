@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.billing import (
     Invoice,
+    InvoiceDueDateBasis,
     InvoiceLine,
     InvoiceStatus,
     ServiceEntitlement,
@@ -52,6 +53,7 @@ from app.services.billing.invoices import (
     ReviewedBackdatedServiceInvoiceLineDocument,
     ReviewedPrepaidInvoiceSequenceDocument,
 )
+from app.services.billing_settings import resolve_payment_due_days
 from app.services.common import round_money, to_decimal
 from app.services.customer_financial_position import get_customer_financial_position
 from app.services.domain_errors import DomainError
@@ -1104,6 +1106,8 @@ def execute_backdated_service_invoice(
             f"({command.query.starts_on.isoformat()} to {command.query.ends_on.isoformat()})"
         )
         if command.query.action is BackdatedServiceInvoiceAction.create:
+            draft_issued_at = datetime.now(UTC)
+            due_days = resolve_payment_due_days(db, subscriber=locked_account)
             try:
                 invoice = Invoices.stage_system_invoice_for_owner(
                     db,
@@ -1113,6 +1117,13 @@ def execute_backdated_service_invoice(
                         currency=current.currency,
                         billing_period_start=current.period_start,
                         billing_period_end=current.period_end,
+                        issued_at=draft_issued_at,
+                        due_at=draft_issued_at + timedelta(days=due_days),
+                        due_date_basis=InvoiceDueDateBasis.contract_terms,
+                        due_date_basis_ref=(
+                            f"subscription:{command.query.subscription_id}"
+                        ),
+                        due_date_policy_version="billing-payment-terms-v1",
                         memo=(
                             "Reviewed invoice for previously consumed subscription service. "
                             "Issue only after verifying the previewed evidence."

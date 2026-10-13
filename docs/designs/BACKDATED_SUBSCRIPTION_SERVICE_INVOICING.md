@@ -66,6 +66,12 @@ draft. Issue revalidates the seal under lock and fails closed if any direct or
 unexpected mutation occurred. Draft creation itself does not create a second
 account charge.
 
+The draft records its preparation instant and the effective subscriber/global
+payment terms as typed due-date evidence (`contract_terms`, subscription source
+reference, and `billing-payment-terms-v1`) before sealing. Issuance therefore
+uses the reviewed due date without inventing or editing financial terms after
+the document was sealed.
+
 ## Reconstruction path
 
 Reconstruction accepts only an active, non-proforma draft, issued,
