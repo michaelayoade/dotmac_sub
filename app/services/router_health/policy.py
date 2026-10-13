@@ -358,6 +358,9 @@ class EffectiveRouterPolicy:
     suspension_portal_addresses: frozenset[str] = frozenset()
     suspension_exclusion_max_prefix_breadth: int = 24
     suspension_exclusion_max_entries: int = 50
+    ops_user: OpsUserPolicy | None = None
+    rest_user: RestUserPolicy | None = None
+    report_unrestricted_full_users: bool = True
     exceptions: tuple[ActiveException, ...] = ()
     annotations: dict[str, str] = field(default_factory=dict)
     lapsed: tuple[LapsedException, ...] = ()
@@ -530,6 +533,9 @@ def effective_policy(
             defaults.suspension_exclusion_max_prefix_breadth
         ),
         suspension_exclusion_max_entries=defaults.suspension_exclusion_max_entries,
+        ops_user=defaults.ops_user,
+        rest_user=defaults.rest_user,
+        report_unrestricted_full_users=defaults.report_unrestricted_full_users,
         exceptions=tuple(active),
         annotations=annotations,
         lapsed=tuple(lapsed),

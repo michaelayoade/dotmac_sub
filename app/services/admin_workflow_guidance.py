@@ -409,6 +409,40 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "router-health",
+        "Network and access",
+        "Read router health findings",
+        "NOC, network operations",
+        "Spot routers that need attention from the Health badge, then open a router to read what is wrong, why it matters and how to fix it.",
+        ("/admin/network/routers",),
+        "On the router list, read the Health column: it shows the most urgent open finding (Critical, High, Medium or Low), OK when nothing is open, or No data when Sub has neither a configuration snapshot nor a runtime poll for that router. Use the Health filter to list only one level.",
+        "A Shadow label means findings are visible here and in the alert console but do not send notifications yet; an owner switches this on through the audited router health alert mode setting.",
+        "Open a router and go to Health. Each finding shows its title, the impact, the evidence Sub observed, the fix, any known issue noted by policy, and when it was first and last seen. Open target takes you to the router or NAS the finding is about.",
+        "The page also shows the last configuration snapshot and the last runtime poll. A stale time is itself a finding, so check it before trusting a clear badge.",
+        "Findings come from stored configuration snapshots, the CoA service path, and a read-only status poll of the router. Fixing the router clears the finding on the next run; there is nothing to acknowledge here.",
+        notes=(
+            "The reconciler never changes a router. Every fix is a separate, human-approved router change.",
+            "Router health does not use the Status column, which is a separate inventory field.",
+            "Known exceptions (for example a retired BGP peer) live in the audited router health policy setting and expire on their date; an expired exception shows the finding again.",
+            "Evidence includes management addresses, so the detail needs the router:read permission.",
+        ),
+    ),
+    _guide(
+        "cross-app-drift",
+        "Network and access",
+        "Review cross-app drift and router posture",
+        "Operations, network operations",
+        "See where Sub and its sibling apps disagree on shared facts, and see the router posture summary beside it.",
+        ("/admin/drift",),
+        "Read the severity tiles first, then filter the findings table by status, severity, check, entity or owner.",
+        "Each drift finding names the condition, the entity, who owns the fix and the evidence; resolve the underlying disagreement at its owner and the finding closes on the next detection run.",
+        "Above the filters, Router posture counts open router health findings by priority. With the router:read permission it also lists the most urgent ones with their impact, evidence and fix; without it you see counts only.",
+        "Open a router from a posture finding to see every finding and the last snapshot and runtime poll times for that router.",
+        notes=(
+            "Router posture is read-only and separate from the drift table; router health findings are never written as drift findings.",
+        ),
+    ),
+    _guide(
         "olt-operational-health",
         "Network and access",
         "Interpret OLT operational health",
@@ -1527,6 +1561,25 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="network:fiber:read",
         ),
     ),
+    "router-health": (
+        _action(
+            "scan-router-health", "Scan router health", 0, 1, permission="router:read"
+        ),
+        _action(
+            "read-router-findings",
+            "Read a router's health findings",
+            2,
+            3,
+            permission="router:read",
+        ),
+        _action(
+            "know-fix-clears", "Know when a finding clears", 4, permission="router:read"
+        ),
+    ),
+    "cross-app-drift": (
+        _action("review-drift", "Review drift findings", 0, 1),
+        _action("review-router-posture", "Review router posture", 2, 3),
+    ),
     "olt-operational-health": (
         _action("compare-olts", "Compare OLT health", 0),
         _action("inspect-olt-evidence", "Inspect OLT evidence", 1, 2),
@@ -2385,6 +2438,8 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Network",
         (
             "network-access",
+            "router-health",
+            "cross-app-drift",
             "olt-operational-health",
             "ont-wifi-pppoe-actions",
             "cpe-detail-wifi-actions",

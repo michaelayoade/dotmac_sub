@@ -1,6 +1,8 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
 
+{% from "admin/network/routers/_health.html" import health_badge %}
+
 {% block title %}Routers - Admin{% endblock %}
 
 {% block content %}
@@ -82,9 +84,18 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="w-44">
+                <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Health</label>
+                <select name="health" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All health</option>
+                    {% for h in health_filters %}
+                    <option value="{{ h.value }}" {{ 'selected' if health_filter == h.value }}>{{ h.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div class="flex gap-2">
                 <button type="submit" class="inline-flex h-[38px] items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700">Filter</button>
-                {% if search or status_filter %}
+                {% if search or status_filter or health_filter %}
                 <a href="/admin/network/routers" class="inline-flex h-[38px] items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-700">Clear</a>
                 {% endif %}
             </div>
@@ -103,6 +114,7 @@
                     <th class="pb-3 pr-4 font-medium">IP</th>
                     <th class="pb-3 pr-4 font-medium">Version</th>
                     <th class="pb-3 pr-4 font-medium">Status</th>
+                    <th class="pb-3 pr-4 font-medium">Health{% if health_mode == 'shadow' %} <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600 dark:bg-slate-700 dark:text-slate-300" title="Findings are visible but do not notify yet">Shadow</span>{% endif %}</th>
                     <th class="pb-3 pr-4 font-medium">Access</th>
                     <th class="pb-3 pr-4 font-medium">Location</th>
                     <th class="pb-3 font-medium">Last Seen</th>
@@ -123,6 +135,10 @@
                         {% set status_colors = {'online': 'active', 'offline': 'neutral', 'degraded': 'warning', 'maintenance': 'neutral', 'unreachable': 'error'} %}
                         {{ status_badge(r.status.value | capitalize, status_colors.get(r.status.value, 'neutral'), pulse=(r.status.value == 'online'), size="sm") }}
                     </td>
+                    <td class="py-3 pr-4">
+                        {% set hb = health_badges.get(r.id) %}
+                        {% if hb %}<a href="/admin/network/routers/{{ r.id }}#health" data-health-badge="{{ hb.level }}">{{ health_badge(hb) }}</a>{% endif %}
+                    </td>
                     <td class="py-3 pr-4 text-slate-600 dark:text-slate-300">{{ r.access_method.value | replace('_', ' ') | capitalize }}</td>
                     <td class="py-3 pr-4 text-slate-600 dark:text-slate-300">{{ r.location or '—' }}</td>
                     <td class="py-3 text-slate-500 dark:text-slate-400 text-xs">{{ r.last_seen_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
@@ -140,12 +156,12 @@
         </p>
         <div class="flex items-center gap-2">
             {% if pagination.has_prev %}
-            <a href="?page={{ pagination.page - 1 }}&limit={{ pagination.limit }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+            <a href="?page={{ pagination.page - 1 }}&limit={{ pagination.limit }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if health_filter %}&health={{ health_filter }}{% endif %}"
                class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
             {% endif %}
             <span class="text-sm text-slate-600 dark:text-slate-400">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
             {% if pagination.has_next %}
-            <a href="?page={{ pagination.page + 1 }}&limit={{ pagination.limit }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+            <a href="?page={{ pagination.page + 1 }}&limit={{ pagination.limit }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if health_filter %}&health={{ health_filter }}{% endif %}"
                class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
             {% endif %}
         </div>
