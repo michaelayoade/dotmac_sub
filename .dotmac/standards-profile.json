@@ -38,6 +38,15 @@
   ],
   "typed_contract_surfaces": [
     {
+      "surface_id": "deployment-candidate-material-probe-adapter",
+      "paths": [
+        "scripts/setup/verify_candidate_materials.py"
+      ],
+      "require_public_annotations": true,
+      "forbid_any": true,
+      "require_immutable_records": true
+    },
+    {
       "surface_id": "source-of-truth-service-contracts",
       "paths": [
         "app/services/sot_manifest.py"

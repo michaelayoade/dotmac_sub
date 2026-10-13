@@ -50,7 +50,9 @@ DOMAIN = DomainSOT(
             notes=(
                 "Read-only early candidate gate. No secret provisioning, rotation, "
                 "credential writer or feature enablement. Operation-only absence "
-                "does not establish feature readiness; unavailable observations fail closed."
+                "does not establish feature readiness; unavailable observations fail closed. "
+                "scripts.setup.verify_candidate_materials is a names/status-only "
+                "Foundation wire adapter over these existing read-only owners."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -172,6 +174,7 @@ DOMAIN = DomainSOT(
                     "tests/test_deployment_secret_requirements.py",
                     "tests/test_deployment_secret_schema.py",
                     "tests/test_deployment_secret_readiness.py",
+                    "tests/test_candidate_material_probe.py",
                     "tests/integration/test_deployment_secret_requirements_pg.py",
                     "tests/integration/test_deployment_secret_schema_pg.py",
                 ),
