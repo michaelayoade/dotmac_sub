@@ -8,7 +8,10 @@ from unittest.mock import MagicMock, Mock
 from uuid import UUID
 
 import pytest
+from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import operators
+from sqlalchemy.sql.elements import BinaryExpression, BindParameter, ColumnClause
 
 from app.models.billing import (
     PaymentProviderEventFinancialEffect,
@@ -17,6 +20,7 @@ from app.models.billing import (
     PaymentSettlementOrigin,
     PaymentStatus,
 )
+from app.models.integration_platform import IntegrationInbox
 from app.services.billing import opening_export as owner
 from app.services.billing.opening_export_contracts import (
     BillingOpeningExportPreview,
@@ -36,6 +40,32 @@ ACCOUNT, PAYMENT, PROVIDER = UUID(int=1), UUID(int=2), UUID(int=3)
 QUERY = PreviewBillingOpeningExportQuery(
     "a" * 40, UUID(int=4), AT, (("NGN", 2),), "sub-billing-opening-census-v2"
 )
+
+
+def assert_safe_projection(projection: object) -> None:
+    """Allow named safe columns or exactly the three known receipt ID scalars."""
+    if isinstance(projection, ColumnClause):
+        assert isinstance(projection.name, str) and projection.name
+        assert projection.name not in {
+            "payload",
+            "payload_json",
+            "headers_json",
+            "consequence_json",
+            "error",
+            "error_detail",
+            "file_path",
+            "review_notes",
+        }
+        return
+    assert isinstance(projection, BinaryExpression), "Unknown projection expression"
+    assert projection.operator is operators.json_getitem_op
+    assert isinstance(projection.left, ColumnClause)
+    assert projection.left.table is IntegrationInbox.__table__
+    assert projection.left.name == "consequence_json"
+    assert projection.left.shares_lineage(IntegrationInbox.__table__.c.consequence_json)
+    assert isinstance(projection.right, BindParameter)
+    assert isinstance(projection.right.value, str)
+    assert projection.right.value in {"provider_event_id", "payment_id", "provider_id"}
 
 
 def report() -> BillingOpeningExportPreview:
@@ -321,16 +351,8 @@ def test_capture_reads_whole_populations_without_payloads_or_inner_join_loss() -
         sql = str(statement)
         assert " WHERE " not in sql and " JOIN " not in sql
         assert "ORDER BY" in sql
-        selected = {column.name for column in statement.selected_columns}
-        assert not selected & {
-            "payload",
-            "payload_json",
-            "headers_json",
-            "error",
-            "error_detail",
-            "file_path",
-            "review_notes",
-        }
+        for projection in statement.selected_columns:
+            assert_safe_projection(projection)
     assert result.qualified_payment_ids == ()
     db.flush.assert_not_called()
     db.commit.assert_not_called()
@@ -426,3 +448,49 @@ def test_cli_v2_cash_blockers_fail_readiness_even_with_empty_ar_population(
         output["capture"]["declared_source"]["population_version"]
         == QUERY.population_version
     )
+
+
+@pytest.mark.parametrize(
+    "projection",
+    [
+        IntegrationInbox.__table__.c.payload_json,
+        IntegrationInbox.__table__.c.headers_json,
+        IntegrationInbox.__table__.c.consequence_json,
+        IntegrationInbox.consequence_json["unsafe_private_key"].as_string(),
+        IntegrationInbox.headers_json["provider_event_id"].as_string(),
+        IntegrationInbox.__table__.alias("other")
+        .c.consequence_json["provider_event_id"]
+        .as_string(),
+        literal(1) + literal(2),
+        literal("provider_event_id"),
+    ],
+    ids=[
+        "payload",
+        "headers",
+        "whole-consequence",
+        "unsafe-key",
+        "wrong-column",
+        "aliased-source",
+        "arbitrary-binary",
+        "arbitrary-bind",
+    ],
+)
+def test_projection_privacy_checker_rejects_unsafe_or_unknown_expressions(
+    projection: object,
+) -> None:
+    with pytest.raises(AssertionError):
+        assert_safe_projection(projection)
+
+
+def test_projection_privacy_checker_accepts_named_columns_and_exact_consequence_ids() -> (
+    None
+):
+    projections = select(
+        IntegrationInbox.id,
+        IntegrationInbox.payload_digest,
+        IntegrationInbox.consequence_json["provider_event_id"].as_string(),
+        IntegrationInbox.consequence_json["payment_id"].as_string(),
+        IntegrationInbox.consequence_json["provider_id"].as_string(),
+    ).selected_columns
+    for projection in projections:
+        assert_safe_projection(projection)
