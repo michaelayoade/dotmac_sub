@@ -21,6 +21,90 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="financial.billing_numbering_readiness",
+        module="app.services.billing_numbering_readiness",
+        owns=("billing numbering complete-population seed readiness",),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.credit_notes",
+        ),
+        notes="Read-only census and digest-bound seed proposal; incumbent writers remain authoritative.",
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="billing numbering complete-population seed readiness",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "effective billing numbering settings",
+                        "complete invoice number population",
+                        "complete credit-note number population",
+                        "legacy and module sequence state",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="effective billing numbering settings",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="canonical invoice and credit-note prefix, padding and start settings",
+                ),
+                AuthorityInput(
+                    name="complete invoice number population",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="all Invoice identifiers and invoice_number values, regardless of lifecycle",
+                ),
+                AuthorityInput(
+                    name="complete credit-note number population",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="all CreditNote identifiers and credit_number values, regardless of lifecycle",
+                ),
+                AuthorityInput(
+                    name="legacy and module sequence state",
+                    owner="financial.billing_numbering_readiness",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="snapshot observation only: incumbent app.services.numbering owns DocumentSequence writes; released dotmac_numbering owns NumberSeries, SeriesCounter and AllocationReceipt storage; census owns no allocation authority",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Caller owns a read-only repeatable snapshot and session lifecycle; owner never completes a transaction.",
+                locking="No locks or writes. Future seed command must revalidate the complete digest under incumbent-writer exclusion.",
+                idempotency="No idempotency record. Same ordered population, configuration and counters yield the same versioned digest.",
+                retries="Retry the entire snapshot after transient read failure; incomplete or incompatible evidence cannot admit a seed.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.billing_numbering_readiness.unsupported_configuration",
+                    "financial.billing_numbering_readiness.incomplete_population",
+                ),
+                mapping_owner="standalone billing numbering readiness CLI",
+                fail_closed_on=(
+                    "incomplete census",
+                    "unsupported configuration or exhausted counter",
+                    "incompatible module state",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.billing_numbering_readiness",
+                verification="Full-population census, formatter round-trip, immutable digest, PostgreSQL snapshot and architecture canaries.",
+                cutover_gate="Native read-only resolver only. Future writer adoption has a separate contract and requires fresh digest and stable document UUID/date inputs.",
+                fallback_retirement="Incumbent runtime paths remain unchanged until the separate authorized numbering cutover.",
+            ),
+            steward="billing operations",
+            design_refs=("docs/designs/BILLING_NUMBERING_READINESS.md",),
+            test_refs=(
+                "tests/test_billing_numbering_readiness.py",
+                "tests/integration/test_billing_numbering_readiness.py",
+                "tests/architecture/test_billing_numbering_readiness_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.payment_gateway_finance",
         module="app.services.payment_gateway_finance",
         owns=(

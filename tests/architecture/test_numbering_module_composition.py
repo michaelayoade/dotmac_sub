@@ -21,7 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 RELEASE_REVISION = "4c282228b53405442effc4159f5db9d50446d335"
 READINESS_OWNER = "app/services/billing_numbering_readiness.py"
 READ_ONLY_IMPORTS = {
-    "dotmac_numbering.models": frozenset({"NumberSeries", "SeriesCounter"}),
+    "dotmac_numbering.models": frozenset(
+        {"AllocationReceipt", "NumberSeries", "SeriesCounter"}
+    ),
     "dotmac_numbering.service": frozenset(
         {
             "format_number",
@@ -180,7 +182,7 @@ def test_readiness_owner_may_import_only_released_pure_read_contracts(
     owner = tmp_path / READINESS_OWNER
     owner.parent.mkdir(parents=True)
     owner.write_text(
-        "from dotmac_numbering.models import NumberSeries, SeriesCounter\n"
+        "from dotmac_numbering.models import AllocationReceipt, NumberSeries, SeriesCounter\n"
         "from dotmac_numbering.service import (\n"
         "    format_number, period_for, SeriesConfiguration, MAX_DIGITS, MAX_VALUE\n"
         ")\n"
