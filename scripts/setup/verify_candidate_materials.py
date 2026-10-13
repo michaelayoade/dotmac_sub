@@ -181,7 +181,11 @@ def evaluate_probe(
             logging.disable(2**63 - 1)
             try:
                 checks = _boot_checks()
-                if checks and ProbeResult(checks).status is not ProbeStatus.READY:
+                if not checks:
+                    return ProbeResult(
+                        (ProbeCheck("probe.evaluation", ProbeStatus.UNAVAILABLE),)
+                    )
+                if ProbeResult(checks).status is not ProbeStatus.READY:
                     return ProbeResult(checks)
                 if scope is ProbeScope.APPLICATION:
                     checks += _requirement_checks(
@@ -191,10 +195,6 @@ def evaluate_probe(
                             candidate_revision=candidate_revision,
                             target_server=target_server,
                         )
-                    )
-                if not checks:
-                    return ProbeResult(
-                        (ProbeCheck("probe.evaluation", ProbeStatus.UNAVAILABLE),)
                     )
                 return ProbeResult(checks)
             except Exception:

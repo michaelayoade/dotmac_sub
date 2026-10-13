@@ -216,11 +216,17 @@ def test_cli_success_emits_one_document_and_restores_logging(
     assert logging.root.manager.disable == original
 
 
-def test_empty_inventory_never_emits_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("scope", tuple(probe.ProbeScope))
+def test_empty_inventory_never_emits_ready(
+    monkeypatch: pytest.MonkeyPatch, scope: probe.ProbeScope
+) -> None:
     monkeypatch.setattr(probe, "_boot_checks", lambda: ())
-    result = probe.evaluate_probe(
-        scope=probe.ProbeScope.BOOT, phase=probe.ProbePhase.PRE_MUTATION
+    monkeypatch.setattr(
+        probe,
+        "_application_requirements",
+        lambda **kwargs: pytest.fail("Empty boot inventory must stop before app reads"),
     )
+    result = probe.evaluate_probe(scope=scope, phase=probe.ProbePhase.PRE_MUTATION)
     assert result.checks
     assert result.status is probe.ProbeStatus.UNAVAILABLE
 
