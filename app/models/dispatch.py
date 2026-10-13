@@ -224,6 +224,10 @@ class WorkOrderAssignmentQueue(Base):
     __tablename__ = "work_order_assignment_queue"
     __table_args__ = (
         CheckConstraint(
+            "assigned_vendor_user_id IS NULL OR (assigned_vendor_id IS NOT NULL AND assigned_technician_id IS NULL)",
+            name="ck_work_order_selected_vendor_user",
+        ),
+        CheckConstraint(
             "status != 'assigned' OR ((assigned_technician_id IS NOT NULL AND assigned_vendor_id IS NULL) OR (assigned_technician_id IS NULL AND assigned_vendor_id IS NOT NULL))",
             name="ck_work_order_assignment_target",
         ),
@@ -250,6 +254,10 @@ class WorkOrderAssignmentQueue(Base):
     status: Mapped[str] = mapped_column(
         String(20), default=DispatchQueueStatus.queued, nullable=False
     )
+    assignment_generation: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    assignment_effective_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     reason: Mapped[str | None] = mapped_column(Text)
     dispatch_rule_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("dispatch_rules.id")
@@ -272,7 +280,11 @@ class WorkOrderAssignmentQueue(Base):
     work_order = relationship("WorkOrder")
     dispatch_rule = relationship("DispatchRule")
     assigned_technician = relationship("TechnicianProfile")
+    assigned_vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("field_vendor_users.id", ondelete="RESTRICT")
+    )
     assigned_vendor = relationship("Vendor")
+    assigned_vendor_user = relationship("FieldVendorUser")
 
     @property
     def crm_work_order_id(self) -> str:

@@ -35,6 +35,102 @@ void main() {
 
   tearDown(() => container.dispose());
 
+  for (final generation in <String?>[
+    null,
+    '36abc9bb-ffef-4453-bf98-497f61004836',
+  ]) {
+    test(
+      'assignJob preserves snapshot evidence for generation $generation',
+      () async {
+        final job = ManagerJob.fromJson({
+          'id': 'wo-1',
+          'revision': '2026-10-11T09:12:13.123456Z',
+          'assignment_generation': generation,
+        });
+        final command = ManagerJobAssignmentCommand.fromSnapshot(
+          job: job,
+          personId: 'person-1',
+        );
+        expect(
+          command.commandId,
+          matches(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+          ),
+        );
+        adapter.on('POST', '/api/v1/field/manager/jobs/wo-1/assign', (options) {
+          expect(options.data, {
+            'person_id': 'person-1',
+            'expected_revision': '2026-10-11T09:12:13.123456Z',
+            'expected_assignment_generation': generation,
+            'command_id': command.commandId,
+          });
+          return (200, {});
+        });
+        final repository = container.read(managerRepositoryProvider);
+        await repository.assignJob(command);
+        // Sending the same explicit command retains its receipt identity.
+        await repository.assignJob(command);
+        expect(adapter.requests, hasLength(2));
+        expect(
+          ManagerJobAssignmentCommand.fromSnapshot(
+            job: job,
+            personId: 'person-1',
+          ).commandId,
+          isNot(command.commandId),
+        );
+      },
+    );
+  }
+
+  test(
+    'assignment without a valid server revision fails before any request',
+    () {
+      for (final revision in <String?>[null, 'invalid']) {
+        final job = ManagerJob.fromJson({'id': 'wo-1', 'revision': revision});
+        expect(
+          () => ManagerJobAssignmentCommand.fromSnapshot(
+            job: job,
+            personId: 'person-1',
+          ),
+          throwsA(isA<ManagerAssignmentSnapshotUnavailable>()),
+        );
+      }
+      expect(adapter.requests, isEmpty);
+    },
+  );
+
+  test(
+    'stale assignment surfaces conflict without retrying or changing evidence',
+    () async {
+      final command = ManagerJobAssignmentCommand.fromSnapshot(
+        job: ManagerJob.fromJson({
+          'id': 'wo-1',
+          'revision': '2026-10-11T09:12:13.123456Z',
+          'assignment_generation': '36abc9bb-ffef-4453-bf98-497f61004836',
+        }),
+        personId: 'person-1',
+      );
+      adapter.on('POST', '/api/v1/field/manager/jobs/wo-1/assign', (options) {
+        return (409, {'detail': 'Work order changed; reload before assigning'});
+      });
+      await expectLater(
+        container.read(managerRepositoryProvider).assignJob(command),
+        throwsA(
+          isA<DioException>().having(
+            (error) => error.response?.statusCode,
+            'status',
+            409,
+          ),
+        ),
+      );
+      expect(adapter.requests, hasLength(1));
+      expect(
+        (adapter.requests.single.data as Map)['command_id'],
+        command.commandId,
+      );
+    },
+  );
+
   test('unassignJob sends the assignment queue transition', () async {
     adapter.on('POST', '/api/v1/field/manager/assignments/queue-1/unassign', (
       options,
@@ -109,6 +205,8 @@ void main() {
               'status': 'dispatched',
               'priority': 'high',
               'work_type': 'install',
+              'revision': '2026-10-11T09:12:13.123456Z',
+              'assignment_generation': '36abc9bb-ffef-4453-bf98-497f61004836',
               'assigned_to_label': 'Ada Technician',
               'subscriber_label': 'Amina Bello (SUB-42)',
               'address_text': '14 Garki Road, Abuja',
@@ -126,6 +224,14 @@ void main() {
 
     expect(jobs, hasLength(1));
     expect(jobs.single.id, 'wo-dispatch-1');
+    expect(
+      jobs.single.revision,
+      DateTime.utc(2026, 10, 11, 9, 12, 13, 123, 456),
+    );
+    expect(
+      jobs.single.assignmentGeneration,
+      '36abc9bb-ffef-4453-bf98-497f61004836',
+    );
     expect(
       jobs.single.description,
       'Replace the drop cable and commission the ONT.',

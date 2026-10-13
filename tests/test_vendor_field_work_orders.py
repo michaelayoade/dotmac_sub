@@ -59,7 +59,11 @@ def _vendor(db: Session) -> tuple[SystemUser, FieldVendorUser, Vendor]:
 
 
 def _job(
-    db: Session, vendor: Vendor, *, metadata: dict[str, str] | None = None
+    db: Session,
+    vendor: Vendor,
+    member: FieldVendorUser,
+    *,
+    metadata: dict[str, str] | None = None,
 ) -> WorkOrder:
     job = WorkOrder(
         public_id=f"wo-{uuid4()}",
@@ -72,7 +76,10 @@ def _job(
     db.flush()
     db.add(
         WorkOrderAssignmentQueue(
-            work_order_mirror_id=job.id, assigned_vendor_id=vendor.id, status="assigned"
+            work_order_mirror_id=job.id,
+            assigned_vendor_id=vendor.id,
+            assigned_vendor_user_id=member.id,
+            status="assigned",
         )
     )
     db.flush()
@@ -90,11 +97,12 @@ def _context(user: SystemUser) -> CommandContext:
 
 def test_vendor_reads_native_assignment_without_technician(db_session: Session) -> None:
     user, membership, native = _vendor(db_session)
-    other_user, _, other_native = _vendor(db_session)
-    job = _job(db_session, native)
+    other_user, other_membership, other_native = _vendor(db_session)
+    job = _job(db_session, native, membership)
     hidden = _job(
         db_session,
         other_native,
+        other_membership,
         metadata={"assigned_vendor_id": str(membership.vendor_id)},
     )
     db_session.commit()
@@ -123,7 +131,7 @@ def test_vendor_reads_native_assignment_without_technician(db_session: Session) 
 def test_vendor_with_stale_technician_never_gets_staff_scope(
     db_session: Session,
 ) -> None:
-    user, _, native = _vendor(db_session)
+    user, membership, native = _vendor(db_session)
     technician = TechnicianProfile(person_id=user.id, system_user_id=user.id)
     db_session.add(technician)
     db_session.flush()
@@ -140,7 +148,7 @@ def test_vendor_with_stale_technician_never_gets_staff_scope(
             status="assigned",
         )
     )
-    assigned = _job(db_session, native)
+    assigned = _job(db_session, native, membership)
     db_session.commit()
     assert [
         item.id for item in field_jobs.list(db_session, FieldJobsQuery(user.id))
@@ -173,7 +181,7 @@ def test_vendor_start_pause_resume_completion_and_scoped_replay(
     db_session: Session,
 ) -> None:
     user, membership, native = _vendor(db_session)
-    job = _job(db_session, native)
+    job = _job(db_session, native, membership)
     user_id, membership_id, public_id = user.id, membership.id, job.public_id
     context = _context(user)
     db_session.commit()
@@ -197,13 +205,14 @@ def test_vendor_start_pause_resume_completion_and_scoped_replay(
             db_session,
             replace(start, client_event_id=uuid4(), event=FieldEvent.complete),
         )
-    other_user, _, other_native = _vendor(db_session)
+    other_user, other_membership, other_native = _vendor(db_session)
     queue = (
         db_session.query(WorkOrderAssignmentQueue)
         .filter(WorkOrderAssignmentQueue.work_order_mirror_id == job.id)
         .one()
     )
     queue.assigned_vendor_id = other_native.id
+    queue.assigned_vendor_user_id = other_membership.id
     db_session.commit()
     with pytest.raises(FieldAccessError):
         field_transitions.apply(db_session, start)
@@ -214,7 +223,7 @@ def test_vendor_notes_and_manual_worklogs_use_explicit_actor(
     db_session: Session,
 ) -> None:
     user, membership, native = _vendor(db_session)
-    job = _job(db_session, native)
+    job = _job(db_session, native, membership)
     user_id, membership_id, public_id = user.id, membership.id, job.public_id
     context = _context(user)
     note = CreateFieldWorkOrderNote(
@@ -250,11 +259,11 @@ def test_vendor_notes_and_manual_worklogs_use_explicit_actor(
 
 
 def test_vendor_timers_are_isolated_by_authenticated_user(db_session: Session) -> None:
-    first, _, first_vendor = _vendor(db_session)
-    second, _, second_vendor = _vendor(db_session)
+    first, first_membership, first_vendor = _vendor(db_session)
+    second, second_membership, second_vendor = _vendor(db_session)
     first_job, second_job = (
-        _job(db_session, first_vendor),
-        _job(db_session, second_vendor),
+        _job(db_session, first_vendor, first_membership),
+        _job(db_session, second_vendor, second_membership),
     )
     first_id, second_id = first.id, second.id
     first_public, second_public = first_job.public_id, second_job.public_id
@@ -326,8 +335,8 @@ def test_vendor_evidence_create_retry_and_completion(
         return stored
 
     monkeypatch.setattr(file_uploads, "stage_upload", stage_upload)
-    user, _, native = _vendor(db_session)
-    job = _job(db_session, native)
+    user, membership, native = _vendor(db_session)
+    job = _job(db_session, native, membership)
     user_id, public_id = user.id, job.public_id
     context = _context(user)
     db_session.commit()

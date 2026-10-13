@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    FetchedValue,
     Float,
     ForeignKey,
     Index,
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 from app.models.catalog import HealthStatus
+from app.models.transaction_provenance import OuterTransactionId
 
 
 class DeviceRole(enum.Enum):
@@ -1098,6 +1100,9 @@ class OutageScopeRevision(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    creation_outer_xid: Mapped[str | None] = mapped_column(
+        OuterTransactionId(), nullable=True, server_default=FetchedValue()
+    )
 
 
 class OutageScopeRevisionMember(Base):
@@ -1264,6 +1269,9 @@ class OutageIncidentTicketLink(Base):
         String(20), nullable=False, default="native"
     )
     scope_revision_sequence: Mapped[int | None] = mapped_column(Integer)
+    creation_outer_xid: Mapped[str | None] = mapped_column(
+        OuterTransactionId(), nullable=True, server_default=FetchedValue()
+    )
 
 
 class OutageIncidentWorkOrderLink(Base):

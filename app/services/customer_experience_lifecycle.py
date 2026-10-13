@@ -8,7 +8,8 @@ work-order commands/field transitions, and support retain their own decisions.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
+from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy.orm import Session, selectinload
@@ -33,7 +34,18 @@ from app.schemas.portal import (
     ProjectStageState,
     WorkOrderItem,
 )
-from app.services.common import coerce_uuid
+from app.services.customer_field_job_chat import (
+    CustomerChatAvailability,
+    CustomerChatAvailabilityQuery,
+    CustomerChatAvailabilityReason,
+    chat_availability,
+)
+from app.services.customer_work_order_selfcare import (
+    TechnicianLocationQuery,
+    TechnicianRatingQuery,
+    rating_eligibility,
+    tracking_eligibility,
+)
 from app.services.field.work_order_status import WORK_ORDER_TERMINAL_VALUES
 from app.services.projects import (
     FIBER_INSTALLATION_STAGE_ORDER,
@@ -46,13 +58,42 @@ from app.services.status_presentation import (
     work_order_status_presentation,
 )
 
+
+@dataclass(frozen=True, slots=True)
+class CustomerLifecycleQuery:
+    subscriber_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerProjectQuery:
+    subscriber_id: UUID
+    project_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerWorkOrderQuery:
+    subscriber_id: UUID
+    work_order_public_id: str
+
+
 _PROJECT_INACTIVE = frozenset(
     {ProjectStatus.completed.value, ProjectStatus.canceled.value}
 )
 _TASK_DONE = frozenset({ProjectTaskStatus.done.value, ProjectTaskStatus.canceled.value})
 
 
-def ticket_actions(ticket: Any) -> list[CustomerSelfCareAction]:
+class CustomerTicketActionSubject(Protocol):
+    @property
+    def id(self) -> UUID: ...
+
+    @property
+    def status(self) -> str: ...
+
+    @property
+    def csat_rating(self) -> int | None: ...
+
+
+def ticket_actions(ticket: CustomerTicketActionSubject) -> list[CustomerSelfCareAction]:
     actions = [
         CustomerSelfCareAction(
             key=CustomerActionKey.view_ticket,
@@ -102,28 +143,13 @@ def ticket_reference(ticket: Ticket) -> CustomerTicketReference:
     )
 
 
-#: A visit whose technician may already be travelling. ``dispatched`` is the
-#: status an ``en_route`` departure sets, and the chat is opened by that same
-#: departure; the later statuses keep it reachable until the visit ends.
-_CHATTABLE_STATUSES = frozenset({"dispatched", "in_progress", "paused"})
-
-
 def _technician_rating(row: WorkOrder) -> int | None:
     return row.technician_rating
 
 
-def _has_job_chat(row: WorkOrder) -> bool:
-    """Whether this visit has a chat to open.
-
-    The chat starts at departure rather than at ``in_progress``, because a
-    wrong address is worth correcting while the technician is still driving.
-    Tracking stays narrower — the map only means something once the visit has
-    actually started.
-    """
-    return row.status in _CHATTABLE_STATUSES
-
-
-def _work_order_actions(row: WorkOrder) -> list[CustomerSelfCareAction]:
+def _work_order_actions(
+    row: WorkOrder, *, can_track: bool, can_rate: bool, chat: CustomerChatAvailability
+) -> list[CustomerSelfCareAction]:
     actions = [
         CustomerSelfCareAction(
             key=CustomerActionKey.view_work_order,
@@ -131,7 +157,7 @@ def _work_order_actions(row: WorkOrder) -> list[CustomerSelfCareAction]:
             api_path=f"/me/work-orders/{row.public_id}",
         )
     ]
-    if row.status == "in_progress":
+    if can_track:
         actions.append(
             CustomerSelfCareAction(
                 key=CustomerActionKey.track_technician,
@@ -139,15 +165,15 @@ def _work_order_actions(row: WorkOrder) -> list[CustomerSelfCareAction]:
                 api_path=f"/me/work-orders/{row.public_id}/technician-location",
             )
         )
-    if _has_job_chat(row):
+    if chat.available:
         actions.append(
             CustomerSelfCareAction(
                 key=CustomerActionKey.chat_technician,
-                label="Message technician",
+                label="Message technician" if chat.can_send else "View conversation",
                 api_path=f"/me/work-orders/{row.public_id}/chat",
             )
         )
-    if row.status == "completed" and _technician_rating(row) is None:
+    if can_rate:
         actions.append(
             CustomerSelfCareAction(
                 key=CustomerActionKey.rate_technician,
@@ -159,7 +185,22 @@ def _work_order_actions(row: WorkOrder) -> list[CustomerSelfCareAction]:
     return actions
 
 
-def work_order_reference(row: WorkOrder) -> CustomerWorkOrderReference:
+def work_order_reference(row: WorkOrder, *, db: Session) -> CustomerWorkOrderReference:
+    can_track = tracking_eligibility(
+        db, query=TechnicianLocationQuery(row.subscriber_id, row.public_id)
+    ).available
+    rating = rating_eligibility(
+        db, query=TechnicianRatingQuery(row.subscriber_id, row.public_id)
+    )
+    chat = (
+        chat_availability(
+            db, query=CustomerChatAvailabilityQuery(row.subscriber_id, row.public_id)
+        )
+        if row.subscriber_id
+        else CustomerChatAvailability(
+            False, False, CustomerChatAvailabilityReason.not_found
+        )
+    )
     return CustomerWorkOrderReference(
         id=row.id,
         public_id=row.public_id,
@@ -173,10 +214,12 @@ def work_order_reference(row: WorkOrder) -> CustomerWorkOrderReference:
         scheduled_end=row.scheduled_end,
         estimated_arrival_at=row.estimated_arrival_at,
         completed_at=row.completed_at,
-        technician_name=row.technician_name or row.assigned_to_name,
-        technician_phone=row.technician_phone,
+        technician_name=rating.technician.display_name if rating.technician else None,
+        technician_phone=rating.technician.phone if rating.technician else None,
         technician_rating=_technician_rating(row),
-        actions=_work_order_actions(row),
+        actions=_work_order_actions(
+            row, can_track=can_track, can_rate=rating.available, chat=chat
+        ),
     )
 
 
@@ -229,6 +272,7 @@ def _project_actions(project: Project) -> list[CustomerSelfCareAction]:
 
 def _project_item(
     project: Project,
+    db: Session,
     *,
     work_orders: list[WorkOrder],
     service_orders: list[ServiceOrder],
@@ -279,7 +323,9 @@ def _project_item(
                 status_presentation=project_task_status_presentation(task_status),
                 completed_at=task.completed_at if task else None,
                 ticket=ticket_reference(ticket) if ticket else None,
-                work_orders=[work_order_reference(row) for row in linked_work_orders],
+                work_orders=[
+                    work_order_reference(row, db=db) for row in linked_work_orders
+                ],
             )
         )
 
@@ -352,7 +398,7 @@ def _project_item(
         progress_pct=progress_pct,
         current_stage=None if completed else current_stage,
         stages=stages,
-        work_orders=[work_order_reference(row) for row in unscoped_work_orders],
+        work_orders=[work_order_reference(row, db=db) for row in unscoped_work_orders],
         related_tickets=[ticket_reference(ticket) for ticket in related_tickets],
         provisioning=provisioning,
         actions=_project_actions(project),
@@ -365,8 +411,12 @@ def _project_item(
     )
 
 
-def projects_for_subscriber(db: Session, subscriber_id: str) -> MyProjectsResponse:
-    subscriber_uuid = coerce_uuid(subscriber_id)
+def projects_for_subscriber(
+    db: Session, *, query: CustomerLifecycleQuery
+) -> MyProjectsResponse:
+    if query.subscriber_id is None:
+        return MyProjectsResponse(projects=[], total=0, active=0)
+    subscriber_uuid = query.subscriber_id
     projects = (
         db.query(Project)
         .options(selectinload(Project.tasks))
@@ -421,6 +471,7 @@ def projects_for_subscriber(db: Session, subscriber_id: str) -> MyProjectsRespon
     items = [
         _project_item(
             project,
+            db,
             work_orders=work_orders_by_project.get(project.id, []),
             service_orders=service_orders_by_project.get(project.id, []),
             tickets_by_id=tickets_by_id,
@@ -435,14 +486,22 @@ def projects_for_subscriber(db: Session, subscriber_id: str) -> MyProjectsRespon
 
 
 def project_for_subscriber(
-    db: Session, subscriber_id: str, project_id: UUID
+    db: Session, *, query: CustomerProjectQuery
 ) -> ProjectItem | None:
-    response = projects_for_subscriber(db, subscriber_id)
-    return next((item for item in response.projects if item.id == project_id), None)
+    response = projects_for_subscriber(
+        db, query=CustomerLifecycleQuery(query.subscriber_id)
+    )
+    return next(
+        (item for item in response.projects if item.id == query.project_id), None
+    )
 
 
-def work_orders_for_subscriber(db: Session, subscriber_id: str) -> MyWorkOrdersResponse:
-    subscriber_uuid = coerce_uuid(subscriber_id)
+def work_orders_for_subscriber(
+    db: Session, *, query: CustomerLifecycleQuery
+) -> MyWorkOrdersResponse:
+    if query.subscriber_id is None:
+        return MyWorkOrdersResponse(work_orders=[], total=0, upcoming=0)
+    subscriber_uuid = query.subscriber_id
     rows = (
         db.query(WorkOrder)
         .options(
@@ -457,7 +516,7 @@ def work_orders_for_subscriber(db: Session, subscriber_id: str) -> MyWorkOrdersR
     )
     items = [
         WorkOrderItem(
-            **work_order_reference(row).model_dump(),
+            **work_order_reference(row, db=db).model_dump(),
             work_type=row.work_type,
             priority=row.priority,
             address=row.address,
@@ -485,9 +544,16 @@ def work_orders_for_subscriber(db: Session, subscriber_id: str) -> MyWorkOrdersR
 
 
 def work_order_for_subscriber(
-    db: Session, subscriber_id: str, public_id: str
+    db: Session, *, query: CustomerWorkOrderQuery
 ) -> WorkOrderItem | None:
-    response = work_orders_for_subscriber(db, subscriber_id)
+    response = work_orders_for_subscriber(
+        db, query=CustomerLifecycleQuery(query.subscriber_id)
+    )
     return next(
-        (item for item in response.work_orders if item.public_id == public_id), None
+        (
+            item
+            for item in response.work_orders
+            if item.public_id == query.work_order_public_id
+        ),
+        None,
     )

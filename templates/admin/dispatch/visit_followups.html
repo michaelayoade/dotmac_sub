@@ -1,0 +1,65 @@
+{% extends "layouts/admin.html" %}
+{% block content %}
+<div class="mx-auto max-w-5xl space-y-6 p-6">
+<h1 class="text-2xl font-semibold">Failed visit followups</h1>
+<p>Assign an accountable team and due time for each exact failure. Revisit required remains pending issuance until a supervisor approves and links an exact replacement. This review does not book an appointment or issue a job.</p>
+<a class="underline" href="/admin/dispatch/visit-followups">Pending intake and open followups</a>
+{% if error %}<div role="alert" class="rounded border border-red-400 p-4">{{ error }}</div>{% endif %}
+{% if stale %}<dl>{% for key, value in submitted.items() %}<dt>{{ key | replace("_", " ") }}</dt><dd class="break-all">{{ value }}</dd>{% endfor %}</dl><p>Your original review inputs are retained. <a class="underline" href="{{ request.url.path }}">Reload current evidence and start a new intent</a>.</p>{% endif %}
+{% if not workspace %}
+<h2 class="text-xl font-semibold">Pending failure sources without responsibility</h2>
+{% for row in pending.rows %}<div class="rounded border p-4">
+<a class="underline" href="/admin/dispatch/work-orders/{{ row.work_order_public_id }}">{{ row.work_order_label }}</a>
+<p>{{ row.source.kind.value | replace('_', ' ') }} · {{ row.occurred_at }} · {{ row.failure_reason }}</p>
+<p class="text-sm">Exact source {{ row.source.source_id }}</p>
+{% if row.readiness.state.value == 'ready' %}<a class="underline" href="?source_kind={{ row.source.kind.value }}&source_id={{ row.source.source_id }}{% if selected_team %}&team_id={{ selected_team }}{% endif %}">Review this failure</a>{% else %}<p>Dispatch assignment permission is required to take responsibility.</p>{% endif %}
+</div>{% else %}<p>No pending failure sources on this page.</p>{% endfor %}
+{% if pending.next_work_order_id %}<a href="?after_source={{ pending.next_work_order_id }}">Next pending page</a>{% endif %}
+<h2 class="text-xl font-semibold">Accountable followups</h2>
+<a class="underline" href="?history=1">Include no revisit history</a>
+{% for row in queue.rows %}<div class="rounded border p-4"><a class="underline" href="/admin/dispatch/visit-followups/{{ row.obligation_id }}">{{ row.work_order_label }}</a>
+<p>{{ row.disposition.value | replace('_',' ') }} · {{ row.responsible_team_label }}{% if row.responsible_person_label %} / {{ row.responsible_person_label }}{% endif %} · Due {{ row.due_at }}</p>
+{% if row.disposition.value == 'revisit_required' %}<p>{{ 'Approved replacement linked' if row.replacement_decision_id else 'Pending approved replacement issuance/linkage' }}</p>{% endif %}</div>{% else %}<p>No accountable followups on this page.</p>{% endfor %}
+{% if queue.next_obligation_id %}<a href="?after_followup={{ queue.next_obligation_id }}{% if request.query_params.get("history") == "1" %}&amp;history=1{% endif %}">Next followup page</a>{% endif %}
+{% else %}
+<a class="underline" href="/admin/dispatch/work-orders/{{ workspace.work_order_public_id }}">Open failed work order</a>
+<p>Original immutable source: {{ workspace.source.kind.value }} {{ workspace.source.source_id }}</p>
+<h2 class="text-xl font-semibold">Review history</h2>
+{% for row in workspace.revisions %}<div class="rounded border p-4"><p>Revision {{ row.sequence }} · {{ row.disposition.value | replace('_',' ') }} · {{ row.decided_at }}</p>
+<p>{{ row.responsible_team_label }}{% if row.responsible_person_label %} / {{ row.responsible_person_label }}{% endif %} · Due {{ row.due_at }}</p><p>{{ row.reason }}</p>
+{% if row.replacement_decision_id %}<p>Exact approved replacement decision: {{ row.replacement_decision_id }}. Review its current scope in the completion workspace.</p>{% elif row.disposition.value == 'revisit_required' %}<p>Pending approved replacement issuance/linkage.</p>{% endif %}</div>{% endfor %}
+{% endif %}
+{% set source_kind = submitted.get('source_kind', request.query_params.get('source_kind', '')) %}
+{% set source_id = submitted.get('source_id', request.query_params.get('source_id', '')) %}
+{% if workspace or source_id %}
+<h2 class="text-xl font-semibold">{{ form_contract.title }}</h2>
+{% for consequence in form_contract.consequences %}<p>{{ consequence.label }}</p>{% endfor %}
+<form method="get" class="space-y-2">
+{% if source_id %}<input type="hidden" name="source_kind" value="{{ source_kind }}"><input type="hidden" name="source_id" value="{{ source_id }}">{% endif %}
+<label>Choose responsible team to load eligible staff<select name="team_id" required class="block rounded border p-2"><option value="">Select a team</option>{% for team in options.teams %}<option value="{{ team.team_id }}" {% if selected_team == team.team_id|string %}selected{% endif %}>{{ team.label }}</option>{% endfor %}</select></label><button class="rounded border p-2">Load team members</button></form>
+{% set current = workspace.revisions[0] if workspace else none %}
+{% if (workspace and workspace.readiness.state.value == 'ready') or (selected_source and selected_source.readiness.state.value == 'ready') %}
+<form method="post" class="space-y-4">
+<input type="hidden" name="_csrf_token" value="{{ csrf_token }}"><input type="hidden" name="intent_key" value="{{ intent_key }}">
+<input type="hidden" name="source_kind" value="{{ source_kind }}"><input type="hidden" name="source_id" value="{{ source_id }}">
+<input type="hidden" name="revision_id" value="{{ submitted.get('revision_id', current.revision_id if current else '') }}">
+<label>Responsible team<select name="team_id" required class="block rounded border p-2"><option value="">Select a team</option>{% for team in options.teams %}<option value="{{ team.team_id }}" {% if selected_team == team.team_id|string %}selected{% endif %}>{{ team.label }}</option>{% endfor %}</select></label>
+<label>Responsible person (optional)<select name="person_id" class="block rounded border p-2"><option value="">Team responsibility</option>{% for person in options.people %}<option value="{{ person.system_user_id }}" {% if submitted.get('person_id', current.responsible_system_user_id|string if current and current.responsible_system_user_id else '') == person.system_user_id|string %}selected{% endif %}>{{ person.label }}</option>{% endfor %}</select></label>
+<label>Due time including timezone<input class="block rounded border p-2" name="due_at" required placeholder="2026-10-12T09:00:00+01:00" value="{{ submitted.get('due_at', current.due_at.isoformat() if current else '') }}"></label>
+{% if workspace %}<label>Disposition<select name="disposition" class="block rounded border p-2">{% for value,label in [('triage','Triage'),('revisit_required','Revisit required — pending approved linkage'),('no_revisit','No revisit — reason required')] %}<option value="{{ value }}" {% if submitted.get('disposition', current.disposition.value) == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>{% endif %}
+<label>Review reason<textarea name="reason" required maxlength="4000" class="block w-full rounded border p-2">{{ submitted.get('reason', '') }}</textarea></label>
+{% if approved_link_page %}
+{% if approved_option %}<label>Current approved replacement<select name="replacement_decision_id" required class="block rounded border p-2"><option value="{{ approved_option.decision_id }}">{{ approved_option.work_order_public_id }} — {{ approved_option.work_order_title }} (approval {{ approved_option.generation }})</option></select></label>
+<input type="hidden" name="replacement_generation" value="{{ submitted.get('replacement_generation', approved_option.generation) }}">
+{% if submitted.get('replacement_decision_id') and submitted.get('replacement_decision_id') != approved_option.decision_id|string %}<p>Your original approved decision remains in the retained input above; reload to review the current choice.</p>{% endif %}
+<p>Select revisit required to record this exact approved scope linkage. No replacement job is issued here.</p>
+<button class="rounded border p-3" formaction="/admin/dispatch/visit-followups/{{ workspace.obligation_id }}/approved-replacement" {% if stale %}disabled{% endif %}>Record with approved replacement linkage</button>
+{% else %}<p>No current approved replacement is eligible for this exact failure. Review approved scope in the completion workspace.</p>{% endif %}
+{% else %}
+<button class="rounded border p-3" {% if stale %}disabled{% endif %}>Record followup review</button>
+{% if workspace and workspace.replacement_readiness.state.value == 'ready' %}<a class="underline" href="/admin/dispatch/visit-followups/{{ workspace.obligation_id }}/approved-replacement">Review current approved replacement linkage</a>{% endif %}
+{% endif %}
+</form>{% else %}<p>Current dispatch assignment permission is required to record a new revision. History remains available.</p>{% endif %}
+{% endif %}
+</div>
+{% endblock %}

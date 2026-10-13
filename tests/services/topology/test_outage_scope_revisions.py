@@ -9,7 +9,7 @@ trusting the mutable incident root.
 from __future__ import annotations
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
-from app.models.network_monitoring import NetworkDevice
+from app.models.network_monitoring import NetworkDevice, OutageScopeRevision
 from app.models.subscriber import Subscriber
 from app.services.bulk_actions import membership_scope_token
 from app.services.topology.outage import (
@@ -19,6 +19,7 @@ from app.services.topology.outage import (
     repoint_root,
     revision_audience_subscription_ids,
 )
+from app.services.topology.outage_complaint_contracts import RecordOutageScopeRevision
 
 
 def _nas_node_with_subs(db, offer_id, count, *, name="node-a", nas_name="NAS-A"):
@@ -84,14 +85,25 @@ def test_declare_appends_initial_revision_with_exact_audience(
     effective = first.effective_at
     if effective.tzinfo is None:
         effective = effective.replace(tzinfo=UTC)
-    assert effective == incident.started_at
+    started = incident.started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    assert effective == started
 
 
 def test_unchanged_scope_and_audience_appends_nothing(db_session, catalog_offer):
     _, node, _ = _nas_node_with_subs(db_session, catalog_offer.id, 2)
     incident = declare_outage(db_session, node=node)
 
-    assert record_scope_revision(db_session, incident, reason="confirmed") is None
+    assert (
+        record_scope_revision(
+            db_session,
+            command=RecordOutageScopeRevision(
+                incident_id=incident.id, reason="confirmed"
+            ),
+        )
+        is None
+    )
     assert len(list_scope_revisions(db_session, incident.id)) == 1
 
 
@@ -111,10 +123,16 @@ def test_audience_drift_appends_delta_revision(db_session, catalog_offer):
     db_session.add(joined)
     db_session.flush()
 
-    revision = record_scope_revision(db_session, incident, reason="audience_drift")
+    revision = record_scope_revision(
+        db_session,
+        command=RecordOutageScopeRevision(
+            incident_id=incident.id, reason="audience_drift"
+        ),
+    )
 
     assert revision is not None
     assert revision.sequence == 2
+    revision = db_session.get(OutageScopeRevision, revision.revision_id)
     assert revision.reason == "audience_drift"
     assert revision.entered_count == 1
     assert revision.left_count == 0
@@ -172,9 +190,22 @@ def test_history_is_append_only_and_monotonic(db_session, catalog_offer):
     # strictly monotonic and content-idempotent.
     subscriptions[0].status = SubscriptionStatus.suspended
     db_session.flush()
-    drifted = record_scope_revision(db_session, incident, reason="audience_drift")
+    drifted = record_scope_revision(
+        db_session,
+        command=RecordOutageScopeRevision(
+            incident_id=incident.id, reason="audience_drift"
+        ),
+    )
     assert drifted is not None and drifted.sequence == 2
-    assert record_scope_revision(db_session, incident, reason="audience_drift") is None
+    assert (
+        record_scope_revision(
+            db_session,
+            command=RecordOutageScopeRevision(
+                incident_id=incident.id, reason="audience_drift"
+            ),
+        )
+        is None
+    )
 
     revisions = list_scope_revisions(db_session, incident.id)
     assert [revision.sequence for revision in revisions] == [1, 2]

@@ -52,6 +52,7 @@ from app.models.team_inbox import (
     InboxSavedFilter,
     InboxTeamSource,
 )
+from app.models.work_order import WorkOrder
 from app.schemas.sales import (
     LeadCapturePartyCreate,
     LeadCaptureRequest,
@@ -85,6 +86,7 @@ from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.domain_errors import DomainError
+from app.services.events import EventType, emit_event
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -108,6 +110,11 @@ _ADMIN_MUTATION = OwnerCommandDefinition(
     owner=OWNER,
     concern="operator conversation and collaboration commands",
     name="execute_team_inbox_admin_mutation",
+)
+_FIELD_CUSTOMER_MESSAGE = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="customer field-job chat message commands",
+    name="record_field_job_customer_message",
 )
 _AI_OUTBOUND_REVALIDATION = OwnerCommandDefinition(
     owner=OWNER,
@@ -4014,39 +4021,140 @@ def email_transcript(
     return _commit(db, action)
 
 
+class FieldJobCustomerMessageReason(StrEnum):
+    not_found = "not_found"
+    closed = "closed"
+    invalid_request = "invalid_request"
+    idempotency_conflict = "idempotency_conflict"
+
+
+class FieldJobCustomerMessageError(InboxCommandError):
+    def __init__(self, reason: FieldJobCustomerMessageReason) -> None:
+        self.reason = reason
+        super().__init__(
+            "Visit conversation is unavailable for this request",
+            suffix="command_rejected",
+            details={"reason": reason.value},
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordFieldJobCustomerMessageCommand:
+    subscriber_id: UUID
+    work_order_public_id: str
+    body: str
+    context: CommandContext
+
+
 def record_field_job_customer_message(
     db: Session,
     *,
-    work_order_public_id: str,
-    body: str,
-    author_name: str | None = None,
-) -> dict:
-    """Commit one customer message on a job chat.
+    command: RecordFieldJobCustomerMessageCommand,
+) -> team_inbox_field_job.FieldJobCustomerMessageOutcome:
+    """Lock root then conversation; recheck customer scope and state inside owner."""
 
-    The portal adapter has already established that the caller owns the visit;
-    this is the family's commit boundary for that write, so the inbox owner
-    itself stays transaction-free.
-    """
-
-    def action() -> dict:
-        conversation = (
-            db.query(InboxConversation)
-            .filter(
-                InboxConversation.channel_type == team_inbox_field_job.FIELD_JOB_CHANNEL
+    def action() -> team_inbox_field_job.FieldJobCustomerMessageOutcome:
+        context = command.context
+        text = command.body.strip()
+        if (
+            context.actor != f"subscriber:{command.subscriber_id}"
+            or context.scope != "customer:field-job-chat:write"
+            or not context.reason.strip()
+            or not context.idempotency_key
+            or len(context.idempotency_key) > 120
+            or not text
+            or len(text) > 2000
+        ):
+            raise FieldJobCustomerMessageError(
+                FieldJobCustomerMessageReason.invalid_request
             )
-            .filter(InboxConversation.external_thread_id == work_order_public_id)
+        order = (
+            db.query(WorkOrder)
+            .filter(WorkOrder.public_id == command.work_order_public_id)
+            .with_for_update()
+            .populate_existing()
             .one_or_none()
         )
-        if conversation is None:
-            raise ConversationNotFoundError()
-        return team_inbox_field_job.record_customer_message(
+        if (
+            order is None
+            or order.subscriber_id != command.subscriber_id
+            or order.work_order_kind != "customer"
+            or not order.is_active
+        ):
+            raise FieldJobCustomerMessageError(FieldJobCustomerMessageReason.not_found)
+        conversation = team_inbox_field_job.conversation_for(db, order, for_update=True)
+        if conversation is None or conversation.subscriber_id != command.subscriber_id:
+            raise FieldJobCustomerMessageError(FieldJobCustomerMessageReason.not_found)
+        if not team_inbox_field_job.is_open(conversation):
+            raise FieldJobCustomerMessageError(FieldJobCustomerMessageReason.closed)
+        external_id = f"field-customer:{order.id}:{command.subscriber_id}:{context.idempotency_key}"
+        existing = (
+            db.query(InboxMessage)
+            .filter(
+                InboxMessage.channel_type == team_inbox_field_job.FIELD_JOB_CHANNEL,
+                InboxMessage.external_message_id == external_id,
+                InboxMessage.direction == InboxMessageDirection.inbound.value,
+            )
+            .one_or_none()
+        )
+        if existing is not None:
+            if existing.conversation_id != conversation.id or existing.body != text:
+                raise FieldJobCustomerMessageError(
+                    FieldJobCustomerMessageReason.idempotency_conflict
+                )
+            return team_inbox_field_job.customer_message_outcome(
+                existing, replayed=True
+            )
+        subscriber = db.get(Subscriber, command.subscriber_id)
+        if subscriber is None:
+            raise FieldJobCustomerMessageError(FieldJobCustomerMessageReason.not_found)
+        author_name = (
+            subscriber.company_name
+            or " ".join(
+                p for p in (subscriber.first_name, subscriber.last_name) if p
+            ).strip()
+            or subscriber.email
+            or subscriber.account_number
+        )
+        outcome = team_inbox_field_job.record_customer_message(
             db,
             conversation=conversation,
-            body=body,
+            body=text,
             author_name=author_name,
+            external_message_id=external_id,
         )
+        stage_audit_event(
+            db,
+            action="field_job.customer_message_created",
+            entity_type="inbox_message",
+            entity_id=str(outcome.message_id),
+            actor=AuditActor.user(str(command.subscriber_id)),
+            request_id=str(context.command_id),
+            metadata={
+                "work_order_id": str(order.id),
+                "conversation_id": str(conversation.id),
+                "correlation_id": str(context.correlation_id),
+            },
+        )
+        emit_event(
+            db,
+            EventType.field_job_customer_message_created,
+            {
+                "schema_version": 1,
+                "message_id": str(outcome.message_id),
+                "conversation_id": str(conversation.id),
+                "work_order_id": str(order.id),
+                "command_id": str(context.command_id),
+                "correlation_id": str(context.correlation_id),
+            },
+            actor=context.actor,
+            subscriber_id=command.subscriber_id,
+        )
+        return outcome
 
-    return _commit(db, action)
+    return _commit(
+        db, action, context=command.context, definition=_FIELD_CUSTOMER_MESSAGE
+    )
 
 
 def consume_snooze_wake(

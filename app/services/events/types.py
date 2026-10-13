@@ -20,6 +20,8 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
+    field_identity_changed = "field_identity.changed"
+
     customer_bulk_message_changed = "customer_bulk_message.changed"
 
     # Staff notification events
@@ -29,6 +31,8 @@ class EventType(enum.Enum):
     field_attachment_created = "field.attachment_created"
     field_attachment_deleted = "field.attachment_deleted"
     field_job_location_corrected = "field.job_location_corrected"
+    work_order_classified = "work_order.classified"
+    field_job_customer_message_created = "field_job.customer_message_created"
 
     authentication_sessions_revoked = "authentication_sessions.revoked"
 
@@ -342,6 +346,9 @@ class EventType(enum.Enum):
     sales_order_funding_satisfied = "sales_order.funding_satisfied"
     sales_order_fulfilled = "sales_order.fulfilled"
     project_created = "project.created"
+    field_completion_review_recorded = "field.completion_review_recorded"
+    project_work_order_issued = "project_work_order.issued"
+    project_engineering_plan_changed = "project_engineering_plan.changed"
     installation_scope_created = "installation_scope.created"
     implementation_released = "implementation.released"
     service_order_released = "service_order.released"
@@ -585,6 +592,8 @@ class EventType(enum.Enum):
     outage_rerooted = "outage.rerooted"
     outage_discarded = "outage.discarded"
     outage_resolved = "outage.resolved"
+    outage_complaint_reviewed = "outage.complaint_reviewed.v1"
+    outage_complaint_linked = "outage.complaint_linked.v1"
     outage_compensation_proposed = "outage_compensation.proposed"
     outage_compensation_approved = "outage_compensation.approved"
     time_credit_attested = "time_credit.attested"

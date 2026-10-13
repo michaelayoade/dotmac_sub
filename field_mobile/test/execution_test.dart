@@ -86,6 +86,36 @@ void main() {
   }
 
   group('transition outbox payloads', () {
+    test(
+      'queued transitions retain the assignment generation captured for each event',
+      () async {
+        final controller = container.read(executionControllerProvider.notifier);
+        await controller.transition(
+          'wo-1',
+          'en_route',
+          assignmentGeneration: '11111111-1111-4111-8111-111111111111',
+        );
+        await controller.transition(
+          'wo-1',
+          'arrived',
+          assignmentGeneration: '22222222-2222-4222-8222-222222222222',
+        );
+        final payloads = await queued('transition');
+        expect(
+          payloads.singleWhere(
+            (entry) => entry['event'] == 'en_route',
+          )['assignment_generation'],
+          '11111111-1111-4111-8111-111111111111',
+        );
+        expect(
+          payloads.singleWhere(
+            (entry) => entry['event'] == 'arrived',
+          )['assignment_generation'],
+          '22222222-2222-4222-8222-222222222222',
+        );
+      },
+    );
+
     test('carry client_event_id, GPS, and occurred_at', () async {
       final controller = container.read(executionControllerProvider.notifier);
       final clientEventId = await controller.transition('wo-1', 'start');

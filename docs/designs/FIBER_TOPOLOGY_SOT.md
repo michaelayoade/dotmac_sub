@@ -1450,10 +1450,16 @@ scope stored on a planned native work order, and
 `network.fiber_field_verification_jobs` owns write-free preview plus confirmed
 execution. A plan binds at most 100 explicitly selected current worklist rows,
 every staged/row/content/geometry hash, existing job context, the complete
-worklist report hash, explicit subscriber and schedule, optional technician,
-and a deterministic idempotent native job ID. Execute re-runs report and plan
-confirmation, then delegates create/assignment to
-`operations.work_order_commands` in one transaction with audit evidence.
+worklist report hash, explicit subscriber and schedule, optional technician or
+explicit active vendor and attending member, and a deterministic idempotent
+native job ID. Typed queries and outcomes preserve the exact selected person in
+the confirmation digest. The coordinator enters one owner-command transaction
+and establishes physical PostgreSQL repeatable read before authorization or any
+SQL. Execute re-runs report and plan confirmation, locks discovered principals
+before existing work orders, then delegates flush-only create and assignment to
+`operations.work_order_commands`. Audit, receipt, assignment and customer intents
+commit together. Exact receipt replay revalidates current admission and attending
+membership without rotating assignment generation or duplicating consequences.
 
 ## Approved numeric cutover-readiness policy
 

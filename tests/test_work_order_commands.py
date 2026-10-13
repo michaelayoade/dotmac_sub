@@ -18,6 +18,7 @@ from app.schemas.dispatch import (
 )
 from app.services import work_order_commands as work_order_command_module
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.work_order_assignment_contracts import (
     TechnicianAssignmentTarget,
     WorkOrderAssignmentCommand,
@@ -26,6 +27,23 @@ from app.services.work_order_assignment_contracts import (
 from app.services.work_order_commands import work_order_commands
 from app.services.work_order_errors import WorkOrderCommandError
 from tests.staff_identity_fixtures import add_bound_staff_user
+
+
+@pytest.fixture
+def dispatch_access(db_session) -> PermissionAdmission:
+    staff = SystemUser(
+        first_name="Synthetic",
+        last_name="Dispatcher",
+        email=f"{uuid4()}@example.invalid",
+        is_active=True,
+    )
+    db_session.add(staff)
+    db_session.flush()
+    result = PermissionAdmission(
+        staff.id, "system_user", frozenset({"operations:dispatch:assign"})
+    )
+    db_session.commit()
+    return result
 
 
 def _subscriber(db_session) -> Subscriber:
@@ -286,6 +304,7 @@ def test_project_task_can_own_multiple_field_visits(db_session):
 
 def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
     db_session,
+    dispatch_access,
 ):
     subscriber = _subscriber(db_session)
     technician = _technician(db_session)
@@ -300,7 +319,7 @@ def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
     )
     auth = {
         "principal_type": "system_user",
-        "principal_id": str(uuid4()),
+        "principal_id": str(dispatch_access.principal_id),
     }
 
     preview = work_order_commands.preview_assignment(
@@ -320,13 +339,14 @@ def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
     )
 
     command = WorkOrderAssignmentCommand(
+        access=dispatch_access,
         work_order_public_id=work_order.public_id,
         target=TechnicianAssignmentTarget(technician.id),
         reason="field_verification",
     )
     context = CommandContext.system(
         actor=auth["principal_id"],
-        scope="work_order:assignment",
+        scope="operations:dispatch:assign",
         reason="field verification",
     )
     db_session.commit()
@@ -334,6 +354,21 @@ def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
     replayed = work_order_commands.assign(db_session, command=command, context=context)
     assert replayed.queue_id == assigned.queue_id
     assert replayed.replayed
+    from app.models.notification import CommunicationIntentRecord
+
+    customer_intents = (
+        db_session.query(CommunicationIntentRecord)
+        .filter(
+            CommunicationIntentRecord.dedupe_key
+            == f"work-order-assignment:{context.command_id}"
+        )
+        .all()
+    )
+    assert len(customer_intents) == 1
+    assert customer_intents[0].metadata_["assignment_queue_id"] == str(
+        assigned.queue_id
+    )
+    assert customer_intents[0].metadata_["technician_name"] == "Ada Technician"
     db_session.refresh(work_order)
     assert work_order.status == "dispatched"
     assert work_order.assigned_to_name == "Ada Technician"
@@ -358,8 +393,11 @@ def test_assignment_preview_is_read_only_and_assignment_is_atomic_replay(
         db_session,
         str(assigned.queue_id),
         WorkOrderAssignmentQueueUpdate(status="skipped"),
+        access=dispatch_access,
         context=CommandContext.system(
-            actor=auth["principal_id"], scope="work_order:assignment", reason="skip"
+            actor=auth["principal_id"],
+            scope="operations:dispatch:assign",
+            reason="skip",
         ),
     )
     db_session.refresh(work_order)
@@ -443,3 +481,155 @@ def test_native_work_order_events_use_uuid_and_preserve_public_identity(
     for payload in emitted:
         assert UUID(payload["work_order_id"]) == work_order.id
         assert payload["work_order_public_id"] == work_order.public_id
+
+
+def test_assignment_intent_failure_rolls_back_assignment_and_intent(
+    db_session, monkeypatch, dispatch_access
+):
+    from sqlalchemy.orm import Session
+
+    from app.models.notification import CommunicationIntentRecord
+    from app.services import customer_experience_communications
+
+    subscriber = _subscriber(db_session)
+    technician = _technician(db_session)
+    visit = work_order_commands.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            subscriber_id=subscriber.id,
+            title="Atomic customer visit",
+            status="scheduled",
+        ),
+    )
+    public_id = visit.public_id
+    command = WorkOrderAssignmentCommand(
+        access=dispatch_access,
+        work_order_public_id=public_id,
+        target=TechnicianAssignmentTarget(technician.id),
+    )
+    original = customer_experience_communications.request_assignment_update
+
+    def fail_after_staging(
+        db: Session,
+        *,
+        request: customer_experience_communications.AssignmentCommunicationRequest,
+    ) -> None:
+        original(db, request=request)
+        raise RuntimeError("intent consequence failed")
+
+    monkeypatch.setattr(
+        customer_experience_communications,
+        "request_assignment_update",
+        fail_after_staging,
+    )
+    db_session.commit()
+    with pytest.raises(RuntimeError, match="intent consequence failed"):
+        work_order_commands.assign(
+            db_session,
+            command=command,
+            context=CommandContext.system(
+                actor=str(dispatch_access.principal_id),
+                scope="operations:dispatch:assign",
+                reason="assignment rollback",
+            ),
+        )
+    db_session.refresh(visit)
+    assert visit.status == "scheduled"
+    assert visit.technician_name is None
+    assert (
+        db_session.query(WorkOrderAssignmentQueue)
+        .filter(WorkOrderAssignmentQueue.work_order_mirror_id == visit.id)
+        .count()
+        == 0
+    )
+    assert db_session.query(CommunicationIntentRecord).count() == 0
+
+
+def test_explicit_same_technician_assignment_rotates_generation_but_reschedule_preserves(
+    db_session,
+    dispatch_access,
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.services.work_order_assignment_contracts import AssignmentOperation
+
+    subscriber = _subscriber(db_session)
+    technician = _technician(db_session)
+    visit = work_order_commands.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            subscriber_id=subscriber.id, title="Generation visit", status="scheduled"
+        ),
+    )
+    target = TechnicianAssignmentTarget(technician.id)
+    public_id = visit.public_id
+    db_session.commit()
+    first_command = WorkOrderAssignmentCommand(
+        access=dispatch_access, work_order_public_id=public_id, target=target
+    )
+    first_context = CommandContext.system(
+        actor=str(dispatch_access.principal_id),
+        scope="operations:dispatch:assign",
+        reason="assign",
+    )
+    first = work_order_commands.assign(
+        db_session, command=first_command, context=first_context
+    )
+    second = work_order_commands.assign(
+        db_session,
+        command=first_command,
+        context=CommandContext.system(
+            actor=str(dispatch_access.principal_id),
+            scope="operations:dispatch:assign",
+            reason="reassign",
+        ),
+    )
+    assert first.assignment_generation is not None
+    assert second.assignment_generation is not None
+    assert first.assignment_generation != second.assignment_generation
+    replay = work_order_commands.assign(
+        db_session, command=first_command, context=first_context
+    )
+    assert replay.replayed
+    assert replay.assignment_generation == first.assignment_generation
+    scheduled = work_order_commands.assign(
+        db_session,
+        command=WorkOrderAssignmentCommand(
+            access=dispatch_access,
+            work_order_public_id=public_id,
+            target=target,
+            operation=AssignmentOperation.reschedule,
+            scheduled_start=datetime.now(UTC) + timedelta(days=1),
+        ),
+        context=CommandContext.system(
+            actor=str(dispatch_access.principal_id),
+            scope="operations:dispatch:assign",
+            reason="reschedule",
+        ),
+    )
+    assert scheduled.assignment_generation == second.assignment_generation
+
+
+def test_native_snapshot_uses_frozen_canonical_full_header(db_session):
+    from pydantic import ValidationError
+
+    subscriber = _subscriber(db_session)
+    created = work_order_commands.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            subscriber_id=subscriber.id,
+            title="Typed snapshot",
+            status="scheduled",
+            metadata={"source_ref": "synthetic"},
+        ),
+    )
+    snapshot = work_order_commands.native_work_order_snapshot(
+        db_session, work_order_id=created.id
+    )
+    assert snapshot.id == created.id
+    assert snapshot.public_id == created.public_id
+    assert snapshot.subscriber_id == subscriber.id
+    assert snapshot.created_at and snapshot.updated_at
+    assert snapshot.metadata_["source_ref"] == "synthetic"
+    with pytest.raises(ValidationError):
+        snapshot.title = "Mutated projection"

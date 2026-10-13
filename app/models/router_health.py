@@ -88,7 +88,9 @@ class RouterHealthSignal(Base):
     last_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     #: Short enum-like text (a failure class), never raw router output.
     last_text: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    samples: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    samples: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list, server_default="[]"
+    )
     first_abnormal_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -99,7 +101,7 @@ class RouterHealthSignal(Base):
         DateTime(timezone=True), nullable=False
     )
     consecutive_abnormal: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
+        Integer, nullable=False, default=0, server_default="0"
     )
     boot_marker: Mapped[str | None] = mapped_column(String(40), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -143,5 +145,7 @@ class NasCoaOutcomeBucket(Base):
     bucket_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     last_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

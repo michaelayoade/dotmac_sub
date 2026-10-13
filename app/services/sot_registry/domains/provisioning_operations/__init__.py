@@ -17,17 +17,44 @@ from app.services.automation_contracts import (
 from app.services.sot_registry.domains.provisioning_operations.core import (
     SERVICES as CORE_SERVICES,
 )
+from app.services.sot_registry.domains.provisioning_operations.field_completion_projection import (
+    SERVICES as COMPLETION_PROJECTION_SERVICES,
+)
 from app.services.sot_registry.domains.provisioning_operations.field_execution import (
     ASSIGNMENT_RECORDS,
 )
 from app.services.sot_registry.domains.provisioning_operations.field_execution import (
     SERVICES as FIELD_EXECUTION_SERVICES,
 )
+from app.services.sot_registry.domains.provisioning_operations.field_identity import (
+    SERVICES as FIELD_IDENTITY_SERVICES,
+)
+from app.services.sot_registry.domains.provisioning_operations.project_engineering_plans import (
+    SERVICES as PROJECT_ENGINEERING_SERVICES,
+)
+from app.services.sot_registry.domains.provisioning_operations.project_engineering_projection import (
+    SERVICES as PROJECT_ENGINEERING_PROJECTION_SERVICES,
+)
+from app.services.sot_registry.domains.provisioning_operations.project_field_completion import (
+    SERVICES as PROJECT_FIELD_COMPLETION_SERVICES,
+)
+from app.services.sot_registry.domains.provisioning_operations.project_field_completion import (
+    with_project_field_completion,
+)
+from app.services.sot_registry.domains.provisioning_operations.project_work_order_handoff import (
+    SERVICES as PROJECT_HANDOFF_SERVICES,
+)
 from app.services.sot_registry.domains.provisioning_operations.vendor_delivery import (
     SERVICES as VENDOR_DELIVERY_SERVICES,
 )
 from app.services.sot_registry.domains.provisioning_operations.vendor_identity import (
     SERVICES as VENDOR_IDENTITY_SERVICES,
+)
+from app.services.sot_registry.domains.provisioning_operations.visit_followup import (
+    SERVICES as VISIT_FOLLOWUP_SERVICES,
+)
+from app.services.sot_registry.domains.provisioning_operations.work_order_templates import (
+    SERVICES as WORK_ORDER_TEMPLATE_SERVICES,
 )
 from app.services.sot_registry.model import DomainSOT
 
@@ -131,8 +158,16 @@ DOMAIN = DomainSOT(
         "field",
     ),
     services=(
-        *CORE_SERVICES,
+        *(with_project_field_completion(service) for service in CORE_SERVICES),
+        *PROJECT_FIELD_COMPLETION_SERVICES,
+        *PROJECT_ENGINEERING_SERVICES,
+        *PROJECT_ENGINEERING_PROJECTION_SERVICES,
+        *COMPLETION_PROJECTION_SERVICES,
+        *PROJECT_HANDOFF_SERVICES,
+        *VISIT_FOLLOWUP_SERVICES,
         *FIELD_EXECUTION_SERVICES,
+        *FIELD_IDENTITY_SERVICES,
+        *WORK_ORDER_TEMPLATE_SERVICES,
         ASSIGNMENT_RECORDS,
         *VENDOR_IDENTITY_SERVICES,
         *VENDOR_DELIVERY_SERVICES,

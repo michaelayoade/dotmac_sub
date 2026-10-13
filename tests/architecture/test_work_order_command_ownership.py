@@ -87,8 +87,31 @@ def test_assignment_readers_ignore_non_assigned_queue_rows():
     for relative_path in (
         "field/jobs.py",
         "field/manager.py",
-        "customer_work_order_selfcare.py",
         "workqueue/providers/work_orders.py",
     ):
         source = source_text(SERVICES / relative_path)
         assert "DispatchQueueStatus.assigned" in source
+
+    # Native customer tracking and tagged ingest delegate assignment selection
+    # to its typed owner rather than maintaining another queue-selection policy.
+    for relative_path in (
+        "customer_work_order_selfcare.py",
+        "field/location_tracking.py",
+    ):
+        calls = {
+            ast.unparse(node.func)
+            for node in ast.walk(python_ast(SERVICES / relative_path))
+            if isinstance(node, ast.Call)
+        }
+        assert "work_order_commands.current_assignment" in calls
+        assert "CurrentWorkOrderAssignmentQuery" in calls
+        assert "WorkOrderAssignmentQueue" not in source_text(SERVICES / relative_path)
+    owner_tree = python_ast(OWNER)
+    current_assignment = next(
+        node
+        for node in ast.walk(owner_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "current_assignment"
+    )
+    owner_query = ast.unparse(current_assignment)
+    assert "row.status != DispatchQueueStatus.assigned" in owner_query
+    assert "return None" in owner_query

@@ -1,5 +1,8 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
+import '../core/api_exception.dart';
 import '../core/http.dart';
 import '../models/page.dart';
 import '../models/ticket.dart';
@@ -13,6 +16,36 @@ class SupportRepository {
   SupportRepository(this.dio);
 
   final Dio dio;
+
+  /// Read private photo bytes through the authenticated, ticket-scoped owner.
+  Future<Uint8List> attachmentImage({
+    required String ticketId,
+    required String fileId,
+  }) async {
+    late final Response<List<int>> response;
+    try {
+      response = await dio.get<List<int>>(
+        '/me/support/tickets/${Uri.encodeComponent(ticketId)}/attachments/${Uri.encodeComponent(fileId)}',
+        options: Options(
+          responseType: ResponseType.bytes,
+          followRedirects: false,
+          extra: {'requireFresh': true},
+        ),
+      );
+    } on DioException catch (error) {
+      throw ApiException.fromDio(error);
+    }
+    final bytes = response.data;
+    final type = response.headers.value(Headers.contentTypeHeader) ?? '';
+    if ((response.statusCode ?? 0) != 200 ||
+        !type.toLowerCase().startsWith('image/') ||
+        bytes == null ||
+        bytes.isEmpty ||
+        bytes.length > 5 * 1024 * 1024) {
+      throw ApiException('This photo could not be loaded.');
+    }
+    return Uint8List.fromList(bytes);
+  }
 
   /// GET /me/support/tickets?status=&limit=&offset=
   Future<Page<Ticket>> tickets({

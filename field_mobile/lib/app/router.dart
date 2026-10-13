@@ -309,6 +309,7 @@ class _CompletionRoute extends ConsumerWidget {
         .when(
           data: (detail) => CompletionWizard(
             jobId: jobId,
+            assignmentGeneration: detail.job.assignmentGeneration,
             requirements: detail.completionRequirements,
             existingPhotoCount: detail.completionPhotoCount,
             hasExistingSignature: detail.hasCompletionSignature,
@@ -346,8 +347,8 @@ class _HomeSwitch extends ConsumerWidget {
   }
 }
 
-/// The Map tab shows vendors their vendor-scoped nearby plant; techs get the
-/// full technician map (job pins + editable assets).
+/// Vendors see only current assigned-job destinations; technicians use the
+/// technician map with job pins and editable assets.
 class _MapSwitch extends ConsumerWidget {
   const _MapSwitch({this.focusJobId});
 

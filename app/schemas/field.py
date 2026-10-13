@@ -83,6 +83,7 @@ class FieldJobSummary(BaseModel):
 
     id: str
     work_order_mirror_id: UUID
+    assignment_generation: UUID | None = None
     title: str
     description: str | None = None
     status: str
@@ -239,6 +240,7 @@ class FieldWorkLogSubmitResponse(BaseModel):
 
 
 class FieldJobEventRead(BaseModel):
+    assignment_generation: UUID | None = None
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -302,6 +304,7 @@ class FieldTransitionPayloadInput(BaseModel):
 
 
 class FieldTransitionRequest(BaseModel):
+    assignment_generation: UUID | None = None
     event: Literal[
         "accept",
         "en_route",
@@ -855,6 +858,7 @@ class FieldRouteResponse(BaseModel):
 
 
 class LocationPingInput(BaseModel):
+    assignment_generation: UUID | None = None
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     accuracy_m: float | None = Field(default=None, ge=0)
@@ -1520,6 +1524,7 @@ class TechnicianSatisfactionResponse(BaseModel):
 
 
 class FieldManagerJob(BaseModel):
+    assignment_generation: UUID | None = None
     id: str
     work_order_mirror_id: UUID
     assignment_queue_id: UUID | None = None
@@ -1543,6 +1548,8 @@ class FieldManagerJob(BaseModel):
 
 
 class FieldManagerJobAssignRequest(BaseModel):
+    vendor_user_id: UUID | None = None
+    expected_assignment_generation: UUID | None = None
     person_id: str | None = Field(default=None, min_length=1, max_length=64)
     vendor_id: UUID | None = None
     expected_revision: datetime | None = None

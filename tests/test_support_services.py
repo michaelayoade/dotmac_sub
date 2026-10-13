@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.models.admin_alert import AdminNotification
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -748,7 +749,9 @@ def test_resolution_confirmation_dispute_reopens_ticket(db_session, subscriber):
     assert confirmation["customer_dispute_reason"] == "Still offline"
 
 
-def test_auto_confirm_pending_closes_after_grace_window(db_session, subscriber):
+def test_auto_confirm_pending_closes_after_grace_window(
+    db_session: Session, subscriber: Subscriber, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
@@ -758,8 +761,12 @@ def test_auto_confirm_pending_closes_after_grace_window(db_session, subscriber):
         actor_id=str(subscriber.id),
         grace_hours=24,
     )
-    updated.resolved_at = datetime.now(UTC) - timedelta(hours=25)
-    db_session.add(updated)
+    future = datetime.now(UTC) + timedelta(hours=25)
+
+    def now() -> datetime:
+        return future
+
+    monkeypatch.setattr(support_service, "_now", now)
     db_session.commit()
 
     count = support_service.tickets.auto_confirm_pending(db_session)
@@ -803,7 +810,7 @@ def test_authenticated_selfcare_resolution_uses_same_confirmation_owner(
     )
 
     confirmed = support_service.tickets.respond_to_resolution_for_customer(
-        db_session, ticket, confirm=True
+        db_session, ticket, confirm=True, expected_subscriber_ids=(subscriber.id,)
     )
 
     assert confirmed.status == TicketStatus.closed.value
@@ -823,6 +830,7 @@ def test_authenticated_selfcare_dispute_reopens_with_reason(db_session, subscrib
         ticket,
         confirm=False,
         reason="Optical light is still red",
+        expected_subscriber_ids=(subscriber.id,),
     )
 
     assert reopened.status == TicketStatus.open.value
@@ -843,7 +851,7 @@ def test_authenticated_selfcare_rejects_expired_confirmation(db_session, subscri
 
     with pytest.raises(DomainError) as expired:
         support_service.tickets.respond_to_resolution_for_customer(
-            db_session, ticket, confirm=True
+            db_session, ticket, confirm=True, expected_subscriber_ids=(subscriber.id,)
         )
     assert expired.value.code == "resolution_confirmation_inactive"
 
@@ -867,13 +875,17 @@ def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
     assert exc.value.code == "resolution_confirmation_not_eligible"
 
 
-def test_resolution_confirmation_accepts_crm_provenance(db_session, subscriber):
+def test_resolution_confirmation_accepts_crm_provenance(
+    db_session: Session, subscriber: Subscriber
+) -> None:
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
     ticket.metadata_ = {"crm_ticket_id": str(uuid4())}
-    token_row = support_service.ticket_access_tokens.mint(db_session, ticket)
     db_session.commit()
+    _, token_row = support_service.tickets.request_resolution_confirmation(
+        db_session, str(ticket.id)
+    )
 
     confirmed = support_service.tickets.confirm_resolution(db_session, token_row)
     assert confirmed.status == TicketStatus.closed.value

@@ -421,6 +421,21 @@ from app.models.field_asset import (  # noqa: F401
 )
 from app.models.field_attachment import FieldAttachment  # noqa: F401
 from app.models.field_chat import FieldJobChatMessage  # noqa: F401
+from app.models.field_completion_review import (  # noqa: F401
+    CompletionCriteriaHead,
+    CompletionCriteriaRevision,
+    CompletionCriterion,
+    CompletionCriterionResult,
+    CompletionEnrollment,
+    CompletionEvidenceFile,
+    CompletionObservation,
+    CompletionReviewDecision,
+    CompletionReviewHead,
+    CompletionReviewPolicy,
+    CompletionReviewPolicyHead,
+    CompletionReviewReceipt,
+    CompletionSubmission,
+)
 from app.models.field_erp_sync import (  # noqa: F401
     FieldErpSyncEvent,
     FieldErpSyncFlow,
@@ -433,6 +448,10 @@ from app.models.field_expense import (  # noqa: F401
     FieldExpenseRequestItem,
 )
 from app.models.field_fiber import FieldFiberTestResult  # noqa: F401
+from app.models.field_identity import (  # noqa: F401
+    FieldIdentityReceipt,
+    FieldIdentityRevision,
+)
 from app.models.field_job_event import FieldJobEvent  # noqa: F401
 from app.models.field_location import (  # noqa: F401
     FieldTechLocationPing,
@@ -451,6 +470,11 @@ from app.models.field_vendor import (  # noqa: F401
     FieldVendor,
     FieldVendorDeviceToken,
     FieldVendorUser,
+)
+from app.models.field_visit_followup import (  # noqa: F401
+    FieldVisitFollowup,
+    FieldVisitFollowupReceipt,
+    FieldVisitFollowupRevision,
 )
 from app.models.field_worklog import FieldWorkLog  # noqa: F401
 from app.models.forwarding_topology import (  # noqa: F401
@@ -752,6 +776,9 @@ from app.models.organization import (  # noqa: F401
     OrganizationMembership,
     OrganizationMembershipRole,
 )
+from app.models.outage_complaint_correlation import (
+    OutageComplaintCorrelationReceipt,  # noqa: F401
+)
 from app.models.owner_output import (  # noqa: F401
     OwnerOutputReceipt,
     ReceiptOutcome,
@@ -838,6 +865,25 @@ from app.models.project import (  # noqa: F401
     ProjectTemplateTask,
     ProjectTemplateTaskDependency,
     ProjectType,
+)
+from app.models.project_engineering_plan import (  # noqa: F401
+    EngineeringPlanCriterion,
+    EngineeringPlanDecision,
+    EngineeringPlanReceipt,
+    EngineeringPlanRevision,
+    EngineeringPolicyHead,
+    EngineeringPolicyRevision,
+    ProjectEngineeringPlan,
+)
+from app.models.project_field_completion import (  # noqa: F401
+    ProjectFieldCompletionApplication,
+    ProjectFieldCompletionBasis,
+    ProjectFieldCompletionLineage,
+    ProjectFieldCompletionReceipt,
+    ProjectFieldCompletionRequirement,
+)
+from app.models.project_work_order_issuance import (
+    ProjectWorkOrderIssuance,  # noqa: F401
 )
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
@@ -1003,6 +1049,11 @@ from app.models.service_team import (  # noqa: F401
     ServiceTeamScopeType,
     ServiceTeamType,
 )
+from app.models.shared_outage_completion import (  # noqa: F401
+    CompletionReplacementOutageProof,
+    SupportResolutionSharedIncident,
+    SupportResolutionSharedWorkScope,
+)
 from app.models.sla import (  # noqa: F401
     SlaEligibilityInterval,
     SlaMonitoringInterval,
@@ -1020,6 +1071,7 @@ from app.models.snmp import (  # noqa: F401
 )
 from app.models.splynx_transaction import SplynxBillingTransaction  # noqa: F401
 from app.models.stored_file import StoredFile  # noqa: F401
+from app.models.stored_file_retention import StoredFileRetention  # noqa: F401
 from app.models.subscriber import (  # noqa: F401
     Address,
     AddressType,

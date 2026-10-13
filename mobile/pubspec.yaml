@@ -16,6 +16,7 @@ dependencies:
 
   # Networking
   dio: ^5.5.0
+  uuid: ^4.5.1
 
   # Live-chat realtime transport (CRM widget /ws/widget): instant messages,
   # "agent is typing", and "Seen" without poll lag.

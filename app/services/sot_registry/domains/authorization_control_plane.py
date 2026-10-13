@@ -197,6 +197,148 @@ CREDENTIAL_ADMINISTRATION_SERVICES = (
     ),
 )
 
+PERMISSION_MATCHING_OWNER = "auth.permission_key_matching"
+PERMISSION_MATCHING_CONCERN = "effective permission key vocabulary matching"
+PERMISSION_MATCHING_SERVICE = SOTService(
+    name=PERMISSION_MATCHING_OWNER,
+    module="app.services.permission_matching",
+    owns=(PERMISSION_MATCHING_CONCERN,),
+    contract=ServiceContract(
+        concerns=(
+            ConcernContract(
+                name=PERMISSION_MATCHING_CONCERN,
+                role=OwnerRole.POLICY,
+                input_names=("effective permission matching inputs",),
+            ),
+        ),
+        authoritative_inputs=(
+            AuthorityInput(
+                name="effective permission matching inputs",
+                owner=PERMISSION_MATCHING_OWNER,
+                kind=AuthorityKind.CONTROL_INPUT,
+                source="Typed effective grant set and required permission; checked-in exact aliases and wildcard vocabulary. This policy does not load or grant permissions.",
+            ),
+        ),
+        transaction=TransactionContract(
+            mode=TransactionMode.NOT_APPLICABLE,
+            boundary="Pure matching with no database or external effects.",
+            locking="None; immutable typed inputs.",
+            idempotency="Same inputs return the same boolean.",
+            retries="No retries; recompute after the grant owner refreshes effective grants.",
+        ),
+        errors=ErrorContract(
+            domain_codes=(),
+            mapping_owner="Calling authorization adapter",
+            fail_closed_on=("No matching exact, explicit alias, or wildcard grant",),
+        ),
+        migration=MigrationContract(
+            state=AuthorityMigrationState.NATIVE,
+            new_owner=PERMISSION_MATCHING_OWNER,
+            verification="Existing RBAC wildcard tests and typed identity wildcard-review regression tests.",
+            fallback_retirement="auth_dependencies reexports the original expansion helper; no parallel matching vocabulary remains there.",
+        ),
+        steward="identity and access",
+        design_refs=("docs/designs/FIELD_IDENTITY_REVIEW.md",),
+        test_refs=("tests/test_rbac_wildcard_perms.py", "tests/test_field_identity.py"),
+    ),
+)
+
+STAFF_ADMISSION_OWNER = "auth.staff_permission_admission"
+STAFF_ADMISSION_CONCERN = "fresh canonical active staff Person permission admission"
+STAFF_ADMISSION_SERVICE = SOTService(
+    name=STAFF_ADMISSION_OWNER,
+    module="app.services.staff_permission_admission",
+    owns=(STAFF_ADMISSION_CONCERN,),
+    depends_on=("auth.permission_gate", "auth.erp_staff_access"),
+    notes="Strict typed staff admission only. Delegates the gate-owned canonical RBAC calculator, then requires current active staff and canonical Person, native vendor exclusion and write leave eligibility. No route gate, generic permission policy, grants, denial audit or authentication mutation authority. Existing gate transport/audit debt remains outside this capability.",
+    contract=ServiceContract(
+        concerns=(
+            ConcernContract(
+                name=STAFF_ADMISSION_CONCERN,
+                role=OwnerRole.POLICY,
+                input_names=(
+                    "server permission admission",
+                    "canonical gate permission decision",
+                    "canonical staff Person binding",
+                    "canonical active Person",
+                    "native vendor membership",
+                    "current staff leave restriction",
+                ),
+            ),
+        ),
+        authoritative_inputs=(
+            AuthorityInput(
+                name="server permission admission",
+                owner="auth.permission_gate",
+                kind=AuthorityKind.CONTROL_INPUT,
+                source="Typed server-produced PermissionAdmission from the existing canonical HTTP gate; never deserialized from user input.",
+            ),
+            AuthorityInput(
+                name="canonical gate permission decision",
+                owner="auth.permission_gate",
+                kind=AuthorityKind.DERIVED_PROJECTION,
+                source="Typed PermissionPrincipal (native UUID/principal-kind enum/role and scope sets) passed to the gate-owned has_permission calculator. Current active Role and Permission rows and native staff role/direct grants are read fresh; exact aliases, wildcards and canonical admin semantics remain unchanged. The admission owner does not duplicate RBAC SQL or issue grants.",
+            ),
+            AuthorityInput(
+                name="canonical staff Person binding",
+                owner="auth.staff_provisioning",
+                kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                source="Current SystemUser activity, system_user classification and canonical person_party_id binding; native UUIDs, never guessed from CRM identifiers.",
+            ),
+            AuthorityInput(
+                name="canonical active Person",
+                owner="party.registry",
+                kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                source="Current Party row must be an active Person at the staff principal's exact canonical person_party_id; missing or inactive Person denies admission.",
+            ),
+            AuthorityInput(
+                name="native vendor membership",
+                owner="auth.vendor_user_provisioning",
+                kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                source="Any native FieldVendorUser membership for the authentication principal excludes it from strict staff admission, independently of staff RBAC grants.",
+            ),
+            AuthorityInput(
+                name="current staff leave restriction",
+                owner="auth.erp_staff_access",
+                kind=AuthorityKind.DERIVED_PROJECTION,
+                source="Typed active_leave_restriction query rechecks current effective ERP leave projection for write admission; read admission retains read-only access. Projection writes and denial audit remain with existing owners.",
+            ),
+        ),
+        transaction=TransactionContract(
+            mode=TransactionMode.READ_ONLY,
+            boundary="Read-only typed PermissionAdmission plus required permission/write mode to AuthorizedStaffPerson or stable domain refusal. Never completes caller transactions, writes grants, audits denials or mutates authentication state.",
+            locking="Fresh server reads at invocation. A command caller revalidates after domain lock waits and compares returned Person with its initially evaluated Person; the final check defines authorization linearization, not a long-lived grant.",
+            idempotency="No persisted state or receipts; repeat reads evaluate current canonical facts and may deny after revocation.",
+            retries="No internal retries or stale/cache fallback. Calling owner retries its whole command only for database concurrency failure.",
+        ),
+        errors=ErrorContract(
+            domain_codes=("auth.staff_permission_admission.denied",),
+            mapping_owner="Calling command owner or HTTP adapter; no FastAPI in strict admission",
+            fail_closed_on=(
+                "non-staff principal",
+                "missing exact server admission",
+                "inactive principal or Person",
+                "native vendor membership",
+                "revoked current permission",
+                "active staff leave write restriction",
+            ),
+        ),
+        migration=MigrationContract(
+            state=AuthorityMigrationState.NATIVE,
+            new_owner=STAFF_ADMISSION_OWNER,
+            verification="Typed boundary and fresh role/direct grant, wildcard, leave and caller post-lock revalidation unit tests.",
+            cutover_gate="Engineering commands and protected current resolver use only this strict staff capability; coordinator full gates remain required.",
+            fallback_retirement="No copied generic permission calculator, raw auth dictionary, Any result bag, route-gate migration, grant writer or new denial-audit path. Existing auth.permission_gate remains accurately in its legacy baseline.",
+        ),
+        steward="identity and access",
+        design_refs=("docs/designs/PROJECT_ENGINEERING_PLANS.md",),
+        test_refs=(
+            "tests/test_project_engineering_plans.py",
+            "tests/architecture/test_project_engineering_plan_boundary.py",
+            "tests/test_rbac_wildcard_perms.py",
+        ),
+    ),
+)
 
 DOMAIN = DomainSOT(
     domain="authorization_control_plane",
@@ -653,6 +795,8 @@ DOMAIN = DomainSOT(
             ),
         ),
         *CREDENTIAL_ADMINISTRATION_SERVICES,
+        PERMISSION_MATCHING_SERVICE,
+        STAFF_ADMISSION_SERVICE,
         SOTService(
             name="auth.credential_security_inventory",
             module="app.services.credential_security_inventory",
@@ -733,6 +877,7 @@ DOMAIN = DomainSOT(
             depends_on=(
                 "auth.rbac_catalog",
                 "auth.subscriber_assignments",
+                "auth.permission_key_matching",
             ),
         ),
         SOTService(
@@ -1027,6 +1172,11 @@ DOMAIN = DomainSOT(
                 "This is the only application and seed writer for roles, "
                 "permissions, and role_permissions. Catalog identities are "
                 "case-normalized and protected by functional unique indexes. "
+                "Permission identifiers have two or three letter-leading "
+                "segments separated by colons or dots; segment characters are "
+                "lowercase letters, numbers, underscores, and hyphens. The "
+                "exact global wildcard retains its existing special case; "
+                "identifier validation never grants access or creates aliases. "
                 "Permission-policy updates preserve an unchanged legacy role "
                 "name, while new and genuinely renamed roles must use the "
                 "canonical lowercase identifier syntax. "

@@ -635,7 +635,7 @@ def test_message_attribution_is_only_in_metadata_not_a_column():
     assert '"actor_id": str(actor_person_id)' in operations
 
 
-def test_the_audit_trail_covers_egress_and_ownership_crossings_only():
+def test_the_audit_trail_covers_egress_and_ownership_crossings_only() -> None:
     """Pins which operator actions are audited, so nobody assumes coverage.
 
     This gate previously asserted that ``team_inbox_commands`` staged *no*
@@ -644,7 +644,7 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only():
     row metadata, not the audit log, which is the limitation the gate above
     describes.
 
-    Seven actions are audited, for seven distinct reasons:
+    Eight actions are audited, for eight distinct reasons:
 
     - the conversation → ticket handoff, because it crosses an ownership line
       into ``support.ticket_lifecycle``;
@@ -661,20 +661,24 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only():
       relationship owner without changing the sender's identity.
     - editing an AI intake route, because it changes which team receives a
       classified customer conversation.
+    - an explicit customer field-job message, because the customer message owner
+      crosses into Team Inbox persistence with native WorkOrder/conversation
+      lineage and an audited customer actor; it is not an ordinary staff reply.
 
-    An eighth entry here should be a decision, not drift.
+    A ninth entry here should be a decision, not drift.
     """
     commands = Path("app/services/team_inbox_commands.py").read_text()
     handoff = Path("app/services/conversation_ticket_handoff.py").read_text()
 
     assert "stage_audit_event" in handoff
-    assert commands.count("stage_audit_event(") == 7
+    assert commands.count("stage_audit_event(") == 8
     assert 'action="reply_comment"' in commands
     assert 'action="ai_conversation_human_takeover"' in commands
     assert 'action="inbox_represented_customer_selected"' in commands
     assert 'action="inbox_represented_lead_selected"' in commands
     assert 'action="team_inbox.ai_route_updated"' in commands
     assert "TRANSCRIPT_AUDIT_ACTION" in commands
+    assert 'action="field_job.customer_message_created"' in commands
     for command in ("def apply_label(", "def update_status("):
         body = commands.split(command, 1)[1].split("\ndef ", 1)[0]
         assert "stage_audit_event" not in body, command

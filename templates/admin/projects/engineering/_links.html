@@ -1,0 +1,7 @@
+<nav aria-label="Infrastructure engineering" class="flex flex-wrap gap-4 text-sm">
+{% for technology in ['fiber', 'radio'] %}
+{% for label, suffix, permission in [('Engineering plans', '', 'project:engineering_plan:read'),('Approval policy', '/policy', 'project:engineering_plan:policy'),('Draft revision', '/draft', 'project:engineering_plan:write'),('Review revision', '/review', 'project:engineering_plan:approve'),('Revoke approval', '/revoke', 'project:engineering_plan:revoke'),('Issue infrastructure work', '/issuance', 'operations:dispatch:write')] %}
+{% if can(request, permission) %}<a class="text-cyan-700 underline dark:text-cyan-300" href="/admin/projects/{{ engineering_project_id }}/engineering{{ suffix }}?technology={{ technology }}{% if engineering_task_id and suffix != '/policy' %}&task_id={{ engineering_task_id }}{% endif %}">{{ technology|title }} {{ label|lower }}</a>{% endif %}
+{% endfor %}
+{% endfor %}
+</nav>

@@ -26,7 +26,25 @@ from app.schemas.dispatch import (
 )
 from app.services import dispatch
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.work_order_errors import WorkOrderCommandError
+
+
+@pytest.fixture
+def dispatch_access(db_session) -> PermissionAdmission:
+    staff = SystemUser(
+        first_name="Synthetic",
+        last_name="Dispatcher",
+        email=f"{uuid4()}@example.invalid",
+        is_active=True,
+    )
+    db_session.add(staff)
+    db_session.flush()
+    result = PermissionAdmission(
+        staff.id, "system_user", frozenset({"operations:dispatch:assign"})
+    )
+    db_session.commit()
+    return result
 
 
 def _system_user(db_session) -> SystemUser:
@@ -171,7 +189,9 @@ def test_shift_and_availability_validate_time_windows(db_session):
         ShiftCreate(technician_id=profile.id, start_at=start, end_at=start)
 
 
-def test_assignment_queue_resolves_crm_work_order_and_updates_status(db_session):
+def test_assignment_queue_resolves_crm_work_order_and_updates_status(
+    db_session, dispatch_access
+):
     user = _system_user(db_session)
     profile = dispatch.technician_profiles.create(
         db_session, TechnicianProfileCreate(system_user_id=user.id)
@@ -186,8 +206,11 @@ def test_assignment_queue_resolves_crm_work_order_and_updates_status(db_session)
             assigned_technician_id=profile.id,
             reason="Initial import",
         ),
+        access=dispatch_access,
         context=CommandContext.system(
-            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+            actor=str(dispatch_access.principal_id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
         ),
     )
     assert queued.work_order_mirror_id == work_order.id
@@ -197,8 +220,11 @@ def test_assignment_queue_resolves_crm_work_order_and_updates_status(db_session)
         db_session,
         str(queued.id),
         WorkOrderAssignmentQueueUpdate(status="assigned"),
+        access=dispatch_access,
         context=CommandContext.system(
-            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+            actor=str(dispatch_access.principal_id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
         ),
     )
     assert updated.status == "assigned"
@@ -207,7 +233,7 @@ def test_assignment_queue_resolves_crm_work_order_and_updates_status(db_session)
     )
 
 
-def test_native_work_order_header_create_update_and_queue(db_session):
+def test_native_work_order_header_create_update_and_queue(db_session, dispatch_access):
     user = _system_user(db_session)
     sub = _subscriber(db_session)
     profile = dispatch.technician_profiles.create(
@@ -255,8 +281,11 @@ def test_native_work_order_header_create_update_and_queue(db_session):
             assigned_technician_id=profile.id,
             status="assigned",
         ),
+        access=dispatch_access,
         context=CommandContext.system(
-            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+            actor=str(dispatch_access.principal_id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
         ),
     )
     assert queued.work_order_mirror_id == work_order.id
@@ -277,8 +306,11 @@ def test_native_work_order_header_create_update_and_queue(db_session):
             assigned_technician_id=profile.id,
             status="assigned",
         ),
+        access=dispatch_access,
         context=CommandContext.system(
-            actor="test", scope="operations:dispatch:assign", reason="test assignment"
+            actor=str(dispatch_access.principal_id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
         ),
     )
     assert replayed.id == queued.id
@@ -292,13 +324,14 @@ def test_native_work_order_header_create_update_and_queue(db_session):
     assert direct_assignment.value.status_code == 422
 
 
-def test_assignment_queue_rejects_unknown_work_order(db_session):
+def test_assignment_queue_rejects_unknown_work_order(db_session, dispatch_access):
     with pytest.raises(WorkOrderCommandError) as exc:
         dispatch.assignment_queue.create(
             db_session,
             WorkOrderAssignmentQueueCreate(crm_work_order_id="missing"),
+            access=dispatch_access,
             context=CommandContext.system(
-                actor="test",
+                actor=str(dispatch_access.principal_id),
                 scope="operations:dispatch:assign",
                 reason="test assignment",
             ),
@@ -324,3 +357,47 @@ def test_delete_marks_skill_and_profile_inactive(db_session):
         row.id for row in dispatch.technician_profiles.list(db_session)
     }
     assert db_session.get(TechnicianProfile, profile.id).is_active is False
+
+
+def test_typed_dispatch_permission_admission_retains_staff_leave_guard(
+    db_session, dispatch_access, monkeypatch
+):
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import Session
+    from starlette.requests import Request
+
+    from app.services import auth_dependencies
+
+    api = FastAPI()
+    api.dependency_overrides[auth_dependencies.require_user_auth] = lambda: {
+        "principal_id": str(dispatch_access.principal_id),
+        "principal_type": "system_user",
+        "roles": ["admin"],
+    }
+    api.dependency_overrides[auth_dependencies._get_db] = lambda: db_session
+
+    def refuse_leave(
+        *,
+        db: Session,
+        auth: dict[str, object],
+        request: Request | None,
+        permission_key: str,
+    ) -> None:
+        raise HTTPException(status_code=403, detail="Staff is on leave")
+
+    monkeypatch.setattr(
+        auth_dependencies, "_enforce_staff_leave_write_guard", refuse_leave
+    )
+
+    @api.post("/dispatch-proof")
+    def dispatch_proof(
+        access: PermissionAdmission = Depends(
+            auth_dependencies.require_permission_admission("operations:dispatch:assign")
+        ),
+    ):
+        return {"principal_id": str(access.principal_id)}
+
+    response = TestClient(api).post("/dispatch-proof")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Staff is on leave"

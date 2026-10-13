@@ -1,0 +1,23 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import card, detail_header %}
+{% block title %}Review assignment again - {{ work_order_id }}{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+{{ detail_header(title='Review assignment again', subtitle=work_order_id, back_href='/admin/dispatch/work-orders/' ~ work_order_id, color='cyan', color2='emerald') }}
+{% call card('Assignment could not be confirmed', color='cyan') %}
+<p role="alert" class="mb-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{{ error }}</p>
+<p class="mb-5 text-sm text-slate-600 dark:text-slate-300">Your selection and reason are kept. Reload the current assignment for a fresh review before confirming.</p>
+<form method="post" action="/admin/dispatch/work-orders/{{ work_order_id }}/queue" class="space-y-5">
+{% include "components/forms/csrf_input.html" %}
+<input type="hidden" name="target_selection" value="{{ selection.target_selection }}">
+{% if selection.vendor_user_id %}<input type="hidden" name="vendor_user_id" value="{{ selection.vendor_user_id }}">{% endif %}
+{% if selection.expected_revision %}<input type="hidden" name="expected_revision" value="{{ selection.expected_revision.isoformat() }}">{% endif %}
+{% if selection.expected_assignment_generation %}<input type="hidden" name="expected_assignment_generation" value="{{ selection.expected_assignment_generation }}">{% endif %}
+<input type="hidden" name="command_id" value="{{ command_id }}">
+<input type="hidden" name="reload_current" value="true">
+<label class="block text-sm font-semibold">Reason<textarea name="reason" maxlength="2000" rows="3" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 dark:bg-slate-900">{{ selection.reason or '' }}</textarea></label>
+<div class="flex flex-wrap gap-3"><button type="submit" class="rounded-xl bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white">Reload and review</button><a href="/admin/dispatch/work-orders/{{ work_order_id }}" class="rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-semibold">Back to work order</a></div>
+</form>
+{% endcall %}
+</div>
+{% endblock %}

@@ -81,6 +81,8 @@ class GeofenceQuery:
     system_user_id: uuid.UUID
     latitude: float
     longitude: float
+    work_order_public_id: str | None = None
+    assignment_generation: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,12 +101,26 @@ def evaluate(db: Session, query: GeofenceQuery) -> tuple[GeofenceTransition, ...
         db_session_adapter.release_read_transaction(db)
         return ()
     radius = arrival_radius_m(db)
-    candidates: list[tuple[str, float]] = []
+    candidates: list[tuple[str, float, uuid.UUID | None]] = []
     for row in (
         scoped_work_orders(db, actor)
         .filter(WorkOrder.status.in_(_ARRIVABLE_STATUSES))
         .all()
     ):
+        from app.services.work_order_assignment_contracts import (
+            CurrentWorkOrderAssignmentQuery,
+        )
+        from app.services.work_order_commands import work_order_commands
+
+        assignment = work_order_commands.current_assignment(
+            db, query=CurrentWorkOrderAssignmentQuery(row.id)
+        )
+        generation = assignment.generation if assignment else None
+        if generation is not None and (
+            query.work_order_public_id != row.public_id
+            or query.assignment_generation != generation
+        ):
+            continue
         location = _location(row)
         if location.latitude is None or location.longitude is None:
             continue
@@ -112,13 +128,13 @@ def evaluate(db: Session, query: GeofenceQuery) -> tuple[GeofenceTransition, ...
             query.latitude, query.longitude, location.latitude, location.longitude
         )
         if distance <= radius:
-            candidates.append((row.public_id, round(distance, 1)))
+            candidates.append((row.public_id, round(distance, 1), generation))
     # The query's implicit transaction is read-only. Each selected transition
     # then enters its own registered command owner and rechecks current scope.
     db_session_adapter.release_read_transaction(db)
     fired: list[GeofenceTransition] = []
-    for public_id, distance in candidates:
-        client_event_id = uuid.uuid5(_GEOFENCE_NS, f"start:{public_id}")
+    for public_id, distance, generation in candidates:
+        client_event_id = uuid.uuid5(_GEOFENCE_NS, f"start:{public_id}:{generation}")
         try:
             result = field_transitions.apply(
                 db,
@@ -132,6 +148,7 @@ def evaluate(db: Session, query: GeofenceQuery) -> tuple[GeofenceTransition, ...
                     requester_system_user_id=actor.system_user_id,
                     public_id=public_id,
                     event=FieldEvent.start,
+                    assignment_generation=generation,
                     client_event_id=client_event_id,
                     latitude=query.latitude,
                     longitude=query.longitude,

@@ -37,26 +37,45 @@ from app.schemas.dispatch import (
     WorkOrderAssignmentQueueRead,
     WorkOrderAssignmentQueueUpdate,
     WorkOrderAssignmentRequest,
+    WorkOrderClassificationRead,
+    WorkOrderClassificationRequest,
     WorkOrderHeaderCreate,
     WorkOrderHeaderRead,
     WorkOrderHeaderUpdate,
 )
 from app.services import dispatch as dispatch_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import (
+    require_permission,
+    require_permission_admission,
+)
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network.fiber_field_verification_job_plan_contracts import (
+    FiberJobPlanCommand,
+    FiberJobPlanQuery,
+    FiberPlanAuditPrincipal,
+)
 from app.services.network.fiber_field_verification_job_plans import (
     FiberFieldVerificationJobPlanError,
     execute_fiber_field_verification_job_plan,
     preview_fiber_field_verification_job_plan,
+    serialize_fiber_plan_command,
+)
+from app.services.network.fiber_field_verification_job_scope import (
+    planned_scope_payload,
 )
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.work_order_assignment_contracts import (
+    AssignmentOperation,
     AssignmentTarget,
     TechnicianAssignmentTarget,
     VendorAssignmentTarget,
     WorkOrderAssignmentCommand,
     WorkOrderAssignmentQuery,
 )
+from app.services.work_order_classification_contracts import ClassifyWorkOrderCommand
+from app.services.work_order_errors import WorkOrderCommandError
+from app.services.work_order_templates import WorkOrderTemplateError
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
 
@@ -66,7 +85,10 @@ _DISPATCH_WRITE = Depends(require_permission("operations:dispatch:write"))
 
 
 def _assignment_context(
-    auth: dict, *, request_id: str | None, command_id: UUID | None = None
+    access: PermissionAdmission,
+    *,
+    request_id: str | None,
+    command_id: UUID | None = None,
 ) -> CommandContext:
     identity = command_id or (
         uuid5(NAMESPACE_URL, f"work-order-assignment:{request_id}")
@@ -76,7 +98,7 @@ def _assignment_context(
     return CommandContext(
         command_id=identity,
         correlation_id=uuid5(NAMESPACE_URL, request_id) if request_id else identity,
-        actor=str(auth.get("principal_id") or "dispatch"),
+        actor=str(access.principal_id),
         scope="operations:dispatch:assign",
         reason="Dispatch work-order assignment",
         idempotency_key=str(identity),
@@ -85,7 +107,7 @@ def _assignment_context(
 
 def _assignment_target(payload: WorkOrderAssignmentPreviewRequest) -> AssignmentTarget:
     if payload.vendor_id is not None:
-        return VendorAssignmentTarget(payload.vendor_id)
+        return VendorAssignmentTarget(payload.vendor_id, payload.vendor_user_id)
     assert payload.technician_id is not None
     return TechnicianAssignmentTarget(payload.technician_id)
 
@@ -356,8 +378,39 @@ def update_dispatch_rule(
     return dispatch_service.dispatch_rules.update(db, rule_id, payload)
 
 
-def _job_plan_args(payload: FiberFieldVerificationJobPlanRequest) -> dict:
-    return payload.model_dump()
+def _job_plan_query(payload: FiberFieldVerificationJobPlanRequest) -> FiberJobPlanQuery:
+    target: AssignmentTarget | None = None
+    if payload.assigned_vendor_id is not None:
+        target = VendorAssignmentTarget(
+            payload.assigned_vendor_id, payload.assigned_vendor_user_id
+        )
+    elif payload.assigned_technician_id is not None:
+        target = TechnicianAssignmentTarget(payload.assigned_technician_id)
+    return FiberJobPlanQuery(
+        expected_worklist_report_sha256=payload.expected_worklist_report_sha256,
+        staged_feature_ids=tuple(payload.staged_feature_ids),
+        subscriber_id=payload.subscriber_id,
+        title=payload.title,
+        description=payload.description,
+        priority=payload.priority,
+        address=payload.address,
+        scheduled_start=payload.scheduled_start,
+        scheduled_end=payload.scheduled_end,
+        target=target,
+        assignment_reason=payload.assignment_reason,
+        idempotency_key=payload.idempotency_key,
+    )
+
+
+def _fiber_plan_error(exc: FiberFieldVerificationJobPlanError) -> HTTPException:
+    kind = exc.code.rsplit(".", 1)[-1]
+    status_code = {
+        "forbidden": 403,
+        "not_found": 404,
+        "stale_worklist": 409,
+        "stale_plan": 409,
+    }.get(kind, 422)
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 @router.post(
@@ -373,12 +426,16 @@ def preview_field_verification_job_plan(
 ):
     del auth, write_auth, network_auth
     try:
-        return preview_fiber_field_verification_job_plan(
-            db,
-            **_job_plan_args(payload),
+        plan = preview_fiber_field_verification_job_plan(
+            db, query=_job_plan_query(payload)
         )
+        return {
+            "command": serialize_fiber_plan_command(plan),
+            **planned_scope_payload(plan.scope),
+            "plan_sha256": plan.plan_sha256,
+        }
     except FiberFieldVerificationJobPlanError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        raise _fiber_plan_error(exc) from exc
 
 
 @router.post(
@@ -388,24 +445,68 @@ def preview_field_verification_job_plan(
 )
 def execute_field_verification_job_plan(
     payload: FiberFieldVerificationJobPlanExecuteRequest,
-    auth: dict = Depends(require_permission("operations:dispatch:assign")),
-    write_auth: dict = Depends(require_permission("operations:dispatch:write")),
-    network_auth: dict = Depends(require_permission("network:fiber:read")),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:assign")
+    ),
+    write_access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:write")
+    ),
+    network_access: PermissionAdmission = Depends(
+        require_permission_admission("network:fiber:read")
+    ),
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
-    del write_auth, network_auth
-    values = payload.model_dump(exclude={"expected_plan_sha256"})
-    try:
-        return execute_fiber_field_verification_job_plan(
-            db,
-            expected_plan_sha256=payload.expected_plan_sha256,
-            auth=auth,
-            request_id=request_id,
-            **values,
+    if any(
+        proof.principal_id != access.principal_id
+        or proof.principal_type != access.principal_type
+        for proof in (write_access, network_access)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Permission admissions must identify the same principal",
         )
+    admitted = PermissionAdmission(
+        principal_id=access.principal_id,
+        principal_type=access.principal_type,
+        admitted_permissions=access.admitted_permissions
+        | write_access.admitted_permissions
+        | network_access.admitted_permissions,
+    )
+    query = _job_plan_query(payload)
+    command_id = uuid5(NAMESPACE_URL, f"fiber-job-plan:{query.idempotency_key}")
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=uuid5(NAMESPACE_URL, request_id) if request_id else command_id,
+        actor=str(admitted.principal_id),
+        scope="operations:dispatch:assign",
+        reason=query.assignment_reason or "Create fiber field-verification work order",
+        idempotency_key=query.idempotency_key,
+    )
+    db_session_adapter.release_read_transaction(db)
+    try:
+        outcome = execute_fiber_field_verification_job_plan(
+            db,
+            command=FiberJobPlanCommand(
+                query=query,
+                expected_plan_sha256=payload.expected_plan_sha256,
+                context=context,
+                access=admitted,
+                audit=FiberPlanAuditPrincipal(admitted.principal_id, request_id),
+            ),
+        )
+        return {
+            "work_order": outcome.work_order,
+            "assignment": outcome.assignment,
+            "replayed": outcome.replayed,
+            "plan": {
+                "command": serialize_fiber_plan_command(outcome.plan),
+                **planned_scope_payload(outcome.plan.scope),
+                "plan_sha256": outcome.plan.plan_sha256,
+            },
+        }
     except FiberFieldVerificationJobPlanError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        raise _fiber_plan_error(exc) from exc
 
 
 @router.post(
@@ -494,6 +595,8 @@ def preview_work_order_assignment(
             scheduled_start=payload.scheduled_start,
             scheduled_end=payload.scheduled_end,
             status=payload.status,
+            expected_revision=payload.expected_revision,
+            expected_assignment_generation=payload.expected_assignment_generation,
         ),
     )
 
@@ -505,11 +608,15 @@ def preview_work_order_assignment(
 def assign_work_order(
     work_order_id: str,
     payload: WorkOrderAssignmentRequest,
-    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:assign")
+    ),
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
     command = WorkOrderAssignmentCommand(
+        access=access,
+        operation=AssignmentOperation(payload.operation),
         work_order_public_id=work_order_id,
         target=_assignment_target(payload),
         scheduled_start=payload.scheduled_start,
@@ -518,15 +625,20 @@ def assign_work_order(
         reason=payload.reason,
         dispatch_rule_id=payload.dispatch_rule_id,
         expected_revision=payload.expected_revision,
+        expected_assignment_generation=payload.expected_assignment_generation,
     )
     context = _assignment_context(
-        auth, request_id=request_id, command_id=payload.command_id
+        access, request_id=request_id, command_id=payload.command_id
     )
     db_session_adapter.release_read_transaction(db)
     outcome = dispatch_service.work_order_commands.assign(
         db, command=command, context=context
     )
     return WorkOrderAssignmentOutcomeRead(
+        vendor_user_id=outcome.target.vendor_user_id
+        if isinstance(outcome.target, VendorAssignmentTarget)
+        else None,
+        assignment_generation=outcome.assignment_generation,
         queue_id=outcome.queue_id,
         work_order_id=outcome.work_order_id,
         technician_id=outcome.target.technician_id
@@ -548,16 +660,19 @@ def assign_work_order(
 )
 def create_assignment_queue_item(
     payload: WorkOrderAssignmentQueueCreate,
-    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:assign")
+    ),
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
-    context = _assignment_context(auth, request_id=request_id)
+    context = _assignment_context(access, request_id=request_id)
     db_session_adapter.release_read_transaction(db)
     return dispatch_service.assignment_queue.create(
         db,
         payload,
         context=context,
+        access=access,
     )
 
 
@@ -592,15 +707,63 @@ def list_assignment_queue(
 def update_assignment_queue_item(
     queue_id: str,
     payload: WorkOrderAssignmentQueueUpdate,
-    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:assign")
+    ),
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
-    context = _assignment_context(auth, request_id=request_id)
+    context = _assignment_context(access, request_id=request_id)
     db_session_adapter.release_read_transaction(db)
     return dispatch_service.assignment_queue.update(
         db,
         queue_id,
         payload,
         context=context,
+        access=access,
     )
+
+
+@router.post(
+    "/work-orders/{work_order_id}/classification",
+    response_model=WorkOrderClassificationRead,
+)
+def classify_work_order(
+    work_order_id: UUID,
+    payload: WorkOrderClassificationRequest,
+    auth: dict = Depends(require_permission("operations:dispatch:write")),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
+) -> WorkOrderClassificationRead:
+    context = CommandContext(
+        command_id=payload.command_id,
+        correlation_id=uuid5(NAMESPACE_URL, request_id)
+        if request_id
+        else payload.command_id,
+        actor=str(auth.get("principal_id") or "dispatch"),
+        scope="operations:dispatch:write",
+        reason=payload.reason,
+        idempotency_key=str(payload.command_id),
+    )
+    command = ClassifyWorkOrderCommand(
+        context=context,
+        work_order_id=work_order_id,
+        expected_revision=payload.expected_revision,
+        classification=payload.classification,
+    )
+    db_session_adapter.release_read_transaction(db)
+    try:
+        outcome = dispatch_service.work_order_commands.classify(db, command=command)
+    except WorkOrderTemplateError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    except WorkOrderCommandError as exc:
+        raise HTTPException(
+            status_code={
+                "invalid": 422,
+                "forbidden": 403,
+                "not_found": 404,
+                "conflict": 409,
+            }[exc.kind],
+            detail=exc.message,
+        ) from exc
+    return WorkOrderClassificationRead(outcome=outcome)

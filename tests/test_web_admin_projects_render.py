@@ -469,3 +469,27 @@ def test_render_template_admin_pages(db_session, base_context):
     assert "templateTasksEditor" in editor_html
     assert "Add subtask" in editor_html
     assert "Applies to future projects only" in editor_html
+
+
+@pytest.mark.parametrize(
+    "project_type", ["fiber_optics_installation", "air_fiber_installation"]
+)
+def test_fiber_and_radio_project_picker_uses_owner_allowlist(
+    db_session, base_context, project_type
+):
+    from app.services.projects import PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES
+
+    context = web_projects.build_project_form_context(
+        db_session, form={"project_type": project_type}
+    )
+    html = _render(
+        "admin/projects/project_form.html",
+        base_context,
+        {**context, "form_mode": "create"},
+    )
+    assert ".includes(projectType) || type || id" in html
+    assert "projectType === 'cable_rerun'" not in html
+    assert "Select the infrastructure for this physical project." in html
+    assert 'role="combobox"' in html
+    for kind in PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES:
+        assert kind.value in html

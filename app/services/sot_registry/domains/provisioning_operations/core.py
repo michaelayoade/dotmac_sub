@@ -18,12 +18,19 @@ from app.services.sot_manifest import (
     TransactionMode,
     owner_command_boundary_error_codes,
 )
+from app.services.sot_registry.domains.provisioning_operations.completion_review_contract import (
+    REVIEW_CONCERNS,
+    REVIEW_DEPENDENCIES,
+    retention_service,
+    with_completion_review,
+)
 from app.services.sot_registry.domains.provisioning_operations.field_execution import (
     FIELD_COMPLETION_CONTRACT,
     WORK_ORDER_COMMAND_CONTRACT,
 )
 
 SERVICES: tuple[SOTService, ...] = (
+    retention_service(),
     SOTService(
         name="operations.provisioning_context",
         module="app.services.provisioning_context",
@@ -492,26 +499,36 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.work_order_commands",
         owns=(
             "native work-order creation and header commands",
+            "typed native work-order creation participant",
+            "canonical full work-order and assignment snapshots",
+            "explicit native work-order classification",
+            "work-order classification planning snapshot",
             "native work-order project binding",
             "native work-order project-task binding",
             "work-order as-built evidence requirement",
             "work-order assignment decisions and projection",
+            "current native assignment provenance query",
             "work-order assignment-queue transitions",
             "work-order staff/team tag notification consequence",
         ),
         depends_on=(
             "customer.identity_scope",
+            "auth.permission_gate",
+            "auth.staff_permission_admission",
+            "auth.vendor_user_provisioning",
+            "operations.work_order_templates",
             "communications.staff_notifications",
+            "communications.work_order_assignment_updates",
             "operations.work_order_status",
             "observability.audit_log",
         ),
         notes=(
             "Dispatch API/web and field-manager adapters authorize and "
             "delegate here. The owner validates a read-only assignment "
-            "preview, locks the work order, changes queue and assignee "
-            "projection atomically, records exact actor audit evidence, "
+            "preview, locks discovered principals before the work order, changes queue and assignee "
+            "projection atomically, validates canonical PermissionAdmission on every assignment branch, records exact actor audit evidence, "
             "and treats equivalent retries as replays. Retained CRM ids are "
-            "provenance only; field execution statuses remain "
+            "provenance only. Vendor assignment explicitly selects an active native Field member; only that person may execute. Typed native creation is a flush-only fiber/project coordinator participant with separate typed provenance and strict fresh staff dispatch admission for project issuance, with immutable full snapshots for adapter projection; field execution statuses remain "
             "owned by operations.field_completion. Native project-binding "
             "and evidence-policy rejections are transport-neutral "
             "WorkOrderCommandError values mapped only by the app boundary. "
@@ -719,22 +736,32 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="operations.field_completion",
         module="app.services.field.transitions",
+        implementation_modules=(
+            "app.services.field.completion_review",
+            "app.services.field.completion_outage_scope",
+        ),
         owns=(
             "field job completion eligibility",
             "field completion evidence requirements",
             "field job completion transitions",
+            *REVIEW_CONCERNS,
         ),
         depends_on=(
             "operations.work_orders",
             "operations.work_order_status",
             "control.domain_settings",
+            *REVIEW_DEPENDENCIES,
         ),
         notes=(
             "Authenticated field job detail projects the same completion "
             "requirements consumed by transition validation. Field clients "
-            "do not reconstruct this policy."
+            "do not reconstruct this policy. The shared fiber as-built resolver "
+            "excludes only explicitly classified radio work from its fiber-only "
+            "record requirement; photos, signoff, declared splice plans and "
+            "enrolled acceptance remain separate checks. Unclassified and "
+            "unknown technology retain conservative fiber evidence requirements."
         ),
-        contract=FIELD_COMPLETION_CONTRACT,
+        contract=with_completion_review(FIELD_COMPLETION_CONTRACT),
     ),
     SOTService(
         name="operations.material_catalog",
@@ -1952,6 +1979,9 @@ SERVICES: tuple[SOTService, ...] = (
             "ProjectTemplate task-plan definition and application",
             "project customer-account eligibility",
             "project infrastructure relationship",
+            "physical project infrastructure eligibility",
+            "typed current project engineering origin",
+            "typed historical project task withdrawal scope",
             "project creation customer email consequence",
             "project and task status-change customer notification consequence",
             "project completion finance email consequence",
@@ -1985,6 +2015,24 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="typed current project engineering origin",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "canonical project aggregate",
+                        "native infrastructure selection",
+                    ),
+                ),
+                ConcernContract(
+                    name="typed historical project task withdrawal scope",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("canonical project aggregate",),
+                ),
+                ConcernContract(
+                    name="physical project infrastructure eligibility",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("canonical project aggregate",),
+                ),
                 ConcernContract(
                     name="project infrastructure relationship",
                     role=OwnerRole.COMMAND_WRITER,
@@ -2212,7 +2260,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.OWNER_MANAGED,
-                boundary="Every public state-changing command enters execute_owner_command once on a transaction-free adapter session; all nested helpers are flush-only.",
+                boundary="Every public state-changing command enters execute_owner_command once on a transaction-free adapter session; all nested helpers are flush-only. Typed current engineering origin and historical withdrawal queries acquire Project-before-exact-task locks within the caller transaction and never mutate. Historical engineering_plan_revocation_scope returns native scope tokens and canonical business labels without active/status/template/inventory gates; engineering and completion revoke use it for retained evidence withdrawal.",
                 locking="Lock Project before its tasks, then tasks by UUID; assignment and relationship changes re-read locked rows in that order. Customer eligibility is locked and read by native Subscriber UUID inside the owner command.",
                 idempotency="CommandContext idempotency keys identify externally retryable commands; identical completed intent replays its stable typed outcome and changed-state no-ops are safe.",
                 retries="Adapters retry serialization failures, deadlocks, and lock timeouts as a complete command; validation, stale-state, authorization, and idempotency conflicts are not retryable.",

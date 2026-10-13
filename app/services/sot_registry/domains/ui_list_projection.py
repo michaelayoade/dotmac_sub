@@ -1369,6 +1369,7 @@ DOMAIN = DomainSOT(
             name="ui.support_ticket_list_projection",
             module="app.services.web_support_tickets",
             owns=(
+                "customer-scoped visible support attachment content",
                 "admin support-ticket searchable fields",
                 "admin support-ticket filter semantics",
                 "admin support-ticket per-user applied-list restoration",
@@ -1423,6 +1424,14 @@ DOMAIN = DomainSOT(
                 )
                 + (
                     ConcernContract(
+                        name="customer-scoped visible support attachment content",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "authenticated customer attachment scope",
+                            "canonical ticket lifecycle state",
+                        ),
+                    ),
+                    ConcernContract(
                         name=(
                             "admin support-ticket detail customer-account navigation"
                         ),
@@ -1431,6 +1440,12 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="authenticated customer attachment scope",
+                        owner="ui.support_ticket_list_projection",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="CustomerTicketAttachmentQuery carries exact authenticated subscriber, Ticket and StoredFile UUIDs; customer_ticket_attachment_content refreshes/locks Ticket ownership and reuses the existing customer-visible reference resolver against fresh comment/file state before canonical file_uploads reading bounded to the existing 5 MiB support-upload limit; closes provider chunks and revalidates visibility/active binding after I/O before returning inert bytes. The bearer API rejects noncustomer principals and returns only protected binary bytes and safe filename/content metadata, never storage keys or public grants.",
+                    ),
                     AuthorityInput(
                         name="typed support Ticket list query",
                         owner="ui.support_ticket_list_projection",
@@ -1453,7 +1468,7 @@ DOMAIN = DomainSOT(
                         name="canonical ticket lifecycle state",
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="canonical Tickets.query scope before sort and pagination",
+                        source="canonical Tickets.query scope before sort and pagination; exact Ticket subscriber ownership, description/comment publication flags and typed AttachmentMeta stored_file_id references admit customer content only for an active matching StoredFile binding.",
                     ),
                     AuthorityInput(
                         name="ticket configuration",
@@ -1473,14 +1488,17 @@ DOMAIN = DomainSOT(
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.READ_ONLY,
-                    boundary="list, summaries, and export are read-only projections",
-                    locking="stable unique Ticket.id tie-breaker prevents page ambiguity",
+                    boundary="list, summaries, export and typed customer attachment content are read-only projections; no executor, commit or public file grant",
+                    locking="stable unique Ticket.id tie-breaker prevents page ambiguity; customer attachment reads refresh and lock Ticket before exact ownership/publication checks, then refresh child comments and active StoredFile metadata before reading bounded canonical storage bytes; provider resources close before returning and final visible/active scope revalidates after I/O",
                     idempotency="same ListQuery and database snapshot yield the same scope",
                     retries="repeat the read from the canonical query",
                 ),
                 errors=ErrorContract(
-                    domain_codes=("support_ticket_list_invalid_query",),
-                    mapping_owner="admin support list and export HTTP adapters",
+                    domain_codes=(
+                        "support_ticket_list_invalid_query",
+                        "customer_ticket_attachment_not_found",
+                    ),
+                    mapping_owner="admin support list/export and customer support attachment HTTP adapters; attachment scope/private/deleted/missing bytes map uniformly to safe404 with private no-store/nosniff",
                     fail_closed_on=(
                         "unsupported filter",
                         "unsupported sort",
@@ -1497,11 +1515,15 @@ DOMAIN = DomainSOT(
                 ),
                 steward="support product UI",
                 design_refs=(
+                    "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                     "docs/designs/SUPPORT_UX_POLISH_AUDIT.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
                 test_refs=(
+                    "tests/test_customer_support_attachment_api.py",
+                    "tests/architecture/test_customer_support_attachment_boundary.py",
+                    "tests/test_ticket_attachment_viewing.py",
                     "tests/test_customer_detail_navigation.py",
                     "tests/test_support_ticket_list_ui_contract.py",
                     "tests/test_web_support_ticket_customer_context.py",

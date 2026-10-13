@@ -3,6 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, TypeVar
+from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -27,6 +28,23 @@ from app.services.auth_flow import (
     hash_session_token,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.permission_admission import PermissionAdmission
+from app.services.permission_authorization import (
+    PermissionPrincipal,
+    PermissionPrincipalKind,
+)
+from app.services.permission_authorization import (
+    effective_permission_keys as _canonical_effective_permission_keys,
+)
+from app.services.permission_authorization import (
+    has_permission as _canonical_has_permission,
+)
+from app.services.permission_matching import (
+    _expand_permission_keys,
+)
+from app.services.permission_matching import (
+    _wildcard_ancestors as _wildcard_ancestors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -515,189 +533,25 @@ def require_role(role_name: str):
     return _require_role
 
 
-def _permission_domain_aliases(permission_key: str) -> list[str]:
-    """Return explicit compatibility aliases for permission-key transitions.
-
-    Legacy report API-key scopes remain read-only aliases during the granular
-    reports migration. They intentionally do not satisfy ``:export``.
-    """
-    aliases = [permission_key]
-    if permission_key.startswith("customer:"):
-        aliases.append(permission_key.replace("customer:", "subscriber:", 1))
-    elif permission_key.startswith("subscriber:"):
-        aliases.append(permission_key.replace("subscriber:", "customer:", 1))
-    legacy_report_read_scope = {
-        "reports:billing:read": "reports:billing",
-        "reports:network:read": "reports:network",
-    }.get(permission_key)
-    if legacy_report_read_scope:
-        aliases.append(legacy_report_read_scope)
-    return aliases
-
-
-def _expand_permission_key_single(permission_key: str) -> list[str]:
-    """
-    Expand a permission key to aliases for the same permission.
-
-    Permission checks are intentionally exact. A route requiring
-    ``billing:invoice:create`` is not satisfied by ``billing:write`` unless the
-    principal has an explicit wildcard grant handled by ``_wildcard_ancestors``
-    or is in the admin role. This keeps broad/admin-only permissions from
-    overriding granular role containers.
-    """
-    return [permission_key]
-
-
-def _wildcard_ancestors(permission_key: str) -> list[str]:
-    """Wildcard keys that, if HELD, satisfy ``permission_key``.
-
-    ``network:nas:write`` -> ``["*", "network:*", "network:nas:*"]``. A role
-    or direct grant of any of these authorizes the requirement, so access can
-    be granted by domain (``network:*``) or globally (``*``) instead of
-    enumerating every leaf permission.
-    """
-    parts = permission_key.split(":")
-    ancestors = ["*"]
-    for i in range(1, len(parts)):
-        ancestors.append(":".join(parts[:i]) + ":*")
-    return ancestors
-
-
-def _expand_permission_keys(permission_key: str) -> list[str]:
-    keys: list[str] = []
-    seen: set[str] = set()
-    for alias in _permission_domain_aliases(permission_key):
-        for key in _expand_permission_key_single(alias):
-            if key in seen:
-                continue
-            seen.add(key)
-            keys.append(key)
-    # Wildcard grants satisfy any matching requirement.
-    for key in _wildcard_ancestors(permission_key):
-        if key not in seen:
-            seen.add(key)
-            keys.append(key)
-    return keys
+def _permission_principal(auth: dict) -> PermissionPrincipal:
+    return PermissionPrincipal(
+        principal_id=UUID(str(auth["principal_id"])),
+        principal_type=PermissionPrincipalKind(
+            auth.get("principal_type", "subscriber")
+        ),
+        roles=frozenset(str(item) for item in auth.get("roles") or ()),
+        scopes=frozenset(str(item) for item in auth.get("scopes") or ()),
+    )
 
 
 def has_permission(auth: dict, db: Session, permission_key: str) -> bool:
-    principal_id = auth["principal_id"]
-    principal_type = auth.get("principal_type", "subscriber")
-    roles = set(auth.get("roles") or [])
-    if "admin" in roles:
-        return True
-
-    possible_keys = _expand_permission_keys(permission_key)
-
-    scopes = set(auth.get("scopes") or [])
-    if scopes & set(possible_keys):
-        return True
-
-    permissions = (
-        db.query(Permission)
-        .filter(Permission.key.in_(possible_keys))
-        .filter(Permission.is_active.is_(True))
-        .all()
-    )
-    if not permissions:
-        return False
-
-    permission_ids = [p.id for p in permissions]
-
-    has_role_permission: Any | None = None
-    has_direct_permission: Any | None = None
-    if principal_type == "system_user":
-        has_role_permission = (
-            db.query(RolePermission)
-            .join(Role, RolePermission.role_id == Role.id)
-            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
-            .filter(SystemUserRole.system_user_id == principal_id)
-            .filter(RolePermission.permission_id.in_(permission_ids))
-            .filter(Role.is_active.is_(True))
-            .first()
-        )
-        has_direct_permission = (
-            db.query(SystemUserPermission)
-            .filter(SystemUserPermission.system_user_id == principal_id)
-            .filter(SystemUserPermission.permission_id.in_(permission_ids))
-            .first()
-        )
-    else:
-        has_role_permission = (
-            db.query(RolePermission)
-            .join(Role, RolePermission.role_id == Role.id)
-            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
-            .filter(SubscriberRole.subscriber_id == principal_id)
-            .filter(RolePermission.permission_id.in_(permission_ids))
-            .filter(Role.is_active.is_(True))
-            .first()
-        )
-        has_direct_permission = (
-            db.query(SubscriberPermission)
-            .filter(SubscriberPermission.subscriber_id == principal_id)
-            .filter(SubscriberPermission.permission_id.in_(permission_ids))
-            .first()
-        )
-
-    return bool(has_role_permission or has_direct_permission)
+    """Legacy HTTP auth mapping serialized into the canonical typed reader."""
+    return _canonical_has_permission(_permission_principal(auth), db, permission_key)
 
 
 def effective_permission_keys(auth: dict, db: Session) -> frozenset[str]:
-    """All permission keys the principal effectively holds, for UI gating.
-
-    Returns the raw granted keys (scopes + role + direct); the ``admin`` role
-    collapses to the ``"*"`` sentinel meaning "everything". A requirement is
-    checked by expanding it with ``_expand_permission_keys`` against this set
-    (see ``can``), mirroring ``has_permission`` — so the UI can hide what the
-    principal cannot do while the route stays the authority.
-    """
-    roles = set(auth.get("roles") or [])
-    if "admin" in roles:
-        return frozenset({"*"})
-    keys: set[str] = set(auth.get("scopes") or [])
-    principal_id = auth["principal_id"]
-    principal_type = auth.get("principal_type", "subscriber")
-    if principal_type == "system_user":
-        role_rows = (
-            db.query(Permission.key)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .join(Role, Role.id == RolePermission.role_id)
-            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
-            .filter(SystemUserRole.system_user_id == principal_id)
-            .filter(Role.is_active.is_(True))
-            .filter(Permission.is_active.is_(True))
-        )
-        direct_rows = (
-            db.query(Permission.key)
-            .join(
-                SystemUserPermission,
-                SystemUserPermission.permission_id == Permission.id,
-            )
-            .filter(SystemUserPermission.system_user_id == principal_id)
-            .filter(Permission.is_active.is_(True))
-        )
-    else:
-        role_rows = (
-            db.query(Permission.key)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .join(Role, Role.id == RolePermission.role_id)
-            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
-            .filter(SubscriberRole.subscriber_id == principal_id)
-            .filter(Role.is_active.is_(True))
-            .filter(Permission.is_active.is_(True))
-        )
-        direct_rows = (
-            db.query(Permission.key)
-            .join(
-                SubscriberPermission,
-                SubscriberPermission.permission_id == Permission.id,
-            )
-            .filter(SubscriberPermission.subscriber_id == principal_id)
-            .filter(Permission.is_active.is_(True))
-        )
-    keys.update(key for (key,) in role_rows.all())
-    keys.update(key for (key,) in direct_rows.all())
-    return frozenset(keys)
+    """Legacy HTTP auth mapping serialized into the canonical typed reader."""
+    return _canonical_effective_permission_keys(_permission_principal(auth), db)
 
 
 def load_permission_keys(auth: dict, db: Session) -> frozenset[str]:
@@ -856,6 +710,36 @@ def require_permission(permission_key: str):
 
     return _declare_permissions(
         _require_permission,
+        PermissionRequirement(
+            read_any_of=(permission_key,), write_any_of=(permission_key,)
+        ),
+    )
+
+
+def require_permission_admission(
+    permission_key: str,
+) -> Callable[..., PermissionAdmission]:
+    """Typed adapter over the exact canonical gate, including leave checks."""
+    gate = require_permission(permission_key)
+
+    def admission(auth: dict = Depends(gate)) -> PermissionAdmission:
+        principal_type = auth.get("principal_type")
+        if principal_type not in {"system_user", "subscriber"}:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        try:
+            principal_id = UUID(str(auth["principal_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=403, detail="Forbidden") from exc
+        return PermissionAdmission(
+            principal_id=principal_id,
+            principal_type="system_user"
+            if principal_type == "system_user"
+            else "subscriber",
+            admitted_permissions=frozenset({permission_key}),
+        )
+
+    return _declare_permissions(
+        admission,
         PermissionRequirement(
             read_any_of=(permission_key,), write_any_of=(permission_key,)
         ),

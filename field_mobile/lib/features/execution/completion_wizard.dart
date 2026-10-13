@@ -51,12 +51,14 @@ class CompletionWizard extends ConsumerStatefulWidget {
   const CompletionWizard({
     super.key,
     required this.jobId,
+    this.assignmentGeneration,
     this.requirements = JobCompletionRequirements.safeFallback,
     this.existingPhotoCount = 0,
     this.hasExistingSignature = false,
   });
 
   final String jobId;
+  final String? assignmentGeneration;
   final JobCompletionRequirements requirements;
   final int existingPhotoCount;
   final bool hasExistingSignature;
@@ -198,6 +200,7 @@ class _CompletionWizardState extends ConsumerState<CompletionWizard> {
     final clientEventId = await controller.transition(
       widget.jobId,
       'complete',
+      assignmentGeneration: widget.assignmentGeneration,
       payload: completion.transitionPayload,
     );
     final entry = await sync.outboxEntry(clientEventId);

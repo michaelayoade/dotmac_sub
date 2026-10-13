@@ -663,7 +663,7 @@ class TestAdminPagesRender:
                 ),
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 db=db_session,
-                auth={"principal_id": "admin", "roles": ["admin"]},
+                auth=_admin_principal(),
             )
 
         text = self._text(detail)
@@ -701,7 +701,7 @@ class TestAdminPagesRender:
                 ),
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 db=db_session,
-                auth={"principal_id": "admin", "roles": ["admin"]},
+                auth=_admin_principal(),
             )
 
         text = self._text(detail)
@@ -743,7 +743,7 @@ class TestAdminPagesRender:
                 ),
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 db=db_session,
-                auth={"principal_id": "admin", "roles": ["admin"]},
+                auth=_admin_principal(),
             )
             detail_text = self._text(detail)
             assert detail.status_code == 200
@@ -777,7 +777,7 @@ class TestAdminPagesRender:
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 error="Reference already verified",
                 db=db_session,
-                auth={"principal_id": "admin", "roles": ["admin"]},
+                auth=_admin_principal(),
             )
             detail_text = self._text(detail)
             assert detail.status_code == 200
@@ -808,7 +808,7 @@ class TestAdminPagesRender:
                 ),
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 db=db_session,
-                auth={"principal_id": "admin", "roles": ["admin"]},
+                auth=_admin_principal(),
             )
 
         text = self._text(detail)
@@ -830,7 +830,7 @@ class TestAdminPagesRender:
                 request=self._request(f"/admin/billing/payment-proofs/{proof_id}"),
                 proof_id=proof_id,
                 db=db_session,
-                auth={"principal_id": "admin", "roles": ["admin"]},
+                auth=_admin_principal(),
             )
             assert resp.status_code == 404
 
@@ -853,7 +853,11 @@ class TestAdminPagesRender:
                 ),
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 db=db_session,
-                auth={"principal_id": "reader", "roles": []},
+                auth={
+                    "principal_id": str(uuid.uuid4()),
+                    "principal_type": "system_user",
+                    "roles": [],
+                },
             )
 
         text = self._text(detail)
@@ -879,7 +883,7 @@ class TestAdminPagesRender:
                 amount="not-a-number",
                 review_notes="checked statement",
                 db=db_session,
-                auth={"principal_id": "admin", "roles": ["admin"]},
+                auth=_admin_principal(),
             )
 
         text = self._text(response)

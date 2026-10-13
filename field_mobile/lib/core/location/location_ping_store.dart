@@ -13,6 +13,7 @@ class LocationPingPayload {
     required this.capturedAt,
     required this.shift,
     this.workOrderId,
+    this.assignmentGeneration,
     this.accuracyM,
     this.capturedAtIsClockDerived = false,
     this.clientObservationId,
@@ -23,6 +24,7 @@ class LocationPingPayload {
   final DateTime capturedAt;
   final ShiftState shift;
   final String? workOrderId;
+  final String? assignmentGeneration;
 
   /// Horizontal accuracy of the fix, in metres — matches the server's
   /// `accuracy_m` (see `LocationPingInput` in `app/schemas/field.py`). Null
@@ -53,6 +55,7 @@ class LocationPingPayload {
     'captured_at': capturedAt.toUtc().toIso8601String(),
     'status': shift.apiValue,
     'crm_work_order_id': ?workOrderId,
+    'assignment_generation': ?assignmentGeneration,
     'client_observation_id': ?clientObservationId,
   };
 
@@ -73,6 +76,7 @@ class LocationPingPayload {
       capturedAt: capturedAt.toUtc(),
       shift: shift,
       workOrderId: json['crm_work_order_id']?.toString(),
+      assignmentGeneration: json['assignment_generation']?.toString(),
       accuracyM: (json['accuracy_m'] as num?)?.toDouble(),
       clientObservationId: json['client_observation_id']?.toString(),
     );

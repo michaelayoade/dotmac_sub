@@ -1,0 +1,35 @@
+{% extends "layouts/admin.html" %}
+{% from "components/forms/action_form.html" import action_form with context %}
+{% from "components/actions/action_readiness.html" import action_readiness_panel %}
+{% block title %}{{ page.title }}{% endblock %}
+{% block content %}
+{% if page.workspace %}
+{% set source = page.workspace.source %}
+<div class="mx-auto max-w-4xl space-y-6">
+{% if can(request, 'operations:completion-review:read') %}<a class="underline" href="/admin/dispatch/work-orders/{{ source.work_order_public_id }}/completion-review">Back to completion evidence and review</a>{% endif %}
+<header><h1 class="text-2xl font-semibold">{{ page.title }}</h1><p>{{ source.work_order_public_id }} · {{ source.title }} · {{ source.status }}</p><p class="mt-2">Review coverage of the original failed visit. An approved replacement still needs accepted completion before customer confirmation. Canceled scope remains blocking unless explicitly covered by a current reviewed replacement.</p></header>
+<section class="rounded-lg border p-5"><h2 class="font-semibold">Original failed scope</h2>
+{% if source.failure_basis %}<p>Failure: {{ 'Unable to complete the assigned visit' if source.failure_basis.event_id is defined else 'Supervisor rejected submitted completion evidence' }}</p><details class="mt-2"><summary>Exact failure and version evidence</summary><p>{{ source.failure_basis }}</p><p>Criteria revision {{ source.criteria_revision_id }} · Policy revision {{ source.policy_revision_id or 'No published policy' }} · Assignment {{ source.assignment_generation or 'No assignment' }}</p></details>{% else %}<p>No eligible current failure is recorded. Review is blocked.</p>{% endif %}
+<p class="mt-2">Versioned policy: different reviewing Person {{ 'required' if source.independent_reviewer_required is sameas true else 'not required' if source.independent_reviewer_required is sameas false else 'not configured' }}. Current supervisor review: {{ source.current_review_state.value|replace('_', ' ') }}.</p>
+<ol class="mt-3 list-decimal pl-5">{% for criterion in source.criteria %}<li>{{ criterion.statement }}<p class="text-sm">Verify: {{ criterion.verification_method }}</p></li>{% endfor %}</ol></section>
+<nav aria-label="Replacement actions" class="flex gap-4"><a class="underline" href="/admin/dispatch/work-orders/{{ source.work_order_public_id }}/completion-review/replacement">Review replacement</a><a class="underline" href="/admin/dispatch/work-orders/{{ source.work_order_public_id }}/completion-review/replacement/revoke">Revoke coverage</a></nav>
+{% if page.purpose.value == 'review' %}
+<section class="rounded-lg border p-5"><h2 class="font-semibold">Choose a scoped native replacement job</h2><p>Only owner-provided jobs in the original ticket, subscriber and project scope appear. Choosing a job starts a fresh intent and clears unsaved review values.</p>
+<form method="get" class="mt-3"><label>Replacement job<select name="candidate_id" required class="block rounded border px-3 py-2"><option value="">Select replacement job</option>{% for candidate in page.workspace.candidates %}<option value="{{ candidate.enrollment_id }}" {% if page.values.get('replacement_enrollment_id') == candidate.enrollment_id|string %}selected{% endif %}>{{ candidate.work_order_public_id }} · {{ candidate.title }} · {{ candidate.status }}</option>{% endfor %}</select></label><button class="mt-3 rounded border px-3 py-2">Load exact replacement criteria</button></form>
+{% for candidate in page.workspace.candidates if page.values.get('replacement_enrollment_id') == candidate.enrollment_id|string %}<p class="mt-3">{{ candidate.title }} · Execution: {{ candidate.status }}. Current supervisor review: {{ candidate.current_review_state.value|replace('_', ' ') }}. A replacement without current accepted completion blocks customer confirmation.</p><p>Versioned policy: different reviewing Person {{ 'required' if candidate.independent_reviewer_required is sameas true else 'not required' if candidate.independent_reviewer_required is sameas false else 'not configured' }}.</p><a class="underline" href="/admin/dispatch/work-orders/{{ candidate.work_order_public_id }}/completion-review/review">Review replacement completion evidence</a><details><summary>Versioned replacement evidence</summary><p>Criteria {{ candidate.criteria_revision_id }} · Policy {{ candidate.policy_revision_id or 'No published policy' }} · Assignment {{ candidate.assignment_generation or 'No assignment' }}</p></details>{% endfor %}
+</section>{% endif %}
+{{ action_readiness_panel(page.panel, heading="Owner action prerequisites") }}
+{% if page.error %}<div role="alert" class="rounded-lg border p-4">{{ page.error }}{% if page.stale %}<p>Original choices, intent and tokens are preserved. <a class="underline" href="{{ request.url.path }}">Reload current information</a> to start a new intent.</p>{% endif %}</div>{% endif %}
+{% if page.receipt %}<section role="status" class="rounded-lg border p-5"><h2 class="font-semibold">Coverage action recorded</h2><p>{{ page.receipt.state.value|title }} · Generation {{ page.receipt.generation }}. {{ 'Historical receipt replayed after current authorization.' if page.receipt.replayed else 'This records coverage evidence only.' }}</p></section>{% endif %}
+{% if page.form %}<p>{{ page.contract.consequences[0].label }}</p>{{ action_form(page.form) }}{% endif %}
+<section class="rounded-lg border p-5"><h2 class="font-semibold">Immutable replacement lineage and revocations</h2>{% for decision in page.workspace.history %}<article class="mt-3 border-t pt-3"><h3>{{ decision.state.value|title }} · {{ decision.replacement_work_order_public_id }} · {{ decision.replacement_title }}</h3><p>{{ decision.decided_at }} · Generation {{ decision.generation }}</p><p class="whitespace-pre-wrap">{{ decision.reason }}</p><details><summary>Exact criterion coverage evidence</summary>{% for coverage in decision.coverage %}<p>{{ coverage.source_criterion_id }} → {{ coverage.replacement_criterion_id }}</p>{% endfor %}</details></article>{% else %}<p>No replacement review has been recorded.</p>{% endfor %}</section>
+</div>
+{% else %}
+<div class="mx-auto max-w-4xl space-y-6">
+<h1 class="text-2xl font-semibold">{{ page.title }}</h1>
+<div role="alert" class="rounded-lg border p-4">{{ page.error }}<p>Current protected review information is unavailable. This retained draft does not establish the command outcome.</p><p>Original submitted choices, intent and tokens are preserved. <a class="underline" href="{{ request.url.path }}">Reload current information</a> before starting a new intent.</p></div>
+<details><summary>Original submitted draft values</summary><dl>{% for key, value in page.values.fields %}<dt>{{ key }}</dt><dd class="whitespace-pre-wrap">{{ value }}</dd>{% endfor %}</dl></details>
+{% if page.form %}{{ action_form(page.form) }}{% endif %}
+</div>
+{% endif %}
+{% endblock %}

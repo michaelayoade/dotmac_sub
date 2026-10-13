@@ -125,3 +125,15 @@ Beyond "the jump exists and the chain ends in a drop", posture now reports
 Policy `defaults` accept `suspension_portal_addresses` (single IPs). When it is
 empty, any single-host `tcp` 80/443 allow counts as the portal allow; set it to
 pin the allowed portal address exactly.
+
+### Fresh-schema default parity
+
+Revision 001 bootstraps the current ORM schema, and the shared migration schema
+operations owner skips already-existing objects during subsequent revisions.
+The ORM therefore declares the same server defaults as published revision 672:
+`router_health_signals.samples = []`, `consecutive_abnormal = 0`, and
+`nas_coa_outcome_buckets.count = 0`. Python defaults remain in place. This
+alignment changes fresh schema construction; it does not rewrite published
+migration bodies or repair arbitrary pre-existing schema drift. Native SQL
+canaries in `tests/integration/test_router_health_insert_defaults.py` check
+actual migrated defaults and preserve an explicitly supplied counter value.

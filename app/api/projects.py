@@ -16,6 +16,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.schemas.common import ListResponse
 from app.schemas.project import (
@@ -32,6 +33,7 @@ from app.schemas.project import (
 from app.services import project_costs, project_filters
 from app.services import projects as projects_service
 from app.services.auth_dependencies import require_permission
+from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.dynamic_filters import FilterValidationError
 from app.services.web_projects import (
@@ -43,7 +45,7 @@ from app.services.web_projects import (
 def _project_error_status(exc: DomainError) -> int:
     if exc.code.endswith(".not_found"):
         return status.HTTP_404_NOT_FOUND
-    if exc.code.endswith(".unauthorized"):
+    if exc.code.endswith((".unauthorized", ".denied")):
         return status.HTTP_403_FORBIDDEN
     if exc.code.endswith(
         (".stale_state", ".relationship_conflict", ".idempotency_conflict")
@@ -345,3 +347,118 @@ def replace_project_task_dependencies(
 )
 def delete_project_task(task_id: str, db: Session = Depends(get_db)):
     projects_service.project_tasks.delete(db, task_id)
+
+
+# Accepted field scope remains an explicit command with exact preview tokens.
+from uuid import UUID
+
+from app.schemas.project_field_completion import ApplyAcceptedProjectCompletionRequest
+from app.services.auth_dependencies import require_permission_admission
+from app.services.field import completion_project_scope
+from app.services.field.completion_project_scope_contracts import (
+    SCOPE,
+    AcceptedProjectCompletionOutcome,
+    AcceptedProjectCompletionPreview,
+    AcceptedProjectCompletionPreviewQuery,
+    ApplyAcceptedProjectCompletion,
+)
+from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
+
+
+def _apply_accepted_field_scope(
+    db: Session,
+    *,
+    access: PermissionAdmission,
+    project_id: UUID,
+    task_id: UUID | None,
+    payload: ApplyAcceptedProjectCompletionRequest,
+) -> AcceptedProjectCompletionOutcome:
+    db_session_adapter.release_read_transaction(db)
+    return completion_project_scope.apply_accepted_project_completion(
+        db,
+        command=ApplyAcceptedProjectCompletion(
+            context=CommandContext(
+                command_id=payload.command_id,
+                correlation_id=payload.correlation_id,
+                actor=str(access.principal_id),
+                scope=SCOPE,
+                reason=payload.reason,
+                idempotency_key=str(payload.intent_id),
+            ),
+            access=access,
+            project_id=project_id,
+            task_id=task_id,
+            expected_project_revision=payload.expected_project_revision,
+            expected_task_revision=payload.expected_task_revision,
+            expected_requirement_token=payload.expected_requirement_token,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/accepted-field-completion")
+def accepted_project_completion_preview(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("project:update")
+    ),
+) -> AcceptedProjectCompletionPreview:
+    return completion_project_scope.preview_accepted_project_completion(
+        db,
+        query=AcceptedProjectCompletionPreviewQuery(
+            access=access, project_id=project_id, task_id=None
+        ),
+    )
+
+
+@router.post(
+    "/projects/{project_id}/accepted-field-completion",
+    dependencies=[Depends(require_browser_csrf_header)],
+)
+def apply_accepted_project_completion(
+    project_id: UUID,
+    payload: ApplyAcceptedProjectCompletionRequest,
+    db: Session = Depends(get_db),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("project:update")
+    ),
+) -> AcceptedProjectCompletionOutcome:
+    return _apply_accepted_field_scope(
+        db, access=access, project_id=project_id, task_id=None, payload=payload
+    )
+
+
+@router.get("/projects/{project_id}/tasks/{task_id}/accepted-field-completion")
+def accepted_task_completion_preview(
+    project_id: UUID,
+    task_id: UUID,
+    db: Session = Depends(get_db),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("project:task:write")
+    ),
+) -> AcceptedProjectCompletionPreview:
+    return completion_project_scope.preview_accepted_project_completion(
+        db,
+        query=AcceptedProjectCompletionPreviewQuery(
+            access=access, project_id=project_id, task_id=task_id
+        ),
+    )
+
+
+@router.post(
+    "/projects/{project_id}/tasks/{task_id}/accepted-field-completion",
+    dependencies=[Depends(require_browser_csrf_header)],
+)
+def apply_accepted_task_completion(
+    project_id: UUID,
+    task_id: UUID,
+    payload: ApplyAcceptedProjectCompletionRequest,
+    db: Session = Depends(get_db),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("project:task:write")
+    ),
+) -> AcceptedProjectCompletionOutcome:
+    return _apply_accepted_field_scope(
+        db, access=access, project_id=project_id, task_id=task_id, payload=payload
+    )

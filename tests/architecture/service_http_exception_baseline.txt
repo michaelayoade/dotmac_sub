@@ -55,7 +55,6 @@ app/services/field/equipment.py
 app/services/field/equipment_custody.py
 app/services/field/expense_requests.py
 app/services/field/fiber.py
-app/services/field/location_tracking.py
 app/services/field/manager.py
 app/services/field/map_assets.py
 app/services/field/material_requests.py
@@ -80,7 +79,6 @@ app/services/nas/profiles.py
 app/services/nas/provisioner.py
 app/services/nas/templates.py
 app/services/network/cpe.py
-app/services/network/fiber_field_verification_job_plans.py
 app/services/network/fiber_physical_continuity.py
 app/services/network/fiber_services.py
 app/services/network/ip.py

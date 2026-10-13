@@ -2879,6 +2879,166 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/completion-review/enrollments/{enrollment_id}/current": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:enrollment_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "7de1371485a8",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/enrollments/{enrollment_id}/history": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:enrollment_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "8ecafaa83208",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/enrollments/{enrollment_id}/submissions/{submission_id}/attachments/{attachment_id}/content": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:attachment_id!",
+    "path:enrollment_id!",
+    "path:submission_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a2431939694c",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/enrollments/{enrollment_id}/submissions/{submission_id}/attachments/{attachment_id}/review-content": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:attachment_id!",
+    "path:enrollment_id!",
+    "path:submission_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a2431939694c",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/projects/{project_id}/policy": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "e42424798dbf",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/projects/{project_id}/policy/edit": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "e42424798dbf",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/work-orders/{work_order_public_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "2d3f7881fc32",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/work-orders/{work_order_public_id}/policy/edit": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "e42424798dbf",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/work-orders/{work_order_public_id}/replacement-history": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "1550a199dbe9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/work-orders/{work_order_public_id}/replacement-review": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "1550a199dbe9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/work-orders/{work_order_public_id}/replacement-revoke": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "1550a199dbe9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/work-orders/{work_order_public_id}/review": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "2d3f7881fc32",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/completion-review/work-orders/{work_order_public_id}/revoke": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "2d3f7881fc32",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/connectors/configs": {
    "params": [
     "header:authorization",
@@ -4358,6 +4518,43 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/field/identity/{subject_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subject_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "01de72fce759",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/field/identity/{subject_id}/files/{file_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:file_id!",
+    "path:subject_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a2431939694c",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/field/identity/{subject_id}/review-page": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subject_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "cecc9944a5b3",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/field/inventory/categories": {
    "params": [
     "header:authorization",
@@ -4517,6 +4714,35 @@
    "request": null,
    "responses": {
     "200": "c3785891bf89",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/field/jobs/{public_id}/brief": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:public_id!",
+    "query:after_subscription_id",
+    "query:audience_link_id",
+    "query:audience_scope",
+    "query:expected_revision_id",
+    "query:limit"
+   ],
+   "request": null,
+   "responses": {
+    "200": "6ff7d6ef94b8",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/field/jobs/{work_order_id}/completion-review": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "c1a7917357b1",
     "422": "a11c9d9b2af8"
    }
   },
@@ -4829,30 +5055,22 @@
   "GET /api/v1/field/vendor/map-assets/nearby": {
    "params": [
     "header:authorization",
-    "header:x-api-key",
-    "query:lat!",
-    "query:limit",
-    "query:lng!",
-    "query:radius_m",
-    "query:types"
+    "header:x-api-key"
    ],
    "request": null,
    "responses": {
-    "200": "3261aba732c3",
+    "200": "a2431939694c",
     "422": "a11c9d9b2af8"
    }
   },
   "GET /api/v1/field/vendor/map-assets/search": {
    "params": [
     "header:authorization",
-    "header:x-api-key",
-    "query:limit",
-    "query:q!",
-    "query:types"
+    "header:x-api-key"
    ],
    "request": null,
    "responses": {
-    "200": "b2e8032a0b31",
+    "200": "a2431939694c",
     "422": "a11c9d9b2af8"
    }
   },
@@ -6118,6 +6336,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/me/support/tickets/{ticket_id}/attachments/{file_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:file_id!",
+    "path:ticket_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a2431939694c",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/me/support/tickets/{ticket_id}/comments": {
    "params": [
     "header:authorization",
@@ -6200,6 +6431,32 @@
    "request": null,
    "responses": {
     "200": "3d55fc7df3ac",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/me/work-orders/{work_order_id}/field-identity": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "197e0afe6822",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/me/work-orders/{work_order_id}/field-identity/portrait": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_id!",
+    "query:assignment_generation!",
+    "query:portrait_revision!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a2431939694c",
     "422": "a11c9d9b2af8"
    }
   },
@@ -8070,6 +8327,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/projects/{project_id}/accepted-field-completion": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a91d966bed2f",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/projects/{project_id}/cost-summary": {
    "params": [
     "header:authorization",
@@ -8079,6 +8348,103 @@
    "request": null,
    "responses": {
     "200": "5d4207ea8356",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/projects/{project_id}/engineering": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:history_offset",
+    "query:selected_revision_id",
+    "query:task_id",
+    "query:technology"
+   ],
+   "request": null,
+   "responses": {
+    "200": "00696786e51a",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/projects/{project_id}/engineering/draft": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:task_id",
+    "query:technology"
+   ],
+   "request": null,
+   "responses": {
+    "200": "00696786e51a",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/projects/{project_id}/engineering/issuance": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:task_id",
+    "query:technology"
+   ],
+   "request": null,
+   "responses": {
+    "200": "8b5a53b74ca0",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/projects/{project_id}/engineering/policy": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "00696786e51a",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/projects/{project_id}/engineering/review": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:task_id",
+    "query:technology"
+   ],
+   "request": null,
+   "responses": {
+    "200": "00696786e51a",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/projects/{project_id}/engineering/revoke": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:task_id",
+    "query:technology"
+   ],
+   "request": null,
+   "responses": {
+    "200": "00696786e51a",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/projects/{project_id}/tasks/{task_id}/accepted-field-completion": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "path:task_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "a91d966bed2f",
     "422": "a11c9d9b2af8"
    }
   },
@@ -10537,6 +10903,18 @@
    "request": null,
    "responses": {
     "200": "14ce480176cb",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/support/tickets/{ticket_id}/resolution-confirmation": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:ticket_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "6a400500c2e0",
     "422": "a11c9d9b2af8"
    }
   },
@@ -13814,6 +14192,102 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/completion-review/enrollments/{enrollment_id}/criteria": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:enrollment_id!"
+   ],
+   "request": "da1bb3b76b22",
+   "responses": {
+    "200": "7de1371485a8",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/completion-review/enrollments/{enrollment_id}/decisions": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:enrollment_id!"
+   ],
+   "request": "927ace268cc6",
+   "responses": {
+    "200": "7de1371485a8",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/completion-review/enrollments/{enrollment_id}/revocations": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:enrollment_id!"
+   ],
+   "request": "49166c11cb5a",
+   "responses": {
+    "200": "7de1371485a8",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/completion-review/enrollments/{source_enrollment_id}/replacement-decisions": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:source_enrollment_id!"
+   ],
+   "request": "d2c5a3380b16",
+   "responses": {
+    "200": "1a5aa3b8304a",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/completion-review/enrollments/{source_enrollment_id}/replacement-revocations": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:source_enrollment_id!"
+   ],
+   "request": "78445ac0d68f",
+   "responses": {
+    "200": "1a5aa3b8304a",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/completion-review/projects/{project_id}/policy": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!"
+   ],
+   "request": "bba576e2fd74",
+   "responses": {
+    "200": "7de1371485a8",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/completion-review/work-orders/{work_order_public_id}/enrollment": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": "f6aee0686f1c",
+   "responses": {
+    "200": "7de1371485a8",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/completion-review/work-orders/{work_order_public_id}/policy": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_public_id!"
+   ],
+   "request": "bba576e2fd74",
+   "responses": {
+    "200": "7de1371485a8",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/connectors/configs": {
    "params": [
     "header:authorization",
@@ -14452,6 +14926,19 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/dispatch/work-orders/{work_order_id}/classification": {
+   "params": [
+    "header:X-Request-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_id!"
+   ],
+   "request": "13f4702e9a0a",
+   "responses": {
+    "200": "6392c6189c74",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/external-references": {
    "params": [
     "header:authorization",
@@ -14792,6 +15279,30 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/field/identity/{subject_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subject_id!"
+   ],
+   "request": "f89ca21f0fc1",
+   "responses": {
+    "200": "fa568963fba2",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/field/identity/{subject_id}/review": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:subject_id!"
+   ],
+   "request": "feb473338cf4",
+   "responses": {
+    "200": "fa568963fba2",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/field/jobs/{crm_work_order_id}/chat/messages": {
    "params": [
     "header:authorization",
@@ -14861,6 +15372,18 @@
    "request": "bb98c13fdc57",
    "responses": {
     "200": "0bad9b7e0b69",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/field/jobs/{work_order_id}/completion-review/submissions": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:work_order_id!"
+   ],
+   "request": "8f172e9abbd6",
+   "responses": {
+    "200": "7de1371485a8",
     "422": "a11c9d9b2af8"
    }
   },
@@ -17397,6 +17920,95 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/projects/{project_id}/accepted-field-completion": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!"
+   ],
+   "request": "7a73b2b63e4a",
+   "responses": {
+    "200": "2b0575f21912",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/projects/{project_id}/engineering/draft": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:task_id"
+   ],
+   "request": "3bf1ecd5c1d2",
+   "responses": {
+    "200": "59be131a7b84",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/projects/{project_id}/engineering/issuance": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:task_id"
+   ],
+   "request": "8f8ef1753fef",
+   "responses": {
+    "200": "6a7c80a94b99",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/projects/{project_id}/engineering/policy": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!"
+   ],
+   "request": "d91d98847686",
+   "responses": {
+    "200": "59be131a7b84",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/projects/{project_id}/engineering/review": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:task_id"
+   ],
+   "request": "ad3587329aa7",
+   "responses": {
+    "200": "59be131a7b84",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/projects/{project_id}/engineering/revoke": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "query:task_id"
+   ],
+   "request": "e0b52f8320c0",
+   "responses": {
+    "200": "59be131a7b84",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/projects/{project_id}/tasks/{task_id}/accepted-field-completion": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!",
+    "path:task_id!"
+   ],
+   "request": "7a73b2b63e4a",
+   "responses": {
+    "200": "2b0575f21912",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/provisioning-runs": {
    "params": [
     "header:authorization",
@@ -18337,6 +18949,18 @@
    "request": "ec762cb41028",
    "responses": {
     "200": "37f595626388",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/support/tickets/{ticket_id}/resolution-confirmation": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:ticket_id!"
+   ],
+   "request": "e22776facc82",
+   "responses": {
+    "200": "305164ba9ade",
     "422": "a11c9d9b2af8"
    }
   },
@@ -19323,6 +19947,8 @@
  "schemas": {
   "AIInsightCreate": "96a5476084b2",
   "AIInsightRead": "a8c3acb0a5ee",
+  "AcceptedProjectCompletionOutcome": "1bb22d14d0d4",
+  "AcceptedProjectCompletionPreview": "785c050270a3",
   "AccessCredentialCreate": "01515a969e02",
   "AccessCredentialRead": "4ad2a941f5bb",
   "AccessCredentialUpdate": "2635aeef4b64",
@@ -19339,6 +19965,9 @@
   "AccountDeletionRequest": "b30757a32ab4",
   "AccountDeletionResponse": "ec27d7061f25",
   "AccountingStatus": "92c82211b61f",
+  "ActionCorrelation": "ce19449055a1",
+  "ActionReadiness": "c8881bec6757",
+  "ActionableBlocker": "3abe11eb7df0",
   "ActiveAddon": "3e485cc4f158",
   "AddOnCreate": "b547fc466c9e",
   "AddOnPriceCreate": "bc486142ed58",
@@ -19356,6 +19985,7 @@
   "AddressRead": "807d40aea82e",
   "AddressType": "5e189902233b",
   "AddressUpdate": "f9f6114113e3",
+  "AffectedCustomer": "851394f933a9",
   "AiIntakeConfigMetadata": "cb61954c9b6e",
   "AiIntakeConfigRead": "3e871d475e00",
   "AiIntakeConfigUpsert": "526098afff43",
@@ -19388,11 +20018,15 @@
   "ApiKeyGenerateResponse": "a85993b47321",
   "ApiKeyRead": "755fa6dae091",
   "ApiKeyUpdate": "f0219ae2d1b4",
+  "ApplyAcceptedProjectCompletionRequest": "08c800d52f96",
   "AppointmentStatus": "874fd75a5cf2",
   "AssetCatalogItem": "71268e149b30",
   "AssetCatalogResponse": "4e709b9bb309",
   "AssetCatalogSummary": "0b8db6079180",
   "AttachmentMeta": "1ef357e281c1",
+  "AudienceKnowledge": "2354a9121134",
+  "AudienceRevision": "f3d3cf65e445",
+  "AudienceScope": "f9f59c1fbe50",
   "AuditActorType": "add968509176",
   "AuditEventRead": "ba1463d9e560",
   "AuthProvider": "12388e0c7135",
@@ -19471,10 +20105,12 @@
   "BillingTreatmentReason": "e4166cf73bcd",
   "BillingTreatmentRevokeRequest": "e8dc37d14cc7",
   "BillingTreatmentStatus": "5b518a7d3842",
+  "BlockerEvidence": "760552fac09e",
   "Body_import_subscriber_custom_fields_api_v1_imports_subscriber_custom_fields_post": "5a91e05ec795",
   "Body_my_add_ticket_comment_api_v1_me_support_tickets__ticket_id__comments_post": "d1a3a0cea554",
   "Body_my_create_ticket_api_v1_me_support_tickets_post": "2ae0ec94443b",
   "Body_submit_account_payment_proof_api_v1_payment_proofs_reseller_accounts__account_id__post": "ccea971d58ff",
+  "Body_submit_identity_api_v1_field_identity__subject_id__post": "9faaead45e70",
   "Body_submit_my_payment_proof_api_v1_payment_proofs_me_post": "9b733ca2d165",
   "Body_submit_reseller_consolidated_proof_api_v1_payment_proofs_reseller_consolidated_post": "7e14a6cc3202",
   "Body_upload_avatar_api_v1_auth_me_avatar_post": "46d7e6a42f9a",
@@ -19483,6 +20119,12 @@
   "Body_upload_purchase_invoice_attachment_api_v1_vendor_purchase_invoices__invoice_id__attachment_post": "a00c2cbdf3d2",
   "BrandProfileRead": "37033a9fe2b5",
   "BrandProfileUpdate": "7488ddafe176",
+  "BriefDirection": "f1294e683628",
+  "BriefRecommendationStatus": "defbfad153f7",
+  "BriefReference": "177c50ec728e",
+  "BriefReferenceKind": "386aeeeec5e7",
+  "BriefSignoff": "a926cc4b086f",
+  "BriefTask": "d37437ca2856",
   "BuildoutApproveRequest": "ca22f0f6915f",
   "BuildoutMilestoneCreate": "feb305e643fb",
   "BuildoutMilestoneRead": "d50697b8f6f8",
@@ -19526,6 +20168,7 @@
   "CatalogOfferUpdate": "17ed53516c46",
   "ChannelType": "c29499d2167f",
   "ChatSessionResponse": "a5b572df2349",
+  "ClassificationSource": "b5e53048b94a",
   "CollectionAccountCreate": "2027be22d479",
   "CollectionAccountRead": "56176641e31a",
   "CollectionAccountType": "7fadbaba9cc5",
@@ -19533,6 +20176,25 @@
   "CommunicationIntentRead": "7fe15f4f123f",
   "CommunicationSuppressionCreate": "eb2ddd09e40e",
   "CommunicationSuppressionRead": "db0971c9301f",
+  "ComplaintResolutionScope": "81152caf4ba0",
+  "CompletionCriteriaInput": "a5711cc1352e",
+  "CompletionCriterionInput": "dea8a6857f68",
+  "CompletionCriterionResultInput": "051b14166a89",
+  "CompletionDecisionInput": "740c2e342f61",
+  "CompletionEnrollmentInput": "8d72356616c8",
+  "CompletionObservationInput": "6b0e43b89ec6",
+  "CompletionPolicyInput": "72f013df3878",
+  "CompletionPolicyScope": "c74bd3aae6ce",
+  "CompletionPolicyScopeKind": "eeb11150c4b5",
+  "CompletionPolicySnapshot": "db11900b3824",
+  "CompletionProvenance": "0b5ba3eea35a",
+  "CompletionReviewHistory": "42c5c268acd6",
+  "CompletionReviewOutcome": "405ea055f038",
+  "CompletionReviewRecord": "969bc6975b88",
+  "CompletionRevocationInput": "c76870a9a301",
+  "CompletionSubmissionInput": "db37e51a5697",
+  "CompletionSubmissionRecord": "243955a40c12",
+  "CompletionWorkspace": "ed96a94d3f5d",
   "ConfigBackupMethod": "ff69bc6e118f",
   "ConnectionTestResult": "2c98cdba4d10",
   "ConnectionType": "f24a816c5961",
@@ -19546,6 +20208,7 @@
   "CoverageAreaCreate": "8ca327ef22ae",
   "CoverageAreaRead": "abe65b5d6394",
   "CoverageAreaUpdate": "ad1b03429173",
+  "CoverageInput": "a3f2938bd98e",
   "CredentialEnrollmentRequest": "f923fe899d54",
   "CredentialEnrollmentResponse": "ae7efd51c933",
   "CreditNoteApplicationPreviewRead": "f9905e81a27b",
@@ -19569,7 +20232,12 @@
   "CreditNoteUpdate": "2fde6cce87d4",
   "CreditNoteVoidPreviewRead": "d5406fcd111e",
   "CreditNoteVoidRequest": "7591fdab7cef",
+  "CriterionCoverage": "c00263b4b0cb",
+  "CriterionObservation": "563a0efa3e67",
+  "CriterionResult": "392e51a02c04",
+  "CriterionVerdict": "7ce2f00501d1",
   "CurrencySettingsResponse": "914ef6200eb8",
+  "CurrentEngineeringPlanApproval": "91c25a27c6c3",
   "CustomFieldValueItem": "376cacc9d5de",
   "CustomFieldValueList": "77ee77d65990",
   "CustomFieldValueResult": "95a711d8d526",
@@ -19584,8 +20252,10 @@
   "CustomerExperienceHandoffRead": "53183f1817a1",
   "CustomerExperienceResolveAttentionRequest": "86aef0362a70",
   "CustomerExperienceState": "10146f9b7d77",
+  "CustomerFieldIdentityCard": "dcbfd7d914ce",
+  "CustomerFieldIdentityOutcome": "6c22da9027dd",
   "CustomerFieldJobChatMessage": "cc5856b9cfdf",
-  "CustomerFieldJobChatMessageCreate": "17b944829df4",
+  "CustomerFieldJobChatMessageCreate": "89a0e3d668ef",
   "CustomerFieldJobChatThread": "11b10ad07d26",
   "CustomerInboxNotificationRead": "3ed506c8eef8",
   "CustomerNotificationCreate": "21bc85ef2bf2",
@@ -19619,6 +20289,7 @@
   "DeviceTokenRead": "9f85097a0ece",
   "DeviceTokenRegister": "51e3918ef2f2",
   "DirectBankTransferConfig": "aff4d25959a3",
+  "DirectionSource": "3fc4f41225f4",
   "DiscountType": "7f40aa78443f",
   "DispatchRuleCreate": "22adef00c73e",
   "DispatchRuleRead": "cace5b1f540f",
@@ -19629,6 +20300,23 @@
   "DueDateCalculationResponse": "7e29aca78232",
   "DunningAction": "d42e316f102b",
   "ElevationRead": "3ca3d8f2a410",
+  "EmptySharedScopeReview": "d8a0be3d0305",
+  "EngineeringCriterion": "2d1e37f0d86a",
+  "EngineeringDecisionView": "a4acddf45fb7",
+  "EngineeringDraftInput": "a4454d63cb30",
+  "EngineeringIssuanceInput": "94ad48ee09eb",
+  "EngineeringPlanAction": "a9ad48d759eb",
+  "EngineeringPlanContent-Input": "55f9cabae33f",
+  "EngineeringPlanContent-Output": "be84278ffe41",
+  "EngineeringPlanOutcome": "dd0ebb14f545",
+  "EngineeringPolicyInput": "f1cb979116c7",
+  "EngineeringPolicyView": "f512cf514e27",
+  "EngineeringReadPurpose": "9945568ee1f4",
+  "EngineeringReviewInput": "303193112116",
+  "EngineeringRevisionView": "9f3d4d0ddbab",
+  "EngineeringRevocationInput": "cd9ec683a52d",
+  "EngineeringTechnology": "5c0292979e0a",
+  "EngineeringWorkspace": "dc421fbbcb5b",
   "ErpDepartmentReference": "5ce6be19bec1",
   "ErpMaterialStatusReceipt": "dea085458884",
   "ErpStaffAccessReceipt": "b87b89d22096",
@@ -19639,11 +20327,16 @@
   "ExecutionMethod": "44ddf7e0d39d",
   "ExistingStaffAccountPolicy": "0c283b6aefa0",
   "ExpenseRequestStatus": "afa9c66cd8ca",
+  "ExplicitWorkOrderClassification": "13882bd8fcf9",
   "ExternalEntityType": "a15467b5560e",
   "ExternalReferenceCreate": "e15ea6e3a712",
   "ExternalReferenceRead": "8b43fcf317fd",
   "ExternalReferenceSync": "fc05bb73a0e5",
   "ExternalReferenceUpdate": "5ac892cd368b",
+  "FailedScopeReplacementOutcome": "45d29c743adc",
+  "FailedScopeReplacementRecord": "a29d444dc1d3",
+  "FailedScopeReplacementWorkspace": "c7fe8290dcfe",
+  "FailureInput": "e92f2de59733",
   "FdhCabinetCreate": "94f97a382c6f",
   "FdhCabinetRead": "655402f117f3",
   "FdhCabinetUpdate": "a8c79b38e60a",
@@ -19652,12 +20345,12 @@
   "FiberCoverageStatus": "2ea647011755",
   "FiberEndpointRef": "8e2b70ce82d1",
   "FiberEndpointType": "7331104f0c8f",
-  "FiberFieldVerificationJobPlanCommandRead": "2550724e6a83",
+  "FiberFieldVerificationJobPlanCommandRead": "ded00e8ea488",
   "FiberFieldVerificationJobPlanExecuteRead": "1900d1030b19",
-  "FiberFieldVerificationJobPlanExecuteRequest": "750af23e262a",
+  "FiberFieldVerificationJobPlanExecuteRequest": "458eccd6c563",
   "FiberFieldVerificationJobPlanFeatureRead": "42bcf151f2ab",
   "FiberFieldVerificationJobPlanPreviewRead": "b64820005273",
-  "FiberFieldVerificationJobPlanRequest": "cfa959b252c3",
+  "FiberFieldVerificationJobPlanRequest": "8bc7e983cac2",
   "FiberInquiryReceipt": "21b9bec030c0",
   "FiberPathRead": "d6a2ee343fdf",
   "FiberPathSegment": "a86366b1a29f",
@@ -19693,6 +20386,7 @@
   "FieldCableRegistrationCreate": "2fe2e6d32087",
   "FieldCableRegistrationResponse": "7e0dd2969fbb",
   "FieldCapabilityAvailability": "963950603e92",
+  "FieldCompletionPreviewResponse": "b4f5e7009c34",
   "FieldCompletionRequirements": "3a2d8a58716d",
   "FieldConfigRead": "d4e4b3f9ed87",
   "FieldCustomer": "405b26a4eb46",
@@ -19737,19 +20431,20 @@
   "FieldFiberWorkOrderEvidenceMapRead": "d7fb7077bef9",
   "FieldInventoryItemRead": "954925e3505a",
   "FieldInventoryLocationRead": "6a267e02541f",
+  "FieldJobBrief": "f8bb72b44cd8",
   "FieldJobChatMessageCreate": "dcb7015e61ca",
   "FieldJobChatMessageRead": "ec110dbbdd38",
   "FieldJobChatThread": "212168cf97f8",
   "FieldJobDestination": "4b6c7696b99a",
   "FieldJobDestinationsResponse": "b0d6b9d2b637",
   "FieldJobDetail": "5cee8339ca38",
-  "FieldJobEventRead": "2e272c488443",
+  "FieldJobEventRead": "1e6c9be03f6c",
   "FieldJobEvidenceRead": "c37c8f9f1567",
   "FieldJobHistoryItem": "08b99aec055d",
   "FieldJobLocation": "715fe3012dbd",
   "FieldJobLocationUpdate": "c5160a318073",
   "FieldJobPlanSummaryRead": "804740090c93",
-  "FieldJobSummary": "4e501c02cf74",
+  "FieldJobSummary": "2351fc8fd0cc",
   "FieldLinkBudgetComponentRead": "8f2c11d8a0f2",
   "FieldLinkBudgetRead": "0fe4def40cc4",
   "FieldLiveMapFeed": "048a87551489",
@@ -19759,8 +20454,8 @@
   "FieldManagerExpenseApprovalLine": "5e10620348d5",
   "FieldManagerExpenseApproveRequest": "fd6218929b38",
   "FieldManagerExpenseRejectRequest": "5892aecb2cb3",
-  "FieldManagerJob": "3968f52c2206",
-  "FieldManagerJobAssignRequest": "20e64a74fb5b",
+  "FieldManagerJob": "38f1d919e498",
+  "FieldManagerJobAssignRequest": "53fca1b72ec1",
   "FieldManagerJobUnassignRequest": "2a9593a4d2f2",
   "FieldManagerMaterialRejectRequest": "c88a1edfa686",
   "FieldManagerMeResponse": "2f2d847e8029",
@@ -19769,7 +20464,6 @@
   "FieldManagerTechniciansResponse": "afee067c1d2e",
   "FieldMapAsset": "ab8c6d0cb70f",
   "FieldMapAssetLocationUpdate": "c28e382f6d84",
-  "FieldMapAssetNearbyResponse": "a48973c5e2b6",
   "FieldMapSearchResponse": "22a82f1892f0",
   "FieldMapSearchResult": "7cef8d62d73b",
   "FieldMaterialConsumeItem": "911c9370f480",
@@ -19807,7 +20501,7 @@
   "FieldStrandTerminationDetailRead": "eb451174c33f",
   "FieldTicketContext": "c0ae335ff056",
   "FieldTransitionPayloadInput": "8884b12b9bce",
-  "FieldTransitionRequest": "30916a2ba88f",
+  "FieldTransitionRequest": "3f1a7dc877a9",
   "FieldTransitionResponse": "1bd156602fd1",
   "FieldValidationRequest": "19f52e7269b8",
   "FieldValidationResponse": "bc32da234a9d",
@@ -19840,6 +20534,8 @@
   "GeoLocationRead": "2a14154131b3",
   "GeoLocationType": "546a25af75af",
   "GeoLocationUpdate": "17c44d88837e",
+  "GeoPoint-Input": "7b62bff30a86",
+  "GeoPoint-Output": "2d25503b8161",
   "GeocodePreviewRequest": "7b1f3b17b87c",
   "GeocodePreviewResult": "28b62a632a59",
   "GuaranteedSpeedType": "9575d83b5d5e",
@@ -19855,6 +20551,10 @@
   "IPv6AddressCreate": "556d549e15ca",
   "IPv6AddressRead": "d14ab909bf1f",
   "IPv6AddressUpdate": "c13ce5267072",
+  "IdentityDetail": "87e6cd098fc6",
+  "IdentityOutcome": "b69db82dda9b",
+  "IdentityState": "f8bb47c0369d",
+  "IdentityUnavailableReason": "c03167bf2725",
   "InboxAgentPerformanceRead": "6a8463944e15",
   "InboxConversationContactLinkRead": "aedc114d3f1b",
   "InboxConversationContactLinkRequest": "f407043f0c43",
@@ -19967,6 +20667,7 @@
   "IpPoolCreate": "e65b5896ac52",
   "IpPoolRead": "6feed1c5aefd",
   "IpPoolUpdate": "21a949c9cfb8",
+  "IssuedCompletionCriterion": "9a3bc2ffc615",
   "JsonValue": "44136fa355b3",
   "JumpHostCreate": "1e899b5ee0b9",
   "JumpHostRead": "7deddb7a22f2",
@@ -20186,7 +20887,7 @@
   "ListResponse_WorkqueueItemRead_": "69d754624d9b",
   "LocationIngestResponse": "7a40e5e95bcc",
   "LocationPingBatch": "37a9a0a02de5",
-  "LocationPingInput": "5484be538ca7",
+  "LocationPingInput": "33d75fcdb917",
   "LocationSharingUpdate": "c6465626ff15",
   "LoginRequest": "6c0d177cb17d",
   "LoginResponse": "66d2d92d7c0a",
@@ -20227,6 +20928,7 @@
   "NetworkZoneCreate": "3bd5ccc30ff0",
   "NetworkZoneRead": "fc992144ef56",
   "NetworkZoneUpdate": "ad4844748bf0",
+  "NextAction": "8eb24b39802d",
   "NextcloudTalkMessageRequest": "323b5e3380fa",
   "NextcloudTalkRoomCreateRequest": "c22cc4555798",
   "NextcloudTalkRoomListRequest": "2254aa431aad",
@@ -20338,6 +21040,10 @@
   "OnuTypeCreate": "3a340e3e4f2c",
   "OnuTypeRead": "aa310e845438",
   "OnuTypeUpdate": "cae1d2793701",
+  "OperationReference": "1d29fc1fbff6",
+  "OutageAudiencePage": "0e9e3e75dd23",
+  "OutageCompletionIssuance": "326f8f093004",
+  "OutageIssuedTarget": "93750fe99f6d",
   "PartyContactPointType": "1379947b2155",
   "PartyType": "59772d177dc7",
   "PasswordChangeRequest": "5ba9a185f0ca",
@@ -20414,6 +21120,7 @@
   "PlanChangePageResponse": "be87079eef6b",
   "PlanChangeSubmitRequest": "b34494ee5b1c",
   "PlanChangeSubmitResponse": "75b8e6d7a4a9",
+  "PlanDecisionKind": "e0e222407d96",
   "PlanOfferSummary": "8169cadb9660",
   "PolicyDunningStepCreate": "647c1fa3b400",
   "PolicyDunningStepRead": "d83875af05b1",
@@ -20428,6 +21135,7 @@
   "PonPortSplitterLinkUpdate": "74afb6d465bc",
   "PonPortUpdate": "b2990e3c68c1",
   "PopSiteCreate": "e1162574014c",
+  "PopSitePlanLocation": "cfecb36b4f63",
   "PopSiteRead": "fbd95b758989",
   "PopSiteUpdate": "e44d8ae9ac25",
   "PortCreate": "80d73a4c1aaa",
@@ -20452,6 +21160,9 @@
   "ProductPortDescriptorV3": "cdcc534fd811",
   "ProjectCostSummary": "f953c7ceefa5",
   "ProjectCreate": "53a0c89795cd",
+  "ProjectDispatchPreview": "a7b7e6e66487",
+  "ProjectFieldRequirement": "aba004571bc5",
+  "ProjectFieldWorkOrderLabel": "1321fcf80154",
   "ProjectGanttUpdate": "38b022ae411d",
   "ProjectItem": "df3035be834b",
   "ProjectKanbanMove": "7578fb10fb86",
@@ -20472,6 +21183,7 @@
   "ProjectTaskUpdate": "be5ae31b8297",
   "ProjectType": "a29853f91876",
   "ProjectUpdate": "53c319e44d41",
+  "ProjectWorkOrderIssued": "520595b20a85",
   "ProofReview": "f8be89429b4e",
   "ProrationPolicy": "d107683093f4",
   "ProviderEventOrderBy": "92e8a0fc9bbe",
@@ -20531,7 +21243,10 @@
   "RadiusProfileRead": "2c7de2aee451",
   "RadiusProfileSummary": "5e6959b280ee",
   "RadiusProfileUpdate": "40f3b49701c2",
+  "ReadinessImpact": "a6cd581c26cd",
+  "ReadinessState": "0366d0fcd04a",
   "ReceivableLaneRead": "c9c05df6c607",
+  "RecommendedRequirement": "69e014d7e540",
   "ReferAFriendRequest": "8bee3413c7ea",
   "ReferAFriendResponse": "4160efa8b93e",
   "ReferralAccountConversionRead": "9cf42c08688d",
@@ -20553,7 +21268,15 @@
   "RegionZoneCreate": "cceb7e1541b2",
   "RegionZoneRead": "e15adfa11f2a",
   "RegionZoneUpdate": "468a00a54a8c",
+  "RejectedSubmissionFailure": "1b73e7dba6c9",
   "RelocationQuotePrepareResponse": "c250d0421380",
+  "RepairAction": "b34f0e98f999",
+  "ReplacementEnrollmentSnapshot": "ee456244c9e3",
+  "ReplacementReviewInput": "0d6f1f6d4e86",
+  "ReplacementRevocationInput": "61c5cf0cf0f3",
+  "ReplacementState": "795ca8f7b843",
+  "RequirementCode": "6f36c7cd72b7",
+  "RequirementGate": "7c65f9dd94c2",
   "ResellerAccountListStatusFilter": "bb8180ec88a4",
   "ResellerCreate": "cb6783563989",
   "ResellerProfileUpdate": "9021c76df1e0",
@@ -20564,7 +21287,11 @@
   "ResendVerificationEmailResponse": "241154310dbe",
   "ResetPasswordRequest": "58425c2200cb",
   "ResetPasswordResponse": "aaac09b3d8e6",
+  "ResolutionRequestInput": "f70bcf05cef1",
   "ResolvedBrandRead": "9098ad504bf0",
+  "ReviewRequest": "f424e75196ea",
+  "ReviewState": "21657807e516",
+  "ReviewedComplaintResolutionScope": "45ad74e8479d",
   "RoleCreate": "ad05c99ca81c",
   "RolePermissionCreate": "0f78f7e005dc",
   "RolePermissionRead": "8b35446aa3f0",
@@ -20696,6 +21423,8 @@
   "SubscriptionRead": "e2fea35c57bc",
   "SubscriptionStatus": "20a80d40cdef",
   "SubscriptionTechnicalUpdate": "cf9d7e2a90c6",
+  "SupportResolutionPreview": "e40ac41e4f44",
+  "SupportResolutionRequestOutcome": "6a2b21b12b97",
   "SuppressionCreate": "875f5ad57243",
   "SuppressionReason": "e3c4e28c7028",
   "SuppressionScope": "8a2a4910b101",
@@ -20708,6 +21437,8 @@
   "SurveyStatus": "04cb51b8b989",
   "SurveyTriggerType": "b6672355648c",
   "SurveyUpdate": "3ad4ec3680d0",
+  "SurveyedPlanLocation-Input": "3be3ab27299e",
+  "SurveyedPlanLocation-Output": "d2f929d5fd3b",
   "SuspensionAction": "b7fb99a5345c",
   "TableColumnAvailable": "7fb9e3161452",
   "TableColumnPreference": "ac831e199b75",
@@ -20730,6 +21461,9 @@
   "TechnicianSkillCreate": "faeb4784d110",
   "TechnicianSkillRead": "251874c88447",
   "TechnicianSkillUpdate": "ac4bdc9323d0",
+  "TemplateIdentity": "186b67fcaeeb",
+  "TemplateRequirementUse": "7800b27b03ef",
+  "TemplateSource": "88a6f8254ff4",
   "TicketBulkUpdateItem": "0ccf42cd5af2",
   "TicketBulkUpdateRequest": "0d26f731f1d3",
   "TicketChannel": "038f82eb6030",
@@ -20777,6 +21511,7 @@
   "UispIntentTargetType": "6599ebc19f4b",
   "UispSnapshotRead": "77441a18f5c8",
   "UispSnapshotSource": "682be7d74bfd",
+  "UnableToCompleteFailure": "1cdb8ca86f13",
   "UptimeReportItem": "f304a6c052eb",
   "UptimeReportRequest": "3c6e26b26aeb",
   "UptimeReportResponse": "fa073ce2f2ec",
@@ -20863,18 +21598,25 @@
   "WireGuardServerRead": "5b549c1a6fde",
   "WireGuardServerStatus": "2268ad8bed2f",
   "WireGuardServerUpdate": "2df4cdd3d029",
-  "WorkOrderAssignmentOutcomeRead": "42e04d1cbedf",
-  "WorkOrderAssignmentPreviewRead": "a4c5c05fe2e9",
-  "WorkOrderAssignmentPreviewRequest": "c380d90c69ca",
-  "WorkOrderAssignmentPreviewState": "9b1dc15c2b73",
-  "WorkOrderAssignmentQueueCreate": "e3ad08182cca",
-  "WorkOrderAssignmentQueueRead": "f5414340c03e",
-  "WorkOrderAssignmentQueueUpdate": "aaf17e2b926f",
-  "WorkOrderAssignmentRequest": "72ce0f735503",
+  "WorkOrderAccessTechnology": "5cb98a58e3a1",
+  "WorkOrderAssignmentOutcomeRead": "f2ef883a0528",
+  "WorkOrderAssignmentPreviewRead": "6bad24ddf402",
+  "WorkOrderAssignmentPreviewRequest": "43c89b9d6015",
+  "WorkOrderAssignmentPreviewState": "5d38544dd336",
+  "WorkOrderAssignmentQueueCreate": "93a683b8abe9",
+  "WorkOrderAssignmentQueueRead": "74d20fbc09ea",
+  "WorkOrderAssignmentQueueUpdate": "1f0d5a3cba31",
+  "WorkOrderAssignmentRequest": "831d575f21b5",
+  "WorkOrderClassificationOutcome": "c552230b7254",
+  "WorkOrderClassificationRead": "08f43be9de3d",
+  "WorkOrderClassificationRequest": "06af0d0a1384",
   "WorkOrderHeaderCreate": "01fe9f9181a6",
-  "WorkOrderHeaderRead": "a3820ca15353",
+  "WorkOrderHeaderRead": "7080e5e76a47",
   "WorkOrderHeaderUpdate": "39de1964000c",
   "WorkOrderItem": "55a22c634916",
+  "WorkOrderKind": "35c5df8446aa",
+  "WorkOrderPurpose": "024f9dce1bbd",
+  "WorkOrderTemplateRecommendation": "d9610ec92a40",
   "WorkqueueItemRead": "0b2d2a93452e",
   "WorkqueueSectionRead": "694b274bf699",
   "WorkqueueSnoozeCreate": "cbb71449586b",

@@ -156,6 +156,26 @@ def test_fresh_head_has_complete_projection_contract(engine, migrated_database) 
                 "WHERE binding_key = 'local.default'"
             )
 
+
+def test_candidate_downgrade_removes_only_its_projection_contract(
+    migrated_database: URL,
+) -> None:
+    # Later field lifecycle revisions retain completion evidence and are
+    # forward-only. Prove 527's supported downgrade from its own revision,
+    # independently of the fresh-head compatibility proof above.
+    _upgrade(CANDIDATE)
+    columns, _, bindings = _candidate_contract(migrated_database)
+    assert {
+        "party_id",
+        "authentication_binding_id",
+        "tenant_id",
+        "party_bound_at",
+        "party_binding_source",
+        "party_binding_reason",
+    } <= columns
+    assert bindings == {"local.default", "radius.default"}
+    assert _identity_trigger_exists(migrated_database)
+
     _downgrade(PREDECESSOR)
 
     with psycopg.connect(_render(migrated_database)) as connection:

@@ -214,6 +214,11 @@ def _location(row: WorkOrder) -> FieldJobLocation:
     )
 
 
+def project_job_location(row: WorkOrder) -> FieldJobLocation:
+    """Project the canonical native job location for other typed read owners."""
+    return _location(row)
+
+
 def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         value = mapping.get(key)
@@ -231,8 +236,17 @@ _ASSET_DESTINATION_TYPES = {
 }
 
 
-def _summary(row: WorkOrder) -> FieldJobSummary:
+def _summary(row: WorkOrder, *, db: Session) -> FieldJobSummary:
+    from app.services.work_order_assignment_contracts import (
+        CurrentWorkOrderAssignmentQuery,
+    )
+    from app.services.work_order_commands import work_order_commands
+
+    assignment = work_order_commands.current_assignment(
+        db, query=CurrentWorkOrderAssignmentQuery(row.id)
+    )
     return FieldJobSummary(
+        assignment_generation=assignment.generation if assignment else None,
         id=row.public_id,
         work_order_mirror_id=row.id,
         title=row.title,
@@ -410,7 +424,8 @@ class FieldJobs:
             WorkOrder.created_at.asc(),
         )
         return [
-            _summary(row) for row in apply_pagination(statement, limit, offset).all()
+            _summary(row, db=db)
+            for row in apply_pagination(statement, limit, offset).all()
         ]
 
     @staticmethod
@@ -485,7 +500,7 @@ class FieldJobs:
         )
 
         return FieldJobDetail(
-            job=_summary(row),
+            job=_summary(row, db=db),
             completion_requirements=field_transitions.completion_requirements(db),
             customer=_customer(row, subscriber),
             location=_location(row),
@@ -532,6 +547,26 @@ class FieldJobs:
                 code="operations.field_work_order_access.not_found",
                 message="Job not found",
             )
+
+        if actor.kind == FieldActorKind.vendor:
+            from app.services.field.job_brief import FieldJobBriefQuery, get_job_brief
+
+            brief = get_job_brief(
+                db, FieldJobBriefQuery(actor.system_user_id, row.public_id)
+            )
+            return [
+                FieldJobDestination(
+                    destination_type="customer"
+                    if direction.source.value == "work_order"
+                    else direction.source.value,
+                    destination_id=str(direction.entity_id),
+                    label=direction.label,
+                    latitude=direction.latitude,
+                    longitude=direction.longitude,
+                    address_text=direction.address_text,
+                )
+                for direction in brief.directions
+            ]
 
         location = _location(row)
         items: FieldJobDestinationPayloads = [

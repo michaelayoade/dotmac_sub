@@ -77,6 +77,7 @@ class FieldJobEvent(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    assignment_generation: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     client_event_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False
     )

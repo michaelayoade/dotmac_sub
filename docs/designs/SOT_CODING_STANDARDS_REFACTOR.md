@@ -228,7 +228,16 @@ API and admin adapters now submit typed commands; role form updates and policy
 replacement commit atomically with audit and versioned event evidence. Catalog
 identities are normalized and protected by database functional uniqueness,
 assigned identities fail closed on rename or deactivation, and protected
-permissions cannot be granted outside the canonical admin role. The remaining
+permissions cannot be granted outside the canonical admin role.
+Permission identifier policy stays with the catalog owner: two or three
+letter-leading lowercase segments, separated by colons or dots, may contain
+letters, numbers, underscores and hyphens. Existing normalization and the exact
+global `*` exception are unchanged; embedded wildcards and additional namespace
+depth remain invalid. Hyphenated product identifiers such as
+`operations:completion-review:read` retain their migration-seeded identity and
+grants. They do not alias underscore spellings, imply sibling capabilities or
+change canonical permission matching.
+The remaining
 subscriber authorization boundary is now `auth.subscriber_assignments`, the
 single application and seed writer for subscriber role and direct-permission
 grants. It enforces active catalog references, explicit global or

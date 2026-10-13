@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -2080,9 +2081,11 @@ Future<void> _assign(
   );
   if (selected == null) return;
   try {
-    await ref
-        .read(managerRepositoryProvider)
-        .assignJob(jobId: job.id, personId: selected.personId);
+    final command = ManagerJobAssignmentCommand.fromSnapshot(
+      job: job,
+      personId: selected.personId,
+    );
+    await ref.read(managerRepositoryProvider).assignJob(command);
     ref
       ..invalidate(managerJobsProvider)
       ..invalidate(managerSummaryProvider)
@@ -2092,11 +2095,31 @@ Future<void> _assign(
         context,
       ).showSnackBar(SnackBar(content: Text('Assigned to ${selected.name}')));
     }
-  } catch (_) {
+  } catch (error) {
     if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Could not assign job')));
+      final needsReload =
+          error is ManagerAssignmentSnapshotUnavailable ||
+          (error is DioException && error.response?.statusCode == 409);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            needsReload
+                ? 'Job assignment changed or is unavailable. Reload before assigning.'
+                : 'Could not assign job',
+          ),
+          action: needsReload
+              ? SnackBarAction(
+                  label: 'Reload',
+                  onPressed: () {
+                    ref
+                      ..invalidate(managerJobsProvider)
+                      ..invalidate(managerSummaryProvider)
+                      ..invalidate(managerTechniciansProvider);
+                  },
+                )
+              : null,
+        ),
+      );
     }
   }
 }

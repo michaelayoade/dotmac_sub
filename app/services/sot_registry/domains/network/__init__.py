@@ -25,6 +25,9 @@ from app.services.sot_registry.domains.network.network_control import (
 from app.services.sot_registry.domains.network.ont_assignments import (
     SERVICES as ONT_ASSIGNMENTS_SERVICES,
 )
+from app.services.sot_registry.domains.network.outage_completion_evidence import (
+    SERVICES as OUTAGE_COMPLETION_EVIDENCE_SERVICES,
+)
 from app.services.sot_registry.domains.network.outages_and_ip import (
     SERVICES as OUTAGES_AND_IP_SERVICES,
 )
@@ -50,6 +53,7 @@ DOMAIN = DomainSOT(
         *DEVICE_OPERATIONS_SERVICES,
         *NETWORK_CONTROL_SERVICES,
         *OUTAGES_AND_IP_SERVICES,
+        *OUTAGE_COMPLETION_EVIDENCE_SERVICES,
     ),
     entrypoints=(
         "app.services.topology.*",

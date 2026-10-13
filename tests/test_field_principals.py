@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.api.field import router
 from app.db import get_db
@@ -17,7 +18,9 @@ from app.models.vendor_routes import Vendor
 from app.services.auth_dependencies import require_user_auth
 
 
-def _vendor_client(db_session, *, native_link: bool, stale_profile: bool = False):
+def _vendor_client(
+    db_session: Session, *, native_link: bool, stale_profile: bool = False
+) -> TestClient:
     user = SystemUser(
         first_name="Vendor",
         last_name="Crew",
@@ -51,9 +54,9 @@ def _vendor_client(db_session, *, native_link: bool, stale_profile: bool = False
 
 
 @pytest.mark.parametrize("native_link", [True, False])
-def test_vendor_map_relocation_preserves_vendor_principal_fallback(
-    db_session, native_link
-):
+def test_vendor_cannot_relocate_global_plant_with_or_without_native_link(
+    db_session: Session, native_link: bool
+) -> None:
     client = _vendor_client(db_session, native_link=native_link)
     cabinet = FdhCabinet(
         name="Vendor field cabinet",
@@ -67,8 +70,13 @@ def test_vendor_map_relocation_preserves_vendor_principal_fallback(
         f"/api/v1/field/map-assets/fdh_cabinet/{cabinet.id}/location",
         json={"latitude": 9.081, "longitude": 7.462},
     )
-    assert response.status_code == 200
-    assert response.json()["latitude"] == 9.081
+    assert response.status_code == 403
+    assert (
+        response.json()["detail"]["code"] == "operations.field_work_order_access.denied"
+    )
+    db_session.refresh(cabinet)
+    assert cabinet.latitude == 9.071
+    assert cabinet.longitude == 7.451
 
 
 @pytest.mark.parametrize("stale_profile", [False, True])

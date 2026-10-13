@@ -44,7 +44,7 @@ PERMISSION_WRITE_SCOPE = "rbac:permissions:write"
 PERMISSION_DELETE_SCOPE = "rbac:permissions:delete"
 
 _ROLE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,79}$")
-_PERMISSION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:[:.][a-z][a-z0-9_]*){1,2}$")
+_PERMISSION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*(?:[:.][a-z][a-z0-9_-]*){1,2}$")
 
 _ROLE_COMMAND = OwnerCommandDefinition(
     owner="auth.rbac_catalog",
@@ -396,7 +396,9 @@ def _normalize_permission_key(value: str) -> str:
     if key != "*" and not _PERMISSION_KEY_PATTERN.fullmatch(key):
         raise _error(
             "invalid_permission_key",
-            "Permission key must be a lowercase domain:action identifier.",
+            "Permission keys need two or three lowercase segments separated by ':' "
+            "or '.'. Each segment starts with a letter and contains letters, "
+            "numbers, underscores, or hyphens.",
             field="key",
         )
     return key

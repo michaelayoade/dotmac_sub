@@ -39,6 +39,7 @@ from app.schemas.dispatch import (
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.response import ListResponseMixin
 from app.services.work_order_commands import work_order_commands
 
@@ -454,12 +455,14 @@ class AssignmentQueue(ListResponseMixin):
         payload: WorkOrderAssignmentQueueCreate,
         *,
         context: CommandContext,
+        access: PermissionAdmission,
     ) -> WorkOrderAssignmentQueueRead:
         db_session_adapter.release_read_transaction(db)
         return work_order_commands.create_queue_entry(
             db,
             payload,
             context=context,
+            access=access,
         )
 
     @staticmethod
@@ -505,6 +508,7 @@ class AssignmentQueue(ListResponseMixin):
         payload: WorkOrderAssignmentQueueUpdate,
         *,
         context: CommandContext,
+        access: PermissionAdmission,
     ) -> WorkOrderAssignmentQueueRead:
         db_session_adapter.release_read_transaction(db)
         return work_order_commands.update_queue_entry(
@@ -512,6 +516,7 @@ class AssignmentQueue(ListResponseMixin):
             queue_id,
             payload,
             context=context,
+            access=access,
         )
 
 

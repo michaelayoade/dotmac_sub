@@ -47,6 +47,7 @@ from app.services.field.jobs import (
     _technician_name,
 )
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.status_presentation import work_order_status_presentation
 from app.services.work_order_assignment_contracts import (
     AssignmentTarget,
@@ -291,15 +292,17 @@ class FieldManager:
         *,
         payload: FieldManagerJobAssignRequest,
         context: CommandContext,
+        access: PermissionAdmission,
     ) -> FieldManagerJob:
         target: AssignmentTarget
         if payload.vendor_id is not None:
-            target = VendorAssignmentTarget(payload.vendor_id)
+            target = VendorAssignmentTarget(payload.vendor_id, payload.vendor_user_id)
         else:
             assert payload.person_id is not None
             profile = _technician_by_person_id(db, payload.person_id)
             target = TechnicianAssignmentTarget(profile.id)
         command = WorkOrderAssignmentCommand(
+            access=access,
             work_order_public_id=crm_work_order_id,
             target=target,
             scheduled_start=payload.scheduled_start,
@@ -307,6 +310,7 @@ class FieldManager:
             status=payload.status or "dispatched",
             reason="manager_assign",
             expected_revision=payload.expected_revision,
+            expected_assignment_generation=payload.expected_assignment_generation,
         )
         db_session_adapter.release_read_transaction(db)
         outcome = work_order_commands.assign(db, command=command, context=context)
@@ -330,6 +334,9 @@ class FieldManager:
             "id": row.public_id,
             "work_order_mirror_id": row.id,
             "assignment_queue_id": assignment.id if assignment is not None else None,
+            "assignment_generation": assignment.assignment_generation
+            if assignment is not None
+            else None,
             "assigned_vendor_id": assignment.assigned_vendor_id
             if assignment is not None
             else None,

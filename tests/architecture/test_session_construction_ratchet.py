@@ -193,6 +193,58 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: sites (worker, lock blocker and audit rollback); production is unchanged.
 #: Accepted router-health test helpers add a private SQLite engine and
 #: sessionmaker for out-of-band evidence rollback tests (ADR 0018).
+#: +18 from four disposable, real-migration PostgreSQL acceptance harnesses:
+#: identity locking +4; customer-rating concurrency/transfer +9; fiber owner
+#: isolation/replay +2; vendor attending-person concurrency +3. These private
+#: cloned-database engines and independent sessions establish lock ordering,
+#: atomicity and stale-scope denial; no production allowance is added.
+#: +18 from test_project_engineering_plan_acceptance.py: one migrated private
+#: engine and seventeen independent setup/worker/verification Session sites
+#: exercise approval provenance, atomicity, revocation and concurrency.
+#: These are disposable test fixtures, not production construction allowances.
+#: +19 from tests/integration/test_project_work_order_issuance_acceptance.py:
+#: independently committed sessions for duplicate issuance, rollback, immutable
+#: receipt, revocation/supersession and Project-before-task lock races.
+#: +31 from migrated completion-review acceptance: independently committed
+#: sessions prove duplicate intent, retention/deletion races and current access.
+#: +2 fast completion-review unit sessions exercise stale authorization refresh.
+#: +6 fast engineering adapter/read/participant sessions exercise typed read
+#: permissions and rendering; these are test-only, not production allowances.
+#: +55 net from the final universal-completion/support slice: issuance PG
+#: 19->16 (-3), completion PG 31->51 (+20), completion participant +1,
+#: completion adapter +7, engineering-plan unit +1, issuance unit +2 and
+#: support PG +27. All construct disposable test sessions; the 17 production
+#: sites and their exact baseline are unchanged. Case counts are not site counts.
+#: +113 from reviewed recovery and accountable follow-up fixtures: native
+#: replacement PG +34, engineering replacement PG +47, follow-up PG +17,
+#: incident correlation PG +14 and replacement adapter +1. Independently
+#: committing disposable sessions exercise provenance and lock races; no
+#: production allowance changes.
+#: +94 from shared-outage/project completion acceptance: shared PG +34,
+#: shared committed-session helpers +9, project PG +49, project unit +2.
+#: These exercise SQL guards and races against migrated disposable schemas.
+#: Production construction allowance remains unchanged.
+#: +18 from savepoint-safe completion evidence: four truthful terminal-history
+#: sessions, five project outer-transaction regression sessions, and nine
+#: dedicated full-XID/savepoint proof sessions. No production allowance grows.
+#: +9 completes the savepoint proof: three independently committing replacement
+#: lineage sessions and six enrollment/submission/review outer-transaction sites.
+#: +10 from canonical fiber/radio project entry acceptance: independent setup,
+#: issue/review and verification sessions. No production allowance grows.
+#: +5 from the default-evidence radio regression: independent photo/signoff
+#: gate and recorded evidence checks; production remains unchanged.
+#: Reconciliation with current main preserves its recovery-readiness and API-key
+#: revocation fixtures alongside the lifecycle acceptance fixtures above. The
+#: canonical AST inventory is 657 sites across 143 test files: latest main adds
+#: seven subscriber-MFA fixture sites to the lifecycle inventory of 650. Production
+#: remains 17 sites; its exact per-file baseline is unchanged.
+#: +5 from engineering-plan acceptance: independent Sessions prove native
+#: held/blocked/done tasks refuse issuance after approval. The canonical AST
+#: inventory is now 662 sites across 143 test files; production remains 17.
+#: Reconciliation with main a287 preserves fifteen additional fixture sites:
+#: JSON issuance +5, JSON PATCH +5, web key administration +3, and accepted
+#: router-health evidence +2. The canonical AST inventory is 677 sites across
+#: 147 test files; production remains 17 with its exact baseline unchanged.
 #: Staff deletion adds fourteen migrated-PostgreSQL Session sites for pinned
 #: workers, FK/lock blockers and independent rollback observers; production is unchanged.
 #: API-key authentication maintenance adds ten migrated-PG Session sites
@@ -203,9 +255,12 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: physical lock/confirmation interleavings, six network participant fixtures,
 #: and two additional characterization Session sites for fresh owner isolation.
 #: These eighteen test-only sites do not expand production construction allowances.
-#: Location-read preservation adds one migrated-clone engine and two
-#: Session constructions in tests only; production construction is unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 325
+#: Reconciliation with main 81c4b4ccd preserves these 48 additional fixture
+#: sites alongside the lifecycle acceptance fixtures. Main b69f1b4a6 adds
+#: one migrated-clone engine and two Session constructions for location-read
+#: preservation: the canonical scanner measures 728 sites across 154 files.
+#: Production remains 17 sites across 15 files with its baseline unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 728
 
 
 def _baseline() -> dict[str, int]:

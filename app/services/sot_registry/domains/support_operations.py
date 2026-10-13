@@ -492,7 +492,11 @@ DOMAIN = DomainSOT(
         SOTService(
             name="support.ticket_lifecycle",
             module="app.services.support",
+            implementation_modules=("app.services.support_outage_resolution",),
             owns=(
+                "protected staff resolution request preview",
+                "ticket completion-basis confirmation gating",
+                "ticket immutable resolution requests and basis",
                 "ticket lifecycle mutations",
                 "ticket creation and identity",
                 "admin-created ticket customer email acknowledgement",
@@ -511,12 +515,16 @@ DOMAIN = DomainSOT(
                 "ticket audit official timeline and transactional events",
             ),
             depends_on=(
+                "operations.field_completion",
+                "network.outage_completion_evidence",
+                "operations.work_order_commands",
                 "support.ticket_configuration",
                 "support.ticket_vocabulary",
                 "support.ticket_assignment_evaluation",
                 "support.ticket_automation_evaluation",
                 "customer.identity_scope",
                 "auth.staff_provisioning",
+                "auth.staff_permission_admission",
                 "customer.branding",
                 "communications.intents",
                 "communications.notification_service",
@@ -525,6 +533,35 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="protected staff resolution request preview",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "fresh resolution request staff admission",
+                            "canonical ticket state",
+                            "accepted linked work-order completion basis",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket completion-basis confirmation gating",
+                        role=OwnerRole.COMMAND_WRITER,
+                        canonical_writer="support.ticket_lifecycle",
+                        input_names=(
+                            "canonical ticket state",
+                            "accepted linked work-order completion basis",
+                            "typed ticket command",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket immutable resolution requests and basis",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        canonical_writer="support.ticket_lifecycle",
+                        input_names=(
+                            "canonical ticket state",
+                            "accepted linked work-order completion basis",
+                            "typed ticket command",
+                        ),
+                    ),
                     *tuple(
                         ConcernContract(
                             name=name,
@@ -615,6 +652,24 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="reviewed shared outage completion scope",
+                        owner="network.outage_completion_evidence",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact native complaint receipt and selected service, canonical infrastructure ticket, current restored incident/revision/token, all actual issued audience matching work scopes; explicit reviewed empty iff no issuance; snapshots compared on request/confirmation/grace. Unknown history requires explicit correlation adoption; no guessed evidence.",
+                    ),
+                    AuthorityInput(
+                        name="fresh resolution request staff admission",
+                        owner="auth.staff_permission_admission",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="SupportResolutionPreviewQuery and SupportResolutionRequestCommand carry PermissionAdmission freshly revalidated for support:ticket:update with WRITE leave restrictions and canonical active staff Person; checks repeat after waits and before replay. No support READ floor or synthetic executor.",
+                    ),
+                    AuthorityInput(
+                        name="accepted linked work-order completion basis",
+                        owner="operations.field_completion",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed exact origin_ticket_id enrollment presence and support-only TicketCompletionBasis; public resolution_request_preview uses preview_ticket_completion_basis with fresh support:ticket:update admission and the same exact freshness kernel, without writes or an executor; fresh completed event, assignment, criteria, policy, submission, accepted decision and review generation. Support pins native immutable request/child basis, preserving every original required work-order/enrollment scope plus optional exact effective accepted endpoint and ordered reviewed replacement decision lineage. Confirmation/grace revalidate exact current failure/assignment/criteria/policy/coverage lineage and acceptance; stale/revoked lineage blocks consent. A valid request capability may still dispute stale completion evidence. Never infers from ProjectTask.ticket_id.",
+                    ),
                     AuthorityInput(
                         name="typed ticket command",
                         owner="support.ticket_lifecycle",
@@ -746,6 +801,7 @@ DOMAIN = DomainSOT(
                         "transaction."
                     ),
                     locking=(
+                        "Ticket linkage advisory fences sorted before Ticket locks, then completion participant batch Project/task/engineering roots before all WOs/criteria/policy/review/replacement heads; enrollment and issuance use the same fence. "
                         "Existing Ticket mutations lock or operate under the root command; "
                         "comment creation locks the Ticket before resolving its scoped "
                         "idempotency UUID; the database uniquely arbitrates ticket/key; "
@@ -754,6 +810,7 @@ DOMAIN = DomainSOT(
                         "are rechecked before writing."
                     ),
                     idempotency=(
+                        "Public request_resolution returns SupportResolutionRequestOutcome with native request identity, expiry/deadline, pending status and replay flag, never raw token capability; exact actor and stable UUID intent are required. Immutable resolution request intent/fingerprint replays only an active original token with unchanged current basis and original deadline. Changed payload/basis conflicts; consumed tokens cannot be resurrected. Timer receipt records blocked_completion_basis atomically with immutable support attempt and audit. "
                         "The server-generated ticket-comment form UUID and adapter "
                         "Idempotency-Key are carried in CommandContext where supplied; "
                         "ticket/comment-key uniqueness plus an immutable material-input "
@@ -795,6 +852,14 @@ DOMAIN = DomainSOT(
                         "ticket_comment_idempotency_conflict",
                         "automation_assignment_team_unavailable",
                         "automation_priority_invalid",
+                        "resolution_confirmation_required",
+                        "resolution_basis_changed",
+                        "resolution_idempotency_conflict",
+                        "invalid_grace_hours",
+                        "resolution_forbidden",
+                        "resolution_intent_required",
+                        "ticket_inactive",
+                        "invalid_command_scope",
                         *owner_command_boundary_error_codes("support.ticket_lifecycle"),
                     ),
                     mapping_owner=(
@@ -806,6 +871,8 @@ DOMAIN = DomainSOT(
                         "ambiguous customer identity",
                         "merged source",
                         "inactive confirmation capability",
+                        "enrolled direct close without customer confirmation",
+                        "missing changed rejected revoked or stale completion basis",
                     ),
                 ),
                 events=EventContract(
@@ -864,6 +931,7 @@ DOMAIN = DomainSOT(
                 ),
                 steward="support operations",
                 design_refs=(
+                    "docs/designs/SUPPORT_COMPLETION_CONFIRMATION_GATE.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
                     "docs/designs/SUPPORT_UX_POLISH_AUDIT.md",
@@ -871,6 +939,13 @@ DOMAIN = DomainSOT(
                     "mobile/README.md",
                 ),
                 test_refs=(
+                    "tests/test_support_resolution_owner_reads.py",
+                    "tests/test_support_completion_gate.py",
+                    "tests/test_failed_scope_replacement.py",
+                    "tests/integration/test_failed_scope_replacement_acceptance.py",
+                    "tests/architecture/test_failed_scope_replacement_boundary.py",
+                    "tests/integration/test_support_completion_gate_acceptance.py",
+                    "tests/architecture/test_support_completion_gate_boundary.py",
                     "tests/test_support_services.py",
                     "tests/test_ticket_status_transition.py",
                     "tests/test_support_automation.py",

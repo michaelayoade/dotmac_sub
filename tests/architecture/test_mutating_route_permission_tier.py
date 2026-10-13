@@ -107,12 +107,14 @@ _WRITE_TIER_VERBS = frozenset(
         "mirror",
         "pay",
         "operate",
+        "policy",  # Publishes decision-bearing policy.
         "publish",
         "push_config",
         "redrive",
         "repair",  # Executes reviewed financial recovery.
         "retire",
         "reverse",
+        "revoke",  # Withdraws current authority or approval.
         "resume",
         "review",
         "self_assign",
@@ -612,3 +614,18 @@ def test_every_permission_guard_factory_declares_what_it_demands():
         "guard. Wrap the returned dependency in _declare_permissions(...):\n  "
         + "\n  ".join(undeclared)
     )
+
+
+def test_policy_and_revoke_permissions_are_write_tier():
+    for verb in ("policy", "revoke"):
+        assert verb in _WRITE_TIER_VERBS
+        assert verb not in _READ_TIER_VERBS
+        planted = APIRouter(prefix="/admin/__planted__")
+
+        @planted.post(
+            "/mutate", dependencies=[Depends(require_permission(f"operations:{verb}"))]
+        )
+        def _quiet_policy() -> None:  # pragma: no cover - never called
+            return None
+
+        assert _read_tier_violations(_surface_with(planted)) == set()

@@ -68,6 +68,7 @@ class ApplyFieldTransition:
     public_id: str
     event: FieldEvent
     client_event_id: UUID
+    assignment_generation: UUID | None = None
     occurred_at: datetime | None = None
     latitude: float | None = None
     longitude: float | None = None

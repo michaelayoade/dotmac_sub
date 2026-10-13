@@ -16,7 +16,9 @@ from app.api.field.execution import (
 )
 from app.api.field.expense_requests import router as expense_requests_router
 from app.api.field.fiber import router as fiber_router
+from app.api.field.identity import router as identity_router
 from app.api.field.inventory import router as inventory_router
+from app.api.field.job_brief import router as job_brief_router
 from app.api.field.locations import router as locations_router
 from app.api.field.manager import router as manager_router
 from app.api.field.map_assets import router as map_assets_router
@@ -56,12 +58,14 @@ router = APIRouter(
     prefix="/field", tags=["field"], dependencies=[Depends(field_access_error_boundary)]
 )
 router.include_router(attendance_router)
+router.include_router(identity_router)
 router.include_router(attachments_router)
 router.include_router(devices_router)
 router.include_router(equipment_router)
 router.include_router(expense_requests_router)
 router.include_router(fiber_router)
 router.include_router(inventory_router)
+router.include_router(job_brief_router)
 router.include_router(locations_router)
 router.include_router(manager_router)
 router.include_router(map_assets_router)

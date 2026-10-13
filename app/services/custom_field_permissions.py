@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+from app.services.permission_matching import permission_keys_allow
+
 
 def permission_granted(permission_keys: frozenset[str], permission: str) -> bool:
     """Honor exact, domain wildcard, and administrator grants."""
 
-    if "*" in permission_keys or permission in permission_keys:
-        return True
-    parts = permission.split(":")
-    wildcard_keys = {f"{':'.join(parts[:index])}:*" for index in range(1, len(parts))}
-    return bool(wildcard_keys & permission_keys)
+    return permission_keys_allow(permission_keys, permission)
 
 
 __all__ = ["permission_granted"]

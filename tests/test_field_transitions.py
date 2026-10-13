@@ -38,8 +38,14 @@ from app.services.field.execution_contracts import (
 from app.services.field.jobs import field_jobs
 from app.services.field.transitions import field_transitions
 from app.services.field.work_order_access import FieldAccessError
+from app.services.field.work_order_kind import WorkOrderKind
 from app.services.file_storage import UnifiedFileUploadService
 from app.services.owner_commands import CommandContext
+from app.services.work_order_templates import (
+    ClassificationSource,
+    WorkOrderAccessTechnology,
+    WorkOrderPurpose,
+)
 
 
 def _with_utc(value: datetime) -> datetime:
@@ -505,8 +511,12 @@ def test_transition_api(db_session):
     assert body["replayed"] is False
 
 
+@pytest.mark.parametrize(
+    "technology",
+    [WorkOrderAccessTechnology.FIBER, WorkOrderAccessTechnology.UNKNOWN, None],
+)
 def test_project_work_order_completion_requires_fiber_as_built_evidence(
-    db_session, fake_uploads
+    db_session, fake_uploads, technology: WorkOrderAccessTechnology | None
 ):
     from app.models.field_fiber import FieldFiberTestResult
     from app.models.project import Project
@@ -525,6 +535,12 @@ def test_project_work_order_completion_requires_fiber_as_built_evidence(
         status="in_progress",
         assigned_to_crm_person_id="crm-fiber-asbuilt",
         project_id=project.id,
+        access_technology=technology.value if technology else None,
+        purpose=WorkOrderPurpose.MAINTENANCE.value if technology else None,
+        template_version=1 if technology else None,
+        classification_source=ClassificationSource.EXPLICIT_OPERATOR_SELECTION.value
+        if technology
+        else None,
     )
     db_session.commit()
 
@@ -597,6 +613,75 @@ def test_project_work_order_completion_requires_fiber_as_built_evidence(
     assert completed.job.status == "completed"
 
 
+@pytest.mark.parametrize("with_signature", [True, False])
+def test_radio_project_completion_requires_photo_and_signoff_without_fiber(
+    db_session, fake_uploads, with_signature: bool
+):
+    from app.models.project import Project
+    from app.services.field.transitions import resolve_fiber_as_built_evidence
+
+    user = _user(db_session, "RadioAsBuilt")
+    _profile(db_session, user, crm_person_id="crm-radio-asbuilt")
+    project = Project(name="Radio rollout")
+    db_session.add(project)
+    db_session.flush()
+    row = _work_order(
+        db_session,
+        _subscriber(db_session),
+        crm_work_order_id="wo-radio-asbuilt",
+        status="in_progress",
+        assigned_to_crm_person_id="crm-radio-asbuilt",
+        project_id=project.id,
+        work_order_kind=WorkOrderKind.INFRASTRUCTURE.value,
+        access_technology=WorkOrderAccessTechnology.RADIO.value,
+        purpose=WorkOrderPurpose.INFRASTRUCTURE_ROLLOUT.value,
+        template_version=1,
+        classification_source=ClassificationSource.EXPLICIT_OPERATOR_SELECTION.value,
+    )
+    db_session.commit()
+    assert row.requires_as_built_evidence is True
+    evidence = resolve_fiber_as_built_evidence(db_session, row)
+    assert evidence.required is False and evidence.satisfied is True
+    assert (
+        evidence.fiber_test_count,
+        evidence.source_observation_count,
+        evidence.splice_proposal_count,
+    ) == (0, 0, 0)
+
+    def complete(payload: FieldTransitionPayload) -> FieldTransitionResponse:
+        return _transitions_apply(
+            db=db_session,
+            command=ApplyFieldTransition(
+                requester_system_user_id=user.id,
+                public_id="wo-radio-asbuilt",
+                event=FieldEvent.complete,
+                client_event_id=uuid4(),
+                payload=payload,
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_radio_completion",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
+        )
+
+    with pytest.raises(FieldAccessError, match="at least one photo"):
+        complete(FieldTransitionPayload())
+    _attach_photo(db_session, user, "wo-radio-asbuilt")
+    with pytest.raises(FieldAccessError, match="customer signature"):
+        complete(FieldTransitionPayload())
+    if with_signature:
+        _attach_photo(db_session, user, "wo-radio-asbuilt", kind="signature")
+        payload = FieldTransitionPayload()
+    else:
+        payload = FieldTransitionPayload(
+            signature_unavailable_reason="Customerless radio infrastructure rollout"
+        )
+    completed = complete(payload)
+    assert completed.job.status == "completed"
+
+
 def test_non_project_work_order_completion_skips_fiber_as_built_gate(
     db_session, fake_uploads
 ):
@@ -652,3 +737,60 @@ def _transitions_apply(
 ) -> FieldTransitionResponse:
     db_session_adapter.release_read_transaction(db)
     return field_transitions.apply(db=db, command=command)
+
+
+@pytest.mark.parametrize("supplied_generation", [None, "stale"])
+def test_generated_assignment_rejects_missing_or_stale_departure_generation(
+    db_session, supplied_generation
+):
+    from app.models.dispatch import WorkOrderAssignmentQueue
+
+    user = _user(db_session)
+    profile = _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    visit = _work_order(db_session, subscriber)
+    generation = uuid4()
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=visit.id,
+            assigned_technician_id=profile.id,
+            status="assigned",
+            assignment_generation=generation,
+            assignment_effective_at=datetime.now(UTC),
+        )
+    )
+    public_id = visit.public_id
+    db_session.commit()
+    with pytest.raises(FieldAccessError) as exc:
+        _transitions_apply(
+            db_session,
+            ApplyFieldTransition(
+                context=CommandContext.system(
+                    actor=str(user.id), scope="field:test", reason="departure"
+                ),
+                requester_system_user_id=user.id,
+                public_id=public_id,
+                event=FieldEvent.en_route,
+                client_event_id=uuid4(),
+                assignment_generation=uuid4() if supplied_generation else None,
+            ),
+        )
+    assert (
+        exc.value.code == "operations.field_completion.assignment_generation_mismatch"
+    )
+    assert db_session.query(FieldJobEvent).count() == 0
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = _transitions_apply(
+        db_session,
+        ApplyFieldTransition(
+            context=CommandContext.system(
+                actor=str(user.id), scope="field:test", reason="departure"
+            ),
+            requester_system_user_id=user.id,
+            public_id=public_id,
+            event=FieldEvent.en_route,
+            client_event_id=uuid4(),
+            assignment_generation=generation,
+        ),
+    )
+    assert outcome.event.assignment_generation == generation

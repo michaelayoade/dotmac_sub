@@ -8,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../app/theme.dart';
 import '../../core/offline/sync_service.dart';
 import '../execution/execution_controller.dart';
+import '../execution/completion_review_screen.dart';
+import 'job_brief_panel.dart';
 import 'job_models.dart';
 import 'jobs_providers.dart';
 import 'location_pin_screen.dart';
@@ -173,6 +175,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
               _ReferenceChips(detail: detail),
             ],
             const SizedBox(height: 16),
+            JobBriefPanel(jobId: job.id),
+            const SizedBox(height: 12),
             _LocationCard(jobId: job.id, location: detail.location),
             _DestinationsCard(jobId: job.id),
             if (detail.customer != null) ...[
@@ -180,6 +184,7 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
               _CustomerCard(jobId: job.id, customer: detail.customer!),
             ],
             const SizedBox(height: 12),
+            CompletionReviewPanel(jobId: job.id),
             if (capabilities.fiberEvidence.available)
               Card(
                 child: Padding(
@@ -494,6 +499,12 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
   }
 
   Future<void> _runWorkAction(String jobId, String action) async {
+    final assignmentGeneration = ref
+        .read(jobDetailProvider(jobId))
+        .asData
+        ?.value
+        .job
+        .assignmentGeneration;
     String? travelEventId;
     if (action == 'complete') {
       final completed = await context.push<bool>('/jobs/$jobId/complete');
@@ -513,6 +524,7 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
           .transition(
             jobId,
             action,
+            assignmentGeneration: assignmentGeneration,
             payload: destination.toTransitionPayload(),
           );
     } else if (action == 'arrived') {
@@ -524,12 +536,17 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
           .transition(
             jobId,
             action,
+            assignmentGeneration: assignmentGeneration,
             payload: destination.toTransitionPayload(),
           );
     } else {
       await ref
           .read(executionControllerProvider.notifier)
-          .transition(jobId, action);
+          .transition(
+            jobId,
+            action,
+            assignmentGeneration: assignmentGeneration,
+          );
     }
     if (!mounted) return;
     ref.invalidate(jobDetailProvider(jobId));
@@ -1059,9 +1076,19 @@ Future<void> promptUnableToComplete(
   );
   if (reason == null) return;
   if (!context.mounted) return;
+  final assignmentGeneration = ref
+      .read(jobDetailProvider(jobId))
+      .asData
+      ?.value
+      .job
+      .assignmentGeneration;
   await ref
       .read(executionControllerProvider.notifier)
-      .unableToComplete(jobId, reason: reason);
+      .unableToComplete(
+        jobId,
+        reason: reason,
+        assignmentGeneration: assignmentGeneration,
+      );
   if (!context.mounted) return;
   ref.invalidate(jobDetailProvider(jobId));
   Navigator.of(context).maybePop();

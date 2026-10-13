@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import subscriber_mfa_enrollment_http as subscriber_mfa_adapter
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.schemas.billing import (
     BillingAccountCreditAllocationConfirm,
@@ -51,6 +52,8 @@ from app.services import (
 )
 from app.services import password_authentication as subscriber_mfa_owner
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
 
@@ -373,12 +376,17 @@ def reseller_work_order_technician_location(
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return customer_work_order_selfcare.technician_location(
-        db, str(account.id), work_order_id
+        db,
+        query=customer_work_order_selfcare.TechnicianLocationQuery(
+            subscriber_id=account.id,
+            work_order_public_id=work_order_id,
+        ),
     )
 
 
 @router.post(
     "/accounts/{account_id}/work-orders/{work_order_id}/rate-technician",
+    dependencies=[Depends(require_browser_csrf_header)],
     response_model=TechnicianRatingResponse,
 )
 def reseller_rate_technician(
@@ -393,20 +401,43 @@ def reseller_rate_technician(
     account = reseller_portal.owned_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    command = customer_work_order_selfcare.RateTechnicianCommand(
+        context=CommandContext.system(
+            actor=f"reseller:{reseller_id}:principal:{principal.get('principal_id') or principal.get('subscriber_id')}",
+            scope="customer:work_order:rating",
+            reason="Authorized reseller customer feedback",
+        ),
+        representative=customer_work_order_selfcare.ResellerRatingScope(
+            reseller_id=UUID(reseller_id),
+            principal_id=UUID(
+                str(principal.get("principal_id") or principal.get("subscriber_id"))
+            ),
+            principal_kind=customer_work_order_selfcare.RatingRepresentativeKind(
+                principal["principal_type"]
+            ),
+        ),
+        subscriber_id=account.id,
+        work_order_public_id=work_order_id,
+        rating=payload.rating,
+        comment=payload.comment,
+    )
+    db_session_adapter.release_read_transaction(db)
     try:
-        return customer_work_order_selfcare.rate_technician(
-            db,
-            str(account.id),
-            work_order_id,
-            rating=payload.rating,
-            comment=payload.comment,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail="Work order not found") from exc
-    except ValueError as exc:
+        result = customer_work_order_selfcare.rate_technician(db, command=command)
+    except customer_work_order_selfcare.TechnicianRatingError as exc:
         raise HTTPException(
-            status_code=409, detail="Work order is not completed"
+            status_code=404
+            if exc.code.endswith("work_order_not_found")
+            else 422
+            if exc.code.endswith("invalid_rating")
+            else 409,
+            detail=exc.message,
         ) from exc
+    return TechnicianRatingResponse(
+        work_order_id=result.work_order_id,
+        rating=result.rating,
+        already_rated=result.already_rated,
+    )
 
 
 @router.get("/profile")

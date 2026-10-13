@@ -124,6 +124,7 @@ class FieldTechLocationPing(Base):
     # committed) be recognized as a replay instead of a new row. Old/already-
     # shipped app builds omit it, and that path is unaffected — see the
     # composite unique index above and record_ping's dedup check.
+    assignment_generation: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     client_observation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     technician = relationship("TechnicianProfile")

@@ -320,6 +320,14 @@ DEFAULT_PERMISSIONS = [
     ("operations:expense_request:pay", "Initiate approved expense reimbursements"),
     ("operations:asset_custody:read", "View asset custody records"),
     ("operations:asset_custody:write", "Manage asset custody records"),
+    (
+        "operations:completion-review:read",
+        "View issued-work completion review evidence",
+    ),
+    (
+        "operations:completion-review:write",
+        "Publish policy and review issued-work completion evidence",
+    ),
     ("operations:dispatch:read", "View dispatch work orders and maps"),
     ("operations:dispatch:write", "Create and edit dispatch work orders"),
     ("operations:dispatch:assign", "Queue and assign dispatch work orders"),
