@@ -99,6 +99,5 @@ service|app/services/subscriber_profile_cleanup.py
 service|app/services/team_inbox_commands.py
 web_presenter|app/services/web_admin_resellers.py
 web_presenter|app/services/web_customer_actions.py
-web_presenter|app/services/web_customer_details.py
 web_presenter|app/services/web_system_import_wizard.py
 web_presenter|app/services/web_system_restore_tool.py

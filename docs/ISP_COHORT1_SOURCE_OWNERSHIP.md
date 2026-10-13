@@ -27,10 +27,10 @@ implements.
 Sub's readiness work produces inputs for `ctl-isp-006` (source dispositions and
 idempotent replay), `ctl-isp-007` (zero-unexplained-drift shadow) and
 `ctl-isp-009` (bidirectional writer ratchet to zero). Producing an input is not
-verifying a control. Every one of those three is `blocked`, and the two open
-decisions that gate the cohort — `dec-isp-002`, the production deployment
-owner, and `dec-isp-003`, the enforceable legacy Sub transition rule — are
-Michael's and are unresolved.
+verifying a control. Those controls remain blocked. The production deployment
+owner (`dec-isp-002`) is unresolved. The transition decision `dec-isp-003` is
+answered at the pinned revision; its enforcement control `ctl-isp-003` remains
+blocked.
 
 **Nothing in this repository opens the cohort.** Sub is the sole production
 writer of every fact below until a separately authorised sealed switch.
@@ -189,10 +189,16 @@ already-baselined files looks like an ordinary shrink-and-grow pair.
 | Family | Files | Write sites |
 |---|---|---|
 | `service` | 21 | 95 |
-| `web_presenter` | 5 | 13 |
+| `web_presenter` | 4 | 12 |
 | `cli_script` | 5 | 12 |
 | `migration` | 9 | 12 |
-| **total** | **40** | **132** |
+| **total** | **39** | **131** |
+
+The detail location retirement removes one existing presenter write site:
+132 → 131, 40 → 39 counted files, and 29 → 28 production writer surfaces.
+No replacement persistence path is added. Three test-only construction sites
+(one migrated-clone engine and two Sessions) raise the fixture census from
+322 to 325; production Session-construction allowances remain unchanged.
 
 `api_route`, `webhook_handler`, `web_route`, `task_worker`, `scheduled_job`,
 `event_handler`, `websocket`, `importer`, `poller`, `app_module` and
@@ -220,10 +226,10 @@ inventory now answers them separately.
 
 | `AuthorityRole` | Files |
 |---|---|
-| `PARALLEL_WRITER` | 18 |
-| `NO_AUTHORITY` | 13 |
-| `DECLARED_OWNER` | 8 |
-| `SCHEMA_LINEAGE` | 6 |
+| `PARALLEL_WRITER` | 15 |
+| `NO_AUTHORITY` | 14 |
+| `DECLARED_OWNER` | 11 |
+| `SCHEMA_LINEAGE` | 9 |
 | `PROJECTION_WRITER` | 2 |
 | `UNDETERMINED` | 0 |
 
@@ -231,9 +237,9 @@ inventory now answers them separately.
 
 | `BoundaryRole` | Files |
 |---|---|
-| `PERSISTS` | 36 |
+| `PERSISTS` | 39 |
 | `DELEGATES` | 8 |
-| `READS` | 2 |
+| `READS` | 3 |
 | `TRANSPORTS` | 1 |
 | `OBSERVES` | 0 |
 | `UNDETERMINED` | 0 |
@@ -242,11 +248,11 @@ inventory now answers them separately.
 
 | `Reachability` | Files |
 |---|---|
-| `INTERNAL_ONLY` | 23 |
-| `ONLINE_REQUEST` | 9 |
-| `APPLIED_ONCE` | 6 |
-| `OPERATOR_COMMAND` | 4 |
-| `BACKGROUND_JOB` | 3 |
+| `INTERNAL_ONLY` | 25 |
+| `ONLINE_REQUEST` | 10 |
+| `APPLIED_ONCE` | 9 |
+| `OPERATOR_COMMAND` | 3 |
+| `BACKGROUND_JOB` | 2 |
 | `NON_PRODUCTION` | 2 |
 | `UNDETERMINED` | 0 |
 
@@ -258,9 +264,9 @@ authorities; `NO_AUTHORITY` appears with five different boundary roles;
 `INTERNAL_ONLY` appears with four different authorities. If that ever
 collapses, the axes should be merged rather than kept apart for appearances.
 
-Of the 36 writing surfaces, **28 can write production again**. The other eight
-cannot: two touch only disposable databases and six are applied migrations
-Alembic will not re-run. All eight stay in the ratchet, because a *new* one is
+Of the 39 writing surfaces, **28 can write production again**. The other eleven
+cannot: two touch only disposable databases and nine are applied migrations
+Alembic will not re-run. All eleven stay in the ratchet, because a *new* one is
 exactly what the guard should catch; none counts as something a cutover has to
 displace, because none can be retired.
 
@@ -274,9 +280,9 @@ it meant — and there is no second place to edit, so the two cannot disagree.
 |---|---|
 | `LEGACY_PARALLEL_WRITER` | 26 |
 | `AUTHORIZED_ADAPTER` | 8 |
-| `AUTHORITATIVE_WRITER` | 8 |
+| `AUTHORITATIVE_WRITER` | 11 |
 | `DERIVED_PROJECTION` | 2 |
-| `READ_ONLY_CONSUMER` | 2 |
+| `READ_ONLY_CONSUMER` | 3 |
 | `TRANSPORT` | 1 |
 | `OBSERVATION_COLLECTOR` | 0 |
 | `UNKNOWN` | 0 |
@@ -300,10 +306,10 @@ in another application.
 
 | `Disposition` | Files | Meaning |
 |---|---|---|
-| `ROUTE_THROUGH_OWNER_FIRST` | 14 | Must stop bypassing its declared owner *before* the cohort can be shadowed |
-| `RETIRE_AFTER_CUTOVER` | 14 | Displaced by the target; must reach zero for `ctl-isp-009` |
-| `REPOINT_TO_TARGET_API` | 11 | Reads or forwards a cohort fact; after the switch it must reach the target through a versioned contract |
-| `HISTORICAL_NO_ACTION` | 6 | An applied migration; nothing to retire |
+| `ROUTE_THROUGH_OWNER_FIRST` | 12 | Must stop bypassing its declared owner *before* the cohort can be shadowed |
+| `RETIRE_AFTER_CUTOVER` | 16 | Displaced by the target; must reach zero for `ctl-isp-009` |
+| `REPOINT_TO_TARGET_API` | 12 | Reads or forwards a cohort fact; after the switch it must reach the target through a versioned contract |
+| `HISTORICAL_NO_ACTION` | 9 | An applied migration; nothing to retire |
 | `NON_PRODUCTION_NO_ACTION` | 2 | Writes only disposable databases |
 | `UNDECIDED` | 0 | Needs a decision, and says which one |
 
@@ -314,9 +320,10 @@ meaning "nothing happens" would be the one anybody reached for to avoid
 deciding.
 
 **Every counted writer has an individual disposition; the readers take a
-declared default.** 401 files reference cohort state and 47 are inventoried
-here. Assigning an individual disposition to the other 356 would be fabrication
-at scale — the reference census is a bounded reach, not an impact analysis, and
+declared default.** 443 files reference cohort state; 51 surfaces are
+individually inventoried, of which 48 occur in that reference census. The other
+395 references take the declared caller default. Assigning an individual
+disposition to each of them would be fabrication at scale — the reference census is a bounded reach, not an impact analysis, and
 many of those files only mention a model in a type hint.
 
 The default is `REPOINT_TO_TARGET_API`, and it is an answer rather than a gap
@@ -333,7 +340,7 @@ Subscriber projection writes are displaced.
 
 `ROUTE_THROUGH_OWNER_FIRST` is the one that gates `ctl-isp-007` rather than
 `ctl-isp-009`: a shadow comparison run against a source with two writers cannot
-tell drift from the second writer, so those fourteen have to be routed
+tell drift from the second writer, so those twelve have to be routed
 through their owners before a comparison means anything.
 
 ### No undecided surfaces
@@ -350,11 +357,12 @@ recorded in `programmes/dotmac-isp-replacement.json` at `d91a87f`:
 `undecided_surfaces()` now returns empty, and the test asserting that is paired
 with a sensitivity check so it cannot pass by the accessor quietly breaking.
 
-**Two of the three answers create work rather than finishing it.** `addresses`
-still has no *Sub* owner — dec-isp-007 names the target owner, and product-first
-extraction needs a proven Sub implementation to extract from, so Sub must grow
-that owner before the write can be routed and before the cohort can be
-shadowed. And decomposing the recovery cascade is what makes the cohort-1 half
+**Two of the three answers create work rather than finishing it.** The existing
+Sub address owners are `customer.accounts` for identity/text and
+`gis.spatial_sync` for coordinates/projection. Dec-isp-007 names the extracted
+target owner, `dotmac-addresses`; it does not justify another Sub address writer.
+Remaining bypasses must route through those owners before shadow comparison.
+Decomposing the recovery cascade is what makes the cohort-1 half
 separable at all: today one restore touches invoices, payments, credentials,
 RADIUS, IP assignments and ONT assignments in the same pass, and only the
 account rows belong to cohort 1.
@@ -410,12 +418,12 @@ The target recomputes it; it does not trust it.
 
 ### Legacy parallel writers — the displacement list
 
-Twenty-five files write a cohort fact some other owner is declared to own.
-**Seventeen of them can do it again**, and that seventeen is the set `ctl-isp-009`
-must ratchet to zero; the remaining eight are listed for completeness and
-marked non-production. The CRM ticket pull writer was retired on 2026-09-27
-after the production stop gate; the surviving entries retain their checked-in
-dispositions.
+Fifteen production surfaces remain classified as `PARALLEL_WRITER`; these
+cohort touches need retirement or routing through their declared owner. Applied
+migrations and disposable-database writers have separate reachability and are
+not parallel production authority. The executable per-surface inventory is the
+complete classification record. The detail location writer is retired by this
+slice.
 
 | Path | Bypasses | Entity |
 |---|---|---|
@@ -429,13 +437,11 @@ dispositions.
 | `app/services/nin_verifications.py` | `customer.accounts` | account `metadata` |
 | `app/services/team_inbox_commands.py` | `party.registry` | constructs `PartyRelationship` |
 | `app/services/web_admin_resellers.py` | `customer.accounts` | `reseller_id` |
-| `app/services/web_customer_details.py` | `customer.accounts` | account `metadata` |
 | `app/services/web_system_import_wizard.py` | `customer.accounts` | constructs `Subscriber` |
 | `app/services/web_system_restore_tool.py` | `customer.accounts` | `is_active`, account `metadata` |
 | `scripts/migration/backfill_crm_subscriber_links.py` | `customer.accounts` | raw DML |
 | `scripts/migration/backfill_party_status.py` | `party.registry` | raw DML |
 | `scripts/migration/import_crm_phase3.py` | `customer.accounts` | raw DML |
-| `scripts/one_off/backfill_crm_subscriber_ids.py` | `customer.accounts` | raw DML |
 | `scripts/seed/seed_test_fixtures.py` | — | fixtures only, non-production |
 | `scripts/migration/kernel_lineage_rehearsal_canaries.py` | — | rehearsal canaries, non-production |
 | `alembic/versions/045_contact_channels_without_name.py` | — | applied migration, non-production |
@@ -447,24 +453,27 @@ dispositions.
 
 ### The `subscribers.metadata` finding
 
-Seven modules write `subscribers.metadata`: account deletion, NIN
-verification, portal notification read-state, CRM name repair, location
-requests, the customer detail presenter and the system restore tool. No owner
-declares its shape, no schema constrains it, and its keys are added by
-whichever feature needed somewhere to put something.
+The original inventory found seven modules writing `subscribers.metadata`:
+account deletion, NIN verification, portal notification read-state, CRM name
+repair, location requests, the customer detail presenter and the system restore
+tool. This is a historical finding, not the current writer count. The detail
+presenter's location writer is now retired: page reads no longer geocode or
+persist coordinates. The remaining blob has no complete typed shape or schema
+constraint; the executable census and per-surface inventory track its writers.
 
 This is the single most consequential fact in the cohort for migration
 purposes, and it is why the export contract treats the blob as an **inventory
 of keys plus a digest**, never as typed facts. A migration that reads
 structure into that column is inventing a contract nobody owns, and it would
-carry seven features' private conventions into the destination as though they
+carry legacy features' private conventions into the destination as though they
 were data.
 
 ## Adapters and callers
 
-Nine adapters reach cohort state and write none of it. They validate,
-authorise, delegate to an owning service, and own only the transaction —
-which is what `db.commit()` in a route means here.
+These adapters and read surfaces reach cohort state and write none of it.
+Adapters validate, authorise and delegate; they manage Session lifecycle while
+registered command owners control business transactions. Remaining legacy
+transaction-completion debt is tracked separately.
 
 | Path | Family | Guard |
 |---|---|---|
@@ -479,27 +488,27 @@ which is what `db.commit()` in a route means here.
 | `app/tasks/nin_tasks.py` | `task_worker` | worker context; writes verification rows outside this cohort |
 | `app/api/crm_webhooks.py` | `webhook_handler` | provider signature verification; hands the payload to a service and writes no cohort row |
 | `app/services/crm_customers.py` | `service` | reads accounts by exact CRM provenance; creates and updates nothing |
+| `app/services/web_customer_details.py` | `web_presenter` | reads canonical addresses first; pure typed legacy display fallback has no location writes |
 
 ## Reader reach and downstream consequences
 
 Writers are the set a cutover has to displace. Readers are the set it has to
-not surprise, and they are an order of magnitude larger: **401 files** name a
+not surprise, and they are an order of magnitude larger: **443 files** name a
 cohort-1 model or table somewhere in their body — measured by
 `python -m scripts.architecture.isp_cohort_writers` on this consolidation
 commit.
 
 | Family | Files referencing cohort state |
 |---|---|
-| `service` | 222 |
-| `web_presenter` | 48 |
-| `migration` | 46 |
-| `cli_script` | 46 |
-| `app_module` | 21 |
-| `web_route` | 10 |
-| `event_handler` | 3 |
 | `api_route` | 3 |
+| `app_module` | 22 |
+| `cli_script` | 46 |
+| `event_handler` | 4 |
+| `migration` | 57 |
+| `service` | 253 |
 | `task_worker` | 2 |
-| `webhook_handler` | 0 |
+| `web_presenter` | 46 |
+| `web_route` | 10 |
 
 This is a deliberately coarse measure — a mapped-class name anywhere in the
 module, or a table name in a string that also contains a SQL keyword — and it
@@ -559,11 +568,12 @@ rows — historical B2B account records with no live owner — is an open item f
 ## Unresolved
 
 - `dec-isp-002` — production deployment owner for `asm-dotmac-isp`. Michael's.
-- `dec-isp-003` — the enforceable legacy Sub transition rule. Michael's.
+- Programme-wide enforcement evidence for the resolved `dec-isp-003` rule;
+  `ctl-isp-003` remains blocked.
 - The disposition of `organizations` / `organization_memberships` rows.
-- An owner for `subscribers.mrr_total`, or an explicit decision that the
-  target recomputes it and the column is not migrated.
-- An owner and shape for `subscribers.metadata`, or an explicit decision that
-  it crosses as an opaque inventory only.
-- Whether `subscriber_nin_verifications` migrates, is retained in Sub as
-  regulatory evidence, or is retired.
+- Proof that the target recomputes `subscribers.mrr_total`; the no-migration
+  decision is already resolved.
+- Owner-backed transitions for remaining legacy metadata writers. The opaque
+  key-inventory/digest export rule is already decided.
+- Compliance/Records retention evidence for `subscriber_nin_verifications`,
+  already excluded from this cohort export; no purge is authorized here.

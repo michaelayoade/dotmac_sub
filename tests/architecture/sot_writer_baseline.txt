@@ -168,7 +168,6 @@ app.services.vendor_admin
 app.services.web_billing_reconciliation
 app.services.web_catalog_offers
 app.services.web_catalog_subscriptions
-app.services.web_customer_details
 app.services.web_customer_user_access
 app.services.web_integration_syncs
 app.services.web_network_core_devices_forms

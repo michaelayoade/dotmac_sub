@@ -256,10 +256,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: and two additional characterization Session sites for fresh owner isolation.
 #: These eighteen test-only sites do not expand production construction allowances.
 #: Reconciliation with main 81c4b4ccd preserves these 48 additional fixture
-#: sites alongside the lifecycle acceptance fixtures: the canonical AST scanner
-#: measures 725 sites across 153 test files. Production remains 17 sites across
-#: 15 files, with its exact per-file baseline unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 725
+#: sites alongside the lifecycle acceptance fixtures. Main b69f1b4a6 adds
+#: one migrated-clone engine and two Session constructions for location-read
+#: preservation: the canonical scanner measures 728 sites across 154 files.
+#: Production remains 17 sites across 15 files with its baseline unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 728
 
 
 def _baseline() -> dict[str, int]:

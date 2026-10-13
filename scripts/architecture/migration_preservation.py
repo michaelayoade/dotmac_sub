@@ -45,7 +45,7 @@ class PreservationDeclaration:
 
 FIELD_LIFECYCLE_PRESERVATION = PreservationDeclaration(
     adr_path="docs/adr/0030-preserved-field-migration-convergence.md",
-    base_commit="81c4b4ccd032959de6f455991c123a83bdccd674",
+    base_commit="b69f1b4a6d088522ce5834aa57ccd94a3530606d",
     amendment_heading="## Amendment: published router-health convergence — 2026-10-12",
     published_revisions=(
         "671_customer_connection_type_definitions",

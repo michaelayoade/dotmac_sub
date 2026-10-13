@@ -154,3 +154,13 @@ coverage changes. The complete `alembic/` and `app/models/` trees are unchanged.
 All preserved revision IDs, parents, bodies, bridge bytes and source-artifact
 hashes remain unchanged; only the exact base and declaration digest advance.
 This rebase adds no migration admission or deployment authority.
+
+
+The subsequent non-migration reconciliation advances the exact base to
+`b69f1b4a6d088522ce5834aa57ccd94a3530606d` (#3579). It retires location
+writes from customer detail reads and updates associated display and test
+contracts. The complete `alembic/` and `app/models/` Git trees are identical
+to the preceding pinned base. Preserved inventory, revision IDs, parents,
+bodies, bridges and source-artifact hashes remain unchanged; only the exact
+base and its declaration digest advance. This adds no migration admission
+or deployment authority.

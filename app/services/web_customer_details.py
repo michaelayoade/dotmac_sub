@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -57,6 +58,7 @@ from app.models.payment_proof import (
 )
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.subscriber import (
+    Address,
     ChannelType,
     Reseller,
     Subscriber,
@@ -66,11 +68,9 @@ from app.models.subscriber import (
     UserType,
 )
 from app.models.support import Ticket
-from app.schemas.geocoding import GeocodePreviewRequest
 from app.services import account_status_commands
 from app.services import catalog as catalog_service
 from app.services import customer_timeline as customer_timeline_service
-from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
 from app.services import subscriber_summary as subscriber_summary_service
@@ -85,6 +85,11 @@ from app.services.credential_crypto import decrypt_credential
 from app.services.customer_financial_position import (
     get_customer_billing_summary,
     prepaid_available_balances,
+)
+from app.services.customer_legacy_address_display import (
+    LegacyAddressDisplayQuery,
+    LegacyAddressDisplaySnapshot,
+    resolve_legacy_address_display,
 )
 from app.services.customer_network_path import (
     SubscriptionNetworkPath,
@@ -893,82 +898,49 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
     }
 
 
-def _build_person_fallback_address(db: Session, customer: Subscriber):
-    if (customer.address_line1 or "").strip() == "":
-        return []
+def _legacy_coordinate(value: object, *, bound: float) -> float | None:
+    """Normalize an untrusted legacy persistence value at the presenter edge."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        return None
+    try:
+        coordinate = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return (
+        coordinate if math.isfinite(coordinate) and abs(coordinate) <= bound else None
+    )
 
-    customer_meta = getattr(customer, "metadata_", None) or {}
-    customer_lat = getattr(customer, "latitude", None)
-    customer_lng = getattr(customer, "longitude", None)
 
-    def _clean_value(value):
-        if isinstance(value, str):
-            trimmed = value.strip()
-            return None if not trimmed or trimmed.lower() == "none" else trimmed
-        return value
-
-    address_line1 = (customer.address_line1 or "").strip()
-    address_line2 = _clean_value(getattr(customer, "address_line2", None))
-    city = _clean_value(getattr(customer, "city", None))
-    region = _clean_value(getattr(customer, "region", None))
-    postal_code = _clean_value(getattr(customer, "postal_code", None))
-    country_code = _clean_value(getattr(customer, "country_code", None))
-    if customer_lat is None:
-        customer_lat = customer_meta.get("latitude")
-    if customer_lng is None:
-        customer_lng = customer_meta.get("longitude")
-
-    if customer_lat is None or customer_lng is None:
-        try:
-            payload = GeocodePreviewRequest(
-                address_line1=address_line1,
-                address_line2=address_line2,
-                city=city,
-                region=region,
-                postal_code=postal_code,
-                country_code=country_code,
-                limit=1,
-            )
-            results = geocoding_service.geocode_preview_from_request(db, payload)
-            if results:
-                first = results[0] or {}
-                lat_value = first.get("latitude")
-                lng_value = first.get("longitude")
-                if lat_value is not None and lng_value is not None:
-                    customer_lat = float(lat_value)
-                    customer_lng = float(lng_value)
-                    if getattr(customer, "metadata_", None) is None:
-                        customer.metadata_ = {}
-                    if isinstance(customer.metadata_, dict):
-                        customer.metadata_["latitude"] = customer_lat
-                        customer.metadata_["longitude"] = customer_lng
-                        try:
-                            db.add(customer)
-                            db.commit()
-                        except Exception:
-                            db.rollback()
-        except Exception:
-            logger.debug(
-                "Fallback geocoding preview failed for customer %s",
-                customer.id,
-                exc_info=True,
-            )
-
-    return [
-        SimpleNamespace(
-            id=None,
-            is_primary=True,
-            address_line1=address_line1,
-            address_line2=address_line2,
-            city=city,
-            region=region,
-            postal_code=postal_code,
-            country_code=country_code,
-            latitude=customer_lat,
-            longitude=customer_lng,
-            created_at=None,
+def _build_person_fallback_address(
+    *, customer: Subscriber
+) -> tuple[LegacyAddressDisplaySnapshot, ...]:
+    metadata_values: object
+    metadata_values = customer.metadata_
+    if not isinstance(metadata_values, dict):
+        metadata_values = {}
+    latitude: object = getattr(customer, "latitude", None)
+    longitude: object = getattr(customer, "longitude", None)
+    snapshot = resolve_legacy_address_display(
+        query=LegacyAddressDisplayQuery(
+            address_line1=customer.address_line1,
+            address_line2=customer.address_line2,
+            city=customer.city,
+            region=customer.region,
+            postal_code=customer.postal_code,
+            country_code=customer.country_code,
+            latitude=_legacy_coordinate(
+                latitude if latitude is not None else metadata_values.get("latitude"),
+                bound=90,
+            ),
+            longitude=_legacy_coordinate(
+                longitude
+                if longitude is not None
+                else metadata_values.get("longitude"),
+                bound=180,
+            ),
         )
-    ]
+    )
+    return (snapshot,) if snapshot is not None else ()
 
 
 def _build_map_payload(primary_address, customer_name: str):
@@ -1803,7 +1775,7 @@ def build_customer_detail_snapshot(
     subscribers = [customer]
 
     # Load addresses and contacts for all subscriber accounts
-    addresses: list[Any] = []
+    addresses: list[Address | LegacyAddressDisplaySnapshot] = []
     contacts: list[dict[str, object]] = []
     accounts: list[Subscriber] = []
     for sub in subscribers:
@@ -1864,7 +1836,7 @@ def build_customer_detail_snapshot(
 
     # Address resolution with fallback
     if not addresses:
-        addresses = _build_person_fallback_address(db, customer)
+        addresses.extend(_build_person_fallback_address(customer=customer))
 
     primary_address = next(
         (
@@ -2066,7 +2038,13 @@ def build_customer_detail_snapshot(
     network_access_inactive_count = (
         len(network_access_cards) - network_access_active_count
     )
-    if include_network and map_data and primary_address:
+    if (
+        include_network
+        and map_data
+        and primary_address
+        and primary_address.latitude is not None
+        and primary_address.longitude is not None
+    ):
         map_data = project_customer_network_map(
             db,
             customer_name=customer_name,

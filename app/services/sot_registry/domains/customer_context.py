@@ -165,6 +165,88 @@ DOMAIN = DomainSOT(
     services=(
         CUSTOMER_FIELD_IDENTITY_SERVICE,
         SOTService(
+            name="customer.legacy_address_display",
+            module="app.services.customer_legacy_address_display",
+            owns=("legacy inline customer address display",),
+            depends_on=("customer.accounts",),
+            notes=(
+                "Pure, response-local display of retained inline address facts only "
+                "when no canonical Address is available. It neither geocodes nor "
+                "writes location facts; it does not register the whole customer "
+                "detail presenter as a domain owner."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="legacy inline customer address display",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("retained inline customer address facts",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="retained inline customer address facts",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.OBSERVATION,
+                        source=(
+                            "Immutable typed facts captured by the presenter from "
+                            "the current Subscriber only when its canonical Address "
+                            "list is empty; legacy metadata coordinates remain "
+                            "unverified display evidence, never canonical location."
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary=(
+                        "Pure typed query and immutable snapshot; no Session, "
+                        "transaction completion, provider call or cache mutation."
+                    ),
+                    locking="None; consumes only supplied render-time facts.",
+                    idempotency="Identical facts produce the same display snapshot.",
+                    retries="No automatic retry or external operation.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="customer detail presenter",
+                    fail_closed_on=(
+                        "Missing or invalid coordinates cannot become a map pin.",
+                        "Blank inline address text yields no fallback address.",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "web_customer_details read-time geocoding and Subscriber "
+                        "metadata persistence"
+                    ),
+                    new_owner="customer.legacy_address_display",
+                    verification=(
+                        "Composed snapshot and render tests, exact writer ratchets, "
+                        "and migrated PostgreSQL caller-transaction preservation."
+                    ),
+                    cutover_gate=(
+                        "No location-fallback geocoding, metadata mutation, commit "
+                        "or rollback; canonical Address precedence is unchanged. "
+                        "Other legacy presenter error paths are not migrated."
+                    ),
+                    fallback_retirement=(
+                        "Remove this display-only compatibility resolver after "
+                        "evidenced inline-address backfill and reader cutover; this "
+                        "slice does not backfill, repair geometry or move authority."
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=("docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md",),
+                test_refs=(
+                    "tests/test_customer_legacy_address_display.py",
+                    "tests/test_web_customer_details.py",
+                    "tests/architecture/test_customer_detail_location_read_boundary.py",
+                    "tests/integration/test_customer_detail_location_read_pg.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.account_deletion",
             module="app.services.customer_account_deletion",
             owns=("customer account hard deletion",),

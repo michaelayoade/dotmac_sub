@@ -50,7 +50,7 @@ else:
         PreservedBridge,
     )
 
-PRESERVATION_SHA256 = "0cc02e35b5518903a983bf2ec669c55415843cd069af9e48b671baad41fc90de"
+PRESERVATION_SHA256 = "0b1001d80424da18ebdd3fbd7707f6c03bfc3b06e3fd2ea77b7331a957828446"
 
 VERSIONS_DIR = "alembic/versions"
 

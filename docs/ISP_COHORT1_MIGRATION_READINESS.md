@@ -5,10 +5,12 @@ party and customer" — from `asm-dotmac-sub-legacy` to `asm-dotmac-isp`, and th
 evidence each step has to produce.
 
 **Nothing in this document is authorised to run.** Every cohort in the accepted
-matrix is `blocked`, `dec-isp-002` (production deployment owner) and
-`dec-isp-003` (the enforceable legacy Sub transition rule) are open and are
-Michael's, and no host, date or window is named here or may be inferred from
-here. This is the shape of the work, written down while it is cheap, so that
+matrix is `blocked`, and `dec-isp-002` (production deployment owner) remains
+open. Governance answered `dec-isp-003` at the pinned revision: source work
+must be bounded cutover preparation that retires local writers. Its enforcement
+control `ctl-isp-003` remains blocked; an answered decision does not verify a
+control. No host, date or window is named here or may be inferred from here.
+This is the shape of the work, written down while it is cheap, so that
 when it is authorised nobody has to invent it under time pressure.
 
 Companion documents: `docs/adr/0012-isp-cohort-source-readiness.md` (the
@@ -23,7 +25,7 @@ decision), `docs/ISP_COHORT1_SOURCE_OWNERSHIP.md` (who writes what today).
 | Source | `asm-dotmac-sub-legacy` — source-authoritative |
 | Target | `asm-dotmac-isp` — candidate, independent database, no deployment owner |
 | Entity types | 12 |
-| Production writers | 29 (11 declared owners, 2 derived projections, 16 parallel) |
+| Production writers | 28 (11 declared owners, 2 derived projections, 15 parallel) |
 | Contract version | 1 |
 | Record schema version | 1 |
 
@@ -51,8 +53,9 @@ the control cites immutable evidence.
 ### 1. The destination pins a registry-verified module set — `ctl-isp-004`
 
 Cohort 1's components are `dotmac-kernel` and `dotmac-ui` (reuse),
-`dotmac-party` (release), `dotmac-brand-profiles` (adopt) and
-`dotmac-customers` (build). Each must be an immutable published artifact pinned
+`dotmac-party` (release), `dotmac-brand-profiles` (adopt),
+`dotmac-customers` (build), and `dotmac-addresses` (build, dec-isp-007).
+Each must be an immutable published artifact pinned
 by digest, not by version and never by tag.
 
 Sub's part: none. Sub does not pin, compose or install any of them. A Sub
@@ -199,10 +202,10 @@ Before any authority moves, prove the way back on a disposable target:
 Not this work, and not this document's to schedule. What the switch needs:
 
 - a named production deployment owner (`dec-isp-002`, open);
-- the enforceable legacy Sub transition rule (`dec-isp-003`, open);
+- the enforceable legacy Sub transition rule (`dec-isp-003`, answered; `ctl-isp-003`, blocked);
 - an operator approval attributable to a person, recorded in Governance;
 - **traffic-zero evidence** for the cohort's Sub write paths: a measured window
-  in which none of the 29 production writers executed. Sub already emits
+  in which none of the 28 production writers executed. Sub already emits
   structured logs and audit events; the evidence is a query over them naming
   each writer and showing no invocation, not an assertion that the surface is
   quiet;
@@ -247,7 +250,7 @@ nothing to retire; they remain in the baseline so a *new* fixture seeder or a
 | `ctl-isp-006` | Dotmac Sub technical owner | Every source row dispositioned; idempotent replay proved by digest equality |
 | `ctl-isp-007` | Dotmac ISP technical owner | Zero unexplained drift at an immutable source watermark |
 | `ctl-isp-008` | Michael Ayoade | Sealed switch: approval, delta capture, traffic-zero evidence, rollback conditions |
-| `ctl-isp-009` | Dotmac Sub technical owner | 29 production writers to zero, ratchet lowered writer by writer |
+| `ctl-isp-009` | Dotmac Sub technical owner | 28 production writers to zero, ratchet lowered writer by writer |
 
 A control is verified only in Governance, citing an immutable
 controlled-source reference. Nothing in this repository advances one, and an
@@ -271,10 +274,10 @@ plus the two dispositions that were always going to need one:
   intent, but one restore currently touches invoices, payments, credentials,
   RADIUS, IP assignments and ONT assignments in the same pass. Only the account
   rows are cohort 1, and the pass has to be separable before they can move.
-- **`subscribers.metadata` has seven writers and no declared shape.** Decided:
-  it crosses as an opaque key inventory plus a digest until an owner declares
-  its keys. That is a standing rule, not a pending question — but the seven
-  writers still have to route through `customer.accounts`.
+- **`subscribers.metadata` remains opaque export evidence.** It crosses as a
+  key inventory plus a digest, never as target-owned facts. The detail location
+  writer is retired; remaining dispositions come from the executable inventory,
+  not the historical seven-writer count.
 - **`organizations` and `organization_memberships` have no counted writer.**
   Historical B2B account records with no live owner. Do they migrate, stay in
   Sub as history, or retire with evidence? Still open.

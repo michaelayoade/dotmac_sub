@@ -293,6 +293,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "If deletion is blocked by linked financial, recovery, or history records, review those records with the responsible team. If the account is busy or changed during deletion, refresh it and retry; for bulk deletion, obtain a fresh preview and confirmation.",
         notes=(
             "Timeline and ledger entries are evidence; review them before deciding on a correction.",
+            "Opening the customer page does not look up or save new coordinates. If Location not set appears, use the explicit location action and save confirmed coordinates; viewing the page does not update the account.",
             "A successful deletion removes the customer account and its login records, releases active IP assignments, retires active customer equipment, and saves the audit record together. If any part fails, these changes are all undone. Retained equipment and network history remain, along with the underlying person or organization record.",
             "Deletion cannot be used to erase linked financial or retained history records. An individual customer with a remaining subscription is also blocked from deletion.",
             "An activation override only admits prepaid activation. The account stays funding-quarantined, excluded from balance-based suspension and restoration, and still counts in the quarantine alert until its opening is captured.",
