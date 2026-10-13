@@ -630,13 +630,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The real-predecessor canary archives this ancestor's original tree.
+          # The canary archives a pinned old source, independent of squash ancestry.
           fetch-depth: 0
 
       - name: Verify immutable ERP accounting-fact predecessor
-        run: |
-          git cat-file -e f3a18e7ff2d89821eb410760bd326253fb5c36af^{commit}
-          git merge-base --is-ancestor f3a18e7ff2d89821eb410760bd326253fb5c36af HEAD
+        run: python3 -m scripts.ci.immutable_predecessor
 
       - uses: ./.github/actions/setup-ci-python
         with:
