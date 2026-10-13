@@ -1,5 +1,6 @@
 """Admin billing payments routes."""
 
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from typing import Any, cast
 from uuid import UUID
@@ -30,11 +31,24 @@ from app.services import (
 )
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import has_permission, require_permission
+from app.services.db_session_adapter import db_session_adapter
 from app.services.inclusive_date_range import InclusiveDateRangeError
+from app.services.list_query import ListQuery
 from app.web.request_parsing import parse_json_body
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+
+
+def _stream_payments_csv(*, list_query: ListQuery) -> Iterator[str]:
+    """Own the database session for the complete streaming-response lifetime."""
+    db = db_session_adapter.create_session()
+    try:
+        yield from web_billing_payments_service.stream_payments_csv(
+            db, list_query=list_query
+        )
+    finally:
+        db.close()
 
 
 @router.get(
@@ -113,7 +127,6 @@ def payments_export_csv(
     start_date: OptionalDateQuery = None,
     end_date: OptionalDateQuery = None,
     unallocated_only: bool = Query(False),
-    db: Session = Depends(get_db),
 ):
     try:
         list_query = web_billing_payments_service.build_payments_list_query(
@@ -128,9 +141,8 @@ def payments_export_csv(
         )
     except (InclusiveDateRangeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    rows = web_billing_payments_service.stream_payments_csv(db, list_query=list_query)
     return StreamingResponse(
-        rows,
+        _stream_payments_csv(list_query=list_query),
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="payments_export.csv"'},
     )
