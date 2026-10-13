@@ -158,7 +158,7 @@
         "path": "tests/test_nextcloud_talk_credential_setup.py",
         "symbol": "<module>",
         "category": "outbound_transport",
-        "fingerprint": "93e33b5e252bfb463ce9a622f08b0c3108147a37e1122629ba9c0489048ec48b"
+        "fingerprint": "c31304ba674a0781dc6e33990d28f68e19dda55814387eb4f4ed5929c6c59346"
       },
       {
         "path": "tests/test_nextcloud_talk_staff_notifications.py",
