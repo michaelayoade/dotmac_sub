@@ -4401,7 +4401,10 @@ SERVICES: tuple[SOTService, ...] = (
             "finalize_invoice_application_for_owner. The retired inline "
             "project_paid_invoice_billing_anchors helper is gone. The reviewed "
             "repair also admits a NULL active-prepaid anchor only when an "
-            "active entitlement proves its exact paid-through target; the "
+            "active entitlement proves its exact paid-through target; a paused "
+            "subscription is admitted only by an explicitly subscription-scoped "
+            "review, never by bulk discovery, and the repair changes no lifecycle "
+            "state. The "
             "legacy cadence/forgiveness backfill is retired. A lagging "
             "entitlement-backed repair targets the later of active entitlement "
             "coverage and any applied service-extension grant, so it cannot "
@@ -4584,6 +4587,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "prepaid subscription and renewal terms",
                         "funded service entitlement evidence",
                         "applied service-extension coverage evidence",
+                        "fingerprint-bound explicit subscription selection",
                     ),
                     canonical_writer="financial.prepaid_service_renewals",
                 ),
@@ -4840,6 +4844,16 @@ SERVICES: tuple[SOTService, ...] = (
                         "ServiceExtensionEntry grant interval"
                     ),
                 ),
+                AuthorityInput(
+                    name="fingerprint-bound explicit subscription selection",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "operator-selected subscription UUID and exact preview "
+                        "fingerprint; permits paused-subscription review without "
+                        "expanding bulk repair eligibility"
+                    ),
+                ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.OWNER_MANAGED,
@@ -5042,6 +5056,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
                 "docs/designs/FUNDED_PREPAID_RENEWAL_INVOICING.md",
                 "docs/designs/USAGE_ALLOWANCE_RESET_CYCLES.md",
+                "docs/runbooks/MONEY_PATH_OPERATIONAL_CLOSURE.md",
                 "docs/runbooks/LEGACY_PREPAID_RENEWAL_TAX_INVOICE_CORRECTION.md",
                 "docs/runbooks/LEGACY_PAYMENT_BACKED_PREPAID_RENEWAL_INVOICE_REPAIR.md",
                 "docs/runbooks/REVIEWED_MIGRATED_PREPAID_OPENING_REPAIR.md",
@@ -5049,6 +5064,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             test_refs=(
                 "tests/test_prepaid_service_renewals.py",
+                "tests/test_payment_allocation_settlement_consequence.py",
                 "tests/services/billing/test_payment_status_recompute.py",
                 "tests/test_subledger_forward_shadow.py",
                 "tests/architecture/test_prepaid_billing_anchor_ownership.py",

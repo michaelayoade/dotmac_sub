@@ -865,6 +865,51 @@ def test_reviewed_anchor_repair_retracts_an_explicit_unsupported_lead(
     assert at(subscription.next_billing_at) == at(entitlement.ends_at)
 
 
+def test_reviewed_anchor_repair_can_correct_explicitly_selected_paused_subscription(
+    db_session, subscriber, subscription
+):
+    """A paused service can be repaired without restoring it or widening bulk scope."""
+    invoice = _prepaid_invoice(db_session, subscriber, subscription)
+    payment = _settled_payment(db_session, subscriber)
+    _allocate(db_session, payment, invoice)
+    entitlement = _entitlement(db_session, invoice)
+    unsupported_lead = at(entitlement.ends_at) + timedelta(minutes=5)
+    subscription.next_billing_at = unsupported_lead
+    subscription.status = SubscriptionStatus.paused
+    db_session.commit()
+
+    bulk_preview = preview_stale_prepaid_billing_anchor_repair(db_session, limit=50)
+    assert bulk_preview.cohort_size == 0
+
+    default_preview = preview_stale_prepaid_billing_anchor_repair(
+        db_session,
+        limit=1,
+        subscription_ids=(subscription.id,),
+    )
+    assert default_preview.cohort_size == 0
+
+    preview = preview_stale_prepaid_billing_anchor_repair(
+        db_session,
+        limit=1,
+        subscription_ids=(subscription.id,),
+        include_unsupported_leads=True,
+    )
+    assert preview.cohort_size == 1
+    assert preview.candidates[0].coverage_end == at(entitlement.ends_at)
+
+    result = apply_stale_prepaid_billing_anchor_repair(
+        db_session,
+        preview,
+        actor="pytest:operator",
+        reason="Align paused subscription anchor to exact funded coverage",
+    )
+
+    assert result.repaired == 1
+    db_session.refresh(subscription)
+    assert subscription.status == SubscriptionStatus.paused
+    assert at(subscription.next_billing_at) == at(entitlement.ends_at)
+
+
 def test_reviewed_anchor_repair_quarantines_an_applied_extension(
     db_session, subscriber, subscription
 ):

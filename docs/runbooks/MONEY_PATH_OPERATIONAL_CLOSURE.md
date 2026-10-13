@@ -110,12 +110,14 @@ repair instead:
 poetry run python scripts/one_off/repair_stale_prepaid_billing_anchors.py --limit 500
 ```
 
-The preview includes active prepaid subscriptions whose anchor is NULL or
-behind an active entitlement. It proposes only the entitlement's exact coverage
-end and prints every candidate included in the page fingerprint; it does not
-silently truncate the review list. Review the whole page and its fingerprint,
-then—on the separately approved, explicitly named host—apply that exact
-fingerprint:
+The bulk preview includes active prepaid subscriptions whose anchor is NULL or
+behind an active entitlement. A paused subscription is considered only when
+its exact UUID is selected with `--subscription-id`; a lead beyond exact
+coverage also requires `--include-unsupported-leads`. It proposes only the
+entitlement's exact coverage end (or a later applied extension end) and prints
+every candidate included in the page fingerprint; it does not silently
+truncate the review list. Review the whole page and its fingerprint, then—on the
+separately approved, explicitly named host—apply that exact fingerprint:
 
 ```bash
 poetry run python scripts/one_off/repair_stale_prepaid_billing_anchors.py \
@@ -130,7 +132,9 @@ Run until the evidence-backed cohort is zero. A NULL anchor with no exact active
 entitlement is not repairable by this command: leave it in review, determine the
 contract/lifecycle evidence, and use the owning lifecycle command. Do not infer
 an anchor from account creation, current time, mutable offer cadence, or a
-plausible invoice.
+plausible invoice. This repair changes only the billing anchor, never lifecycle
+state; after repairing a paused subscription, rerun the normal resume preview
+and resume only if its billing and access blockers have cleared.
 
 ## 5. Receivables prioritization
 

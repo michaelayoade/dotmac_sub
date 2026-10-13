@@ -6954,6 +6954,18 @@ def _stale_billing_anchor_candidates(
         if include_unsupported_leads
         else lagging_or_absent
     )
+    eligible_status = Subscription.status == SubscriptionStatus.active
+    if subscription_ids:
+        # Paused services are eligible only in an explicitly selected review.
+        # The bulk cohort stays active-only, and the repair still derives its
+        # target solely from exact entitlement and applied-extension evidence.
+        eligible_status = or_(
+            eligible_status,
+            and_(
+                Subscription.status == SubscriptionStatus.paused,
+                Subscription.id.in_(list(subscription_ids)),
+            ),
+        )
     query = (
         select(
             Subscription.id,
@@ -6972,7 +6984,7 @@ def _stale_billing_anchor_candidates(
             extension_coverage.c.subscription_id == Subscription.id,
         )
         .where(
-            Subscription.status == SubscriptionStatus.active,
+            eligible_status,
             Subscription.billing_mode == BillingMode.prepaid,
             candidate_predicate,
         )

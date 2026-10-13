@@ -254,11 +254,14 @@ coverage and restoration. Fixed-term expiry still
 checks authoritative coverage and holds unresolved projections before acting.
 
 The prepaid-renewal owner's billing-anchor repair discovers absent or lagging
-anchors from exact active entitlement evidence. An evidence-free anchor lead
-is never repaired in bulk: an operator must select the exact subscription in a
-fingerprint-bound preview and explicitly allow retraction, and an applied
+anchors from exact active entitlement evidence. Bulk discovery remains limited
+to active subscriptions. A paused subscription may be included only when the
+operator explicitly selects its exact ID in a fingerprint-bound preview; an
+evidence-free anchor lead also requires explicit retraction, and an applied
 service extension quarantines the candidate. Confirmation aligns the anchor to
-the entitlement end and records durable audit evidence without posting money.
+the exact entitlement and extension coverage end and records durable audit
+evidence without posting money or changing lifecycle state. A paused subscription
+must then pass the normal lifecycle resume preview before restoration.
 
 For a prepaid settlement, the replacement period starts after the exact
 uninterrupted coverage containing the payment instant. That coverage is the

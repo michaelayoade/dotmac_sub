@@ -20,8 +20,9 @@ without that evidence remain review stock.
 
 An anchor ahead of exact coverage is excluded from bulk discovery. Operators
 may select explicit subscription UUIDs and opt into unsupported-lead repair;
-an applied service extension still quarantines the row rather than being
-silently clawed back.
+paused subscriptions are eligible only in that explicitly selected cohort. An
+applied service extension still quarantines the row rather than being silently
+clawed back. Repair never changes subscription lifecycle state.
 
 Preview-then-apply, idempotent, and evidence-producing:
   * preview is read-only and fingerprint-bound;
