@@ -20,7 +20,13 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentStatus,
 )
-from app.models.catalog import CatalogOffer, Subscription
+from app.models.catalog import (
+    AccessType,
+    CatalogOffer,
+    PriceBasis,
+    ServiceType,
+    Subscription,
+)
 from app.models.subscriber import Subscriber
 from app.services.billing.opening_export import (
     BillingOpeningExportError,
@@ -68,7 +74,13 @@ def census_rows(census_factory: sessionmaker[Session]) -> SeededCensus:
             email=f"census-{marker}@example.invalid",
             reseller_id=_default_reseller_id(writer),
         )
-        offer = CatalogOffer(name=f"Census {marker}", code=f"CEN-{marker}")
+        offer = CatalogOffer(
+            name=f"Census {marker}",
+            code=f"CEN-{marker}",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        )
         writer.add_all([account, offer])
         writer.flush()
         subscriptions = [
