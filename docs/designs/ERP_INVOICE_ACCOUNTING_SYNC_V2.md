@@ -14,12 +14,14 @@ Billing outbox bridge or transport activation and does not depend on WHT work.
 released Billing a1 `AccountingFactV1` into `BillingAccountingExportV1` with
 `contract="billing.accounting.export.v1"` and
 `fact_contract="billing.accounting.fact.v1"`. The complete canonical fact,
-explicit tenant/platform scope, source system, fact UUID/version, account and
+explicit tenant scope, source system, fact UUID/version, account and
 posting-group identities, opaque source reference/authority, event and commit
 instants, signed lane effects, allocation/deallocation/reallocation/refund/
 reversal evidence and offsets, tax snapshots and FX provenance are preserved.
 Money carries exact decimal amount, currency and minor units; invalid precision,
 nonfinite values, floats, missing scope and naive timestamps fail closed.
+Sub is tenant-only under ADR 0009: both mapping and captured-fact parsing refuse
+platform scope; every accepted fact requires an explicit tenant UUID.
 The transport digest covers every released fact field; it is a transport
 canonicalization digest, not an assertion about Billing's internal digest
 implementation. No GL classification, recognition decision, document identifier,
@@ -52,7 +54,9 @@ Sub graph's terminal revision at base
 mismatch is preserved. Revision 434 stays frozen. The hosted migration canary
 archives that immutable old source, migrates its real old model/enum chain in
 an explicitly disposable database, asserts the new label is absent, then runs
-the candidate upgrade and preserves an old export. This avoids describing a
+the candidate upgrade and preserves an old export. The hosted integration
+checkout includes full history and verifies that this immutable source is an
+ancestor of the candidate before the canary runs. This avoids describing a
 current-metadata predecessor rebuild as evidence of the old enum. Current-main
 revision collision and all hosted acceptance checks remain required before
 publication; no migration has been executed by this implementation session.

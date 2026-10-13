@@ -23,7 +23,7 @@ from dotmac_billing import (
     AppliedTaxSnapshotV1,
 )
 from dotmac_billing.contracts import ACCOUNTING_FACT_CONTRACT
-from dotmac_kernel.cache import PlatformScope, TenantScope
+from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency, Money
 from pydantic import (
     AwareDatetime,
@@ -94,14 +94,8 @@ class _Wire(BaseModel):
 
 
 class _Scope(_Wire):
-    plane: Literal["tenant", "platform"]
-    tenant_id: UUID | None = None
-
-    @model_validator(mode="after")
-    def coherent_plane(self) -> _Scope:
-        if (self.plane == "tenant") != (self.tenant_id is not None):
-            raise ValueError("tenant plane requires tenant_id; platform forbids it")
-        return self
+    plane: Literal["tenant"]
+    tenant_id: UUID
 
 
 class _Money(_Wire):
@@ -217,13 +211,8 @@ class _Fact(_Wire):
         return value.astimezone(UTC)
 
     def fact(self) -> AccountingFactV1:
-        scope = (
-            TenantScope(self.scope.tenant_id)
-            if self.scope.tenant_id is not None
-            else PlatformScope()
-        )
         return AccountingFactV1(
-            scope=scope,
+            scope=TenantScope(self.scope.tenant_id),
             source_system=self.source_system,
             fact_id=self.fact_id,
             fact_version=self.fact_version,
@@ -291,12 +280,9 @@ def _money(value: Money) -> _Money:
 
 
 def _wire(fact: AccountingFactV1) -> _Fact:
-    if isinstance(fact.scope, TenantScope):
-        scope = _Scope(plane="tenant", tenant_id=fact.scope.tenant_id)
-    elif isinstance(fact.scope, PlatformScope):
-        scope = _Scope(plane="platform", tenant_id=None)
-    else:
-        raise _invalid("An explicit tenant or platform scope is required.")
+    if not isinstance(fact.scope, TenantScope):
+        raise _invalid("Sub accounting facts require an explicit tenant scope.")
+    scope = _Scope(plane="tenant", tenant_id=fact.scope.tenant_id)
     fx = fact.fx_snapshot
     return _Fact(
         scope=scope,

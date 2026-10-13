@@ -122,7 +122,7 @@ def test_complete_fact_digest_detects_changes(field: str) -> None:
         ),
         "tax": replace(fact, tax_snapshots=()),
         "reversal": replace(fact, reverses_fact_id=uuid4()),
-        "scope": replace(fact, scope=PlatformScope()),
+        "scope": replace(fact, scope=TenantScope(uuid4())),
         "version": replace(fact, fact_version=2),
     }[field]
     assert (
@@ -144,6 +144,30 @@ def test_complete_fact_digest_detects_changes(field: str) -> None:
 def test_invalid_fact_boundaries_fail_closed(changes: dict[str, object]) -> None:
     with pytest.raises(BillingAccountingFactError):
         map_billing_accounting_fact(replace(accounting_fact(), **changes))
+
+
+def test_mapper_refuses_platform_scoped_facts() -> None:
+    with pytest.raises(BillingAccountingFactError):
+        map_billing_accounting_fact(replace(accounting_fact(), scope=PlatformScope()))
+
+
+@pytest.mark.parametrize(
+    "scope",
+    (
+        {"plane": "platform"},
+        {"plane": "platform", "tenant_id": None},
+        {"plane": "platform", "tenant_id": str(uuid4())},
+        {"plane": "tenant"},
+        {"plane": "tenant", "tenant_id": None},
+    ),
+)
+def test_parser_refuses_platform_or_incomplete_tenant_scope(
+    scope: dict[str, str | None],
+) -> None:
+    payload = map_billing_accounting_fact(accounting_fact()).to_payload()["fact"]
+    payload["scope"] = scope
+    with pytest.raises(BillingAccountingFactError):
+        parse_billing_accounting_fact(json.dumps(payload))
 
 
 def test_canonical_digest_ignores_json_key_order() -> None:
@@ -231,7 +255,6 @@ def test_scope_source_and_version_define_distinct_fact_replay_identities() -> No
     fact = accounting_fact()
     original = map_billing_accounting_fact(fact)
     for changed in (
-        replace(fact, scope=PlatformScope()),
         replace(fact, scope=TenantScope(uuid4())),
         replace(fact, source_system="another-source"),
         replace(fact, fact_version=2),

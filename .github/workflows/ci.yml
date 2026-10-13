@@ -629,6 +629,14 @@ jobs:
       TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The real-predecessor canary archives this ancestor's original tree.
+          fetch-depth: 0
+
+      - name: Verify immutable ERP accounting-fact predecessor
+        run: |
+          git cat-file -e f3a18e7ff2d89821eb410760bd326253fb5c36af^{commit}
+          git merge-base --is-ancestor f3a18e7ff2d89821eb410760bd326253fb5c36af HEAD
 
       - uses: ./.github/actions/setup-ci-python
         with:
