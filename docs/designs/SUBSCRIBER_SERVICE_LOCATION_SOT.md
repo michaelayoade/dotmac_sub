@@ -163,6 +163,16 @@ and coordinates atomically through `customer.accounts` and `gis.spatial_sync`.
 There is no customer review or pending state for this editor. Clear restores
 the stored values before submission.
 
+The map always renders a draggable pin. When no canonical coordinate exists,
+the pin begins provisionally at the map centre without populating the submitted
+coordinate fields or enabling Save; the customer's first drag, click, tap,
+search selection, or successful browser-location result selects coordinates.
+Browser location lookup is only a convenience: unsupported, denied,
+unavailable, and timed-out results remain distinct, explain the relevant
+recovery, and never disable manual pin placement. The low-accuracy request is
+deliberate because desktop browsers commonly resolve location from Wi-Fi rather
+than a GPS receiver.
+
 The portal route is an adapter: after authentication and scope resolution it
 releases its read transaction and calls the typed
 `customer.portal_location_commands` coordinator. The coordinator locks the
