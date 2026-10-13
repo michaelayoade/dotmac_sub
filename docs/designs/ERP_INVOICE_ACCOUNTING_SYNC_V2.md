@@ -3,6 +3,60 @@
 Status: shadow-only compatibility contract. It does not authorize an ERP
 cutover, a data repair, or a billing writer change.
 
+## Released Billing fact transport preparation — 2026-10-13
+
+Candidate implementation only; hosted acceptance is pending. The existing ERP
+pull feed, invoice-sync contract, permissions and runtime delivery remain
+unchanged. This slice adds no ingress, HTTP client, credential, dispatcher,
+Billing outbox bridge or transport activation and does not depend on WHT work.
+
+`app.services.dotmac_erp.billing_accounting_fact` maps the already pinned,
+released Billing a1 `AccountingFactV1` into `BillingAccountingExportV1` with
+`contract="billing.accounting.export.v1"` and
+`fact_contract="billing.accounting.fact.v1"`. The complete canonical fact,
+explicit tenant/platform scope, source system, fact UUID/version, account and
+posting-group identities, opaque source reference/authority, event and commit
+instants, signed lane effects, allocation/deallocation/reallocation/refund/
+reversal evidence and offsets, tax snapshots and FX provenance are preserved.
+Money carries exact decimal amount, currency and minor units; invalid precision,
+nonfinite values, floats, missing scope and naive timestamps fail closed.
+The transport digest covers every released fact field; it is a transport
+canonicalization digest, not an assertion about Billing's internal digest
+implementation. No GL classification, recognition decision, document identifier,
+sequence or accounting relationship is inferred from `source_ref`.
+
+The existing ERP owner has a dedicated, dormant
+`stage_committed_billing_fact` flush-only participant and additive
+`ErpBillingFlow.accounting_fact`. It requires an active registered owner command,
+which proves transaction authority only. A future separately reviewed consumer
+must obtain committed Billing outbox evidence and validate source and scope
+before staging. Captured JSON does not establish that trust. No runtime caller
+or consumer is wired in this slice. The participant uses the existing export
+ledger and unique key; transaction-advisory serialization protects the absent
+first insert before row lookup and canonical payload comparison. Replay identity
+is `(source_system, exact_scope, fact_id, fact_version)`, independent of delivery
+status and command/correlation IDs. Exact replay returns the existing export;
+changed complete evidence refuses, including concurrent first inserts. Generic
+invoice staging refuses accounting-fact-shaped payloads instead of inventing
+invoice lines. ERP delivery and acknowledgement keep their existing owner.
+
+`preview-module-accounting-export --fact-file <captured-fact.json>` calls the
+actual parser and mapper before opening any database session. It emits a
+captured-preview-only envelope, never invokes staging and provides no trust
+promotion or live receiving endpoint.
+
+Migration `688_billing_accounting_fact_export` adds one enum label, no data.
+Its actual predecessor is `686_field_lifecycle_router_health_merge`, the complete
+Sub graph's terminal revision at base
+`f3a18e7ff2d89821eb410760bd326253fb5c36af`; the existing filename/revision
+mismatch is preserved. Revision 434 stays frozen. The hosted migration canary
+archives that immutable old source, migrates its real old model/enum chain in
+an explicitly disposable database, asserts the new label is absent, then runs
+the candidate upgrade and preserves an old export. This avoids describing a
+current-metadata predecessor rebuild as evidence of the old enum. Current-main
+revision collision and all hosted acceptance checks remain required before
+publication; no migration has been executed by this implementation session.
+
 ## Purpose and authority
 
 Self-Care owns the Invoice document, line, discount, lifecycle, and issued tax

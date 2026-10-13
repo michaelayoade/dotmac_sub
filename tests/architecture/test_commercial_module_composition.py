@@ -17,6 +17,17 @@ PYPROJECT = ROOT / "pyproject.toml"
 
 
 _SHADOW_IMPORTS = {
+    "app/services/dotmac_erp/billing_adapter.py": {
+        ("dotmac_billing", "AccountingFactV1"),
+    },
+    "app/services/dotmac_erp/billing_accounting_fact.py": {
+        ("dotmac_billing", "AccountingAllocationEffectV1"),
+        ("dotmac_billing", "AccountingEffectV1"),
+        ("dotmac_billing", "AccountingFactV1"),
+        ("dotmac_billing", "AppliedFxSnapshotV1"),
+        ("dotmac_billing", "AppliedTaxSnapshotV1"),
+        ("dotmac_billing.contracts", "ACCOUNTING_FACT_CONTRACT"),
+    },
     "app/services/collections_module_shadow.py": {
         ("dotmac_collections", "ReceivableObservationV1"),
     },
@@ -28,7 +39,36 @@ def _external_commercial_imports_under_app(root: Path = ROOT) -> list[str]:
     prefixes = ("dotmac_billing", "dotmac_collections", "dotmac_subscriptions")
     for path in (root / "app").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        dynamic_names = {"__import__"}
         for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+                dynamic_names.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "import_module"
+                )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and node.args:
+                function = node.func
+                dynamic = (
+                    isinstance(function, ast.Name) and function.id in dynamic_names
+                ) or (
+                    isinstance(function, ast.Attribute)
+                    and function.attr == "import_module"
+                )
+                target = node.args[0]
+                if (
+                    dynamic
+                    and isinstance(target, ast.Constant)
+                    and isinstance(target.value, str)
+                ):
+                    if any(
+                        target.value == prefix or target.value.startswith(f"{prefix}.")
+                        for prefix in prefixes
+                    ):
+                        offenders.append(
+                            f"{path.relative_to(root)}:{node.lineno}:{target.value}:dynamic"
+                        )
             if isinstance(node, ast.Import):
                 imports = [(alias.name, "*") for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
@@ -147,3 +187,60 @@ def test_shadow_adapter_has_no_write_or_stateful_reader_surface() -> None:
     assert "report-local" in source
     assert "blocker_pairs" in source
     assert "observe_at" in source
+
+
+def test_accounting_transport_dto_allowlist_is_exact_and_path_bound(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "app/services/dotmac_erp/billing_accounting_fact.py"
+    owner.parent.mkdir(parents=True)
+    owner.write_text("from dotmac_billing import AccountingFactV1 as ReleasedFact\n")
+    assert _external_commercial_imports_under_app(tmp_path) == []
+    owner.write_text("from dotmac_billing.service import accept_settlement\n")
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.write_text(
+        'from importlib import import_module as load\nload("dotmac_billing.service")\n'
+    )
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.unlink()
+    (owner.parent / "wrong_owner.py").write_text(
+        "from dotmac_billing import AccountingFactV1\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path)
+
+
+def _committed_fact_runtime_activation(root: Path) -> tuple[str, ...]:
+    offenders: list[str] = []
+    for directory in (root / "app", root / "scripts"):
+        for path in directory.rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and any(
+                    alias.name == "stage_committed_billing_fact" for alias in node.names
+                ):
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+                elif isinstance(node, ast.Call):
+                    function = node.func
+                    if (
+                        isinstance(function, ast.Attribute)
+                        and function.attr == "stage_committed_billing_fact"
+                    ) or (
+                        isinstance(function, ast.Name)
+                        and function.id == "stage_committed_billing_fact"
+                    ):
+                        offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+    return tuple(offenders)
+
+
+def test_committed_billing_fact_transport_has_no_live_consumer() -> None:
+    assert _committed_fact_runtime_activation(ROOT) == ()
+
+
+def test_pending_consumer_guard_rejects_planted_activation(tmp_path: Path) -> None:
+    consumer = tmp_path / "app/services/accidental_fact_consumer.py"
+    consumer.parent.mkdir(parents=True)
+    consumer.write_text(
+        "from app.services.dotmac_erp.billing_adapter import stage_committed_billing_fact as stage\n"
+        "stage(db, command, context=context)\n"
+    )
+    assert _committed_fact_runtime_activation(tmp_path)

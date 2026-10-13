@@ -270,7 +270,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +2 from the read-only numbering census: one unbound fast-unit Session and
 #: one migrated-PostgreSQL session factory using the existing migrated engine. These
 #: observe snapshots and forbidden writes; production remains 17 sites/15 files.
-TEST_FIXTURE_BASELINE_TOTAL = 738
+#: +7 from ERP fact export canaries: three disposable engines, two session
+#: factories and two predecessor-upgrade setup/verification Sessions. All are test-only;
+#: production remains 17 sites across 15 files with its baseline unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 745
 
 
 def _baseline() -> dict[str, int]:

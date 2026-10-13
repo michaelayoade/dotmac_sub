@@ -23,6 +23,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.dotmac_erp.billing_adapter",
         owns=(
             "versioned ERP billing payload staging",
+            "released Billing accounting fact transport preview",
             "durable ERP delivery and acknowledgement evidence",
         ),
         depends_on=("events.owner_outputs",),
@@ -34,10 +35,19 @@ SERVICES: tuple[SOTService, ...] = (
             "accounts, TaxCode mappings, journals, returns, and "
             "statements, and fails closed on anything missing or "
             "ambiguous. ERP downtime leaves exports pending and never "
-            "rolls back Sub cash, documents, entitlement, or access."
+            "rolls back Sub cash, documents, entitlement, or access. "
+            "billing_accounting_fact maps the complete released AccountingFactV1 "
+            "without GL, recognition or document-link inference. Captured JSON "
+            "is preview evidence only; the committed-Billing outbox consumer "
+            "and source/scope trust validation remain pending and unregistered."
         ),
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="released Billing accounting fact transport preview",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("captured accounting fact preview evidence",),
+                ),
                 ConcernContract(
                     name="versioned ERP billing payload staging",
                     role=OwnerRole.AUTHORITATIVE_RECORD,
@@ -55,6 +65,15 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="captured accounting fact preview evidence",
+                    owner="external:operator-captured-billing-evidence",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "operator-captured AccountingFactV1 JSON; structural validation "
+                        "confers no source trust and cannot stage an export"
+                    ),
+                ),
                 AuthorityInput(
                     name="committed billing owner outputs",
                     owner="events.owner_outputs",
@@ -74,7 +93,8 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
-                    "stage_export is a flush-only participant inside "
+                    "stage_export and dormant stage_committed_billing_fact are "
+                    "flush-only participants inside "
                     "the committing owner's command; "
                     "record_delivery_outcome enters "
                     "execute_owner_command once on a transaction-free "
@@ -83,12 +103,17 @@ SERVICES: tuple[SOTService, ...] = (
                 locking=(
                     "The export row is locked FOR UPDATE before an "
                     "outcome is recorded; the idempotency unique "
-                    "constraint serialises duplicate staging."
+                    "constraint remains the duplicate backstop. Accounting-fact "
+                    "first inserts acquire the existing transaction-advisory lock "
+                    "pattern on canonical source identity before row lookup, then "
+                    "lock the export row; no participant transaction completion."
                 ),
                 idempotency=(
                     "One export per business idempotency key; a replayed "
                     "terminal outcome is a no-op and a conflicting one "
-                    "fails closed."
+                    "fails closed. Accounting facts identify source_system, explicit "
+                    "scope, fact_id and fact_version; canonical complete payload "
+                    "equality is required on replay even after delivery."
                 ),
                 retries=(
                     "Delivery attempts are durable and repeatable; a "
@@ -97,6 +122,9 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             errors=ErrorContract(
                 domain_codes=(
+                    "integration.dotmac_erp_billing_adapter.accounting_fact_identity_conflict",
+                    "integration.dotmac_erp_billing_adapter.accounting_fact_requires_dedicated_flow",
+                    "integration.dotmac_erp_billing_adapter.invalid_accounting_fact",
                     "integration.dotmac_erp_billing_adapter.active_caller_transaction",
                     "integration.dotmac_erp_billing_adapter.command_contract_violation",
                     "integration.dotmac_erp_billing_adapter.conflicting_export_outcome",
@@ -115,6 +143,7 @@ SERVICES: tuple[SOTService, ...] = (
                 mapping_owner="the ERP delivery task and finance adapters",
                 fail_closed_on=(
                     "an incomplete payload",
+                    "source fact identity reuse with changed evidence",
                     "an acknowledgement without ERP's reference",
                     "a rejection without reviewable evidence",
                 ),
@@ -146,7 +175,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "ADR 0007 Phase 7 gate: every flow has stable "
                     "idempotency and replay, ERP outage cannot roll "
                     "back Sub facts, identities are structurally "
-                    "recorded, and finance approves accounting parity."
+                    "recorded, and finance approves accounting parity. Released "
+                    "Billing facts additionally require a separately reviewed trusted "
+                    "committed-outbox consumer validating source/scope; no consumer, "
+                    "public ingress, dispatcher or live ERP activation exists here."
                 ),
                 fallback_retirement=(
                     "Fallback ERP push paths and obsolete columns are "
@@ -160,6 +192,9 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             test_refs=(
                 "tests/test_erp_billing_adapter.py",
+                "tests/test_billing_accounting_fact_export.py",
+                "tests/integration/test_billing_accounting_fact_export_pg.py",
+                "tests/architecture/test_commercial_module_composition.py",
                 "tests/architecture/test_billing_target_architecture.py",
             ),
         ),

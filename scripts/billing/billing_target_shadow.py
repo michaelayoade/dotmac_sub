@@ -1325,6 +1325,28 @@ def _cmd_pending_erp_exports(db, args) -> int:
     return 0
 
 
+def _cmd_preview_module_accounting_export(args: argparse.Namespace) -> int:
+    """Captured evidence preview only; no session, owner command or staging."""
+    from pathlib import Path
+
+    from app.services.dotmac_erp.billing_accounting_fact import (
+        map_billing_accounting_fact,
+        parse_billing_accounting_fact,
+    )
+
+    captured = Path(args.fact_file).read_text(encoding="utf-8")
+    fact = parse_billing_accounting_fact(captured)
+    envelope = map_billing_accounting_fact(fact)
+    _emit(
+        {
+            "mode": "captured-preview-only",
+            "runtime_consumer": "pending",
+            "export": envelope.to_payload(),
+        }
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1697,7 +1719,15 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=_cmd_pending_erp_exports)
 
+    p = sub.add_parser(
+        "preview-module-accounting-export",
+        help="preview captured Billing AccountingFactV1 without persistence or source trust",
+    )
+    p.add_argument("--fact-file", required=True)
+
     args = parser.parse_args()
+    if args.command == "preview-module-accounting-export":
+        return _cmd_preview_module_accounting_export(args)
     db = SessionLocal()
     try:
         return args.func(db, args)
