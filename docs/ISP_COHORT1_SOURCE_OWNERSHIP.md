@@ -15,25 +15,39 @@ implements.
 | | |
 |---|---|
 | Programme | `pgm-dotmac-isp-replacement` |
-| Accepted revision | `d91a87f6823bfd2afa6c2025bdb1af644331fa39` |
+| Accepted revision | `dbd9cec107ee5125a8d41f75065d3823f69d6b8e` |
 | Record | `programmes/dotmac-isp-replacement.json` in `dotmac_governance` |
 | Decision | `docs/adr/0012-dotmac-isp-replacement-programme.md` (Accepted) |
-| Source assembly | `asm-dotmac-sub-legacy` — **source-authoritative** |
-| Target assembly | `asm-dotmac-isp` — candidate, independent database |
+| Source assembly | `asm-dotmac-sub-legacy-domains` — **source-authoritative** |
+| Target assembly | `asm-dotmac-sub-composed` — same Sub runtime/database (`shared-in-process`) |
 | Track | `track-isp-sub-cutover` |
 | Cohort | `cohort-isp-01`, sequence 1, state **blocked** |
 | Components | kernel (reuse), UI (reuse), `dotmac-party` (release), `dotmac-brand-profiles` (adopt), `dotmac-customers` (build), `dotmac-addresses` (build) |
 
-Sub's readiness work produces inputs for `ctl-isp-006` (source dispositions and
-idempotent replay), `ctl-isp-007` (zero-unexplained-drift shadow) and
-`ctl-isp-009` (bidirectional writer ratchet to zero). Producing an input is not
-verifying a control. Those controls remain blocked. The production deployment
-owner (`dec-isp-002`) is unresolved. The transition decision `dec-isp-003` is
-answered at the pinned revision; its enforcement control `ctl-isp-003` remains
-blocked.
+Both assemblies name `dotmac_sub`; Sub's product, runtime and API are
+preserved. The separate ISP skeleton is frozen. `ctl-isp-001` is verified;
+002/005/007/008 are superseded; 003/004/006/009/010/011/012 and cohort 1 remain
+blocked. No programme decisions remain open. `dec-isp-002` is superseded and
+is not a deployment-host procurement blocker.
 
-**Nothing in this repository opens the cohort.** Sub is the sole production
-writer of every fact below until a separately authorised sealed switch.
+Source dispositions and idempotent replay feed `ctl-isp-006`; production-shaped
+Sub/module lineage rehearsal feeds `ctl-isp-010`; same-database in-process shadow
+feeds `ctl-isp-011`; operator-approved per-domain one-writer configuration and
+rollback feed `ctl-isp-012`; zero displaced writers before rollback-window
+closure feeds `ctl-isp-009`. Producing inputs does not verify controls.
+
+**Nothing here opens the cohort or moves authority.** Sub's existing owners
+continue until the selected module's separately authorized switch. The fifteen
+parallel production paths are switch-time retirement entries, not fifteen
+prerequisite cleanup PRs. Earlier source changes need a concrete migration
+blocker, a deliberately retained path or an immediate security/data-loss defect.
+Independent modules need their own complete evidence, not unrelated cohort
+closure. No host, migration, backfill, shadow, purge or cutover is authorized.
+
+Historical source snapshots retain their recorded assembly IDs and Governance
+pins: explicit historical `SourceRevision` values remain parseable and their
+digests reproducible. New defaults identify the current source and pin.
+Historical tooling receipts are not in-place population/adoption evidence.
 
 ## Tenant scope
 
@@ -68,8 +82,29 @@ operator-tenant data.
 | `organization_membership` | `organization_memberships` | `OrganizationMembership` | **none declared** | `dotmac-customers` |
 | `brand_profile` | `brand_profiles` | `BrandProfile` | `customer.branding` | `dotmac-brand-profiles` |
 
-The expected target component is an expectation recorded from the Governance
-matrix. It is not a plan, an approval, or a claim that any module is released.
+The expected target component is a historical source-mapping expectation, not
+proof of released capability or a complete adoption contract. In the selected
+slice, bind every entity/relation to an actual typed owner/link, explicit
+product retention, or retirement outcome. Kernel already implements
+Party/person/organization identity; its explicit mapping/link remains to be
+proved. Party excludes person/organization identity and customer accounts;
+Customers excludes identity, reachability and addresses. In particular, the
+contact and organization/membership rows cannot be assigned to Customers merely
+because this table historically expected it. Full cohort closure needs all
+six components and all twelve source entity types; independent slices need
+only their own complete dependencies.
+
+Current Starter artifact evidence does not establish a verified graph for the
+whole cohort. Party/Brand Profiles/Customers historical a1 tags are
+legacy-unverified/non-pinnable. Addresses has no tracked owner package in the
+inspected tree; registry availability is unknown. The same kernel a104 wheel
+filename has SHA256
+`183e0aa003db22fc2cfd8a846df14589027e34a9632180b018222d5eac0d6076` in the
+kernel receipt and
+`54562973a659427aed067a504aa0eaaa427fda8e13d184e8401d72d234ec2534` in the
+module dependency ledger. This is a record inconsistency, not a registry-byte
+finding. Reconcile retained evidence and independent readback, not a rebuild
+of the existing tag. The runbook records the remaining exact-artifact frontier.
 
 ### Addresses are owned, four ways
 
@@ -302,21 +337,21 @@ Classification says what a surface is; it does not say what becomes of it, and
 that is the question a cutover actually needs answered. Every surface carries
 one, **including the adapters and readers that write nothing**: a route that
 reads a customer account has to read it from somewhere once that account lives
-in another application.
+behind a composed module owner in this same application.
 
 | `Disposition` | Files | Meaning |
 |---|---|---|
-| `ROUTE_THROUGH_OWNER_FIRST` | 12 | Must stop bypassing its declared owner *before* the cohort can be shadowed |
-| `RETIRE_AFTER_CUTOVER` | 16 | Displaced by the target; must reach zero for `ctl-isp-009` |
-| `REPOINT_TO_TARGET_API` | 12 | Reads or forwards a cohort fact; after the switch it must reach the target through a versioned contract |
+| `ROUTE_THROUGH_OWNER_FIRST` | 12 | Explicitly resolve this bypass for its selected module switch; earlier routing needs an evidenced blocker |
+| `RETIRE_AFTER_CUTOVER` | 16 | Disable at the selected authority switch; zero displaced writers before rollback closure (`ctl-isp-009`) |
+| `REPOINT_TO_TARGET_API` | 12 | Historical enum: reads/forwards through the composed owner typed boundary; no cross-application HTTP requirement |
 | `HISTORICAL_NO_ACTION` | 9 | An applied migration; nothing to retire |
 | `NON_PRODUCTION_NO_ACTION` | 2 | Writes only disposable databases |
 | `UNDECIDED` | 0 | Needs a decision, and says which one |
 
 There is deliberately no "stays as it is" disposition. Every surface here
 touches cohort-1 state — that is the inclusion criterion — and once that state
-lives in another application, no such touch survives unchanged. A member
-meaning "nothing happens" would be the one anybody reached for to avoid
+moves behind a composed owner, each touch needs an explicit boundary outcome.
+A member meaning "nothing happens" would be the one anybody reached for to avoid
 deciding.
 
 **Every counted writer has an individual disposition; the readers take a
@@ -326,22 +361,23 @@ individually inventoried, of which 48 occur in that reference census. The other
 disposition to each of them would be fabrication at scale — the reference census is a bounded reach, not an impact analysis, and
 many of those files only mention a model in a type hint.
 
-The default is `REPOINT_TO_TARGET_API`, and it is an answer rather than a gap
-because only one shape is available: ADR 0012 gives the two applications
-separate databases, sessions and transactions, so after the switch a file that
-reads a cohort fact either reaches the target through a versioned contract or
-stops reading it. What the default may never cover is a **writer** — "displace
-this" is a decision about a specific line of code, and a guard fails the build
-if a counted writer ever falls through to it.
+The default remains `REPOINT_TO_TARGET_API` for compatibility with the
+executable inventory. Under in-place conversion it means the composed owner's
+typed public read/delegation boundary, not a separate HTTP application or
+database. It never covers a writer: each counted writer needs its own explicit
+disposition and guard. A shared database does not authorize bypassing the new
+owner or silently retaining a parallel ORM write path.
 
 The disposition is about the surface's **cohort-1 touch**, not the whole file.
 `account_lifecycle.py` keeps owning subscription lifecycle long after its
 Subscriber projection writes are displaced.
 
-`ROUTE_THROUGH_OWNER_FIRST` is the one that gates `ctl-isp-007` rather than
-`ctl-isp-009`: a shadow comparison run against a source with two writers cannot
-tell drift from the second writer, so those twelve have to be routed
-through their owners before a comparison means anything.
+`ROUTE_THROUGH_OWNER_FIRST` and `RETIRE_AFTER_CUTOVER` are retained enum
+names, not current blanket timing instructions. For the selected slice,
+identify what blocks a valid backfill/shadow/switch and retire or redirect all
+displaced authority at its switch. Do not refactor all twelve routing entries
+before an independent module can be shadowed. `ctl-isp-007` is superseded;
+in-process comparison belongs to `ctl-isp-011`.
 
 ### No undecided surfaces
 
@@ -361,11 +397,13 @@ with a sensitivity check so it cannot pass by the accessor quietly breaking.
 Sub address owners are `customer.accounts` for identity/text and
 `gis.spatial_sync` for coordinates/projection. Dec-isp-007 names the extracted
 target owner, `dotmac-addresses`; it does not justify another Sub address writer.
-Remaining bypasses must route through those owners before shadow comparison.
-Decomposing the recovery cascade is what makes the cohort-1 half
-separable at all: today one restore touches invoices, payments, credentials,
-RADIUS, IP assignments and ONT assignments in the same pass, and only the
-account rows belong to cohort 1.
+Retire or redirect the selected slice's bypasses at its authority switch; route
+earlier only where a concrete rehearsal/shadow/switch blocker requires it.
+For the selected Customers switch, prove the recovery cascade's account touch
+can be separated while preserving its other owners: today one restore touches
+invoices, payments, credentials, RADIUS, IP assignments and ONT assignments in
+the same pass, and only the account rows belong to cohort 1. This is not a
+prerequisite for unrelated modules.
 
 ### Declared owners
 
@@ -411,7 +449,7 @@ legacy deletion methods. Other account and profile owners remain unchanged.
 | `app/services/account_lifecycle.py` | `access.subscription_lifecycle` | Subscriber lifecycle status and its override columns |
 | `app/services/mrr_snapshot.py` | **none declared** | `subscribers.mrr_total` |
 
-Both must cross to the destination as *derived*, never as the account's own
+Both remain *derived* across an in-process owner change, never the account's own
 state. `mrr_total` is the sharper risk: a money figure, computed elsewhere,
 stored on the account row, written by a module the registry does not declare.
 The target recomputes it; it does not trust it.
@@ -565,15 +603,17 @@ roots. It reads "no counted writer" for that reason. The disposition of these
 rows — historical B2B account records with no live owner — is an open item for
 `ctl-isp-006`.
 
-## Unresolved
+## Remaining evidence tasks
 
-- `dec-isp-002` — production deployment owner for `asm-dotmac-isp`. Michael's.
+No programme decision remains open; evidence gaps are not open decisions.
+
 - Programme-wide enforcement evidence for the resolved `dec-isp-003` rule;
   `ctl-isp-003` remains blocked.
 - The disposition of `organizations` / `organization_memberships` rows.
 - Proof that the target recomputes `subscribers.mrr_total`; the no-migration
   decision is already resolved.
-- Owner-backed transitions for remaining legacy metadata writers. The opaque
+- Selected-module mapping and switch-time retirement for displaced metadata
+  writers; earlier edits require a concrete blocker. The opaque
   key-inventory/digest export rule is already decided.
 - Compliance/Records retention evidence for `subscriber_nin_verifications`,
   already excluded from this cohort export; no purge is authorized here.

@@ -37,7 +37,7 @@ Classification says what a surface is. It does not say what happens to it, and
 "what happens to it" is the question a cutover actually needs answered. Every
 surface therefore carries a `Disposition`, including the adapters and readers
 that write nothing: a route that reads a customer account has to come from
-somewhere after that account lives in another application.
+the selected module's typed contract after its authority switch inside Sub.
 
 `Disposition.UNDECIDED` is a real state and carries a required `open_question`.
 The three original questions were answered at the pinned Governance decision
@@ -48,9 +48,10 @@ revision. Any future undecided surface remains enumerable through
 
 `PARALLEL_WRITER` here does not schedule anything. It records that a second
 path writes a fact some other owner is declared to own, so the cutover sequence
-knows what has to be displaced before authority can move. Nothing in this
-module retires, disables or reroutes a writer; Sub remains the sole production
-writer for this cohort until a separately authorised sealed switch.
+knows what must be displaced in the selected module's authority-switch slice.
+The census does not schedule blanket pre-cutover refactoring. Nothing in this
+module retires, disables or reroutes a writer; existing Sub owners remain
+authoritative until each module's separately authorised one-writer switch.
 
 ## UNDETERMINED means undetermined
 
@@ -143,20 +144,21 @@ class Disposition(StrEnum):
 
     There is deliberately no "stays as it is" member. Every surface here
     touches cohort-1 state — that is the inclusion criterion — and once that
-    state lives in another application, no such touch can survive unchanged.
+    authority belongs to the composed module, its callers must use that owner.
     A member meaning "nothing happens" would be the one anybody reached for to
     avoid deciding, and this vocabulary exists to force the decision.
     """
 
-    #: Displaced by the target. Must reach zero for `ctl-isp-009`.
+    #: Disable at the selected switch; remove by applicable rollback closure
+    #: and prove zero displaced writers for `ctl-isp-009`.
     RETIRE_AFTER_CUTOVER = "retire_after_cutover"
-    #: Must stop bypassing its declared owner *before* the cohort can be
-    #: shadowed — a comparison against a source with two writers cannot
-    #: distinguish drift from the second writer.
+    #: Historical label: route a surviving touch through the selected owner
+    #: at its switch. Earlier edits require an evidenced migration blocker or
+    #: immediate security/data-loss defect, not merely this classification.
     ROUTE_THROUGH_OWNER_FIRST = "route_through_owner_first"
     #: Reads or forwards a cohort fact, so after the switch it must reach the
-    #: target through a versioned contract. ADR 0012 permits no other shape:
-    #: the two applications share no tables, sessions or transactions.
+    #: module through a typed versioned contract in the same Sub process and
+    #: database. The historical API label does not require an HTTP boundary.
     REPOINT_TO_TARGET_API = "repoint_to_target_api"
     #: An applied migration. There is nothing to retire.
     HISTORICAL_NO_ACTION = "historical_no_action"

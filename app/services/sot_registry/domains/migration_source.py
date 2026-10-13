@@ -52,8 +52,8 @@ DOMAIN = DomainSOT(
                 "Read-only. It writes nothing, completes no transaction, and "
                 "decides nothing about the destination: there is no target "
                 "status vocabulary and no disposition field in the contract. "
-                "Sub remains the sole production writer of every cohort-1 "
-                "fact until a separately authorised sealed switch."
+                "Existing Sub owners remain authoritative until each selected "
+                "module's separately authorised in-place one-writer switch."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -196,7 +196,7 @@ DOMAIN = DomainSOT(
                         "proving the export path issues no persistence call"
                     ),
                     cutover_gate=(
-                        "Governance ctl-isp-006 and ctl-isp-007. This owner "
+                        "Governance ctl-isp-006 and ctl-isp-011. This owner "
                         "produces inputs to those controls; it does not verify "
                         "them, and no cohort authority moves because an export "
                         "exists"

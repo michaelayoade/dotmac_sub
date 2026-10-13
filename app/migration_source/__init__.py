@@ -1,8 +1,8 @@
-"""Sub as the measured *source* of the ISP replacement — never as its target.
+"""Read-only source evidence for Sub's in-place modular conversion.
 
 This package is governance and read-only contract. Nothing in it is imported
 by Sub's request path today, nothing in it writes, and nothing in it decides
-anything about the destination application. It exists so that three questions
+anything about candidate module authority. It exists so that three questions
 have mechanical answers instead of recollections:
 
 1. which Governance revision binds Sub to this programme (`programme`);
@@ -21,10 +21,11 @@ reason and is a different concern: that package describes a disposable shadow
 
 ## The boundary this package must not cross
 
-Sub is `asm-dotmac-sub-legacy` and remains the sole production writer of every
-cohort fact until a separately authorised sealed switch. This package composes
-no Starter module, adds no migration, opens no cohort, writes to no target
-database, and advances no Governance control. Those limits are structural
+Sub's legacy domains (`asm-dotmac-sub-legacy-domains`) remain authoritative
+until each selected module's separately authorised one-writer switch. Sub also
+hosts the candidate composed assembly (`asm-dotmac-sub-composed`); this source
+package itself composes no module, adds no migration, opens no cohort, writes
+no candidate state, and advances no Governance control. Those limits are structural
 where they can be — the vocabularies simply lack the words — and stated here
 where they cannot be.
 """

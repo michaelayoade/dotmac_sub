@@ -78,7 +78,7 @@ class MismatchCategory(StrEnum):
     UNEXPECTED_IN_TARGET = "unexpected-in-target"
     #: Same identity on both sides, different canonical digest.
     DIVERGENT = "divergent"
-    #: The two digests do not share a contract or schema version.
+    #: The digests differ in contract/schema version or programme binding.
     UNSUPPORTED_VERSION = "unsupported-version"
     #: The source did not drain this entity type; it cannot be compared.
     SOURCE_UNKNOWN = "source-unknown"
@@ -356,6 +356,10 @@ def compare(source: CohortDigest, target: CohortDigest) -> tuple[Mismatch, ...]:
     if (
         source.contract_version is not target.contract_version
         or source.schema_version != target.schema_version
+        or source.source_revision.source_assembly_id
+        != target.source_revision.source_assembly_id
+        or source.source_revision.governance_revision
+        != target.source_revision.governance_revision
     ):
         return tuple(
             Mismatch(
@@ -366,7 +370,12 @@ def compare(source: CohortDigest, target: CohortDigest) -> tuple[Mismatch, ...]:
                     f"source is contract {source.contract_version.value} schema "
                     f"{source.schema_version}; target is contract "
                     f"{target.contract_version.value} schema "
-                    f"{target.schema_version}. Digests across versions are not "
+                    f"{target.schema_version}; source binding is "
+                    f"{source.source_revision.source_assembly_id}@"
+                    f"{source.source_revision.governance_revision}; target binding "
+                    f"is {target.source_revision.source_assembly_id}@"
+                    f"{target.source_revision.governance_revision}. "
+                    "Digests across versions or programme bindings are not "
                     "comparable and a difference would not mean drift."
                 ),
             )

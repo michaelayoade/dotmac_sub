@@ -1,334 +1,401 @@
 # Cohort-isp-01 migration readiness runbook
 
-The sequence that would move Governance cohort `cohort-isp-01` — "Foundation
-party and customer" — from `asm-dotmac-sub-legacy` to `asm-dotmac-isp`, and the
-evidence each step has to produce.
+Preparation for converting Sub in place from `asm-dotmac-sub-legacy-domains`
+to `asm-dotmac-sub-composed`. Both assemblies are `dotmac_sub`: one product,
+runtime, API and database (`shared-in-process`). The separate `dotmac-isp`
+walking skeleton is frozen and is not the cutover target.
 
-**Nothing in this document is authorised to run.** Every cohort in the accepted
-matrix is `blocked`, and `dec-isp-002` (production deployment owner) remains
-open. Governance answered `dec-isp-003` at the pinned revision: source work
-must be bounded cutover preparation that retires local writers. Its enforcement
-control `ctl-isp-003` remains blocked; an answered decision does not verify a
-control. No host, date or window is named here or may be inferred from here.
-This is the shape of the work, written down while it is cheap, so that
-when it is authorised nobody has to invent it under time pressure.
+**Nothing in this document is authorised to run.** No authority moved, no
+module was installed, and no migration, backfill, shadow or switch was run by
+this binding update. No host, date or operational window is selected. Controls
+remain in their accepted Governance states until their own evidence is accepted.
 
-Companion documents: `docs/adr/0012-isp-cohort-source-readiness.md` (the
-decision), `docs/ISP_COHORT1_SOURCE_OWNERSHIP.md` (who writes what today).
+Companion documents: `docs/adr/0012-isp-cohort-source-readiness.md` and
+`docs/ISP_COHORT1_SOURCE_OWNERSHIP.md`.
 
 ## Where the source stands
 
 | | |
 |---|---|
-| Programme | `pgm-dotmac-isp-replacement` at `d91a87f6823bfd2afa6c2025bdb1af644331fa39` |
+| Programme | `pgm-dotmac-isp-replacement` at `dbd9cec107ee5125a8d41f75065d3823f69d6b8e` |
+| Controlled record | `programmes/dotmac-isp-replacement.json` in Governance |
 | Cohort | `cohort-isp-01`, sequence 1, state **blocked** |
-| Source | `asm-dotmac-sub-legacy` — source-authoritative |
-| Target | `asm-dotmac-isp` — candidate, independent database, no deployment owner |
+| Source | `asm-dotmac-sub-legacy-domains` — source-authoritative |
+| Target | `asm-dotmac-sub-composed` — same Sub runtime and database |
 | Entity types | 12 |
 | Production writers | 28 (11 declared owners, 2 derived projections, 15 parallel) |
 | Contract version | 1 |
 | Record schema version | 1 |
 
-What Sub can claim today is exactly the four members of
-`SourceReadinessClaim`, and no more:
+The source-readiness claims remain `inventoried`, `export_contract_ready`,
+`digest_contract_ready`, and `writer_surface_ratcheted`. They establish source
+tooling, not actual module adoption, population backfill or switch acceptance.
+Historical snapshots and digests are evidence only for their recorded source
+revision. Explicit historical `SourceRevision` values remain parseable and
+retain reproducible digests; new defaults use the current assembly and pin.
+Do not rewrite old provenance or compare different provenance as if identical.
+The comparator rejects different source assembly IDs or Governance revisions as
+`unsupported-version`; retained historical golden fixtures preserve the old
+aggregate rather than restamping it.
 
-- `inventoried` — every writer and caller of cohort-1 state is classified;
-- `export_contract_ready` — the typed read-only snapshot exists and is tested;
-- `digest_contract_ready` — the comparison digest is deterministic and tested;
-- `writer_surface_ratcheted` — the current writer surface is frozen in both
-  directions.
+There are no open programme decisions. In particular, `dec-isp-002` and its
+`ctl-isp-002` are superseded, not destination-host procurement blockers.
+`ctl-isp-003` remains blocked despite the answered transition decision.
 
-The vocabulary has no member that spells adoption or cutover, on purpose. Read
-those four next to the cohort's state, which is **blocked**: both statements
-are true at once, and the pairing is the point. `ctl-isp-001` — attributable
-human approval of the programme itself — is the one control already `verified`;
-every other control below is not.
+## Current Governance controls
 
-## The ten steps
-
-The order is Governance's, and every step is gated by the control named beside
-it. A step cannot start because the previous one looks finished; it starts when
-the control cites immutable evidence.
-
-### 1. The destination pins a registry-verified module set — `ctl-isp-004`
-
-Cohort 1's components are `dotmac-kernel` and `dotmac-ui` (reuse),
-`dotmac-party` (release), `dotmac-brand-profiles` (adopt),
-`dotmac-customers` (build), and `dotmac-addresses` (build, dec-isp-007).
-Each must be an immutable published artifact pinned
-by digest, not by version and never by tag.
-
-Sub's part: none. Sub does not pin, compose or install any of them. A Sub
-change that added one would be composing a Starter module in the source
-assembly, which the programme forbids for exactly this cohort.
-
-### 2. The destination composes the lineage disabled — `ctl-isp-004`
-
-The target assembly installs the module lineages without activating any
-writer. Composition is not adoption; a composed module with no rows and no
-callers has moved nothing.
-
-### 3. The destination applies its own migrations — `ctl-isp-005`
-
-Against the target's own database. It shares no table, session, transaction or
-migration with Sub, and the two applications never read each other's rows. The
-catalog, RLS and grant proof is the target's evidence to produce.
-
-### 4. The destination imports typed Sub snapshots as observations — `ctl-isp-006`
-
-The first step that touches Sub, and it touches it read-only.
-
-**Backfill ordering.** Referential closure decides it, and it is not the same
-as the entity list's alphabetical order. Import in this order:
-
-1. `party`
-2. `party_role`, `party_external_reference` — both reference `party` only
-3. `organization` — references `party`, and its own `parent_id` self-reference
-   means it needs a second pass or deferred constraints
-4. `brand_profile` — its `scope_id` points at a reseller or organization
-5. `customer_account` — references `party`, `organization`, and later-cohort
-   ids (`reseller_id`, `tax_rate_id`, `policy_set_id`, `sales_order_id`) that
-   **do not exist in the target yet**
-6. `party_relationship`, `party_membership`, `party_contact_point` — reference
-   two parties each
-7. `organization_membership` — references `organization` and a person id
-8. `customer_contact`, `customer_address` — reference `customer_account`
-
-Steps 5 onward carry references the target cannot resolve during cohort 1. They
-are imported as **unresolved correlation references**, never as foreign keys
-and never dropped. A dropped reference is unrecoverable; an unresolved one is a
-later cohort's join.
-
-**Deduplication keys.** The stable opaque identity — `<entity_type>:<uuid>` —
-is the only deduplication key. Not the email, not the phone, not the subscriber
-number: Sub's own model documents that `subscribers.email` is deliberately
-non-unique because customers under one reseller share a contact address, and
-deduplicating on it would silently merge distinct accounts. A row already held
-under its source identity is replaced or skipped; it is never inserted twice
-and never merged with a similar-looking row.
-
-**Checkpoint and retry.** Pagination is keyset — `after_source_id` — so a retry
-resumes without re-reading and without skipping. An interrupted drain resumes
-from its last checkpoint at the *same* source revision; if the revision has
-moved, the drain restarts. Retrying an export is free: it writes nothing and
-has nothing to compensate.
-
-**Snapshot consistency.** One drain is one REPEATABLE READ, READ ONLY
-transaction, and its `source_revision` carries the Alembic head, the
-application version and the PostgreSQL visibility snapshot that fixed the read.
-Two pages with different `snapshot_transaction_id` values are two snapshots and
-must not be assembled into one import.
-
-**Observations, not decisions.** The destination writes what Sub said, marked
-as an observation. It does not set lifecycle state from it. The snapshot has no
-disposition field and no target status vocabulary, so there is nothing in it to
-mistake for a decision — but the discipline still belongs on the import side.
-
-### 5. The destination's resolver builds local candidate state — `ctl-isp-006`
-
-The target's own resolver derives its state from the observations. Three
-classes of source fact must not survive as authority:
-
-- **Declared derived fields.** `CustomerAccountRecord.DERIVED_FIELDS` names
-  them: `status`, `is_active`, `lifecycle_override_status`,
-  `lifecycle_override_reason`, `lifecycle_override_source`,
-  `lifecycle_override_at`,
-  `legacy_party_status` and `mrr_total`. Every one is a projection of a
-  decision owned elsewhere in Sub. The target recomputes them from its own
-  subscriptions and its own policy. `mrr_total` in particular is a money figure
-  written by a module Sub's registry does not declare; adopting it would give
-  the destination a number with no owner on either side.
-- **Opaque blobs.** Every `metadata` column, `access_scope` and
-  `legal_address` cross as a key inventory and a digest. They are evidence that
-  a convention exists, not data. Reading structure into them would invent a
-  contract nobody owns.
-- **Unresolved references.** See the ordering note above.
-
-### 6. Shadow comparison runs against source digests — `ctl-isp-007`
-
-Sub publishes a `CohortDigest`; the destination produces its own over the state
-its resolver built; `digest.compare` reduces the pair to bounded verdicts.
-
-The comparison needs no Sub database access and no Sub credentials — that is
-the point of the digest artifact. It carries identities and hashes and no field
-values, so it can be attached to a control record and read by whoever
-adjudicates it.
-
-Run it against a digest whose `completeness` is `complete` for every entity
-type. A `partial` type yields `source-unknown` or `target-unknown`, which is
-the honest verdict and not a finding to work around.
-
-### 7. Mismatches reach zero, or an explicitly adjudicated baseline — `ctl-isp-007`
-
-Six verdicts, and each has one correct response:
-
-| Verdict | What it means | Response |
+| Control | State | Meaning for preparation |
 |---|---|---|
-| `missing-from-target` | Sub has a row the target does not | Re-import; if it will not import, that is a defect, not a baseline |
-| `unexpected-in-target` | The target has a row Sub does not | Find what created it; a target row with no source is a second writer |
-| `divergent` | Same identity, different content | Diff the canonical fields; usually a mapping or a normalisation bug |
-| `unsupported-version` | The two digests are not comparable | Re-export at one version; never compare across versions |
-| `source-unknown` | Sub's drain was partial | Finish the drain |
-| `target-unknown` | The target's drain was partial | Finish the drain |
+| `ctl-isp-001` | verified | Attributable programme approval; not operational approval |
+| `ctl-isp-002` | superseded | Separate destination deployment-owner requirement retired |
+| `ctl-isp-003` | blocked | Enforce bounded legacy Sub transition work |
+| `ctl-isp-004` | blocked | Exact verified artifacts and composed migration graph |
+| `ctl-isp-005` | superseded | Separate target database rehearsal retired |
+| `ctl-isp-006` | blocked | Explicit row dispositions and idempotent backfill |
+| `ctl-isp-007` | superseded | Cross-application shadow requirement replaced by 011 |
+| `ctl-isp-008` | superseded | Cross-application switch requirement replaced by 012 |
+| `ctl-isp-009` | blocked | Zero displaced writers before rollback-window closure |
+| `ctl-isp-010` | blocked | Sub database module-lineage rehearsal on a production-shaped copy |
+| `ctl-isp-011` | blocked | In-process read-only shadow against the same database |
+| `ctl-isp-012` | blocked | Operator-approved per-domain one-writer switch and config rollback |
 
-**Adjudication.** A mismatch may only be baselined by a named human, in a
-written record, citing the source identity and the reason. There is deliberately
-no "acceptable" or "expected difference" verdict in the vocabulary: an
-adjudication is a decision about a specific row, and a comparator that could
-express it would let a class of differences be waved through as a category.
+A control is verified only in Governance with immutable controlled-source
+references. This repository neither verifies controls nor opens the cohort.
+Independent modules need their own complete dependency and capability evidence;
+they do not wait for unrelated whole-cohort gaps to close. Whole-cohort closure
+still accounts for all twelve entity types and six components: Addresses,
+Brand Profiles, Customers, Kernel, Party and UI.
 
-Silence is not adjudication. A cohort with unadjudicated mismatches has not met
-`ctl-isp-007`, however small the count.
+## Preparation and switch sequence
 
-### 8. Rollback and recovery are rehearsed — `ctl-isp-008`
+### 1. Select the module and verify its exact artifact graph — `ctl-isp-004`
 
-Before any authority moves, prove the way back on a disposable target:
+Select one bounded module/concern and record the exact compatible dependency
+graph: immutable source commits, artifact filenames, registry-readback SHA256,
+permanent verification receipts and migration heads. Tags or versions alone
+are insufficient. Sub is now the assembly that composes these modules; the old
+prohibition on composition in Sub is superseded by in-place conversion.
+Composition disabled is preparation, not adoption.
 
-- The rollback point is the **immutable source watermark** — the
-  `source_revision` of the last complete pre-switch drain. Record it; it is
-  what a recovery replays from.
-- Prove the import is idempotent: replay the same snapshot twice and show the
-  target's digest is unchanged. An import that is not idempotent cannot be
-  safely retried, and every recovery is a retry.
-- Prove delta capture: take a second drain at a later revision, replay it over
-  the first, and show the target converges without duplicating rows.
-- Prove Sub is untouched: Sub's own cohort digest before and after the entire
-  rehearsal must be identical. The export path writes nothing, so this should
-  be trivially true — rehearse it anyway, because "should be" is the assumption
-  a rehearsal exists to test.
+Current evidence frontier (Starter source `0aa465446794ae03abc743f9e288e9f3831be3aa`):
 
-### 9. A later authorisation seals the writer switch — `ctl-isp-008`
+- Kernel `0.1.0a104` has a verification receipt for source
+  `bf16e30efc3321ca9a495de31570bb5f9a02e9e3`. However, committed records name
+  the same `dotmac_kernel-0.1.0a104-py3-none-any.whl` with two SHA256 values:
+  kernel receipt `183e0aa003db22fc2cfd8a846df14589027e34a9632180b018222d5eac0d6076`
+  and module dependency ledger
+  `54562973a659427aed067a504aa0eaaa427fda8e13d184e8401d72d234ec2534`.
+  These records have different build provenance: `release-module.yml` builds
+  a local smoke dependency wheel without generating CSS, whereas
+  `release-kernel.yml` generates CSS before building the released wheel.
+  Generated `static/css/main.css` is included in the wheel; the kernel changelog
+  documents repository-wide Tailwind inputs. This recipe difference explains
+  why identical kernel source/version need not imply identical wheel bytes;
+  it is not proof of either retained file's exact contents or a registry defect.
+  Do not substitute the smoke hash for the release receipt. Establish retained
+  bytes and test compatibility against the exact published dependency before
+  declaring the selected graph verified. Module-run artifact metadata returned
+  404 through the available connection, so smoke-artifact retention is unknown.
+  Do not rebuild or replace the existing a104 tag.
+  Unpublished `0.1.0a104+dev` is not a substitute or a universal prerequisite.
+- UI `0.1.0a8` has a historical release record and bundle SHA256
+  `1997fe0ca07c058056cefc6ef8a01d4355c4c9c95d678e251b4b2ae08b8abd24`;
+  that record does not supply an individual wheel digest. Normalize retained
+  evidence and independently read back the file; this alone does not require
+  a new release.
+- Party, Brand Profiles and Customers historical a1 tags are explicitly
+  legacy-unverified/non-pinnable in the current ledger. Historical publication
+  statements cannot replace retained registry-byte proof.
+- Addresses has no tracked owner package in the inspected Starter package tree.
+  Registry availability remains unknown, not proven absent. Locate or implement
+  the approved product-first owner when that module or cohort closure needs it.
 
-Not this work, and not this document's to schedule. What the switch needs:
+Evidence paths in Starter are `docs/inventories/kernel-release-verifications/0.1.0a104.json`,
+`docs/inventories/release-record-kernel-a99-ui-a8.md`,
+`docs/inventories/module-release-verifications.json`, and
+`docs/inventories/module-release-legacy-unverified.json`. This runbook does not
+claim artifact readback occurred or authorize publication. A successor release
+requires its own authorization; existing immutable tags are never rebuilt.
 
-- a named production deployment owner (`dec-isp-002`, open);
-- the enforceable legacy Sub transition rule (`dec-isp-003`, answered; `ctl-isp-003`, blocked);
-- an operator approval attributable to a person, recorded in Governance;
-- **traffic-zero evidence** for the cohort's Sub write paths: a measured window
-  in which none of the 28 production writers executed. Sub already emits
-  structured logs and audit events; the evidence is a query over them naming
-  each writer and showing no invocation, not an assertion that the surface is
-  quiet;
-- a delta capture from the sealed watermark forward, so writes that landed
-  between the last drain and the seal are not lost;
-- explicit rollback conditions, agreed before the switch rather than
-  discovered after it.
+The build-recipe explanation is source evidence at the inspected Starter
+revision: `.github/workflows/release-module.yml`,
+`.github/workflows/release-kernel.yml`, root `package.json`, and
+`packages/dotmac-kernel/{pyproject.toml,CHANGELOG.md,scripts/verify_static_artifact.py}`.
+No artifact bytes were downloaded for this assessment.
 
-### 10. Displaced Sub writers are removed and the ratchet is lowered — `ctl-isp-009`
+### 2. Bind selected source concerns to actual module contracts — `ctl-isp-006`
 
-Only after the switch. The ratchet baselines hold 40 entries; the 29 that can
-still write production are what must reach zero — `displaced_writer_paths()`
-is that set, and every one of them carries a disposition that removes it
-(`RETIRE_AFTER_CUTOVER`, `ROUTE_THROUGH_OWNER_FIRST`, or `UNDECIDED`). A
-displaced writer marked to stay would be a contradiction the ratchet could
-never resolve, so a test refuses one.
+For every entity, relation, writer and caller in the selected slice, declare one
+outcome: migrate through a named typed owner contract, explicitly retain with a
+named product owner, or retire with its writer. Coverage is total and disjoint
+for that slice. Keep source identities and unresolved correlations; do not
+invent generic metadata ownership or infer capabilities from package names.
 
-Thirteen of the 29 are `ROUTE_THROUGH_OWNER_FIRST`, and those come **earlier**
-than this step: a shadow comparison run against a source with two writers
-cannot tell drift from the second writer. They gate `ctl-isp-007`, not
-`ctl-isp-009`.
+The source entity table is an expectation, not capability closure. Kernel
+already implements Party/person/organization identity; the missing proof is
+its explicit mapping/link contract. Party excludes person/organization identity
+and customer accounts; Customers excludes identity, reachability and addresses.
+Map `customer_contact`, `organization` and `organization_membership` explicitly
+rather than assigning them to Customers because of the historical table label.
+Addresses draws on Sub's four declared address owners. A missing Addresses
+package blocks the relevant slice and eventual cohort closure, not an unrelated
+module with complete dependencies.
 
-The rule is one direction per change, deliberately: the pull request that
-removes a writer lowers its baseline line in the same commit. Removing a writer
-without lowering the line fails the guard — a ratchet that silently absorbs
-removals can be spent twice, and the next addition would pass a check that
-should have caught it.
+The fifteen parallel production paths are switch-time retirement entries,
+not fifteen automatic pre-cutover refactoring PRs. Earlier source edits need a
+concrete backfill/shadow/switch blocker, a path deliberately remaining live,
+or an immediate security/data-loss defect. The legacy disposition label
+`ROUTE_THROUGH_OWNER_FIRST` does not impose blanket cleanup before shadow.
 
-The eleven non-production entries — two disposable-database tools and nine
-applied migrations — stay. They cannot write production again and there is
-nothing to retire; they remain in the baseline so a *new* fixture seeder or a
-*new* migration touching cohort tables still fails the guard.
+### 3. Rehearse the real module lineage inside Sub — `ctl-isp-010`
 
-## Evidence required before authority can move
+On an explicitly authorized hosted disposable PostgreSQL/PostGIS target made
+from a production-shaped Sub copy, compose the selected verified graph with
+writers disabled. Record the source application revision, Sub Alembic heads,
+module lineage heads, exact artifact graph and copy watermark. Use the real
+Sub predecessor-to-head migration chain and module lineages; fresh-baseline
+checks alone, SQLite and `Base.metadata.create_all()` do not prove deployed
+schema compatibility. Check catalog, constraints, grants and tenant isolation
+where the selected module requires them. Capture before/after counts, failures
+and immutable receipts. Never use local Docker or local PostgreSQL for this
+rehearsal. This document supplies no target or execution authorization.
 
-| Control | Owner | Evidence |
+### 4. Backfill or quarantine idempotently — `ctl-isp-006`
+
+Stage the approved selected-module mapping on that rehearsal copy. Record each
+row's migrated, retained or retired outcome; unresolved/invalid rows go to a
+named quarantine with reason, source identity, repair owner and retry contract.
+Quarantine is accounted-for evidence, not silent omission or permission to
+switch with unresolved invariants.
+
+**Backfill ordering.** For whole-cohort accounting, the source dependency order
+is below; use only the selected slice and its required dependencies:
+
+1. `party`.
+2. `party_role`, `party_external_reference` (reference `party`).
+3. `organization` (references `party`; its `parent_id` needs a second pass or
+   approved deferred constraints).
+4. `brand_profile` (scope can refer to reseller or organization).
+5. `customer_account` (references party, organization and later-cohort IDs:
+   `reseller_id`, `tax_rate_id`, `policy_set_id`, `sales_order_id`).
+6. `party_relationship`, `party_membership`, `party_contact_point` (party links).
+7. `organization_membership` (organization and person links).
+8. `customer_contact`, `customer_address` (customer-account links).
+
+These rows already inhabit Sub's shared database. In-process composition does
+not imply their referenced IDs are absent or require conversion of existing
+foreign keys to correlations. Explicitly map later-cohort links according to
+the selected contract; retain unresolved correlations without dropping them.
+
+**Deduplication keys.** `<entity_type>:<uuid>` is the stable source identity.
+Never deduplicate accounts by email, phone or subscriber number. Shared contact
+addresses are valid. Replay the same watermark twice and prove unchanged target
+state/digest and row-disposition receipts; then rehearse retry and delta
+convergence without duplicate records or repeated business side effects.
+
+**Checkpoint and consistency.** Export pagination remains keyset
+`after_source_id`. A complete drain uses one REPEATABLE READ, READ ONLY
+transaction and one `source_revision` carrying Alembic head, application version
+and PostgreSQL visibility snapshot. Different `snapshot_transaction_id` values
+must not be combined. Resume only within the same fixed snapshot/revision;
+otherwise restart the drain. Existing exporter tests prove a contract, not an
+actual population rehearsal.
+
+**Observations and derived facts.** Source snapshots are observations, not new
+module decisions. Recompute `status`, `is_active`, `lifecycle_override_status`,
+`lifecycle_override_reason`, `lifecycle_override_source`, `lifecycle_override_at`,
+`legacy_party_status` and `mrr_total` through their actual owning policies and
+inputs. Do not adopt those projections as customer authority. `metadata`,
+`access_scope` and `legal_address` remain key inventories plus digests, never
+invented typed facts. The snapshot adds no target status/disposition vocabulary.
+
+### 5. Run read-only in-process shadow — `ctl-isp-011`
+
+With legacy authority still active and candidate writers disabled, compare the
+selected module's candidate read/resolver output with the authoritative source
+inside the same Sub database at a consistent recorded watermark. Shadow must
+not write, dispatch side effects or become a fallback writer. Capture the exact
+mapping, graph, row counts, completeness and explanation for each mismatch.
+The existing `CohortDigest` and `digest.compare` remain bounded comparison tools;
+identity/hash artifacts do not prove a shadow run actually happened.
+
+| Verdict | Response |
+|---|---|
+| `missing-from-target` | Repair mapping/backfill or account for the row through its approved disposition |
+| `unexpected-in-target` | Identify provenance and exclude an unintended writer or mapping error |
+| `divergent` | Investigate canonical fields, normalization and declared derived semantics |
+| `unsupported-version` | Produce comparable contract/provenance versions; never coerce a match |
+| `source-unknown` | Complete the source drain |
+| `target-unknown` | Complete the candidate drain |
+
+Require complete scope and zero unexplained drift, or row-specific human
+adjudication naming identity, reason and invariant impact. There is no automatic
+acceptable-difference verdict. A writer remaining live during shadow is an
+explicitly modeled source input or a demonstrated blocker; its census label
+alone does not require an advance refactor.
+
+### 6. Rehearse a safe one-writer config rollback — `ctl-isp-012`
+
+On the authorized rehearsal copy, test switch and rollback for the selected
+module/concern. Record the exact configuration, owner admission controls and
+state watermark. Prove that config selects exactly one writer and excludes
+legacy fallbacks in either direction. A config flip is safe only when the
+returning owner can interpret all post-switch records and preserves audit,
+idempotency and outbox semantics. If that compatibility cannot be proved,
+stop new writes and use the approved reconciliation/forward-fix path; do not
+restore a stale database or enable both owners. Test post-switch writes and
+retry handling, not just an empty configuration flip.
+
+### 7. Obtain operator approval and switch the selected authority — `ctl-isp-012`
+
+A later attributable operator approval must name the module/concern, exact
+graph, immutable rehearsal and shadow receipts, target host, config transition,
+per-slice in-flight transaction fencing/quiescence, rollback conditions and
+observation window. This
+runbook is not that approval. Measure traffic-zero for the paths displaced by
+this slice and account for in-flight work. Reconcile source changes since
+backfill under the same-database consistency contract before admitting the new
+writer. No cross-database delta capture or whole-product traffic drain is
+required by this in-place switch.
+
+Redirect or disable every displaced writer and fallback in the same selected
+module authority-switch slice. Architecture and database controls must prevent
+parallel authority from returning; update both ratchets deliberately with
+retirement. Do not postpone disabling paths until cohort-wide closure. Preserve
+unrelated responsibilities in multi-purpose files, such as subscription
+lifecycle in `account_lifecycle.py` or non-cohort account-recovery consequences.
+
+### 8. Prove retirement before closing the rollback window — `ctl-isp-009`
+
+Require zero displaced writers for the selected switched scope, with path-level
+traffic and admission evidence, updated baselines and guards. Retained rollback
+code is disabled, explicitly gated and never a live fallback. Delete retired
+paths when the approved rollback window closes. Whole-cohort closure eventually
+accounts for all 28 currently reachable production writer surfaces; the 15
+parallel paths are part of that ledger. Nine applied migrations and two
+non-production tooling entries remain historical/non-production ratchet entries;
+they are not live authorities to retire. Independent module acceptance is not
+held until all unrelated cohort writers reach zero.
+
+## First preparation candidate: Brand Profiles
+
+This is the first bounded packet to complete, not a claim of adoption or an
+approved switch. Source evidence is Sub `b69f1b4a6d088522ce5834aa57ccd94a3530606d`;
+module evidence is Starter `0aa465446794ae03abc743f9e288e9f3831be3aa`.
+The scope is the `brand_profile` entity (`brand_profiles`, `BrandProfile`) and
+`customer.branding`'s profile commands and display resolver. It excludes legal
+identity, billing-company facts and email legal-sender authority. Replacing a
+branding read must not transfer those other owners into Brand Profiles.
+
+Compose the selected owner on the TENANT plane in the existing Sub database.
+Sub's source scope named `platform` is a candidate tenant-wide default, not
+permission to compose the platform control-plane profile/host-binding lineage.
+`customer.branding` depends on `customer.identity_scope` and
+`control.domain_settings`; prove the relevant relation contracts without
+requiring unrelated Party/Customers cohort completion.
+
+### Mapping decisions and evidence still required
+
+| Source concern | Required target contract or disposition | Status |
 |---|---|---|
-| `ctl-isp-002` | Michael Ayoade | A named production deployment owner for `asm-dotmac-isp` |
-| `ctl-isp-003` | Michael Ayoade | The enforceable legacy Sub transition rule |
-| `ctl-isp-004` | Dotmac ISP technical owner | Digest-pinned releases and one composed migration graph |
-| `ctl-isp-005` | Dotmac ISP technical owner | Target catalog, RLS, grants and migration rehearsal on the exact pins |
-| `ctl-isp-006` | Dotmac Sub technical owner | Every source row dispositioned; idempotent replay proved by digest equality |
-| `ctl-isp-007` | Dotmac ISP technical owner | Zero unexplained drift at an immutable source watermark |
-| `ctl-isp-008` | Michael Ayoade | Sealed switch: approval, delta capture, traffic-zero evidence, rollback conditions |
-| `ctl-isp-009` | Dotmac Sub technical owner | 28 production writers to zero, ratchet lowered writer by writer |
+| Source UUID and platform/reseller/organization scope | Stable source correlation; explicit tenant default and reseller/organization identity links; source `scope_id` has no FK | open |
+| Brand/product/legal names and active flag | Map to required `profile_code`/`display_name`, field provenance/locks and DRAFT/ACTIVE/RETIRED semantics without inventing legal authority | open |
+| Organization > reseller > platform > legacy resolution | Prove target selection and per-field fallback precedence for every source scope; no legacy fallback after switch | open |
+| Primary/accent colors | Map typed values and compare rendered output against the released UI token contract | open |
+| Five `metadata.semantic_colors` overrides | Dossier classifies these as `OWNED_BY_PUBLISHED_TOKEN`; enumerate actual values and explicit unsupported-value dispositions | open |
+| Logo, favicon and other asset URLs/static paths | Map to opaque file references owned by the file capability; prove byte/reference and deletion behavior rather than assuming URL equivalence | open |
+| `tagline`, `app_url`, `portal_domain` | No direct target tenant-profile fields established; assign typed retention, migration or retirement outcomes, never silently drop | open |
+| Sender/support fields and `legal_address` | Map each field's actual meaning and owner; existing opaque-address evidence is not a structured address contract | open |
 
-A control is verified only in Governance, citing an immutable
-controlled-source reference. Nothing in this repository advances one, and an
-agent-authored assertion is not evidence.
+The inspected module has different tenant/platform models and migration
+prerequisites, including tenant scope catalog, idempotency and database roles.
+Record exact plane selection and dependency lineage from the chosen verified
+release; source compatibility is not demonstrated merely by the package name.
+The historical a1 release is currently non-pinnable. No exact artifact graph
+or migration/backfill/shadow acceptance is established for this candidate.
 
-## Open source-side questions
+### Switch-time path checklist
 
-Governance answered five decisions on 2026-08-21 (`d91a87f`), and the three
-that were carried as `Disposition.UNDECIDED` on specific surfaces are now
-closed. What remains for `ctl-isp-006` is **work created by those answers**,
-plus the two dispositions that were always going to need one:
+Confirm the exact call graph on the eventual candidate commit. The current
+packet records these paths rather than scheduling source cleanup beforehand:
 
-- **`customer_location_requests.py` bypasses `customer.accounts`.** Not, as an
-  earlier version of this document said, because addresses have no Sub owner —
-  they have four declared ones (see the ownership map). The write simply does
-  not go through any of them, and it has to before the cohort can be shadowed.
-  Extraction into `dotmac-addresses` draws on `customer.accounts`,
-  `gis.spatial_sync`, `customer.location_capture` and
-  `customer.location_verification`.
-- **The account-recovery cascade must be decomposed.** Customers owns recovery
-  intent, but one restore currently touches invoices, payments, credentials,
-  RADIUS, IP assignments and ONT assignments in the same pass. Only the account
-  rows are cohort 1, and the pass has to be separable before they can move.
-- **`subscribers.metadata` remains opaque export evidence.** It crosses as a
-  key inventory plus a digest, never as target-owned facts. The detail location
-  writer is retired; remaining dispositions come from the executable inventory,
-  not the historical seven-writer count.
-- **`organizations` and `organization_memberships` have no counted writer.**
-  Historical B2B account records with no live owner. Do they migrate, stay in
-  Sub as history, or retire with evidence? Still open.
-- **`subscriber_nin_verifications`.** Decided: a Compliance/Records retention
-  disposition rather than a cohort-1 migration one. It stays out of the export
-  and is governed by retention policy; the cohort carries only a presence flag
-  on the account.
-- **Nine other cohort-adjacent tables are deliberately unmapped.** Each is
-  recorded in `surfaces.UNMAPPED_ADJACENT_TABLES` with its reason; each still
-  needs a disposition before the cohort can claim every source row is
-  accounted for.
+- `app/services/brand_profiles.py`: replace upsert/sync/deactivate commands and
+  disable `_legacy_brand` fallback once module parity and rollback are proved.
+- `app/api/branding.py`: route PUT/DELETE adapters through the selected owner.
+- `app/web/admin/system.py`: the branding settings handler writes comms settings,
+  removes managed assets and syncs the profile; separate its retained concerns
+  and retire the displaced brand writes in the switch slice.
+- `app/services/web_system_company_info.py`: preserve company-info ownership,
+  replace its profile sync consequence and prove transaction behavior.
+- `scripts/utils/settings_sync.py`: classify and disable/repoint branding-key
+  writes while preserving unrelated settings synchronization.
+- `scripts/one_off/backfill_brand_profiles.py`: gate or retire the legacy
+  backfill entry point so it cannot reintroduce a writer after the switch.
+- `alembic/versions/267_brand_profiles.py`: preserve applied schema history;
+  it is not a live writer to refactor or delete.
+
+Reader census and parity must include customer/reseller/public/portal branding,
+admin/auth contexts and `app/api/me.py`; invoices, sales quotes, support,
+notifications/tasks, inbox projections and catalog presentation. Inspect direct
+bypasses in `app/services/email.py`, invoice logo settings/StoredFile fallbacks,
+theme/static/favicon lookups, and direct profile-table reads. Repoint only the
+profile concern; retain each unrelated fact's actual owner. This grouped list
+is a starting inventory, not proof that all callers have been enumerated.
+
+### Acceptance receipts for this candidate
+
+Keep these incomplete until immutable evidence exists: verified artifact and
+compatible dependency graph tested against the exact released kernel bytes;
+total field/scope/file dispositions; TENANT composition and hosted
+real-lineage PostgreSQL rehearsal; idempotent backfill/quarantine with source
+correlations; profile-only same-database shadow at consistent provenance;
+one-writer admission and in-flight fencing; post-switch data-compatible config
+rollback; zero displaced profile writers/fallbacks with architecture/database
+guards and path-level receipt. Independent acceptance does not require all
+twelve cohort entities to migrate. No build, install, production read or switch
+is authorized by this packet.
+
+## Remaining source evidence
+
+No open programme decision is implied by an unfinished evidence task:
+
+- Explicit mapping/link and disposition receipts are needed for contacts,
+  organizations and memberships; zero counted writers is not no data.
+- The recovery cascade crosses invoices, payments, credentials, RADIUS, IP
+  and ONT assignments. A selected Customers switch must preserve those owners
+  and retire only its displaced account touch; demonstrate separability when
+  that slice needs it, not as a prerequisite for every module.
+- Opaque metadata remains evidence. Source address corruption needs measured
+  repair evidence where it affects the selected module; no sweep is authorized.
+- `subscriber_nin_verifications` remains excluded with Compliance/Records
+  retention evidence, and the other deliberately unmapped adjacent tables keep
+  their declared reasons. No purge is authorized.
+- `mrr_total` recomputation must be proved where its owning slice switches.
 
 ## Operating the export
 
-Both modes read only, and both refuse a tenant that is not the operator tenant
-rather than answering with an empty page.
+Both modes read only and refuse a tenant other than the operator tenant.
+These invocations document the existing adapter; they are not authorization
+to access a host or customer population.
 
 ```bash
-# privacy-safe comparison digest — identities and hashes, no field values
+# comparison digest: identities and hashes, no field values
 python scripts/migration/export_isp_cohort_snapshot.py --digest
 
-# one page of one entity type; refuses a terminal, writes 0600
+# one page; refuses a terminal and writes a 0600 file
 python scripts/migration/export_isp_cohort_snapshot.py \
     --snapshot --entity-type party --page-size 200 --out /path/to/party-0.json
 ```
 
-Handle a snapshot file as customer data: it carries names, emails, phones and
-addresses. The digest does not, and is the artifact to attach to a control
-record or hand to whoever runs the comparison.
+Snapshots contain customer data. Use digest artifacts for comparison evidence
+where values are unnecessary, and keep the recorded source provenance intact.
 
 ## Why there is no online export endpoint
 
-There is deliberately no HTTP export route, and adding one is not pending work
-that got dropped.
-
-An authenticated `/api/v1` export endpoint would be a standing egress surface
-for the customer identity data of the whole cohort, reachable from the network,
-available continuously. Today it would have no consumer at all: `ctl-isp-002`
-is open, so no destination is named, no deployment owner exists, and nothing is
-positioned to call it. That is the worst possible trade — permanent exposure
-against zero current use.
-
-The operator CLI has the properties the online route would have to re-earn:
-access is host access rather than a token, output is a 0600 file rather than a
-response body, the default mode cannot leak field values, and every invocation
-is a deliberate human act on a host somebody already had to reach.
-
-Build the online adapter when, and only when, all of these hold: `ctl-isp-002`
-is verified with a named destination and deployment owner; the destination can
-authenticate as a specific principal rather than a shared token; the route is
-guarded by a dedicated permission that no seeded role carries by default;
-egress is restricted to the destination; and each export is audited with its
-contract version, checkpoint and requesting principal. Until then the absence
-is the correct design.
+In-place module composition has no cross-application export consumer. The
+operator CLI and in-process typed read boundary cover the current preparation
+contract; a standing network egress endpoint would add a separate access
+surface. `ctl-isp-002` is superseded and cannot be used to require or unlock
+such an endpoint. A future justified remote consumer requires an explicit
+architecture decision, named principal, dedicated permission, restricted egress
+and audited contract version/checkpoint/principal. No HTTP adapter is added here.
