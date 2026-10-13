@@ -3,7 +3,8 @@
 import 'status_presentation.dart';
 
 class WorkOrderSelfCareAction {
-  const WorkOrderSelfCareAction({required this.key, required this.allowed, this.label});
+  const WorkOrderSelfCareAction(
+      {required this.key, required this.allowed, this.label});
 
   final String key;
   final bool allowed;

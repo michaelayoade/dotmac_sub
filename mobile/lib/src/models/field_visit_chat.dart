@@ -40,13 +40,14 @@ class FieldVisitChat {
   final List<FieldVisitMessage> messages;
 
   factory FieldVisitChat.fromJson(Map<String, dynamic> json) => FieldVisitChat(
-    available: json['available'] as bool? ?? false,
-    canSend: json['can_send'] as bool? ?? false,
-    reason: json['reason'] as String?,
-    technicianName: json['technician_name'] as String?,
-    messages: [
-      for (final message in json['messages'] as List? ?? const [])
-        FieldVisitMessage.fromJson((message as Map).cast<String, dynamic>()),
-    ],
-  );
+        available: json['available'] as bool? ?? false,
+        canSend: json['can_send'] as bool? ?? false,
+        reason: json['reason'] as String?,
+        technicianName: json['technician_name'] as String?,
+        messages: [
+          for (final message in json['messages'] as List? ?? const [])
+            FieldVisitMessage.fromJson(
+                (message as Map).cast<String, dynamic>()),
+        ],
+      );
 }

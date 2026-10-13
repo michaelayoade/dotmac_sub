@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from app.services.permission_matching import permission_keys_allow
 from app.services.rbac_catalog import _PERMISSION_KEY_PATTERN
 from app.services.sot_registry.registry import service_relationship
 
@@ -360,8 +361,14 @@ def test_offer_access_requirement_permission_key_matches_the_repo_pattern():
     assert _PERMISSION_KEY_PATTERN.fullmatch(
         "catalog:offer_access_requirement:classify"
     )
-    assert not _PERMISSION_KEY_PATTERN.fullmatch(
+    assert _PERMISSION_KEY_PATTERN.fullmatch(
         "catalog:offer-access-requirement:classify"
+    )
+    # Both spellings are valid identifiers, but the existing capability has
+    # exactly one name. Grammar support must never introduce a grant alias.
+    assert not permission_keys_allow(
+        frozenset({"catalog:offer-access-requirement:classify"}),
+        "catalog:offer_access_requirement:classify",
     )
 
 

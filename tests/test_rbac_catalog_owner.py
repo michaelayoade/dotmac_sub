@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.api import rbac as rbac_api
 from app.models.audit import AuditEvent
@@ -15,11 +16,14 @@ from app.models.rbac import Permission, Role, RolePermission, SystemUserRole
 from app.models.system_user import SystemUser
 from app.schemas.rbac import RoleCreate
 from app.services import rbac_catalog
+from app.services.field.completion_review_contracts import READ, WRITE
 from app.services.owner_commands import CommandContext
+from app.services.permission_matching import permission_keys_allow
 from app.services.web_system_role_forms import (
     build_role_create_payload,
     create_role_with_permissions,
 )
+from scripts.seed.seed_rbac import ADMIN_ONLY_PERMISSION_KEYS, DEFAULT_PERMISSIONS
 
 
 def _context(scope: str, key: str = "rbac-catalog-owner-test") -> CommandContext:
@@ -138,6 +142,133 @@ def test_catalog_identities_are_normalized_and_case_unique(db_session) -> None:
     with pytest.raises(rbac_catalog.RbacCatalogError) as captured:
         _create_permission(db_session, "Network:OLT_Read")
     assert captured.value.code == "auth.rbac_catalog.permission_conflict"
+
+
+@pytest.mark.parametrize("key", (READ, WRITE))
+def test_hyphenated_completion_permissions_use_typed_catalog_commands(
+    db_session: Session, key: str
+) -> None:
+    created = _create_permission(db_session, key)
+    updated = rbac_catalog.update_permission(
+        db_session,
+        rbac_catalog.UpdatePermissionCommand(
+            context=_context(rbac_catalog.PERMISSION_WRITE_SCOPE),
+            permission_id=created.id,
+            key=f"  {key.upper()}  ",
+            description="Completion review capability",
+        ),
+    )
+
+    assert updated.id == created.id
+    assert updated.key == key
+    assert db_session.query(Permission).filter_by(key=key).count() == 1
+    assert db_session.query(RolePermission).count() == 0
+
+
+def test_canonical_seed_permissions_reconcile_through_catalog_owner(
+    db_session: Session,
+) -> None:
+    assert {READ, WRITE} <= {key for key, _ in DEFAULT_PERMISSIONS}
+    for key, description in DEFAULT_PERMISSIONS:
+        permission = rbac_catalog.ensure_permission(
+            db_session,
+            key=key,
+            description=description,
+            is_ui_assignable=key not in ADMIN_ONLY_PERMISSION_KEYS,
+        )
+        assert permission.key == key.strip().lower()
+
+
+def test_exact_global_wildcard_keeps_protected_catalog_behavior(
+    db_session: Session,
+) -> None:
+    created = _create_permission(db_session, "*", is_ui_assignable=False)
+
+    assert created.key == "*"
+    assert db_session.get(Permission, created.id).is_ui_assignable is False
+    assert db_session.query(RolePermission).count() == 0
+
+
+def test_existing_completion_permission_ids_and_grants_survive_seed_reconciliation(
+    db_session: Session,
+) -> None:
+    role = Role(id=uuid4(), name="completion-reviewer", is_active=True)
+    permissions = {
+        key: Permission(id=uuid4(), key=key, is_active=True, is_ui_assignable=True)
+        for key in (READ, WRITE)
+    }
+    db_session.add_all((role, *permissions.values()))
+    db_session.flush()
+    links = tuple(
+        RolePermission(role_id=role.id, permission_id=permission.id)
+        for permission in permissions.values()
+    )
+    db_session.add_all(links)
+    db_session.commit()
+    identities = {key: permission.id for key, permission in permissions.items()}
+    grant_ids = {link.id for link in links}
+
+    for _ in range(2):
+        for key in (READ, WRITE):
+            reconciled = rbac_catalog.ensure_permission(
+                db_session,
+                key=f"  {key.upper()}  ",
+                description="Completion review capability",
+                is_ui_assignable=True,
+            )
+            assert reconciled.id == identities[key]
+        db_session.commit()
+
+    assert {link.id for link in db_session.query(RolePermission).all()} == grant_ids
+    assert db_session.query(Permission).count() == 2
+
+
+@pytest.mark.parametrize(
+    "key",
+    (
+        "operations",
+        "1operations:read",
+        "-operations:read",
+        "operations::read",
+        "operations..read",
+        "operations:1review:read",
+        "operations:-review:read",
+        "operations:review:1read",
+        "operations:completion review:read",
+        "operations:completion/review:read",
+        "operations:completion-review:read:extra",
+        "operations:*",
+        "operations:completion-review:*",
+        "operations:completion*review:read",
+    ),
+)
+def test_permission_identifier_extension_keeps_invalid_keys_closed(
+    db_session: Session, key: str
+) -> None:
+    with pytest.raises(rbac_catalog.RbacCatalogError) as captured:
+        _create_permission(db_session, key)
+
+    assert captured.value.code == "auth.rbac_catalog.invalid_permission_key"
+    assert not db_session.in_transaction()
+    assert db_session.query(Permission).count() == 0
+    assert db_session.query(AuditEvent).count() == 0
+
+
+@pytest.mark.parametrize(
+    ("held", "required", "allowed"),
+    (
+        (READ, WRITE, False),
+        ("operations:completion_review:write", WRITE, False),
+        ("operations:another-review:write", WRITE, False),
+        ("operations:*", WRITE, True),
+        ("operations:completion-review:*", WRITE, True),
+        ("*", WRITE, True),
+    ),
+)
+def test_hyphenated_identifiers_do_not_change_permission_matching(
+    held: str, required: str, allowed: bool
+) -> None:
+    assert permission_keys_allow(frozenset({held}), required) is allowed
 
 
 def test_assigned_role_identity_and_active_state_are_protected(db_session) -> None:
