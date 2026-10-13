@@ -136,6 +136,21 @@ keystore referenced by `android/key.properties`.
    `MOBILE_GLITCHTIP_DSN`. iOS release archiving still needs Apple signing
    credentials wired in (job is stubbed).
 
+   All four `ANDROID_*` signing secrets are mandatory before CI installs or
+   builds anything. Keep using the existing Customer upload keystore and its
+   custody process; Field signing secrets are separate. The workflow refuses
+   stale signing material, invalid/empty keystores, and an invalid key alias.
+   Before upload, `scripts/verify_customer_android_release.py` verifies the
+   selected APK with Android `apksigner`, or the AAB with `jarsigner` and
+   `keytool`. It refuses unsigned/tampered artifacts, unsigned bundle entries,
+   Android debug certificates, and any signer that differs from the restored
+   upload key. The manifest package must equal `io.dotmac.selfcare` (the AAB's
+   protobuf root package is parsed exactly). CI explicitly installs build-tools `36.0.0`; unavailable tools fail
+   closed. Only the selected, verified artifact is uploaded. A missing
+   artifact fails the run, and signing material is removed even after failure.
+   These checks prove build signing and app identity, not Play acceptance or
+   publication. Do not rotate or replace the upload key to bypass a failed check.
+
 The payment return scheme (`dotmacpay`) is registered in the Android manifest
 and iOS Info.plist; for a white-label build, override `BRAND_PAYMENT_SCHEME` in
 the Dart build *and* the matching native entries (Gradle `-PpaymentScheme=`,
