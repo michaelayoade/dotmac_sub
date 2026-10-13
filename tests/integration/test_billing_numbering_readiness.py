@@ -190,7 +190,8 @@ def test_cli_reads_changed_database_prefix_without_touching_installed_cache(
                 DomainSetting.domain == SettingDomain.billing,
                 DomainSetting.key == "invoice_number_prefix",
                 DomainSetting.scope_kind == "tenant",
-                DomainSetting.scope_id == OPERATOR_TENANT_ID,
+                DomainSetting.tenant_id == OPERATOR_TENANT_ID,
+                DomainSetting.scope_id.is_(None),
             )
         )
         if setting is None:
@@ -198,7 +199,7 @@ def test_cli_reads_changed_database_prefix_without_touching_installed_cache(
                 domain=SettingDomain.billing,
                 key="invoice_number_prefix",
                 scope_kind="tenant",
-                scope_id=OPERATOR_TENANT_ID,
+                scope_id=None,
                 tenant_id=OPERATOR_TENANT_ID,
                 value_type=SettingValueType.string,
                 value_text=prefix,
@@ -207,6 +208,7 @@ def test_cli_reads_changed_database_prefix_without_touching_installed_cache(
             writer.add(setting)
         else:
             setting.value_text = prefix
+            setting.value_json = None
             setting.is_active = True
         writer.commit()
     previous = active_settings_cache()
