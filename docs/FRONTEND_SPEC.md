@@ -1376,8 +1376,15 @@ page. At standard desktop widths the bounded defaults use compact grid density
 and fit the work surface without horizontal scrolling; mobile retains overflow
 as a responsive fallback.
 
-#### `GET /admin/catalog/offers`
-**Template:** `admin/catalog/offers/index.html`
+#### `GET /admin/catalog`
+**Template:** `admin/catalog/index.html`
+
+Catalog search is explicitly submitted: typing does not issue a request. Enter
+or the **Search** button submits the search together with Status, Plan kind,
+Plan family, and Plan category, resets pagination to page 1, and updates the
+browser URL. **Clear** empties the query and makes one request while preserving
+those filters. Concurrent catalog-search requests use replacement semantics so
+an older response cannot overwrite newer results.
 
 ```python
 {
@@ -2037,7 +2044,7 @@ These are the ORM objects your templates receive. Access fields with dot notatio
 | Customers | `GET /admin/customers?search=...` | `keyup changed delay:300ms` | `#data-table` |
 | Subscribers | `GET /admin/subscribers?search=...` | `keyup changed delay:300ms` | `#data-table` |
 | Invoices | `GET /admin/billing?search=...` | `keyup changed delay:300ms` | `#data-table` |
-| Offers | `GET /admin/catalog/offers?search=...` | `keyup changed delay:300ms` | `#data-table` |
+| Offers | `GET /admin/catalog?search=...` | form submit (Enter or **Search**); **Clear** submits once | `#catalog-grid-wrapper` |
 
 ### Dynamic Form Fields
 
