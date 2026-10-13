@@ -32,6 +32,8 @@ def _historical_ticket_binding(db):
     )
     installation.connector_version = historical.version
     installation.manifest_digest = historical.digest
+    # Persist the historical fixture pin before the owner refreshes under lock.
+    db.flush()
     installations.create_config_revision(
         db,
         installation_id=installation.id,
