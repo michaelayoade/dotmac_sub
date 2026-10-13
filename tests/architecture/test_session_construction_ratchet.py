@@ -281,7 +281,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: fixtures, two schema classification fixtures, two migrated PostgreSQL
 #: session factories and two isolated empty-bootstrap Engine/Session sites.
 #: Production construction allowances remain unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 771
+#: +1 from the opening evidence census: one sessionmaker over the existing
+#: migrated PostgreSQL engine for an independent committed writer and the
+#: canonical read-only snapshot seam. No production construction allowance changes.
+TEST_FIXTURE_BASELINE_TOTAL = 772
 
 
 def _baseline() -> dict[str, int]:

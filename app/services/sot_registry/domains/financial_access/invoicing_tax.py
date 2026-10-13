@@ -21,6 +21,96 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="financial.invoices.opening_export",
+        module="app.services.billing.opening_export",
+        implementation_modules=("app.services.billing.opening_export_contracts",),
+        owns=("complete billing opening evidence census",),
+        depends_on=(
+            "financial.invoices",
+            "financial.payments",
+            "financial.credit_notes",
+            "financial.ledger",
+            "financial.customer_subledger",
+            "customer.accounts",
+        ),
+        notes="Read-only invoice-domain evidence; incumbent owners retain every mutation and authority decision. No import or activation command.",
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="complete billing opening evidence census",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "current financial source population",
+                        "canonical invoice settlement",
+                        "bounded immutable position evidence",
+                        "declared capture provenance",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="current financial source population",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="All subscriber, invoice/line, payment/refund/reversal/allocation, credit/application, ledger, opening/funding baseline and posting/effect rows in one caller-owned current snapshot; no creation window or subscription join.",
+                ),
+                AuthorityInput(
+                    name="canonical invoice settlement",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Existing resolve_invoice_settlement_amounts including proportional refunds, credit applications and opening consumption; no second resolver.",
+                ),
+                AuthorityInput(
+                    name="bounded immutable position evidence",
+                    owner="financial.customer_subledger",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Existing resolve_position_evidence_at bounded by economic and recorded time; effective durable authority cutover required; shadow never promoted.",
+                ),
+                AuthorityInput(
+                    name="declared capture provenance",
+                    owner="financial.invoices.opening_export",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Caller-declared installation UUID, repository SHA, cutoff, population version and precision evidence; declarations are not authenticated installation or source proof. Actual schema heads/snapshot/capture instant come from PostgreSQL.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Caller supplies clean PostgreSQL READ ONLY REPEATABLE READ/SERIALIZABLE transaction; no begin, commit, rollback, savepoint or flush; autoflush restored.",
+                locking="No write locks. Snapshot captures current mutable rows; timestamps cannot reconstruct historical values.",
+                idempotency="No persistence. Canonically ordered evidence produces a content fingerprint excluding capture clock/snapshot label.",
+                retries="Caller retries entire read snapshot on failure; never partial capture.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.invoices.opening_export.invalid_query",
+                    "financial.invoices.opening_export.snapshot_required",
+                    "financial.invoices.opening_export.schema_evidence_missing",
+                    "financial.invoices.opening_export.nonfinite_source",
+                ),
+                mapping_owner="future source evidence adapter",
+                fail_closed_on=(
+                    "unsupported or dirty caller snapshot",
+                    "missing schema evidence",
+                    "unproven authority or unsupported source mapping",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.invoices.opening_export",
+                verification="Hosted census completeness, canonical refund, exact controls, snapshot and no-write tests.",
+                cutover_gate="Evidence only; no source authority switch, export operation or Starter import command is authorized.",
+                fallback_retirement="No parallel settlement or lane resolver introduced.",
+            ),
+            steward="billing operations",
+            design_refs=("docs/designs/BILLING_OPENING_EVIDENCE_CENSUS.md",),
+            test_refs=(
+                "tests/test_billing_opening_export.py",
+                "tests/integration/test_billing_opening_export.py",
+                "tests/architecture/test_billing_opening_export_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.billing_numbering_readiness",
         module="app.services.billing_numbering_readiness",
         owns=("billing numbering complete-population seed readiness",),
