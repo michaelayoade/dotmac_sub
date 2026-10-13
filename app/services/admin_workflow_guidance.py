@@ -1216,6 +1216,12 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Test or validate the connection before enabling it for normal delivery.",
         "Use sync and failure evidence to investigate problems without repeatedly sending the same operation.",
         "Retired connector jobs remain available for history, but cannot be configured or run again. Create a current connector installation for any approved retained capability.",
+        "For an installed Nextcloud Talk integration, open Manage, confirm its approved server, and enter the existing notifier username and app password. Saving credentials requires both settings and secrets write access.",
+        "Choose Save and validate credentials to check the notifier connection without sending a notification. A failed connection check keeps this Talk integration disabled; correct the credentials and save again.",
+        notes=(
+            "Nextcloud Talk credential setup keeps the approved server, notification policy, and global notification setting unchanged. It does not create a Nextcloud account.",
+            "Configured means a credential reference is stored, not that its current connection is healthy. If storage is unavailable, contact your administrator and retry the same request.",
+        ),
     ),
     _guide(
         "notifications",
@@ -2222,6 +2228,8 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "configure-integration",
             "Configure an integration",
             1,
+            5,
+            6,
             permission="system:settings:write",
         ),
         _action(

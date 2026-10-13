@@ -112,6 +112,24 @@ def _scrub_event_credentials(event: Any, _hint: Any) -> Any:
     block error reporting, so any unexpected event shape is left as-is rather
     than raising.
     """
+    # Credential setup exceptions must not retain captured request bodies,
+    # breadcrumbs, exception messages, or SDK context containing transient input.
+    request = event.get("request") if isinstance(event, dict) else None
+    if isinstance(request, dict) and "/admin/integrations/nextcloud-talk/" in str(
+        request.get("url", "")
+    ):
+        return {
+            key: event[key]
+            for key in (
+                "event_id",
+                "timestamp",
+                "level",
+                "platform",
+                "release",
+                "environment",
+            )
+            if key in event
+        }
     try:
         exc_values = (event.get("exception") or {}).get("values") or []
         for value in exc_values:

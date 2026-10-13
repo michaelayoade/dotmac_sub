@@ -393,6 +393,8 @@ def _installation_manage_url(installation: IntegrationInstallation) -> str:
         return f"/admin/integrations/webhooks/{installation.id}"
     if installation.connector_key == "whatsapp":
         return "/admin/integrations/whatsapp"
+    if installation.connector_key == "nextcloud.talk":
+        return f"/admin/integrations/nextcloud-talk/{installation.id}"
     if installation.connector_key == "meta.social":
         return "/admin/crm/meta"
     if installation.connector_key in {"paystack", "flutterwave"}:

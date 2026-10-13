@@ -218,6 +218,66 @@ def get_installation(
     return installation
 
 
+def lock_installation(
+    db: Session, installation_id: UUID | str
+) -> IntegrationInstallation:
+    """Serialize every aggregate writer and refresh once after lock acquisition."""
+    identity = coerce_uuid(str(installation_id))
+    transaction = db.get_transaction()
+    previous = db.info.get("integration_installation_locks")
+    if previous is not None and previous[0] is transaction and identity in previous[1]:
+        return get_installation(db, identity)
+    with db.no_autoflush:
+        installation = db.scalar(
+            select(IntegrationInstallation)
+            .where(IntegrationInstallation.id == identity)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if installation is None:
+            raise InstallationError("integration installation not found")
+        db.refresh(
+            installation,
+            attribute_names=["current_config_revision", "capability_bindings"],
+        )
+        for binding in installation.capability_bindings:
+            db.refresh(binding)
+        if installation.current_config_revision is not None:
+            db.refresh(installation.current_config_revision)
+    transaction = db.get_transaction()
+    locked = (
+        previous[1] if previous is not None and previous[0] is transaction else set()
+    )
+    locked.add(identity)
+    db.info["integration_installation_locks"] = (transaction, locked)
+    return installation
+
+
+def _lock_binding(
+    db: Session, capability_binding_id: UUID | str
+) -> IntegrationCapabilityBinding:
+    binding_id = coerce_uuid(str(capability_binding_id))
+    installation_id = db.scalar(
+        select(IntegrationCapabilityBinding.installation_id).where(
+            IntegrationCapabilityBinding.id == binding_id
+        )
+    )
+    if installation_id is None:
+        raise InstallationError("integration capability binding not found")
+    installation = lock_installation(db, installation_id)
+    binding = next(
+        (
+            binding
+            for binding in installation.capability_bindings
+            if binding.id == binding_id
+        ),
+        None,
+    )
+    if binding is None:
+        raise InstallationError("integration capability binding not found")
+    return binding
+
+
 def commit_installation_changes(
     db: Session, installation: IntegrationInstallation
 ) -> IntegrationInstallation:
@@ -438,7 +498,7 @@ def create_config_revision(
     schema_version: str = "v1",
     actor: str | None = None,
 ) -> IntegrationConfigRevision:
-    installation = get_installation(db, installation_id)
+    installation = lock_installation(db, installation_id)
     if installation.state == IntegrationInstallationState.retired.value:
         raise InstallationError("retired installation cannot be configured")
     definition = _definition_for_installation(installation)
@@ -522,7 +582,7 @@ def bind_capability(
     policy: dict[str, Any] | None = None,
     actor: str | None = None,
 ) -> IntegrationCapabilityBinding:
-    installation = get_installation(db, installation_id)
+    installation = lock_installation(db, installation_id)
     if installation.state == IntegrationInstallationState.retired.value:
         raise InstallationError("retired installation cannot receive capabilities")
     definition = _definition_for_installation(installation)
@@ -570,10 +630,7 @@ def update_binding_policy(
 ) -> IntegrationCapabilityBinding:
     """Replace an enabled binding's operator-owned dispatch policy."""
 
-    binding = db.get(
-        IntegrationCapabilityBinding,
-        coerce_uuid(str(capability_binding_id)),
-    )
+    binding = _lock_binding(db, capability_binding_id)
     if binding is None:
         raise InstallationError("integration capability binding not found")
     if (
@@ -595,10 +652,7 @@ def disable_capability_binding(
 ) -> IntegrationCapabilityBinding:
     """Disable one capability without stopping sibling lifecycle capabilities."""
 
-    binding = db.get(
-        IntegrationCapabilityBinding,
-        coerce_uuid(str(capability_binding_id)),
-    )
+    binding = _lock_binding(db, capability_binding_id)
     if binding is None:
         raise InstallationError("integration capability binding not found")
     if binding.installation.state != IntegrationInstallationState.enabled.value:
@@ -617,7 +671,7 @@ def validate_static(
     installation_id: UUID | str,
     actor: str | None = None,
 ) -> ValidationResult:
-    installation = get_installation(db, installation_id)
+    installation = lock_installation(db, installation_id)
     if installation.state == IntegrationInstallationState.retired.value:
         raise InstallationError("retired installation cannot be validated")
     installation.state = IntegrationInstallationState.validating.value
@@ -652,7 +706,7 @@ def enable_after_connection_validation(
     connection_result: ValidationResult,
     actor: str | None = None,
 ) -> IntegrationInstallation:
-    installation = get_installation(db, installation_id)
+    installation = lock_installation(db, installation_id)
     static_errors = _static_validation_errors(installation)
     if static_errors:
         raise InstallationError(
@@ -702,7 +756,7 @@ def validate_installation_connection(
     static_result = validate_static(db, installation_id=installation_id, actor=actor)
     if not static_result.valid:
         return static_result
-    installation = get_installation(db, installation_id)
+    installation = lock_installation(db, installation_id)
     failed_codes: list[str] = []
     for binding in installation.capability_bindings:
         try:
@@ -733,7 +787,7 @@ def disable_installation(
     reason: str,
     actor: str | None = None,
 ) -> IntegrationInstallation:
-    installation = get_installation(db, installation_id)
+    installation = lock_installation(db, installation_id)
     if installation.state == IntegrationInstallationState.retired.value:
         raise InstallationError("retired installation is already terminal")
     installation.state = IntegrationInstallationState.disabled.value
@@ -776,7 +830,7 @@ def retire_installation(
     reason: str,
     actor: str | None = None,
 ) -> IntegrationInstallation:
-    installation = get_installation(db, installation_id)
+    installation = lock_installation(db, installation_id)
     if installation.state != IntegrationInstallationState.retired.value:
         if installation.state != IntegrationInstallationState.quarantined.value:
             disable_installation(
@@ -846,7 +900,10 @@ def _provision_installation_capability(
         select(IntegrationInstallation)
         .where(IntegrationInstallation.id == command.installation_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
+    if installation is not None:
+        installation = lock_installation(db, installation.id)
     if installation is None:
         raise _capability_provisioning_error(
             "not_found",
@@ -888,6 +945,7 @@ def _provision_installation_capability(
             IntegrationCapabilityBinding.capability_id == capability_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     actual_binding_id = binding.id if binding is not None else None
     actual_binding_state = (
@@ -1084,7 +1142,10 @@ def _adopt_installation_manifest(
         select(IntegrationInstallation)
         .where(IntegrationInstallation.id == command.installation_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
+    if installation is not None:
+        installation = lock_installation(db, installation.id)
     if installation is None:
         raise _adoption_error(
             "not_found",

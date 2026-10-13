@@ -128,6 +128,12 @@ SUPPORT_RESOLUTION_FORM = register(
 
 HIGH_IMPACT_EDITORS: tuple[HighImpactEditor, ...] = (
     HighImpactEditor(
+        key="integrations.nextcloud_talk.credentials",
+        surface="admin installed Nextcloud Talk credential setup",
+        status="contracted",
+        contract_key="integrations.nextcloud_talk.credentials",
+    ),
+    HighImpactEditor(
         key="support.request_resolution_confirmation",
         surface="admin support ticket customer confirmation request",
         status="contracted",

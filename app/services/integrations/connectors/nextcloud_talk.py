@@ -169,7 +169,7 @@ def _request(
 ) -> tuple[Any, int]:
     base_url = normalize_base_url(config.get("url"))
     username = str(config.get("notifier_username") or "").strip()
-    password = str(secret_material.get("app_password") or "").strip()
+    password = str(secret_material.get("app_password") or "")
     if not username:
         raise TalkTransportError("notifier_username_required")
     if not password:

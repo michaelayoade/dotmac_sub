@@ -254,6 +254,7 @@ def test_legacy_manifest_requires_explicit_adoption_before_phone_number_id(
     )
     installation.connector_version = legacy_definition.version
     installation.manifest_digest = legacy_definition.digest
+    db_session.flush()  # Persist the historical fixture pin before refreshing under lock.
     installations.create_config_revision(
         db_session,
         installation_id=installation.id,
@@ -326,3 +327,16 @@ def test_legacy_manifest_requires_explicit_adoption_before_phone_number_id(
     )
 
     assert revision.config_json["phone_number_id"] == "445744508632976"
+
+
+def test_existing_whatsapp_binding_changes_survive_static_validation_lock(db_session):
+    installation = _save(db_session)
+    for binding in installation.capability_bindings:
+        binding.scope_json = {"channel": "old"}
+        binding.policy_json = {"default": False, "preserved": "operator-policy"}
+    db_session.commit()
+    updated = _save(db_session)
+    db_session.expire_all()
+    for binding in updated.capability_bindings:
+        assert binding.scope_json["channel"] == "whatsapp"
+        assert binding.policy_json == {"default": True, "preserved": "operator-policy"}
