@@ -58,8 +58,8 @@
       "source_reference": "app/services/operator_tenant.py:29"
     },
     {
-      "declaration": "Sub pins dotmac-kernel at exactly 0.1.0a97 (no range) from the private forgejo index in [project.dependencies].",
-      "source_reference": "pyproject.toml:52"
+      "declaration": "Sub pins dotmac-kernel at exactly 0.1.0a98 (no range) from the private forgejo index in [project.dependencies].",
+      "source_reference": "pyproject.toml:54"
     }
   ],
   "source_references": [

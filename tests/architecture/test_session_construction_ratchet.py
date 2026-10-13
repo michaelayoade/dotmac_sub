@@ -273,11 +273,14 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +7 from ERP fact export canaries: three disposable engines, two session
 #: factories and two predecessor-upgrade setup/verification Sessions. All are test-only;
 #: production remains 17 sites across 15 files with its baseline unchanged.
+#: +4 from Tax composition: one disposable clone engine and three caller-owned
+#: Sessions for released API exact retry, caller rollback, and post-rollback retry.
+#: Production remains 17 sites across 15 files; no production allowance changes.
 #: Deployment secret readiness adds 20 test-only sites: 14 isolated requirements
 #: fixtures, two schema classification fixtures, two migrated PostgreSQL
 #: session factories and two isolated empty-bootstrap Engine/Session sites.
 #: Production construction allowances remain unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 765
+TEST_FIXTURE_BASELINE_TOTAL = 769
 
 
 def _baseline() -> dict[str, int]:

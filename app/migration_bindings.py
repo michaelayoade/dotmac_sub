@@ -98,7 +98,7 @@ ASSEMBLY_PREREQUISITE_BINDINGS: Final[tuple[PrerequisiteBinding, ...]] = (
 #: Sub composes tenant storage of selectable commercial owners and numbering.
 #: This is migration intent, not a runtime mount or authority switch;
 #: ``alembic/env.py`` installs it before the released lineages execute.
-#: Payments, Service Orders and Template Studio are atomic tenant-only and
+#: Payments, Service Orders, Tax and Template Studio are atomic tenant-only and
 #: therefore correctly have no selection entries. Template Studio uses the
 #: same Sub-owned tenant and role prerequisites bound above; its authoring
 #: surfaces remain unmounted until Sub's auth/session seam is reviewed.

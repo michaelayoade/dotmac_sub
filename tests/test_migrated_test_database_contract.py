@@ -124,5 +124,6 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
             "so_0001_service_delivery_orders",
             "su_0003_billing_treatments",
             "ts_0002_notify_identity",
+            "tx_0003_result_fingerprint",
         }
     )
