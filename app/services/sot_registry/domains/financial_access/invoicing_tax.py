@@ -1214,6 +1214,7 @@ SERVICES: tuple[SOTService, ...] = (
             "invoice write-off eligibility preview and confirmation",
             "exact invoice closure ledger evidence",
             "invoice closure idempotency and audit evidence",
+            "backdated service invoice idempotency evidence",
             "historical invoice closure evidence reconciliation",
             "invoice settlement access-reconciliation handoff",
         ),

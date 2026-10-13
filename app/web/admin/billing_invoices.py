@@ -29,7 +29,11 @@ from app.services.advance_renewal_invoicing import (
     ManualSubscriptionServiceInvoiceQuery,
     create_manual_subscription_service_invoice,
 )
-from app.services.auth_dependencies import has_permission, require_permission
+from app.services.auth_dependencies import (
+    has_permission,
+    require_any_permission,
+    require_permission,
+)
 from app.services.billing.invoices import is_controlled_invoice_draft
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
@@ -527,7 +531,14 @@ def backdated_service_invoice_page(
 @router.post(
     "/invoices/backdated-service/preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:invoice:read"))],
+    dependencies=[
+        Depends(
+            require_any_permission(
+                backdated_service_invoicing.CREATE_PERMISSION,
+                backdated_service_invoicing.RECONSTRUCT_PERMISSION,
+            )
+        )
+    ],
 )
 def preview_backdated_service_invoice_page(
     request: Request,
@@ -586,7 +597,14 @@ def preview_backdated_service_invoice_page(
 @router.post(
     "/invoices/backdated-service/confirm",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:invoice:read"))],
+    dependencies=[
+        Depends(
+            require_any_permission(
+                backdated_service_invoicing.CREATE_PERMISSION,
+                backdated_service_invoicing.RECONSTRUCT_PERMISSION,
+            )
+        )
+    ],
 )
 def confirm_backdated_service_invoice_page(
     request: Request,
@@ -626,7 +644,7 @@ def confirm_backdated_service_invoice_page(
     )
     # Permission and form reads opened a caller transaction.  The command owner
     # requires a clean session and rechecks every mutable preview fact itself.
-    db.rollback()
+    db_session_adapter.release_read_transaction(db)
     try:
         result = backdated_service_invoicing.execute_backdated_service_invoice(
             db,

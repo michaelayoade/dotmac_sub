@@ -33,7 +33,6 @@ from app.models.billing import (
     TaxRate,
 )
 from app.models.catalog import BillingCycle, BillingMode, CatalogOffer, Subscription
-from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Subscriber
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
@@ -44,12 +43,16 @@ from app.schemas.billing import InvoiceCreate
 from app.services.audit import AuditEvents
 from app.services.billing._common import lock_account
 from app.services.billing.invoices import (
+    BackdatedServiceInvoiceIdempotencyPurpose,
+    BackdatedServiceInvoiceIdempotencyReceipt,
+    CompleteBackdatedServiceInvoiceIdempotency,
     ControlledInvoiceDraftSeal,
     HistoricalChargeProvenance,
     InvoiceLines,
     InvoiceLineTaxSnapshot,
     InvoiceOwnerError,
     Invoices,
+    ReserveBackdatedServiceInvoiceIdempotency,
     ReviewedBackdatedServiceInvoiceLineDocument,
     ReviewedPrepaidInvoiceSequenceDocument,
 )
@@ -95,8 +98,6 @@ _RECONSTRUCT_COMMAND = OwnerCommandDefinition(
     concern=RECONSTRUCT_CONCERN,
     name="reconstruct_backdated_service_invoice",
 )
-_CREATE_IDEMPOTENCY_SCOPE = "backdated-service-invoice-create"
-_RECONSTRUCT_IDEMPOTENCY_SCOPE = "backdated-service-invoice-reconstruct"
 _ELIGIBLE_RECONSTRUCTION_STATUSES = frozenset(
     {
         InvoiceStatus.draft,
@@ -963,46 +964,35 @@ def _reserve_idempotency(
     db: Session,
     *,
     command: CreateBackdatedServiceInvoiceCommand,
-) -> tuple[IdempotencyKey, bool]:
+) -> BackdatedServiceInvoiceIdempotencyReceipt:
     if not command.context.idempotency_key:
         raise _error("idempotency_required", "An idempotency key is required.")
-    scope = (
-        _CREATE_IDEMPOTENCY_SCOPE
+    purpose = (
+        BackdatedServiceInvoiceIdempotencyPurpose.create
         if command.query.action is BackdatedServiceInvoiceAction.create
-        else _RECONSTRUCT_IDEMPOTENCY_SCOPE
+        else BackdatedServiceInvoiceIdempotencyPurpose.reconstruct
     )
-    existing = db.scalar(
-        select(IdempotencyKey)
-        .where(
-            IdempotencyKey.scope == scope,
-            IdempotencyKey.key == command.context.idempotency_key,
+    try:
+        return Invoices.reserve_backdated_service_idempotency_for_owner(
+            db,
+            ReserveBackdatedServiceInvoiceIdempotency(
+                purpose=purpose,
+                key=command.context.idempotency_key,
+                account_id=command.query.account_id,
+            ),
         )
-        .with_for_update()
-    )
-    if existing is not None:
-        if existing.account_id != command.query.account_id or not existing.ref_id:
-            raise _error(
-                "idempotency_conflict",
-                "The idempotency key was already used for a different request.",
-            )
-        return existing, True
-    reservation = IdempotencyKey(
-        scope=scope,
-        key=command.context.idempotency_key,
-        account_id=command.query.account_id,
-    )
-    db.add(reservation)
-    db.flush()
-    return reservation, False
+    except InvoiceOwnerError as exc:
+        suffix = exc.code.rsplit(".", 1)[-1]
+        raise _error(suffix, exc.message) from exc
 
 
 def _replayed_result(
     db: Session,
     *,
-    reservation: IdempotencyKey,
+    invoice_id: UUID,
     command: CreateBackdatedServiceInvoiceCommand,
 ) -> BackdatedServiceInvoiceResult:
-    invoice = db.get(Invoice, UUID(str(reservation.ref_id)))
+    invoice = db.get(Invoice, invoice_id)
     if invoice is None:
         raise _error(
             "idempotency_evidence_missing",
@@ -1079,9 +1069,12 @@ def execute_backdated_service_invoice(
         )
         if locked_subscription is None:
             raise _error("subscription_not_found", "Subscription was not found.")
-        reservation, replayed = _reserve_idempotency(db, command=command)
-        if replayed:
-            return _replayed_result(db, reservation=reservation, command=command)
+        reservation = _reserve_idempotency(db, command=command)
+        if reservation.replayed:
+            assert reservation.invoice_id is not None
+            return _replayed_result(
+                db, invoice_id=reservation.invoice_id, command=command
+            )
         current = preview_backdated_service_invoice(db, command.query)
         if current.fingerprint != command.expected_fingerprint:
             raise _error(
@@ -1243,7 +1236,18 @@ def execute_backdated_service_invoice(
             event_type = EventType.backdated_service_invoice_reconstructed
             audit_action = "reconstruct_backdated_service_invoice"
 
-        reservation.ref_id = str(invoice.id)
+        try:
+            Invoices.complete_backdated_service_idempotency_for_owner(
+                db,
+                CompleteBackdatedServiceInvoiceIdempotency(
+                    reservation_id=reservation.reservation_id,
+                    account_id=command.query.account_id,
+                    invoice_id=invoice.id,
+                ),
+            )
+        except InvoiceOwnerError as exc:
+            suffix = exc.code.rsplit(".", 1)[-1]
+            raise _error(suffix, exc.message) from exc
         actor_type, actor_id = _audit_actor(command.context)
         AuditEvents.stage(
             db,

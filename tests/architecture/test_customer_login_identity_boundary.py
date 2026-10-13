@@ -9,9 +9,9 @@ from app.services.sot_registry.registry import service_relationship
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OWNER = PROJECT_ROOT / "app" / "services" / "customer_login_identity.py"
-ADAPTERS = (
+RESOLVER_CONSUMERS = (
     PROJECT_ROOT / "app" / "services" / "auth_flow.py",
-    PROJECT_ROOT / "app" / "services" / "web_customer_auth.py",
+    PROJECT_ROOT / "app" / "services" / "customer_authentication.py",
 )
 
 
@@ -33,11 +33,11 @@ def test_customer_login_identity_has_complete_read_only_contract() -> None:
     assert service.contract.transaction.mode.value == "read_only"
 
 
-def test_customer_authentication_adapters_use_the_typed_resolver() -> None:
-    for adapter in ADAPTERS:
-        source = adapter.read_text(encoding="utf-8")
+def test_customer_authentication_policies_use_the_typed_resolver() -> None:
+    for consumer in RESOLVER_CONSUMERS:
+        source = consumer.read_text(encoding="utf-8")
         assert "ResolveCustomerLoginIdentity(" in source
-        assert "resolve_customer_login_identity" in _calls(adapter)
+        assert "resolve_customer_login_identity" in _calls(consumer)
 
 
 def test_resolver_is_read_only_and_transport_neutral() -> None:

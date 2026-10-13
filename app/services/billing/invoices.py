@@ -98,6 +98,8 @@ _CONTROLLED_DRAFT_SCHEMA_VERSION = 1
 _BACKDATED_SERVICE_INVOICE_OWNER = "financial.backdated_service_invoicing"
 _BACKDATED_SERVICE_INVOICE_MARKER = "backdated_service_invoice"
 _BACKDATED_SERVICE_INVOICE_REF_PREFIX = "backdated-service-invoicing:"
+_BACKDATED_SERVICE_CREATE_SCOPE = "backdated-service-invoice-create"
+_BACKDATED_SERVICE_RECONSTRUCT_SCOPE = "backdated-service-invoice-reconstruct"
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,120}$")
 
 
@@ -111,6 +113,40 @@ class ControlledInvoiceDraftSeal:
 
     controller_owner: str
     preview_fingerprint: str
+
+
+class BackdatedServiceInvoiceIdempotencyPurpose(StrEnum):
+    """Bounded invoice-ledger purpose for a reviewed historical document."""
+
+    create = "create"
+    reconstruct = "reconstruct"
+
+
+@dataclass(frozen=True, slots=True)
+class ReserveBackdatedServiceInvoiceIdempotency:
+    """Typed request to reserve one invoice result for safe command replay."""
+
+    purpose: BackdatedServiceInvoiceIdempotencyPurpose
+    key: str
+    account_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class BackdatedServiceInvoiceIdempotencyReceipt:
+    """Opaque reservation evidence returned to the composing command owner."""
+
+    reservation_id: UUID
+    invoice_id: UUID | None
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteBackdatedServiceInvoiceIdempotency:
+    """Typed binding of a reserved command to its authoritative invoice."""
+
+    reservation_id: UUID
+    account_id: UUID
+    invoice_id: UUID
 
 
 def _controlled_draft_metadata(invoice: Invoice) -> dict[str, object] | None:
@@ -184,7 +220,7 @@ def _controlled_draft_document_fingerprint(
             "is_sent": invoice.is_sent,
             "added_by_id": invoice.added_by_id,
             "splynx_invoice_id": invoice.splynx_invoice_id,
-            "crm_external_ref": invoice.crm_external_ref,
+            "legacy_external_reference": invoice.legacy_external_reference,
             "metadata": {
                 str(key): value
                 for key, value in (invoice.metadata_ or {}).items()
@@ -1305,6 +1341,90 @@ def _stage_invoice_closure_audit(
 
 
 class Invoices(ListResponseMixin):
+    @staticmethod
+    def reserve_backdated_service_idempotency_for_owner(
+        db: Session,
+        command: ReserveBackdatedServiceInvoiceIdempotency,
+    ) -> BackdatedServiceInvoiceIdempotencyReceipt:
+        """Reserve or replay the invoice result inside the caller's transaction."""
+
+        if not command.key:
+            raise InvoiceOwnerError(
+                code="financial.invoice.idempotency_required",
+                message="An idempotency key is required.",
+            )
+        scope = (
+            _BACKDATED_SERVICE_CREATE_SCOPE
+            if command.purpose is BackdatedServiceInvoiceIdempotencyPurpose.create
+            else _BACKDATED_SERVICE_RECONSTRUCT_SCOPE
+        )
+        existing = db.scalar(
+            select(IdempotencyKey)
+            .where(
+                IdempotencyKey.scope == scope,
+                IdempotencyKey.key == command.key,
+            )
+            .with_for_update()
+        )
+        if existing is not None:
+            if existing.account_id != command.account_id or not existing.ref_id:
+                raise InvoiceOwnerError(
+                    code="financial.invoice.idempotency_conflict",
+                    message=(
+                        "The idempotency key was already used for a different request."
+                    ),
+                )
+            try:
+                invoice_id = UUID(existing.ref_id)
+            except ValueError as exc:
+                raise InvoiceOwnerError(
+                    code="financial.invoice.idempotency_evidence_invalid",
+                    message="The prior invoice result could not be verified.",
+                ) from exc
+            return BackdatedServiceInvoiceIdempotencyReceipt(
+                reservation_id=existing.id,
+                invoice_id=invoice_id,
+                replayed=True,
+            )
+
+        reservation = IdempotencyKey(
+            scope=scope,
+            key=command.key,
+            account_id=command.account_id,
+        )
+        db.add(reservation)
+        db.flush()
+        return BackdatedServiceInvoiceIdempotencyReceipt(
+            reservation_id=reservation.id,
+            invoice_id=None,
+            replayed=False,
+        )
+
+    @staticmethod
+    def complete_backdated_service_idempotency_for_owner(
+        db: Session,
+        command: CompleteBackdatedServiceInvoiceIdempotency,
+    ) -> None:
+        """Bind a reservation to its invoice without completing the transaction."""
+
+        reservation = db.scalar(
+            select(IdempotencyKey)
+            .where(IdempotencyKey.id == command.reservation_id)
+            .with_for_update()
+        )
+        if reservation is None or reservation.account_id != command.account_id:
+            raise InvoiceOwnerError(
+                code="financial.invoice.idempotency_evidence_missing",
+                message="The invoice idempotency reservation could not be verified.",
+            )
+        if reservation.ref_id not in {None, str(command.invoice_id)}:
+            raise InvoiceOwnerError(
+                code="financial.invoice.idempotency_conflict",
+                message="The idempotency key is already bound to another invoice.",
+            )
+        reservation.ref_id = str(command.invoice_id)
+        db.flush()
+
     @staticmethod
     def create_with_lines(
         db: Session,

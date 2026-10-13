@@ -121,11 +121,12 @@ permission and stale-state checks at command entry.
 
 ## Idempotency, audit and repair
 
-Create and reconstruction have separate idempotency scopes. A replay returns
-the original invoice; a key reused for another account fails closed. Invoice
-identity, command reason, actor, usage count, period, amount and preview
-fingerprint are staged in the audit event, with a durable PII-free domain event
-in the same transaction.
+Create and reconstruction have separate idempotency scopes. The invoice owner
+reserves and binds that ledger evidence through a typed participant contract in
+the backdated command's transaction. A replay returns the original invoice; a
+key reused for another account fails closed. Invoice identity, command reason,
+actor, usage count, period, amount and preview fingerprint are staged in the
+audit event, with a durable PII-free domain event in the same transaction.
 
 Drift is visible as a linked line or invoice period that disagrees with the
 fingerprinted audit/event evidence, an overlap introduced after preview, or a
