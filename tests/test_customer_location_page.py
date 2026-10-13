@@ -1,6 +1,7 @@
 """Tests for the customer Service Location page, geocode helpers, and admin review."""
 
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +15,9 @@ from app.schemas.geocoding import ReverseGeocodeQuery
 from app.services import customer_location_requests as location_service
 from app.services import geocoding
 from app.web.customer import location as location_web
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LOCATION_TEMPLATE = PROJECT_ROOT / "templates/customer/location/index.html"
 
 
 def _subscriber(db_session):
@@ -147,9 +151,13 @@ class TestPortalLocationRoutes:
         ):
             response = location_web.customer_location_page(MagicMock(), db_session)
         assert response is template_response
+        assert render.call_args[0][0] == "customer/location/index.html"
         context = render.call_args[0][1]
         assert context["active_page"] == "location"
         assert context["can_submit_request"] is True
+        assert context["current_latitude"] is None
+        assert context["current_longitude"] is None
+        assert context["map_center"] == location_service.DEFAULT_MAP_CENTER
 
     def test_submit_saves_service_address_and_pin(self, db_session):
         subscriber = _subscriber(db_session)
@@ -355,6 +363,34 @@ class TestPortalLocationRoutes:
 
         body = json.loads(response.body)
         assert body["display_name"] == "Allen Avenue, Ikeja"
+
+
+class TestPortalLocationTemplateContract:
+    def test_manual_pin_remains_available_without_existing_or_gps_coordinates(self):
+        template = LOCATION_TEMPLATE.read_text(encoding="utf-8")
+
+        assert "else { placeMarker(center[0], center[1], false); }" in template
+        assert "if (selectCoordinates !== false) updateCoordinates" in template
+        assert "draggable: true" in template
+        assert "marker.dragging.enable()" in template
+        assert "map.on('click'" in template
+        assert "touch-action: none" in template
+        assert "A pin is ready at the map center" in template
+
+    def test_geolocation_errors_have_distinct_manual_recovery_guidance(self):
+        template = LOCATION_TEMPLATE.read_text(encoding="utf-8")
+
+        assert "if (!navigator.geolocation)" in template
+        assert "error.code === 1" in template
+        assert "Location permission is off." in template
+        assert "error.code === 2" in template
+        assert "Check Wi-Fi and Location Services" in template
+        assert "error.code === 3" in template
+        assert "Finding your location took too long." in template
+        assert "enableHighAccuracy: false" in template
+        assert "timeout: 20000" in template
+        assert "maximumAge: 300000" in template
+        assert "place the pin manually on the map" in template
 
 
 # =============================================================================
