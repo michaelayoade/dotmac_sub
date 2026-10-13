@@ -130,6 +130,7 @@ def test_alembic_owns_all_installed_module_resources_before_env_runs() -> None:
         "dotmac_payments.migrations:versions",
         "dotmac_service_orders.migrations:versions",
         "dotmac_subscriptions.migrations:versions",
+        "dotmac_tax.migrations:versions",
         "dotmac_template_studio.migrations:versions",
     ]
 
