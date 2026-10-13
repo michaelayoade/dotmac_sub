@@ -8,20 +8,84 @@ from app.models.subscription_engine import SettingValueType
 from app.models.support import Ticket, TicketStatus
 from app.models.ticket_workflow import (
     SlaBreach,
+    SlaClock,
     SlaClockStatus,
     SlaPolicy,
+    SlaTarget,
     WorkflowEntityType,
 )
 from app.services.sla_assignment import (
+    TicketAttentionQuery,
     check_sla_breaches,
     create_sla_clock_for_ticket,
     latest_ticket_sla_clocks,
     priority_sla_target_minutes,
     resolve_ticket_sla_target_minutes,
+    ticket_attention_summary,
     ticket_sla_status,
     ticket_type_sla_target_minutes,
     update_sla_clocks_for_status_change,
 )
+
+
+def test_ticket_attention_summary_counts_assignment_and_sla_windows(db_session):
+    now = datetime.now(UTC)
+    policy = _policy(db_session)
+    db_session.add(
+        SlaTarget(
+            policy_id=policy.id,
+            priority="normal",
+            target_minutes=60,
+            warning_minutes=15,
+            is_active=True,
+        )
+    )
+    approaching = Ticket(
+        title="Approaching target",
+        status=TicketStatus.open.value,
+        priority="normal",
+        assigned_to_person_id=None,
+    )
+    breached = Ticket(
+        title="Past target",
+        status=TicketStatus.open.value,
+        priority="normal",
+        assigned_to_person_id=None,
+    )
+    db_session.add_all([approaching, breached])
+    db_session.flush()
+    db_session.add_all(
+        [
+            SlaClock(
+                policy_id=policy.id,
+                entity_type=WorkflowEntityType.ticket.value,
+                entity_id=approaching.id,
+                priority="normal",
+                status=SlaClockStatus.running.value,
+                started_at=now - timedelta(minutes=50),
+                due_at=now + timedelta(minutes=10),
+            ),
+            SlaClock(
+                policy_id=policy.id,
+                entity_type=WorkflowEntityType.ticket.value,
+                entity_id=breached.id,
+                priority="normal",
+                status=SlaClockStatus.breached.value,
+                started_at=now - timedelta(hours=2),
+                due_at=now - timedelta(hours=1),
+                breached_at=now - timedelta(hours=1),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    summary = ticket_attention_summary(
+        db_session, query=TicketAttentionQuery(as_of=now)
+    )
+
+    assert summary.unassigned_count == 2
+    assert summary.approaching_response_target_count == 1
+    assert summary.exceeded_response_target_count == 1
 
 
 def _policy(db_session) -> SlaPolicy:

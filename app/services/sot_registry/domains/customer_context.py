@@ -513,6 +513,161 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="customer.dashboard_overview",
+            module="app.services.subscriber",
+            owns=(
+                "active subscriber dashboard projection",
+                "customer onboarding attention projection",
+            ),
+            depends_on=(
+                "customer.accounts",
+                "access.subscription_lifecycle",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="active subscriber dashboard projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical customer account state",
+                            "canonical subscription lifecycle state",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="customer onboarding attention projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical customer account state",
+                            "dashboard onboarding aging window",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical customer account state",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Subscriber lifecycle status, visibility, active flag, and "
+                            "creation time"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical subscription lifecycle state",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Subscriber Subscription rows and canonical active status",
+                    ),
+                    AuthorityInput(
+                        name="dashboard onboarding aging window",
+                        owner="customer.dashboard_overview",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Typed OnboardingAttentionQuery observation time and "
+                            "72-hour default waiting threshold"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Typed dashboard queries read canonical customer and subscription "
+                        "rows without mutation or transaction completion."
+                    ),
+                    locking="No locks; the projection is a point-in-time read.",
+                    idempotency=(
+                        "The same canonical rows, observation time, and aging window "
+                        "produce the same counts."
+                    ),
+                    retries=(
+                        "The dashboard adapter may retry the whole read after a transient "
+                        "database failure."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="admin dashboard adapter",
+                    fail_closed_on=(
+                        "unavailable canonical customer projection inputs",
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="active subscriber dashboard projection",
+                        input_names=(
+                            "canonical customer account state",
+                            "canonical subscription lifecycle state",
+                        ),
+                        writer="customer.dashboard_overview",
+                        freshness=(
+                            "Computed from canonical rows and refreshed by the dashboard "
+                            "KPI partial every 180 seconds."
+                        ),
+                        stale_behavior=(
+                            "Retain the last successful dashboard snapshot; do not count "
+                            "blocked, suspended, canceled, or subscription-less accounts."
+                        ),
+                        drift_signal=(
+                            "Subscriber dashboard tests compare the projection against "
+                            "account and subscription lifecycle fixtures."
+                        ),
+                        rebuild_operation=(
+                            "Re-run Subscribers.get_dashboard_stats from canonical "
+                            "Subscriber and Subscription rows."
+                        ),
+                        repair_owner="customer.dashboard_overview",
+                    ),
+                    ProjectionContract(
+                        name="customer onboarding attention projection",
+                        input_names=(
+                            "canonical customer account state",
+                            "dashboard onboarding aging window",
+                        ),
+                        writer="customer.dashboard_overview",
+                        freshness=(
+                            "Computed at query time and refreshed by the dashboard "
+                            "attention partial every 60 seconds."
+                        ),
+                        stale_behavior=(
+                            "Retain the last successful snapshot; never replace an "
+                            "unavailable query with a zero count."
+                        ),
+                        drift_signal=(
+                            "Onboarding projection tests compare the count with visible "
+                            "new accounts older than the typed aging boundary."
+                        ),
+                        rebuild_operation=(
+                            "Re-run onboarding_attention_summary from canonical Subscriber "
+                            "rows for the requested observation time and aging window."
+                        ),
+                        repair_owner="customer.dashboard_overview",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.dashboard_overview",
+                    verification=(
+                        "Dashboard subscriber and onboarding attention projection tests"
+                    ),
+                    cutover_gate=(
+                        "Dashboard adapters consume only typed subscriber projection results"
+                    ),
+                    fallback_retirement=(
+                        "No template or adapter re-derives active or aged onboarding counts"
+                    ),
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/FRONTEND_SPEC.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_subscriber_splynx_soft_delete.py",
+                    "tests/test_admin_attention.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="customer.connection_types",
             module="app.services.customer_connection_types",
             owns=(

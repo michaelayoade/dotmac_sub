@@ -4,19 +4,21 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.support import Ticket, TicketStatus
+from app.models.support import Ticket, TicketAssignee, TicketStatus
 from app.models.ticket_workflow import (
     SlaBreach,
     SlaBreachStatus,
     SlaClock,
     SlaClockStatus,
     SlaPolicy,
+    SlaTarget,
     WorkflowEntityType,
 )
 from app.services import support_ticket_settings as support_ticket_settings_service
@@ -46,6 +48,101 @@ SLA_APPLICABLE_STATUSES = frozenset(
         TicketStatus.site_under_construction.value,
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class TicketAttentionQuery:
+    """Typed point-in-time query for general-admin support attention counts."""
+
+    as_of: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TicketAttentionSummary:
+    unassigned_count: int
+    approaching_response_target_count: int
+    exceeded_response_target_count: int
+    observed_at: datetime
+
+
+def ticket_attention_summary(
+    db: Session, *, query: TicketAttentionQuery
+) -> TicketAttentionSummary:
+    """Project actionable ticket counts from canonical tickets and SLA clocks."""
+
+    as_of = _as_aware_utc(query.as_of) or datetime.now(UTC)
+    active_ticket_ids = (
+        db.query(Ticket.id)
+        .filter(Ticket.is_active.is_(True))
+        .filter(Ticket.status.in_(SLA_APPLICABLE_STATUSES))
+    )
+    unassigned_count = int(
+        active_ticket_ids.filter(Ticket.assigned_to_person_id.is_(None))
+        .filter(
+            ~db.query(TicketAssignee.ticket_id)
+            .filter(TicketAssignee.ticket_id == Ticket.id)
+            .exists()
+        )
+        .count()
+    )
+
+    target_rows = (
+        db.query(
+            SlaTarget.policy_id,
+            SlaTarget.priority,
+            SlaTarget.warning_minutes,
+        )
+        .filter(SlaTarget.is_active.is_(True))
+        .all()
+    )
+    warning_by_target = {
+        (row.policy_id, str(row.priority or "").strip().lower()): int(
+            row.warning_minutes or 0
+        )
+        for row in target_rows
+    }
+    clock_rows = (
+        db.query(
+            Ticket.id,
+            SlaClock.policy_id,
+            SlaClock.priority,
+            SlaClock.status,
+            SlaClock.due_at,
+        )
+        .join(
+            SlaClock,
+            (SlaClock.entity_id == Ticket.id)
+            & (SlaClock.entity_type == WorkflowEntityType.ticket.value),
+        )
+        .filter(Ticket.id.in_(active_ticket_ids))
+        .all()
+    )
+    approaching_ids: set[UUID] = set()
+    exceeded_ids: set[UUID] = set()
+    for row in clock_rows:
+        if row.status == SlaClockStatus.breached.value:
+            exceeded_ids.add(row.id)
+            continue
+        if row.status != SlaClockStatus.running.value:
+            continue
+        due_at = _as_aware_utc(row.due_at)
+        warning_minutes = warning_by_target.get(
+            (row.policy_id, str(row.priority or "").strip().lower()),
+            warning_by_target.get((row.policy_id, ""), 0),
+        )
+        if (
+            due_at is not None
+            and warning_minutes > 0
+            and as_of < due_at <= as_of + timedelta(minutes=warning_minutes)
+        ):
+            approaching_ids.add(row.id)
+
+    return TicketAttentionSummary(
+        unassigned_count=unassigned_count,
+        approaching_response_target_count=len(approaching_ids),
+        exceeded_response_target_count=len(exceeded_ids),
+        observed_at=as_of,
+    )
 
 
 class TicketSlaClockError(DomainError, ValueError):

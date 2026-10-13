@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from urllib.parse import parse_qs, urlparse
+
 from app.services.admin_attention import build_attention_items
 
 _NET_OK = {
@@ -16,14 +19,16 @@ _NET_OK = {
 def _build(**overrides):
     kwargs = dict(
         net_stats=_NET_OK,
-        overdue_amount=0.0,
         suspended_count=0,
         pending_orders=0,
+        unassigned_support_count=0,
+        support_approaching_target_count=0,
+        support_exceeded_target_count=0,
+        onboarding_waiting_too_long_count=0,
         ont_summary={"low_signal": 0, "not_working": 0},
         unconfigured_ont_count=0,
         pending_location_requests=0,
         pon_outage_count=0,
-        infrastructure_alerts=None,
     )
     kwargs.update(overrides)
     return build_attention_items(**kwargs)
@@ -37,7 +42,7 @@ def test_quiet_system_produces_no_attention_items():
 def test_items_are_severity_ordered_and_toned():
     items, network_items = _build(
         suspended_count=2,  # info
-        overdue_amount=1000.0,  # warning
+        unassigned_support_count=2,  # warning
         net_stats={**_NET_OK, "alarms_critical": 1},  # critical
     )
     assert [i["severity"] for i in items] == ["critical", "warning", "info"]
@@ -55,18 +60,27 @@ def test_ont_not_working_threshold_owned_here():
     assert any("6 ONTs not working" == i["label"] for i in items)
 
 
-def test_absorbed_template_items_pon_and_infra():
+def test_support_and_onboarding_attention_counts_are_rendered():
     items, _ = _build(
-        pon_outage_count=2,
-        infrastructure_alerts={"total": 3, "critical": 1},
+        unassigned_support_count=3,
+        support_approaching_target_count=2,
+        support_exceeded_target_count=1,
+        onboarding_waiting_too_long_count=4,
     )
     labels = [i["label"] for i in items]
-    assert "2 PON ports down" in labels
-    assert "3 infrastructure alerts (1 critical)" in labels
-    # infra severity decision: critical only when critical alerts exist
-    items, _ = _build(infrastructure_alerts={"total": 2, "critical": 0})
-    infra = next(i for i in items if "infrastructure" in i["label"])
-    assert infra["severity"] == "warning"
+    assert "3 unassigned support tickets" in labels
+    assert "2 support tickets approaching response target" in labels
+    assert "1 support ticket past response target" in labels
+    assert "4 customer onboarding cases waiting over 72 hours" in labels
+    assert not any("infrastructure" in label for label in labels)
+    assert not any("overdue receivables" in label for label in labels)
+
+    unassigned = next(item for item in items if "unassigned support" in item["label"])
+    query = parse_qs(urlparse(unassigned["href"]).query)
+    assert query["status"] == ["not_closed"]
+    assert json.loads(query["filters"][0]) == [
+        ["Ticket", "assigned_to_person_id", "is", None]
+    ]
 
 
 def test_ont_not_working_threshold_is_configurable():

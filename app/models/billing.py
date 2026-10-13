@@ -696,6 +696,12 @@ class Invoice(Base):
     )
 
     @property
+    def legacy_external_reference(self) -> str | None:
+        """Return retained external provenance through a neutral read boundary."""
+
+        return self.crm_external_ref
+
+    @property
     def discounted_subtotal(self) -> Decimal:
         return max(
             Decimal("0.00"),

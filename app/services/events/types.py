@@ -154,6 +154,8 @@ class EventType(enum.Enum):
     oauth_token_refreshed = "oauth_token.refreshed"
     oauth_token_refresh_failed = "oauth_token.refresh_failed"
     account_credit_deposited = "account_credit.deposited"
+    backdated_service_invoice_created = "backdated_service_invoice.created"
+    backdated_service_invoice_reconstructed = "backdated_service_invoice.reconstructed"
     prepaid_service_renewed = "prepaid_service.renewed"
     prepaid_service_renewal_document_corrected = (
         "prepaid_service.renewal_document_corrected"
