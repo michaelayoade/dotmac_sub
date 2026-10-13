@@ -98,7 +98,6 @@ def resolve_reseller_session_standing(
                 return None
             user = db.execute(
                 select(
-                    ResellerUser.subscriber_id,
                     ResellerUser.reseller_id,
                     ResellerUser.is_active,
                 )
@@ -111,14 +110,6 @@ def resolve_reseller_session_standing(
                 or user.reseller_id != query.reseller_id
             ):
                 return None
-            if user.subscriber_id is not None:
-                linked = db.execute(
-                    select(Subscriber.is_active)
-                    .where(Subscriber.id == user.subscriber_id)
-                    .execution_options(populate_existing=True)
-                ).one_or_none()
-                if linked is None or not linked.is_active:
-                    return None
         elif query.principal_type == "subscriber":
             if (
                 query.reseller_user_id is not None
