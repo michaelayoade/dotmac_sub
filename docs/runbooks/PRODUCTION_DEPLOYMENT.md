@@ -144,6 +144,37 @@ lane; SQLite metadata unit tests prove only reduction logic.
 
 ## Release sequence
 
+### Shared candidate-material probe prerequisite
+
+`scripts.setup.verify_candidate_materials` adapts the existing boot and declared
+secret-requirement owners to Foundation's closed
+`CandidateMaterialProbeResult.v1` wire result. Its standard output is exactly
+one JSON document containing bounded check names and `ready`, `refused` or
+`unavailable` statuses. Transport diagnostics, values, references and child
+identity claims are excluded. Foundation independently binds the candidate
+image, role and invocation phase; this adapter is not an identity verifier.
+
+The future declarative application-role command is
+`/opt/venv/bin/python -m scripts.setup.verify_candidate_materials --scope application --phase pre_mutation`.
+Application post-migration admission uses `--phase post_migration`, which
+delegates the installed-schema requirement to the same canonical owner.
+The worker and active Beat commands use `--scope boot` with the corresponding
+phase. Boot scope never opens the application database snapshot. Optional and
+operation-only material keep their existing owner policy.
+
+For an independently authorized empty-database bootstrap, the application
+probe accepts the same protected read-only `--bootstrap-authorization`,
+`--candidate-revision` and `--target-server` inputs as the existing requirements
+CLI. Their presence grants no authority; the existing schema owner verifies
+the evidence. No bootstrap bypass is added.
+
+This is a source prerequisite for a published Foundation V4 deployment
+specification. The existing deployment script continues to use its accepted
+probes. This change installs no Foundation runtime dependency, changes no
+deployment authority, and proves no live adoption, token renewal, release,
+Gate 0, D7 or executor retirement. Adoption follows the agreed Platform CP,
+ERP, then Sub executor sequence and the existing artifact release lifecycle.
+
 1. Resolve the base Compose contract from the exact authorized release
    checkout, while resolving `.env` and any host-specific override from the
    persistent deployment directory.
