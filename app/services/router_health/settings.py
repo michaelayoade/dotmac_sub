@@ -28,6 +28,24 @@ class RouterHealthSettings:
     coa_canary_spacing_ms: int = 2000
     coa_canary_reprobe_seconds: int = 300
     max_findings_per_run: int = 300
+    runtime_interval_minutes: int = 15
+    runtime_concurrency: int = 6
+    runtime_connect_timeout_seconds: int = 5
+    runtime_read_timeout_seconds: int = 10
+    runtime_router_deadline_seconds: int = 45
+    unreachable_polls: int = 2
+    ntp_grace_minutes: int = 30
+    clock_skew_seconds: int = 60
+    clock_skew_high_seconds: int = 3600
+    bgp_grace_minutes: int = 30
+    ospf_grace_minutes: int = 30
+    link_downs_24h_warn: int = 20
+    link_downs_24h_high: int = 200
+    sfp_rx_low_dbm: int = -22
+    sfp_rx_critical_dbm: int = -25
+    sfp_overload_dbm: int = 2
+    ppp_drop_pct: int = 50
+    ppp_min_baseline: int = 10
 
 
 def _as_int(value: object, default: int) -> int:
@@ -59,6 +77,24 @@ def load_settings(db: Session) -> RouterHealthSettings:
             "router_health_coa_canary_spacing_ms",
             "router_health_coa_canary_reprobe_seconds",
             "router_health_max_findings_per_run",
+            "router_health_runtime_interval_minutes",
+            "router_health_runtime_concurrency",
+            "router_health_runtime_connect_timeout_seconds",
+            "router_health_runtime_read_timeout_seconds",
+            "router_health_runtime_router_deadline_seconds",
+            "router_health_unreachable_polls",
+            "router_health_ntp_grace_minutes",
+            "router_health_clock_skew_seconds",
+            "router_health_clock_skew_high_seconds",
+            "router_health_bgp_grace_minutes",
+            "router_health_ospf_grace_minutes",
+            "router_health_link_downs_24h_warn",
+            "router_health_link_downs_24h_high",
+            "router_health_sfp_rx_low_dbm",
+            "router_health_sfp_rx_critical_dbm",
+            "router_health_sfp_overload_dbm",
+            "router_health_ppp_drop_pct",
+            "router_health_ppp_min_baseline",
         ],
     )
 
@@ -109,4 +145,32 @@ def load_settings(db: Session) -> RouterHealthSettings:
         max_findings_per_run=number(
             "max_findings_per_run", defaults.max_findings_per_run
         ),
+        runtime_interval_minutes=number(
+            "runtime_interval_minutes", defaults.runtime_interval_minutes
+        ),
+        runtime_concurrency=number("runtime_concurrency", defaults.runtime_concurrency),
+        runtime_connect_timeout_seconds=number(
+            "runtime_connect_timeout_seconds", defaults.runtime_connect_timeout_seconds
+        ),
+        runtime_read_timeout_seconds=number(
+            "runtime_read_timeout_seconds", defaults.runtime_read_timeout_seconds
+        ),
+        runtime_router_deadline_seconds=number(
+            "runtime_router_deadline_seconds", defaults.runtime_router_deadline_seconds
+        ),
+        unreachable_polls=number("unreachable_polls", defaults.unreachable_polls),
+        ntp_grace_minutes=number("ntp_grace_minutes", defaults.ntp_grace_minutes),
+        clock_skew_seconds=number("clock_skew_seconds", defaults.clock_skew_seconds),
+        clock_skew_high_seconds=number(
+            "clock_skew_high_seconds", defaults.clock_skew_high_seconds
+        ),
+        bgp_grace_minutes=number("bgp_grace_minutes", defaults.bgp_grace_minutes),
+        ospf_grace_minutes=number("ospf_grace_minutes", defaults.ospf_grace_minutes),
+        link_downs_24h_warn=number("link_downs_24h_warn", defaults.link_downs_24h_warn),
+        link_downs_24h_high=number("link_downs_24h_high", defaults.link_downs_24h_high),
+        sfp_rx_low_dbm=number("sfp_rx_low_dbm", defaults.sfp_rx_low_dbm),
+        sfp_rx_critical_dbm=number("sfp_rx_critical_dbm", defaults.sfp_rx_critical_dbm),
+        sfp_overload_dbm=number("sfp_overload_dbm", defaults.sfp_overload_dbm),
+        ppp_drop_pct=number("ppp_drop_pct", defaults.ppp_drop_pct),
+        ppp_min_baseline=number("ppp_min_baseline", defaults.ppp_min_baseline),
     )

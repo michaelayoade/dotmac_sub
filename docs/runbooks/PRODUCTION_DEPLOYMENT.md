@@ -60,6 +60,88 @@ refused if the container exists, if any input is partial, or if rollback inputs
 are also present. Bootstrap cannot be combined with hotfix or post-migration
 resume modes.
 
+## Secret readiness before database changes
+
+GitHub orchestrates deployment through the environment-bound host runner.
+Application secret delivery remains host-owned OpenBao configuration; the
+workflow does not perform GitHub OIDC exchange. CI's Forgejo read-token mirror
+is a separate package-read credential. Neither this gate nor a successful CI
+run proves that a live host's secrets, token renewal or store availability have
+been provisioned.
+
+After exact candidate-image/release verification, `scripts/deploy.sh` performs
+the following before database prerequisite repair, backup, image pinning,
+migrations or service replacement:
+
+1. Resolve the authorized Compose files with the candidate image and reject
+   boot components whose image is overridden, whose mounts shadow candidate
+   code or Python runtime, or whose Python path/working directory changes the
+   code being evaluated. Raw resolved configuration is
+   consumed in memory and never printed.
+2. Run the boot-secret probe under each active app/Celery component's own
+   configuration, using the exact candidate and a Python entrypoint override.
+   This covers app, the eight required Celery workers and Beat only when its
+   profile is already active. No dependencies or scheduler are started by the
+   probe. Bandwidth poller and syslog have no shared boot-loader contract and
+   are not forced to acquire JWT/TOTP or unrelated secret permissions.
+3. Validate the shared required references, the three Fernet consumers' key
+   format, and the settings keyring's IDs, active key and usable material using
+   existing boot/crypto rules. An optional path may be absent; permission,
+   network, malformed-field and empty-value errors are not absence.
+4. Under the app service's identity, in one PostgreSQL
+   repeatable-read/read-only operator-tenant snapshot, let
+   `secrets.deployment_readiness` assess schema capabilities and declared
+   feature requirements. Names, enums and aggregate counts leave this boundary;
+   raw credentials, references, installation labels and transport exceptions
+   do not.
+
+Machine HMAC is required for live operator-tenant machine credentials. Modern
+schema uses the attributed active/not-revoked/not-expired predicates; a known
+pre-attribution schema conservatively includes live legacy rows. Disabled
+integrations do not gate; enabled integrations must have an executable exact
+manifest pin, a same-installation current revision and resolvable required
+bindings declared by that manifest. No vault-wide enumeration or connector
+operation is performed. Dynamic integration bindings are checked under the app
+identity only. Worker-specific secret policies or environment overrides require
+their owning connector's acceptance; worker boot probes cover shared boot
+requirements, not every connector binding.
+
+Prepaid attestation and conversion material retain their existing
+operation-scoped policy. Absence does not invent feature enablement or block an
+unused deployment; the receipt explicitly does not establish operational
+readiness. Conversion keeps its configured-value/held-source precedence.
+Provision required material through the existing secret owner before enabling
+a feature; never widen the application token or populate arbitrary paths to
+make a probe green.
+
+Schema admission follows the candidate's actual Alembic ancestry, not revision
+numbers. Known pre-introduction schemas with absent feature tables are reported
+as `not_installed_at_predecessor`. Expected-but-missing columns, unknown or
+divergent heads, partial installation and failed observations are unavailable,
+not dormant. An unversioned application database needs the existing separately
+verified first-deployment authorization bound to this host/revision **and** an
+independent catalogue absence proof for application relations, custom schemas,
+routines and user-defined types. Extension-owned objects are excluded through
+catalogue dependency membership, not guessed names. Container absence or an
+empty/missing Alembic version table alone is insufficient. The adapter mounts
+only the verified bootstrap evidence read-only; no skip flag is provided.
+
+After migrations, the same requirements query runs again before the warm
+candidate or primary replacement. This time predecessor/empty-bootstrap states
+are refused: installed feature schemas and attribution must be present. A
+migration that creates enabled integrations or usable credentials must declare
+and provision its material before deployment; the post-migration gate is a
+safety check, not permission to discover required keys late. Schema changes
+remain subject to the existing forward-repair/rollback floor.
+
+The separate DB-bootstrap pgpass credential still follows the host contract
+below; it is never read or copied into this receipt. Host renewal/availability
+monitoring, per-device credentials and the poller's conditional device-key use
+remain their owners' operational checks. A preflight receipt cannot guarantee
+OpenBao stays available after the snapshot or that every provider/device is
+ready. PostgreSQL schema/RLS/read-only evidence comes from the migrated hosted
+lane; SQLite metadata unit tests prove only reduction logic.
+
 ## Release sequence
 
 1. Resolve the base Compose contract from the exact authorized release
@@ -74,31 +156,36 @@ resume modes.
    unavailable evidence fails closed before backup or database mutation.
 4. Verify the warm-candidate port is free. A port collision fails here before
    backup or migration.
-5. Run database prerequisite bootstrap if `BOOTSTRAP_DATABASE_URL` is supplied,
+5. Validate candidate boot secrets under each active app/Celery configuration
+   and declared feature requirements in a read-only operator-tenant snapshot.
+   Unavailable requirements stop deployment before database bootstrap or backup.
+6. Run database prerequisite bootstrap if `BOOTSTRAP_DATABASE_URL` is supplied,
    then verify commercial module schemas and outbox dispatcher roles through
    the restricted migration connection. Missing prerequisites fail here before
    backup and before Alembic.
-6. Back up the database.
-7. Run candidate-image pre-migration state checks against the target database.
-8. Pin the immutable image and revision.
-9. Apply `alembic upgrade heads`, retrying bounded PostgreSQL lock timeouts.
-10. Verify registered schema contracts and reject every invalid or unready
+7. Back up the database.
+8. Run candidate-image pre-migration state checks against the target database.
+9. Pin the immutable image and revision.
+10. Apply `alembic upgrade heads`, retrying bounded PostgreSQL lock timeouts.
+11. Verify registered schema contracts and reject every invalid or unready
    user-schema index.
-11. Verify every enabled integration installation pin resolves to a current or
+12. Verify every enabled integration installation pin resolves to a current or
    bounded historical definition in the new image. Unavailable pins block
    replacement; historical pins are reported for explicit adoption.
-12. Start the new application image on `127.0.0.1:18002` and wait up to
+13. Recheck declared feature secret requirements against installed schemas.
+    Predecessor and empty-bootstrap states no longer qualify at this gate.
+14. Start the new application image on `127.0.0.1:18002` and wait up to
    `CANDIDATE_HEALTH_TIMEOUT_SECONDS` (production: 600 s) for `/health` to
    answer and `/api/v1/health/ready` to report `"status":"ready"`.
-13. Recreate the primary application and workers. Nginx uses the healthy
+15. Recreate the primary application and workers. Nginx uses the healthy
    candidate while the primary port is unavailable.
-14. Verify the primary image has no source-code bind mount and wait up to
+16. Verify the primary image has no source-code bind mount and wait up to
    `HEALTH_TIMEOUT_SECONDS` (production: 600 s) for its health endpoint and
    readiness document.
-15. Require every declared Celery worker to remain restart-free and answer a
+17. Require every declared Celery worker to remain restart-free and answer a
    node-specific ping, and require Celery Beat to remain running without
    restarts, across a bounded stabilization window.
-16. Gracefully drain the candidate and retain the configured rollback images.
+18. Gracefully drain the candidate and retain the configured rollback images.
 
 The candidate runs the same image, environment, and database schema as the
 primary. It is bound to localhost and exists only for the handoff window.

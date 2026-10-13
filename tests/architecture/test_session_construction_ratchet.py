@@ -264,7 +264,7 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: one disposable engine and seven Sessions for tenant configuration, allocation
 #: and exact replay, caller rollback, post-rollback retry, incumbent-role parity,
 #: repeated upgrade/preview, and populated-table tenant isolation. The canonical
-#: scanner now measures 736 sites across 155 test files. This reviewed test-only
+#: scanner previously measured 736 sites across 155 test files. This test-only
 #: fixture growth does not allow production debt to grow: production remains
 #: exactly 17 sites across 15 files, with its per-file baseline unchanged.
 #: +2 from the read-only numbering census: one unbound fast-unit Session and
@@ -273,7 +273,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +7 from ERP fact export canaries: three disposable engines, two session
 #: factories and two predecessor-upgrade setup/verification Sessions. All are test-only;
 #: production remains 17 sites across 15 files with its baseline unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 745
+#: Deployment secret readiness adds 20 test-only sites: 14 isolated requirements
+#: fixtures, two schema classification fixtures, two migrated PostgreSQL
+#: session factories and two isolated empty-bootstrap Engine/Session sites.
+#: Production construction allowances remain unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 765
 
 
 def _baseline() -> dict[str, int]:
