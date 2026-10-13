@@ -260,7 +260,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: one migrated-clone engine and two Session constructions for location-read
 #: preservation: the canonical scanner measures 728 sites across 154 files.
 #: Production remains 17 sites across 15 files with its baseline unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 728
+#: Deployment secret readiness adds 20 test-only sites: 14 isolated requirements
+#: fixtures, two schema classification fixtures, two migrated PostgreSQL
+#: session factories and two isolated empty-bootstrap Engine/Session sites.
+#: Production construction allowances remain unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 748
 
 
 def _baseline() -> dict[str, int]:
