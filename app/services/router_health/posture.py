@@ -101,7 +101,7 @@ class PostureComputation:
 
 
 def _router_url(router_id: UUID) -> str:
-    return f"/admin/network/routers/{router_id}"
+    return f"/admin/network/routers/{router_id}#health"
 
 
 def _hash(*parts: str) -> str:

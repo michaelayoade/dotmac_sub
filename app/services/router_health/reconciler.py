@@ -84,6 +84,9 @@ def _open_subjects(db: Session, layer: HealthLayer) -> set[UUID]:
     return subjects
 
 
+open_subjects = _open_subjects
+
+
 def _latest_snapshots(db: Session) -> dict[UUID, posture_service.SnapshotInput]:
     newest = (
         select(

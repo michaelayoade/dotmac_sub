@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.celery_app import celery_app
 from app.services import control_registry, observability
 from app.services.db_session_adapter import db_session_adapter
-from app.services.router_health import coa_canary, reconciler
+from app.services.router_health import coa_canary, reconciler, runtime_poll
 from app.tasks._postgres_lock import postgres_session_advisory_lock
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ TASK_POSTURE = "app.tasks.router_health.reconcile_router_posture"
 TASK_SERVICE = "app.tasks.router_health.reconcile_service_path"
 TASK_CANARY = "app.tasks.router_health.run_coa_canary"
 TASK_REPROBE = "app.tasks.router_health.reprobe_coa_canary"
+TASK_RUNTIME = "app.tasks.router_health.observe_router_runtime"
 CANARY_SOFT_LIMIT_SECONDS = 15 * 60
 _LOCK_TIMEOUT_MS = 2000
 
@@ -40,6 +41,8 @@ def _lock_key(task_name: str) -> int:
 SOFT_LIMIT_SECONDS = {
     TASK_POSTURE: 4 * 3600,
     TASK_SERVICE: 40 * 60,
+    # 80% of the shortest permitted interval (10 minutes).
+    TASK_RUNTIME: 8 * 60,
 }
 
 
@@ -155,3 +158,21 @@ def reprobe_coa_canary(nas_device_id: str, run_id: str) -> dict[str, Any]:
         body,
         lock_scope=nas_device_id,
     )
+
+
+@celery_app.task(name=TASK_RUNTIME, soft_time_limit=SOFT_LIMIT_SECONDS[TASK_RUNTIME])
+def observe_router_runtime() -> dict[str, Any]:
+    def body(db: Session) -> dict[str, Any]:
+        stats = runtime_poll.poll_router_runtime(db, task_name=TASK_RUNTIME)
+        return {
+            "polled": stats.polled,
+            "failed": stats.failed,
+            "skipped": stats.skipped,
+            "findings": stats.findings,
+            "opened": stats.opened,
+            "resolved": stats.resolved,
+            "capped": stats.capped,
+            "deferred": stats.deferred,
+        }
+
+    return _run(TASK_RUNTIME, runtime_poll.CONTROL_RUNTIME, body)

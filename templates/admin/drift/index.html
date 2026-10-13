@@ -1,5 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import page_header, card, status_badge, icon_warning %}
+{% from "admin/network/routers/_health.html" import finding_card %}
 
 {% block title %}Cross-App Drift - Admin{% endblock %}
 
@@ -22,6 +23,30 @@
             <p class="mt-1 text-2xl font-bold {{ 'text-rose-600 dark:text-rose-400' if breached_count else 'text-slate-900 dark:text-white' }}">{{ breached_count }}</p>
         </div>
     </div>
+
+    {% if router_posture %}
+    <div id="router-posture">
+    {% call card("Router posture") %}
+    <div class="mb-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-600 dark:text-slate-300">
+        <span>{{ router_posture.total }} open router health finding{{ "s" if router_posture.total != 1 else "" }}</span>
+        {% for level in ['critical', 'high', 'medium', 'low'] %}
+        <span>{{ level | title }}: <strong>{{ router_posture.counts.get(level, 0) }}</strong></span>
+        {% endfor %}
+        {% if router_posture.alert_mode == 'shadow' %}<span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold uppercase text-slate-600 dark:bg-slate-700 dark:text-slate-300">Shadow mode</span>{% endif %}
+    </div>
+    {% if router_posture.detail_visible %}
+        {% if router_posture.top %}
+        <div class="space-y-3">
+            {% for f in router_posture.top %}{{ finding_card(f, show_router=True) }}{% endfor %}
+        </div>
+        <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Showing the {{ router_posture.top | length }} most urgent. Router detail pages list every finding.</p>
+        {% endif %}
+    {% elif router_posture.total %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">Finding details include management addresses and need the router:read permission.</p>
+    {% endif %}
+    {% endcall %}
+    </div>
+    {% endif %}
 
     {% call card("Filters") %}
     <form method="get" action="/admin/drift" class="grid grid-cols-1 gap-3 md:grid-cols-6">

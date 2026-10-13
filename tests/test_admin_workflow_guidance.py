@@ -409,7 +409,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 64
+    assert len(guides) == 66
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -523,3 +523,27 @@ def test_mfa_removal_guides_state_the_controls() -> None:
     reseller = guidance_for_path("/admin/resellers/abc")
     assert reseller is not None and reseller.id == "reseller-user-mfa-removal"
     assert "portal access" in " ".join(reseller.steps).lower()
+
+
+def test_router_health_guidance_covers_badge_shadow_and_read_only_boundary() -> None:
+    guide = guidance_for_path("/admin/network/routers")
+
+    assert guide is not None
+    assert guide.id == "router-health"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    for phrase in (
+        "health column",
+        "no data",
+        "shadow",
+        "impact",
+        "evidence",
+        "fix",
+        "never changes a router",
+        "router:read",
+    ):
+        assert phrase in content
+    assert guidance_for_path("/admin/network/routers/some-id") == guide
+    drift = guidance_for_path("/admin/drift")
+    assert drift is not None
+    assert drift.id == "cross-app-drift"
+    assert "router posture" in " ".join(drift.steps).lower()

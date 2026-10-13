@@ -65,6 +65,24 @@ class CheckId(StrEnum):
     coa_canary_config = "coa-canary-config"
     coa_canary_stale = "coa-canary-stale"
     coa_canary_unverified = "coa-canary-unverified"
+    # runtime layer (PR2)
+    rest_auth_failed = "rest-auth-failed"
+    rest_forbidden = "rest-forbidden"
+    rest_unreachable = "rest-unreachable"
+    rest_tls = "rest-tls"
+    ntp_unsynced = "ntp-unsynced"
+    clock_skew = "clock-skew"
+    bgp_session_down = "bgp-session-down"
+    ospf_neighbor_lost = "ospf-neighbor-lost"
+    link_flapping = "link-flapping"
+    sfp_rx_low = "sfp-rx-low"
+    sfp_overload = "sfp-overload"
+    ppp_drop = "ppp-drop"
+    ops_user = "ops-user"
+    rest_user_missing = "rest-user-missing"
+    rest_user_full = "rest-user-full"
+    full_users_unrestricted = "full-users-unrestricted"
+    router_rebooted = "router-rebooted"
     # policy layer
     policy_invalid = "policy-invalid"
     policy_unmatched = "policy-unmatched"
@@ -80,7 +98,7 @@ POSTURE_CHECKS_OFF_ALIASES: Mapping[str, tuple[CheckId, ...]] = {
     ),
     "suspension-chain": (CheckId.suspension_chain,),
     "radius-incoming": (CheckId.radius_incoming_off,),
-    "ppp-drop": (),
+    "ppp-drop": (CheckId.ppp_drop,),
     "coa-canary": (
         CheckId.coa_canary_timeout,
         CheckId.coa_canary_acked,
@@ -195,3 +213,71 @@ class PostureResult:
     #: listed is carried forward, never resolved.
     evaluated_checks: frozenset[CheckId]
     parse_coverage: float
+
+
+# ------------------------------------------------------------------ runtime (PR2)
+
+
+class RestFailure(StrEnum):
+    """Why a router's REST API could not be read (never the exception text)."""
+
+    auth_failed = "auth_failed"
+    forbidden = "forbidden"
+    unreachable = "unreachable"
+    tls = "tls"
+    other = "other"
+
+
+#: One RouterOS row with every value rendered as text (REST returns strings).
+RuntimeRow = Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class RuntimeObservation:
+    """Everything one runtime poll learned about one router.
+
+    A ``None`` collection means "not available this poll" (endpoint unsupported
+    or the per-router deadline hit); checks over it are carried forward, never
+    resolved. When ``failure`` is set the router could not be read at all and
+    only the access checks are judged.
+    """
+
+    router_id: UUID
+    observed_at: datetime
+    failure: RestFailure | None = None
+    resource: RuntimeRow | None = None
+    clock: RuntimeRow | None = None
+    #: Router wall-clock minus server wall-clock sampled at the request midpoint.
+    server_time_utc: datetime | None = None
+    ntp: RuntimeRow | None = None
+    bgp_connections: tuple[RuntimeRow, ...] | None = None
+    bgp_sessions: tuple[RuntimeRow, ...] | None = None
+    ospf_neighbors: tuple[RuntimeRow, ...] | None = None
+    interfaces: tuple[RuntimeRow, ...] | None = None
+    ppp_active_count: int | None = None
+    users: tuple[RuntimeRow, ...] | None = None
+    #: SFP interface name -> receive power in dBm (None: module reports none).
+    #: ``None`` for the whole mapping means optics were not polled this run.
+    optics: Mapping[str, float | None] | None = None
+    #: The optics POST was tried this poll (whatever its outcome); drives the
+    #: hourly bound so a failing or empty attempt is not retried every poll.
+    optics_attempted: bool = False
+    #: Which login Sub used (its configured REST username); informational only.
+    polled_as: str | None = None
+
+
+@dataclass(frozen=True)
+class SignalState:
+    """One ``router_health_signals`` row as plain values (prior or next)."""
+
+    signal: str
+    scope: str
+    status: str
+    last_value: float | None
+    last_text: str | None
+    samples: tuple[tuple[int, float], ...]
+    first_abnormal_at: datetime | None
+    last_normal_at: datetime | None
+    last_observed_at: datetime
+    consecutive_abnormal: int
+    boot_marker: str | None = None

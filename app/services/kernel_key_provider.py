@@ -55,7 +55,12 @@ import json
 import logging
 from collections.abc import Iterable
 
-from dotmac_kernel.settings_crypto import EncryptionKey, KeyringError, KeyStatus
+from dotmac_kernel.settings_crypto import (
+    EncryptionKey,
+    Keyring,
+    KeyringError,
+    KeyStatus,
+)
 
 from app.services.secrets import resolve_openbao_ref_optional
 
@@ -106,6 +111,16 @@ def _parse(raw: str) -> tuple[EncryptionKey, ...]:
     return tuple(keys)
 
 
+def parse_keyring(raw: str) -> Keyring:
+    """Parse OpenBao material using the runtime kernel's keyring invariants.
+
+    This validates without publishing keys to the global provider or cache.
+    An empty or retired-only ring is legal at runtime; candidate readiness
+    separately requires a usable active key for secret-setting writes.
+    """
+    return Keyring(_parse(raw))
+
+
 class OpenBaoKeyProvider:
     """Loads the settings-encryption keyring from OpenBao.
 
@@ -133,7 +148,7 @@ class OpenBaoKeyProvider:
                 "cannot be written until one is created"
             )
             return ()
-        keys = _parse(raw)
+        keys = parse_keyring(raw).keys
         logger.info(
             "Loaded settings-encryption keyring: %s",
             ", ".join(f"{key.key_id}={key.status.value}" for key in keys) or "empty",

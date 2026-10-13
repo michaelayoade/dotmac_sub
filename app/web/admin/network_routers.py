@@ -46,6 +46,7 @@ def router_list(
     request: Request,
     status: str | None = None,
     search: str | None = None,
+    health: str | None = None,
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -56,6 +57,7 @@ def router_list(
         db,
         status=status,
         search=search,
+        health=health,
         limit=limit,
         offset=offset,
     )
