@@ -116,7 +116,7 @@ SRC_ACCESS_CREDENTIAL = "access_credential"
 SRC_RADIUS_USER = "radius_user"
 _SOURCES = frozenset({SRC_USER_CREDENTIAL, SRC_ACCESS_CREDENTIAL, SRC_RADIUS_USER})
 _PRINCIPAL_TYPES = frozenset({"subscriber", "system_user", "reseller_user"})
-_AUDIENCES = frozenset({"general", "admin"})
+_AUDIENCES = frozenset({"general", "admin", "customer"})
 CHALLENGE_VERSION = 2
 CHALLENGE_TTL = timedelta(minutes=5)
 LOCK_TIMEOUT = "5s"
@@ -286,6 +286,7 @@ class DenialReason(StrEnum):
     RESET_REQUIRED = "must_change_password"
     DISABLED = "account_disabled"
     AUDIENCE = "admin_required"
+    CUSTOMER_REQUIRED = "customer_required"
     PROJECTION = "projection_unavailable"
     INVALID_CHALLENGE = "invalid_mfa_token"
     INVALID_CODE = "invalid_mfa_code"
@@ -301,6 +302,7 @@ class DenialReason(StrEnum):
 class DenialSurface(StrEnum):
     LOGIN = "login"
     CUSTOMER_PORTAL = "customer_portal"
+    CUSTOMER_API = "customer_api"
     VENDOR_API = "vendor_api"
     VENDOR_WEB = "vendor_web"
     RESELLER = "reseller"
