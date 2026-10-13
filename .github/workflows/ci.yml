@@ -630,18 +630,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The real-predecessor canary archives this immutable source tree.
-          # Squash merges preserve source acceptance without preserving ancestry.
+          # The canary archives a pinned old source, independent of squash ancestry.
           fetch-depth: 0
 
       - name: Verify immutable ERP accounting-fact predecessor
-        run: |
-          predecessor=f3a18e7ff2d89821eb410760bd326253fb5c36af
-          if ! git cat-file -e "$predecessor^{commit}"; then
-            git fetch --no-tags --depth=1 origin "$predecessor"
-          fi
-          test "$(git rev-parse "$predecessor^{commit}")" = "$predecessor"
-          git cat-file -e "$predecessor^{tree}"
+        run: python3 -m scripts.ci.immutable_predecessor
 
       - uses: ./.github/actions/setup-ci-python
         with:
