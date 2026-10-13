@@ -53,9 +53,9 @@
     {
       "id": "boot-entry-point",
       "source_path": "app/main.py",
-      "source_blob_sha256": "ed29e69baf2e57a7d8a1ae3c641c2a6dde1b9bfa73363aee8bf243451f4e1701",
+      "source_blob_sha256": "13d288428570e3200fa9df95183eb042630556efb6f93e9fab44d4f7f48fc3d1",
       "selector": "whole-file.v1",
-      "extract_sha256": "ed29e69baf2e57a7d8a1ae3c641c2a6dde1b9bfa73363aee8bf243451f4e1701"
+      "extract_sha256": "13d288428570e3200fa9df95183eb042630556efb6f93e9fab44d4f7f48fc3d1"
     },
     {
       "id": "migration-config",

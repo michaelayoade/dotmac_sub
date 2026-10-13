@@ -1405,9 +1405,9 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
     ),
     "admin-workspace": (
-        _action("choose-work-area", "Choose the right work area", 0, 1),
-        _action("start-customer-work", "Start customer work", 2, 3),
-        _action("verify-result", "Verify the result", 4),
+        _action("choose-work-area", "Choose the right work area", 0, 1, 2, 3),
+        _action("start-customer-work", "Start customer work", 4, 5, 6),
+        _action("verify-result", "Verify the result", 7),
     ),
     "find-customer": (
         _action("search-customers", "Search and filter customers", 0, 1),

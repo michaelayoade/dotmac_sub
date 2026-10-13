@@ -14754,22 +14754,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "POST /api/v1/customer/auth/login": {
-   "params": [],
-   "request": "797f32199b31",
-   "responses": {
-    "200": "de50488584a0",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "POST /api/v1/customer/auth/mfa/verify": {
-   "params": [],
-   "request": "8e8da04dff63",
-   "responses": {
-    "200": "04163c33e70b",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "POST /api/v1/defaults/calculate-due-date": {
    "params": [
     "header:authorization",
@@ -20274,7 +20258,6 @@
   "CustomerFieldJobChatMessageCreate": "89a0e3d668ef",
   "CustomerFieldJobChatThread": "11b10ad07d26",
   "CustomerInboxNotificationRead": "3ed506c8eef8",
-  "CustomerLoginRequest": "1f50e7c9507c",
   "CustomerNotificationCreate": "21bc85ef2bf2",
   "CustomerNotificationRead": "786d04007df7",
   "CustomerNotificationReadRequest": "ba451765626d",

@@ -187,27 +187,23 @@ def test_reset_bumps_credential_version_under_its_row_lock() -> None:
 
 
 def test_customer_password_and_mfa_adapters_use_owner_without_commits() -> None:
-    web_tree = _tree(PROJECT_ROOT / "app/services/web_customer_auth.py")
-    for name in ("customer_login_submit", "_verify_customer_mfa_token"):
-        function = _function(web_tree, name)
+    tree = _tree(PROJECT_ROOT / "app/services/web_customer_auth.py")
+    for name in (
+        "customer_login_submit",
+        "_verify_customer_mfa_token",
+        "_record_customer_local_login_failure",
+    ):
+        function = _function(tree, name)
         assert not {
             "commit",
             "rollback",
             "record_mfa_success",
             "_issue_mfa_token",
         } & _attr_calls(function)
-    policy_tree = _tree(PROJECT_ROOT / "app/services/customer_authentication.py")
-    failure = _function(policy_tree, "_record_customer_local_login_failure")
-    assert not {"commit", "rollback"} & _attr_calls(failure)
-    assert "_record_customer_local_login_failure" not in {
-        node.name for node in web_tree.body if isinstance(node, ast.FunctionDef)
-    }
     assert "complete_password_step" in _attr_calls(
-        _function(web_tree, "customer_login_submit")
+        _function(tree, "customer_login_submit")
     )
-    assert "complete_mfa" in _attr_calls(
-        _function(web_tree, "_verify_customer_mfa_token")
-    )
+    assert "complete_mfa" in _attr_calls(_function(tree, "_verify_customer_mfa_token"))
 
 
 def test_customer_session_resolution_has_no_impersonation_flag_exception() -> None:
