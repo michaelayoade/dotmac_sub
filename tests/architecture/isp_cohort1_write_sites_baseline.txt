@@ -98,7 +98,6 @@
 3 service|app/services/team_inbox_commands.py
 1 web_presenter|app/services/web_admin_resellers.py
 7 web_presenter|app/services/web_customer_actions.py
-1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 132
+TOTAL 131

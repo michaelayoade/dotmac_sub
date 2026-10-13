@@ -203,7 +203,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: physical lock/confirmation interleavings, six network participant fixtures,
 #: and two additional characterization Session sites for fresh owner isolation.
 #: These eighteen test-only sites do not expand production construction allowances.
-TEST_FIXTURE_BASELINE_TOTAL = 322
+#: Location-read preservation adds one migrated-clone engine and two
+#: Session constructions in tests only; production construction is unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 325
 
 
 def _baseline() -> dict[str, int]:
