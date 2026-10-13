@@ -1,6 +1,7 @@
 import builtins
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from ipaddress import IPv4Address as ParsedIPv4Address
 from typing import cast as typing_cast
@@ -448,6 +449,48 @@ def _apply_validated_connection_type(
         current_code=current_code,
     )
     return data
+
+
+@dataclass(frozen=True, slots=True)
+class OnboardingAttentionQuery:
+    """Typed aging rule for customer accounts still awaiting activation."""
+
+    as_of: datetime
+    waiting_too_long_after: timedelta = timedelta(hours=72)
+
+
+@dataclass(frozen=True, slots=True)
+class OnboardingAttentionSummary:
+    waiting_too_long_count: int
+    waiting_before: datetime
+    observed_at: datetime
+
+
+def onboarding_attention_summary(
+    db: Session, *, query: OnboardingAttentionQuery
+) -> OnboardingAttentionSummary:
+    """Count visible new accounts older than the explicit onboarding window."""
+
+    as_of = query.as_of
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=UTC)
+    else:
+        as_of = as_of.astimezone(UTC)
+    waiting_before = as_of - query.waiting_too_long_after
+    count = (
+        db.query(func.count(Subscriber.id))
+        .filter(visible_subscriber_clause())
+        .filter(Subscriber.is_active.is_(True))
+        .filter(Subscriber.status == SubscriberStatus.new)
+        .filter(Subscriber.created_at <= waiting_before)
+        .scalar()
+        or 0
+    )
+    return OnboardingAttentionSummary(
+        waiting_too_long_count=int(count),
+        waiting_before=waiting_before,
+        observed_at=as_of,
+    )
 
 
 class Subscribers(ListResponseMixin):
@@ -1446,7 +1489,6 @@ class Subscribers(ListResponseMixin):
         All aggregations use SQL-level queries for performance.
         """
         import calendar
-        from datetime import timedelta
 
         from sqlalchemy import extract
 
@@ -1482,7 +1524,15 @@ class Subscribers(ListResponseMixin):
             db.query(
                 func.count(Subscriber.id).label("total"),
                 func.count(Subscriber.id)
-                .filter(Subscriber.is_active.is_(True))
+                .filter(
+                    and_(
+                        Subscriber.is_active.is_(True),
+                        Subscriber.status == SubscriberStatus.active,
+                        Subscriber.subscriptions.any(
+                            Subscription.status == SubscriptionStatus.active
+                        ),
+                    )
+                )
                 .label("active"),
                 func.count(Subscriber.id)
                 .filter(Subscriber.status == SubscriberStatus.suspended)
