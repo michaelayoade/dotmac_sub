@@ -1380,6 +1380,7 @@ DOMAIN = DomainSOT(
                             "canonical support ticket customer link",
                             "canonical subscription lifecycle state",
                             "durable automation action identity",
+                            "authoritative prepaid pause coverage evidence",
                         ),
                     ),
                     ConcernContract(
@@ -1504,8 +1505,12 @@ DOMAIN = DomainSOT(
                             "pause_evidence_incomplete"
                         ),
                         (
+                            (
+                                "support.ticket_sla_service_consequence."
+                                "prepaid_pause_coverage_inconsistent"
+                            ),
                             "support.ticket_sla_service_consequence."
-                            "pause_subscription_mismatch"
+                            "pause_subscription_mismatch",
                         ),
                         (
                             "support.ticket_sla_service_consequence."

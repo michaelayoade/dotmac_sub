@@ -222,6 +222,100 @@ def test_resolved_ticket_is_not_paused(
     assert not called
 
 
+def test_prepaid_pause_rejects_anchor_drift_before_lifecycle_write(
+    db_session, subscriber, active_subscription, monkeypatch
+):
+    now = datetime.now(UTC)
+    coverage_end = now + timedelta(days=20)
+    active_subscription.billing_mode = BillingMode.prepaid
+    active_subscription.next_billing_at = coverage_end + timedelta(minutes=4)
+    ticket = Ticket(
+        title="Resolution SLA breached with drifted prepaid anchor",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add_all(
+        (
+            ServiceEntitlement(
+                account_id=subscriber.id,
+                subscription_id=active_subscription.id,
+                starts_at=now - timedelta(days=10),
+                ends_at=coverage_end,
+                amount_funded=active_subscription.unit_price or 0,
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+                metadata_={"source": "test_funded_prepaid_renewal"},
+            ),
+            ticket,
+        )
+    )
+    db_session.commit()
+    command = _pause_command(ticket.id)
+    _seed_authoritative_breach(db_session, ticket_id=ticket.id, command=command)
+
+    called = False
+
+    def fake_pause(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(account_lifecycle, "pause_subscription_for_cause", fake_pause)
+
+    with pytest.raises(
+        ticket_sla_service_automation.TicketSlaServiceAutomationError
+    ) as exc_info:
+        ticket_sla_service_automation.pause_unique_active_service_for_ticket_sla_breach(
+            db_session,
+            command,
+        )
+
+    assert exc_info.value.code.endswith(".prepaid_pause_coverage_inconsistent")
+    assert exc_info.value.details["coverage_end"] == coverage_end.isoformat()
+    assert "prepaid_pause_anchor_mismatch" in exc_info.value.details["blocking_reasons"]
+    assert not called
+
+
+def test_prepaid_pause_rejects_missing_coverage_before_lifecycle_write(
+    db_session, subscriber, active_subscription, monkeypatch
+):
+    active_subscription.billing_mode = BillingMode.prepaid
+    active_subscription.next_billing_at = datetime.now(UTC) + timedelta(days=20)
+    ticket = Ticket(
+        title="Resolution SLA breached without prepaid coverage",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    command = _pause_command(ticket.id)
+    _seed_authoritative_breach(db_session, ticket_id=ticket.id, command=command)
+
+    called = False
+
+    def fake_pause(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(account_lifecycle, "pause_subscription_for_cause", fake_pause)
+
+    with pytest.raises(
+        ticket_sla_service_automation.TicketSlaServiceAutomationError
+    ) as exc_info:
+        ticket_sla_service_automation.pause_unique_active_service_for_ticket_sla_breach(
+            db_session,
+            command,
+        )
+
+    assert exc_info.value.code.endswith(".prepaid_pause_coverage_inconsistent")
+    assert set(exc_info.value.details["blocking_reasons"]) == {
+        "prepaid_pause_coverage_ambiguous",
+        "prepaid_pause_anchor_mismatch",
+    }
+    assert not called
+
+
 def test_resume_accepts_applied_extension_as_prepaid_coverage(
     db_session, subscriber, active_subscription
 ):

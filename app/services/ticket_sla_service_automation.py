@@ -334,6 +334,43 @@ def pause_unique_active_service_for_ticket_sla_breach(
 
         effective_at = datetime.now(UTC)
         subscription = active_services[0]
+        if subscription.billing_mode == BillingMode.prepaid:
+            captured_anchor = subscription.next_billing_at
+            if captured_anchor is None:
+                raise _error(
+                    "prepaid_pause_coverage_inconsistent",
+                    "Prepaid service cannot be paused without a billing anchor.",
+                    subscription_id=str(subscription.id),
+                    blocking_reasons=("billing_anchor_missing",),
+                )
+            coverage = resolve_prepaid_pause_compensation_coverage(
+                db,
+                PrepaidPauseCompensationCoverageQuery(
+                    subscription_id=subscription.id,
+                    account_id=subscription.subscriber_id,
+                    pause_effective_at=effective_at,
+                    captured_billing_anchor=captured_anchor,
+                ),
+            )
+            if not coverage.eligible:
+                raise _error(
+                    "prepaid_pause_coverage_inconsistent",
+                    (
+                        "Prepaid coverage must exactly support the billing anchor "
+                        "before service can be paused."
+                    ),
+                    subscription_id=str(subscription.id),
+                    captured_billing_anchor=captured_anchor.isoformat(),
+                    coverage_end=(
+                        coverage.coverage_end.isoformat()
+                        if coverage.coverage_end is not None
+                        else None
+                    ),
+                    blocking_reasons=tuple(
+                        blocker.value for blocker in coverage.blockers
+                    ),
+                    coverage_fingerprint=coverage.fingerprint,
+                )
         try:
             outcome = account_lifecycle.pause_subscription_for_cause(
                 db,

@@ -57,7 +57,13 @@ instead of treating these labels as interchangeable.
 
 1. The SLA owner records a real resolution breach and stages the durable event.
 2. A published Automation rule selects the typed pause action and policies.
-3. The coordinator revalidates an unresolved Ticket and one active service.
+3. The coordinator revalidates an unresolved Ticket and one active service. For
+   prepaid service, while holding the service lock it also requires continuous
+   authoritative coverage from the pause effective time through the billing
+   anchor and requires that anchor to equal the latest surviving coverage
+   boundary. Missing, discontinuous, or drifted evidence fails before any
+   lifecycle write; correction remains a reviewed command through the existing
+   billing-anchor owner.
 4. The lifecycle owner creates the episode/cause and transitions to `paused`.
 5. The customer receives a durable notification; network projection denies new
    sessions and disconnects current sessions after commit.
