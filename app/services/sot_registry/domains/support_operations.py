@@ -1198,6 +1198,7 @@ DOMAIN = DomainSOT(
                 "ticket SLA clock lifecycle",
                 "ticket SLA breach records",
                 "ticket SLA breach event emission",
+                "ticket dashboard attention projection",
             ),
             depends_on=(
                 "support.ticket_lifecycle",
@@ -1240,6 +1241,15 @@ DOMAIN = DomainSOT(
                             "canonical ticket lifecycle state",
                             "current ticket SLA records",
                             "configured operational escalation policy",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket dashboard attention projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical ticket lifecycle state",
+                            "configured ticket SLA targets",
+                            "current ticket SLA records",
                         ),
                     ),
                 ),
@@ -1323,6 +1333,35 @@ DOMAIN = DomainSOT(
                     replay=(
                         "Ticket, SlaClock, SlaBreach, and configured operational "
                         "escalation rows reconstruct the breach consequence."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="ticket dashboard attention projection",
+                        input_names=(
+                            "canonical ticket lifecycle state",
+                            "configured ticket SLA targets",
+                            "current ticket SLA records",
+                        ),
+                        writer="support.ticket_sla_clock",
+                        freshness=(
+                            "Computed at query time; the admin dashboard refreshes the "
+                            "snapshot every 60 seconds."
+                        ),
+                        stale_behavior=(
+                            "The dashboard retains the last successfully rendered "
+                            "snapshot and never substitutes zero for an unavailable query."
+                        ),
+                        drift_signal=(
+                            "Focused SLA-assignment tests compare unassigned, warning, "
+                            "and breached cohorts with canonical ticket and clock rows."
+                        ),
+                        rebuild_operation=(
+                            "Re-run ticket_attention_summary for the requested observation "
+                            "time from canonical Ticket, TicketAssignee, SlaTarget, and "
+                            "SlaClock rows."
+                        ),
+                        repair_owner="support.ticket_sla_clock",
                     ),
                 ),
                 migration=MigrationContract(

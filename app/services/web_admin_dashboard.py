@@ -18,7 +18,7 @@ from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_attention as admin_attention_service
 from app.services import admin_whats_new as admin_whats_new_service
 from app.services import infrastructure_health as infrastructure_health_service
-from app.services import settings_spec
+from app.services import settings_spec, sla_assignment
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -530,21 +530,33 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         _rollback_after_failed_query(db)
         pending_location_requests = 0
     admin_alert_summary = admin_alerts_service.dashboard_alert_summary(db)
-    by_category = admin_alert_summary.get("by_category")
-    infrastructure_alerts = (
-        by_category.get("infrastructure") if isinstance(by_category, dict) else None
-    ) or {}
+    observed_at = datetime.now(UTC)
+    support_attention = sla_assignment.ticket_attention_summary(
+        db, query=sla_assignment.TicketAttentionQuery(as_of=observed_at)
+    )
+    onboarding_attention = subscriber_service.onboarding_attention_summary(
+        db,
+        query=subscriber_service.OnboardingAttentionQuery(as_of=observed_at),
+    )
     attention_items, network_attention_items = (
         admin_attention_service.build_attention_items(
             net_stats=net_stats,
-            overdue_amount=overdue_amount,
             suspended_count=sub_stats["suspended_count"],
             pending_orders=pending_orders,
+            unassigned_support_count=support_attention.unassigned_count,
+            support_approaching_target_count=(
+                support_attention.approaching_response_target_count
+            ),
+            support_exceeded_target_count=(
+                support_attention.exceeded_response_target_count
+            ),
+            onboarding_waiting_too_long_count=(
+                onboarding_attention.waiting_too_long_count
+            ),
             ont_summary=ont_service_summary,
             unconfigured_ont_count=unconfigured_ont_count,
             pending_location_requests=pending_location_requests,
             pon_outage_count=len(pon_outages),
-            infrastructure_alerts=infrastructure_alerts,
             ont_not_working_threshold=_network_monitoring_int_setting(
                 db, "dashboard_attention_ont_offline_threshold", 5
             ),
@@ -723,8 +735,8 @@ def prewarm_dashboard_global_cache() -> bool:
 
 def _resolve_dashboard_permissions(
     request: Request, db: Session
-) -> tuple[bool, bool, bool]:
-    """Resolve per-user show_financials/show_network/show_subscribers flags."""
+) -> tuple[bool, bool, bool, bool]:
+    """Resolve per-user financial, network, subscriber, and support visibility."""
     from app.services.auth_dependencies import has_permission
 
     auth = getattr(request.state, "auth", None) or {}
@@ -745,6 +757,7 @@ def _resolve_dashboard_permissions(
             or _has("monitoring:read")
             or _has("reports:network:read"),
             _has("customer:read"),
+            _has("support:ticket:read"),
         )
     if user:
         try:
@@ -762,10 +775,11 @@ def _resolve_dashboard_permissions(
                     or "network" in role_names
                     or "technician" in role_names,
                     is_admin or "support" in role_names or "sales" in role_names,
+                    is_admin or "support" in role_names,
                 )
         except Exception:
             pass
-    return (True, True, True)
+    return (True, True, True, True)
 
 
 def dashboard(request: Request, db: Session):
@@ -774,8 +788,8 @@ def dashboard(request: Request, db: Session):
     Heavy global queries are memoized via _get_cached_dashboard_global_context().
     Only per-user fields (current_user + permission flags) are computed inline.
     """
-    show_financials, show_network, show_subscribers = _resolve_dashboard_permissions(
-        request, db
+    show_financials, show_network, show_subscribers, show_support = (
+        _resolve_dashboard_permissions(request, db)
     )
     current_user = web_admin_service.get_current_user(request)
     from app.services.auth_dependencies import can
@@ -795,6 +809,7 @@ def dashboard(request: Request, db: Session):
             "show_financials": show_financials,
             "show_network": show_network,
             "show_subscribers": show_subscribers,
+            "show_support": show_support,
             "show_attendance": show_attendance,
             **global_ctx,
         },
@@ -898,8 +913,8 @@ def _build_infrastructure_service_summary(
 
 
 def dashboard_stats_partial(request: Request, db: Session):
-    show_financials, show_network, show_subscribers = _resolve_dashboard_permissions(
-        request, db
+    show_financials, show_network, show_subscribers, _show_support = (
+        _resolve_dashboard_permissions(request, db)
     )
     global_ctx = _get_cached_dashboard_global_context(db)
     return templates.TemplateResponse(
@@ -909,6 +924,25 @@ def dashboard_stats_partial(request: Request, db: Session):
             "show_financials": show_financials,
             "show_network": show_network,
             "show_subscribers": show_subscribers,
+            **global_ctx,
+        },
+    )
+
+
+def dashboard_attention_partial(request: Request, db: Session):
+    """Render the permission-filtered attention feed from a refreshed snapshot."""
+
+    _, show_network, show_subscribers, show_support = _resolve_dashboard_permissions(
+        request, db
+    )
+    global_ctx = _get_cached_dashboard_global_context(db)
+    return templates.TemplateResponse(
+        "admin/dashboard/_attention.html",
+        {
+            "request": request,
+            "show_network": show_network,
+            "show_subscribers": show_subscribers,
+            "show_support": show_support,
             **global_ctx,
         },
     )

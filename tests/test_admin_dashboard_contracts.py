@@ -108,3 +108,32 @@ def test_index_template_renders_freshness_as_state():
     # The snapshot freshness is a StateValue, rendered only when present.
     assert "data_freshness.is_present" in source
     assert "data_freshness.value" in source
+
+
+def test_general_dashboard_keeps_business_overview_and_moves_system_content():
+    root = Path(__file__).resolve().parents[1]
+    dashboard = (root / "templates/admin/dashboard/index.html").read_text(
+        encoding="utf-8"
+    )
+    system = (root / "templates/admin/system/index.html").read_text(encoding="utf-8")
+
+    assert dashboard.index("What's new") < dashboard.index("_attention.html")
+    assert "dashboard-infrastructure" not in dashboard
+    assert "Recent Events" not in dashboard
+    assert "_stats.html" in dashboard
+
+    assert "dashboard-infrastructure" in system
+    assert 'hx-get="/admin/system/infrastructure"' in system
+    assert "Recent Audit Events" in system
+
+
+def test_attention_partial_refreshes_and_keeps_textual_status():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "templates/admin/dashboard/_attention.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'hx-get="/admin/dashboard/attention"' in source
+    assert 'hx-trigger="every 60s"' in source
+    assert "item.label" in source
+    assert "No items currently need attention." in source

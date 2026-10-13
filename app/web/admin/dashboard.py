@@ -16,7 +16,12 @@ from app.services.workforce_attendance import AttendanceAction
 router = APIRouter(tags=["web-admin-dashboard"])
 
 _DASHBOARD_READ_DEPENDENCY = Depends(
-    require_any_permission("billing:invoice:read", "monitoring:read", "customer:read")
+    require_any_permission(
+        "billing:invoice:read",
+        "monitoring:read",
+        "customer:read",
+        "support:ticket:read",
+    )
 )
 
 
@@ -40,6 +45,17 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 def dashboard_stats_partial(request: Request, db: Session = Depends(get_db)):
     """HTMX partial for dashboard stats cards."""
     return web_admin_dashboard_service.dashboard_stats_partial(request, db)
+
+
+@router.get(
+    "/dashboard/attention",
+    response_class=HTMLResponse,
+    dependencies=[_DASHBOARD_READ_DEPENDENCY],
+)
+def dashboard_attention_partial(request: Request, db: Session = Depends(get_db)):
+    """HTMX partial for the current general-admin attention counts."""
+
+    return web_admin_dashboard_service.dashboard_attention_partial(request, db)
 
 
 @router.get(

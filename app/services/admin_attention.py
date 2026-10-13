@@ -12,6 +12,9 @@ semantic ``tone`` so templates map tone → colour and never re-derive meaning.
 
 from __future__ import annotations
 
+import json
+from urllib.parse import urlencode
+
 _SEVERITY_RANK = {"critical": 0, "major": 1, "warning": 2, "info": 3}
 _SEVERITY_TONE = {
     "critical": "negative",
@@ -24,6 +27,15 @@ _SEVERITY_TONE = {
 # Tunable via the dashboard_attention_ont_offline_threshold setting; this is
 # the registered default (settings_spec owns the live value).
 DEFAULT_ONT_NOT_WORKING_ATTENTION_THRESHOLD = 5
+
+
+def _unassigned_support_url() -> str:
+    filters = json.dumps(
+        [["Ticket", "assigned_to_person_id", "is", None]], separators=(",", ":")
+    )
+    return "/admin/support/tickets?" + urlencode(
+        {"status": "not_closed", "filters": filters}
+    )
 
 
 def _item(label: str, href: str, severity: str, domain: str) -> dict:
@@ -43,14 +55,16 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
 def build_attention_items(
     *,
     net_stats: dict,
-    overdue_amount: float,
     suspended_count: int,
     pending_orders: int,
+    unassigned_support_count: int,
+    support_approaching_target_count: int,
+    support_exceeded_target_count: int,
+    onboarding_waiting_too_long_count: int,
     ont_summary: dict,
     unconfigured_ont_count: int,
     pending_location_requests: int,
     pon_outage_count: int,
-    infrastructure_alerts: dict | None = None,
     ont_not_working_threshold: int = DEFAULT_ONT_NOT_WORKING_ATTENTION_THRESHOLD,
 ) -> tuple[list[dict], list[dict]]:
     """Decide the overview's attention items from owner-computed facts.
@@ -99,19 +113,37 @@ def build_attention_items(
             ),
             network=True,
         )
-    infra = infrastructure_alerts or {}
-    infra_total = int(infra.get("total") or 0)
-    if infra_total > 0:
-        infra_critical = int(infra.get("critical") or 0)
+    if support_exceeded_target_count > 0:
         _add(
             _item(
-                f"{infra_total} infrastructure "
-                f"{_plural(infra_total, 'alert')} ({infra_critical} critical)",
-                "/admin/alerts?category=infrastructure&status=open",
-                "critical" if infra_critical else "warning",
-                "network",
-            ),
-            network=True,
+                f"{support_exceeded_target_count} support "
+                f"{_plural(support_exceeded_target_count, 'ticket')} "
+                "past response target",
+                "/admin/reports/ticket-sla?open_only=true",
+                "critical",
+                "support",
+            )
+        )
+    if support_approaching_target_count > 0:
+        _add(
+            _item(
+                f"{support_approaching_target_count} support "
+                f"{_plural(support_approaching_target_count, 'ticket')} "
+                "approaching response target",
+                "/admin/reports/ticket-sla",
+                "warning",
+                "support",
+            )
+        )
+    if unassigned_support_count > 0:
+        _add(
+            _item(
+                f"{unassigned_support_count} unassigned support "
+                f"{_plural(unassigned_support_count, 'ticket')}",
+                _unassigned_support_url(),
+                "warning",
+                "support",
+            )
         )
     offline = int(net_stats.get("offline_count") or 0)
     if offline > 0:
@@ -124,13 +156,15 @@ def build_attention_items(
             ),
             network=True,
         )
-    if overdue_amount > 0:
+    if onboarding_waiting_too_long_count > 0:
         _add(
             _item(
-                f"₦{overdue_amount:,.0f} overdue receivables",
-                "/admin/billing",
+                f"{onboarding_waiting_too_long_count} customer onboarding "
+                f"{_plural(onboarding_waiting_too_long_count, 'case')} "
+                "waiting over 72 hours",
+                "/admin/customers?status=new",
                 "warning",
-                "billing",
+                "customers",
             )
         )
     if suspended_count > 0:
