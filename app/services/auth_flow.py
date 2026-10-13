@@ -100,7 +100,6 @@ class LoginAudience(str, Enum):
 
     general = "general"
     admin = "admin"
-    customer = "customer"
 
 
 def is_admin_portal_principal(principal_type: str, principal: object | None) -> bool:
@@ -140,12 +139,6 @@ def principal_refusal(
         principal_type, principal
     ):
         return "admin_required"
-    if audience is LoginAudience.customer and (
-        principal_type != "subscriber"
-        or not isinstance(principal, Subscriber)
-        or principal.user_type is not UserType.customer
-    ):
-        return "customer_required"
     return None
 
 
@@ -1359,12 +1352,7 @@ def _record_denial(
 def _owner_denial_status(
     exc: password_authentication.PasswordAuthenticationError,
 ) -> Literal[401, 403, 409, 428, 429, 503]:
-    if exc.kind in {
-        "locked",
-        "account_disabled",
-        "admin_required",
-        "customer_required",
-    }:
+    if exc.kind in {"locked", "account_disabled", "admin_required"}:
         return 403
     if exc.kind == "must_change_password":
         return 428
@@ -1498,11 +1486,6 @@ def _http_from_refusal(
         )
     if kind == "account_disabled":
         return HTTPException(status_code=403, detail="Account disabled")
-    if kind == "customer_required":
-        return HTTPException(
-            status_code=403,
-            detail={"code": exc.code, "message": exc.message},
-        )
     if kind == "admin_required":
         return HTTPException(
             status_code=403,
@@ -2311,17 +2294,8 @@ class AuthFlow(ListResponseMixin):
             raise
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
-        # Customer native login keeps the customer portal's TOTP-only policy
-        # and whitespace handling. Other audiences retain recovery-code login.
-        customer_audience = audience is LoginAudience.customer
-        totp_ok = bool(
-            totp.verify(code.strip() if customer_audience else code, valid_window=0)
-        )
-        recovery_hash = (
-            None
-            if totp_ok or customer_audience
-            else _candidate_recovery_code_hash(code)
-        )
+        totp_ok = bool(totp.verify(code, valid_window=0))
+        recovery_hash = None if totp_ok else _candidate_recovery_code_hash(code)
         failure_policy = _mfa_failure_policy(db)
 
         # Phase B: one owner transaction (credential gate, eligibility,
