@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -13,6 +14,7 @@ from app.services import integration as integration_service
 from app.services import web_connector_runtime as web_connector_runtime_service
 from app.services import web_integration_syncs as web_integration_syncs_service
 from app.services import web_integrations as web_integrations_service
+from app.services import web_integrations_nextcloud_talk as talk_setup
 from app.services import (
     web_integrations_payment_gateways as web_integrations_payment_gateways_service,
 )
@@ -25,6 +27,7 @@ from app.services.domain_errors import DomainError
 from app.services.field import material_catalog
 from app.services.integrations import erp_admin as erp_admin_service
 from app.services.integrations import installations, payment_capability
+from app.services.integrations.nextcloud_talk_installation import TALK_CREDENTIAL_SCOPE
 from app.services.owner_commands import CommandContext
 from app.tasks.dotmac_erp_outbox import refresh_material_catalog
 
@@ -1444,4 +1447,122 @@ def whatsapp_config_test_send(
         context["error"] = str(exc)
     return templates.TemplateResponse(
         "admin/integrations/whatsapp/config.html", context
+    )
+
+
+@router.get(
+    "/nextcloud-talk/{installation_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def nextcloud_talk_credentials(
+    request: Request, installation_id: UUID, db: Session = Depends(get_db)
+):
+    try:
+        page = talk_setup.build_page(db, installation_id=installation_id)
+    except (DomainError, installations.InstallationError):
+        raise HTTPException(
+            status_code=404, detail="Talk integration not found"
+        ) from None
+    context = _base_context(request, db, active_page="integrations")
+    context.update(
+        page=page,
+        form_contract=talk_setup.TALK_CREDENTIAL_FORM,
+        recent_activities=recent_activity_for_paths(
+            db, ["/admin/integrations/nextcloud-talk"]
+        ),
+    )
+    return templates.TemplateResponse("admin/integrations/nextcloud_talk.html", context)
+
+
+@router.post(
+    "/nextcloud-talk/{installation_id}",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("system:settings:write")),
+        Depends(require_permission("system:secrets:write")),
+    ],
+)
+async def nextcloud_talk_credentials_save(
+    request: Request,
+    installation_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission("system:settings:write")),
+):
+    # Parse manually: framework validation must never echo a credential-bearing form.
+    operation_id = None
+    try:
+        installation_uuid = UUID(installation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid setup request") from None
+    form = await request.form()
+    error = None
+    notice = None
+    status_code = 200
+    try:
+        operation_id = UUID(str(form.get("operation_id") or ""))
+        command = talk_setup.TalkCredentialForm(
+            revision_id=str(form.get("revision_id") or ""),
+            connector_version=str(form.get("connector_version") or ""),
+            manifest_digest=str(form.get("manifest_digest") or ""),
+            operation_id=str(operation_id),
+            username=str(form.get("username") or ""),
+            app_password=SecretStr(str(form.get("app_password") or "")),
+        )
+        db_session_adapter.release_read_transaction(db)
+        outcome = talk_setup.save_credentials(
+            db,
+            installation_id=installation_uuid,
+            form=command,
+            context=CommandContext(
+                command_id=operation_id,
+                correlation_id=operation_id,
+                actor=f"user:{auth.get('principal_id') or 'unknown'}",
+                scope=TALK_CREDENTIAL_SCOPE,
+                reason="Configure Nextcloud Talk notifier credentials",
+                idempotency_key=f"nextcloud-talk-credential:{operation_id}",
+            ),
+        )
+        if outcome.status == "storage_unavailable":
+            error = "Credential storage is unavailable. Contact your administrator, then retry this request."
+            status_code = 503
+        elif outcome.status == "validation_failed":
+            error = "Credentials saved, but the connection check failed. Talk remains disabled. Check the notifier username and app password, then save again."
+            operation_id = None
+            status_code = 400
+        else:
+            notice = "Credentials validated. This Talk integration is enabled."
+            operation_id = None
+    except DomainError as exc:
+        error = (
+            "This request already stored different credentials or configuration. Reload the page to start a new setup request."
+            if exc.code.endswith("talk_credential_conflict")
+            else "Setup could not be completed. Reload the page before changing credentials or retrying a different request."
+        )
+        status_code = 400
+    except ValueError:
+        error = "Setup could not be completed. Reload the page before changing credentials or retrying a different request."
+        status_code = 400
+    try:
+        page = talk_setup.build_page(
+            db,
+            installation_id=installation_uuid,
+            operation_id=operation_id,
+            error=error,
+            notice=notice,
+        )
+    except (DomainError, installations.InstallationError):
+        raise HTTPException(
+            status_code=404, detail="Talk integration not found"
+        ) from None
+    context = _base_context(request, db, active_page="integrations")
+    context.update(
+        page=page,
+        form_contract=talk_setup.TALK_CREDENTIAL_FORM,
+        recent_activities=recent_activity_for_paths(
+            db, ["/admin/integrations/nextcloud-talk"]
+        ),
+    )
+    return templates.TemplateResponse(
+        "admin/integrations/nextcloud_talk.html", context, status_code=status_code
     )

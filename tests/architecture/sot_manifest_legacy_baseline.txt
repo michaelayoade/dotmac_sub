@@ -132,7 +132,6 @@ secrets.access_credential_format
 secrets.credential_crypto
 secrets.credential_integrity
 secrets.credential_recovery
-secrets.reference_store
 secrets.rotation
 secrets.settings_migration
 secrets.settings_policy

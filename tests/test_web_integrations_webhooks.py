@@ -86,3 +86,28 @@ def test_webhook_admin_test_delivery_uses_canonical_worker(db_session, monkeypat
         == "app.tasks.integration_delivery.deliver_integration_event"
     )
     assert queued["args"] == [str(record.id)]
+
+
+def test_webhook_rename_persists_after_configuration_lock_refresh(db_session):
+    endpoint = webhooks.create_webhook_endpoint(
+        db_session,
+        name="Before rename",
+        url="https://hooks.example.test/events",
+        signing_secret_ref=None,
+        authorization_ref=None,
+        event_types=["invoice.created"],
+        is_active=False,
+    )
+    updated = webhooks.update_webhook_endpoint(
+        db_session,
+        endpoint_id=str(endpoint.id),
+        name="After rename",
+        url="https://hooks.example.test/changed",
+        signing_secret_ref=None,
+        authorization_ref=None,
+        event_types=["invoice.created"],
+        is_active=False,
+    )
+    db_session.refresh(updated)
+    assert updated.name == "After rename"
+    assert updated.current_config_revision.config_json["url"].endswith("/changed")

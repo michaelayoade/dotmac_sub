@@ -102,7 +102,20 @@ def _updated_secret_fields(path: str, form: Mapping[str, object]) -> dict[str, s
 
 
 def save_secret(path: str, form: Mapping[str, object]) -> dict:
-    from app.services.secrets import list_secret_field_names, write_secret
+    from app.services.secrets import (
+        is_managed_secret_path,
+        list_secret_field_names,
+        write_secret,
+    )
+
+    if is_managed_secret_path(path):
+        return {
+            "ok": False,
+            "secret_path": path,
+            "fields": {},
+            "metadata": {},
+            "error": "This credential is managed by its integration. Use the integration setup page.",
+        }
 
     try:
         updated = _updated_secret_fields(path, form)
@@ -146,11 +159,16 @@ def _new_secret_fields(form: Mapping[str, object]) -> dict[str, str]:
 
 
 def create_secret(form: Mapping[str, object]) -> dict:
-    from app.services.secrets import write_secret
+    from app.services.secrets import is_managed_secret_path, write_secret
 
     path = str(form.get("path") or "").strip()
     if not path:
         return {"ok": False, "error": "Secret path is required"}
+    if is_managed_secret_path(path):
+        return {
+            "ok": False,
+            "error": "This credential is managed by its integration. Use the integration setup page.",
+        }
     data = _new_secret_fields(form)
     if not data:
         return {"ok": False, "error": "At least one field is required"}
@@ -165,5 +183,6 @@ def create_secret(form: Mapping[str, object]) -> dict:
 def delete_secret_path(path: str) -> str:
     from app.services.secrets import delete_secret
 
-    delete_secret(path)
+    if not delete_secret(path):
+        return "/admin/system/secrets?status=error&message=Secret+could+not+be+deleted"
     return f"/admin/system/secrets?status=success&message=Secret+{quote_plus(path)}+deleted"
