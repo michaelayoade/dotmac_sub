@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -33,12 +33,14 @@ from app.services.router_health.contracts import (
     ConfigExportOutcome,
     HealthFinding,
     HealthLayer,
+    SignalState,
 )
 
 OWNER = "network.router_health"
 CONCERN_EXPORT_EVIDENCE = "router config export evidence"
 CONCERN_PROJECTION = "router health findings projection"
 CONCERN_CANARY = "CoA canary operation"
+CONCERN_RUNTIME = "router runtime observations"
 ACTOR = "system:router_health"
 AUDIT_ACTOR = AuditActor(actor_type=AuditActorType.system, actor_id=ACTOR)
 SIGNAL_CONFIG_EXPORT = "config_export"
@@ -261,6 +263,131 @@ def retire_router_health_findings(
     )
 
 
+# --------------------------------------------------------------- runtime (PR2)
+
+
+@dataclass(frozen=True)
+class RouterRuntimeResult:
+    """One router's next signal states and the signals to forget."""
+
+    router_id: UUID
+    signals: tuple[SignalState, ...]
+    retire: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class RecordRuntimePollCommand:
+    context: CommandContext
+    results: tuple[RouterRuntimeResult, ...]
+    findings: tuple[HealthFinding, ...]
+    scopes: tuple[findings_service.Scope, ...]
+    mode: str
+    retire_subjects: tuple[tuple[HealthLayer, UUID], ...] = ()
+    capped: int = 0
+
+
+def _write_signal(
+    db: Session,
+    router_id: UUID,
+    state: SignalState,
+    existing: RouterHealthSignal | None,
+) -> None:
+    row = existing
+    if row is None:
+        row = RouterHealthSignal(
+            router_id=router_id,
+            signal=state.signal,
+            scope=state.scope,
+            samples=[],
+            consecutive_abnormal=0,
+        )
+        db.add(row)
+    row.status = state.status
+    row.last_value = (
+        None if state.last_value is None else Decimal(str(round(state.last_value, 4)))
+    )
+    row.last_text = state.last_text
+    row.samples = [[ts, value] for ts, value in state.samples[-SAMPLE_LIMIT:]]
+    row.first_abnormal_at = state.first_abnormal_at
+    row.last_normal_at = state.last_normal_at
+    row.last_observed_at = state.last_observed_at
+    row.consecutive_abnormal = state.consecutive_abnormal
+    row.boot_marker = state.boot_marker
+
+
+def _apply_runtime_results(db: Session, results: Sequence[RouterRuntimeResult]) -> int:
+    written = 0
+    for result in results:
+        rows = {
+            (row.signal, row.scope): row
+            for row in db.execute(
+                select(RouterHealthSignal).where(
+                    RouterHealthSignal.router_id == result.router_id
+                )
+            ).scalars()
+        }
+        for state in result.signals:
+            _write_signal(
+                db, result.router_id, state, rows.get((state.signal, state.scope))
+            )
+            written += 1
+        for signal, scope in result.retire:
+            db.execute(
+                delete(RouterHealthSignal).where(
+                    RouterHealthSignal.router_id == result.router_id,
+                    RouterHealthSignal.signal == signal,
+                    RouterHealthSignal.scope == scope,
+                )
+            )
+    db.flush()
+    return written
+
+
+def record_runtime_poll(
+    db: Session, *, command: RecordRuntimePollCommand
+) -> findings_service.SyncOutcome:
+    """Persist runtime signals and project runtime findings (one commit)."""
+
+    def operation() -> findings_service.SyncOutcome:
+        written = _apply_runtime_results(db, command.results)
+        outcome = findings_service.sync_findings(
+            db, findings=command.findings, scopes=command.scopes, mode=command.mode
+        )
+        retired = 0
+        for layer, subject_id in command.retire_subjects:
+            retired += findings_service.resolve_subjects(
+                db, layer=layer, subject_ids=[subject_id]
+            )
+        _stage_event(
+            db,
+            command.context,
+            {
+                "kind": "runtime_poll",
+                "mode": command.mode,
+                "routers": len(command.results),
+                "signals": written,
+                "findings": len(command.findings),
+                "opened": outcome.opened,
+                "resolved": outcome.resolved + retired,
+                "capped": command.capped,
+            },
+        )
+        return findings_service.SyncOutcome(
+            opened=outcome.opened,
+            updated=outcome.updated,
+            escalated=outcome.escalated,
+            resolved=outcome.resolved + retired,
+            capped=command.capped,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_definition(CONCERN_RUNTIME, "record_runtime_poll"),
+        context=command.context,
+        operation=operation,
+    )
+
+
 # ----------------------------------------------------------------------- canary
 
 
@@ -369,12 +496,15 @@ __all__: Sequence[str] = [
     "CompleteCanaryRunCommand",
     "ProjectFindingsCommand",
     "RecordConfigExportOutcomesCommand",
+    "RecordRuntimePollCommand",
+    "RouterRuntimeResult",
     "RetireFindingsCommand",
     "begin_coa_canary_run",
     "complete_coa_canary_run",
     "reconcile_router_posture",
     "reconcile_service_path",
     "record_config_export_outcomes",
+    "record_runtime_poll",
     "retire_router_health_findings",
     "system_context",
 ]

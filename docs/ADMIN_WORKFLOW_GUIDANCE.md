@@ -63,3 +63,17 @@ published. Never use a script to write the database directly or to bypass the
 module's owner command. Save drafts, review permissions and runtime status,
 then publish only after the resulting run evidence and rollback/reconciliation
 path are understood.
+
+## Router health
+
+Use `/admin/network/routers` to find routers that need attention. The Health
+column shows the most urgent open router health finding (Critical, High,
+Medium, Low), OK, or No data when Sub has neither a configuration snapshot nor a
+runtime poll for the router, and the Health filter narrows the list to one
+level. A Shadow label means findings are visible but do not notify yet. A
+router's detail page has a Health section with each finding's title, impact,
+evidence, fix, known issue and first/last seen, plus the last snapshot and
+runtime poll times. `/admin/drift` shows a read-only Router posture summary:
+counts for everyone with drift access, finding detail only with `router:read`
+because evidence contains management addresses. The reconciler never changes a
+router, never uses `Router.status`, and writes no drift findings.
