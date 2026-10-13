@@ -57,9 +57,9 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a97"
-KERNEL_WHEEL_SHA256 = "f4a460db0daf855c50a4336da1f0c9294af38c12e7588e49be9b80027cf37f11"
-KERNEL_SDIST_SHA256 = "7d79f309df646dfff46be5eee49ff3c34ae9f2ee2af089e546cc58f6d973350d"
+KERNEL_PIN = "0.1.0a98"
+KERNEL_WHEEL_SHA256 = "27405c57c4af395224cdd2f4366c0144207e9df2eab4ca8a8ed1142c1d0859fa"
+KERNEL_SDIST_SHA256 = "597acda6b7d1046650aa17b5d847f581b05ee577e7893067762f3bb2790c38af"
 
 #: The private index source name pyproject must route the kernel through.
 KERNEL_SOURCE = "forgejo"
@@ -96,6 +96,10 @@ KERNEL_SOURCE = "forgejo"
 #: Sub will pass strictness explicitly at its content cutover; loading this
 #: helper does not install Studio's Kernel-owned route or flag policy in Sub.
 #:
+#: a98 adds capability_composition and capability_contract via the package root.
+#: Their imports only reach the already-reviewed product_manifest contract.
+#: DatabaseRuntime and the reference factory stay excluded from Sub boot.
+#:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
 #: test below proves that separately, on middleware and routes. But the cost of
@@ -112,6 +116,8 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.audit",
         "dotmac_kernel.audit_actions",
         "dotmac_kernel.cache",
+        "dotmac_kernel.capability_composition",
+        "dotmac_kernel.capability_contract",
         "dotmac_kernel.config",
         "dotmac_kernel.entitlements",
         "dotmac_kernel.exceptions",
@@ -214,6 +220,7 @@ def test_pure_surface_imports_without_database(module: str) -> None:
 def test_installed_kernel_is_the_reviewed_pin_and_ships_py_typed() -> None:
     import dotmac_kernel
 
+    assert "site-packages" in Path(dotmac_kernel.__file__).parts
     assert dotmac_kernel.__version__ == KERNEL_PIN
     dist = importlib.metadata.distribution("dotmac-kernel")
     assert dist.version == KERNEL_PIN
@@ -270,7 +277,7 @@ def test_pyproject_pins_kernel_exactly_from_the_named_index() -> None:
 
 
 def test_lock_carries_the_reviewed_kernel_release_bytes() -> None:
-    """The current pin resolves to the exact reviewed a97 lock artifacts."""
+    """The current pin resolves to the exact reviewed a98 lock artifacts."""
     import tomllib
 
     with (PROJECT_ROOT / "poetry.lock").open("rb") as lock_file:
@@ -495,5 +502,26 @@ def test_app_middleware_and_routes_are_kernel_free_and_prefixes_unchanged() -> N
         capture_output=True,
         text=True,
         timeout=300,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_a98_selective_composition_keeps_reference_runtime_out_of_sub_boot() -> None:
+    """a98's factory defect is excluded by Sub's real, unchanged boot path."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "import dotmac_kernel\n"
+            "import app.main\n"
+            "forbidden = {'dotmac_kernel.app_factory', 'dotmac_kernel.db', "
+            "'dotmac_kernel.database_runtime', 'dotmac_kernel.session_runtime'}\n"
+            "assert forbidden.isdisjoint(sys.modules), forbidden & set(sys.modules)\n",
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr

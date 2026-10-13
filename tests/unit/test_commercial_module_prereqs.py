@@ -44,9 +44,11 @@ def test_the_schema_set_is_derived_from_the_composed_lineages() -> None:
         "dotmac_billing": "mod_billing",
         "dotmac_collections": "mod_coll",
         "dotmac_inbox": "mod_inbox",
+        "dotmac_numbering": "mod_numbering",
         "dotmac_payments": "mod_payments",
         "dotmac_service_orders": "mod_serviceorders",
         "dotmac_subscriptions": "mod_subscriptions",
+        "dotmac_tax": "mod_tax",
         "dotmac_template_studio": "mod_tstudio",
     }
     assert module_schemas() == set(derived.values())

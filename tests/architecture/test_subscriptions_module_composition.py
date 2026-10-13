@@ -14,6 +14,7 @@ from dotmac_kernel.planes import (
     supported_plane_sets,
     validate_module_plane_selections,
 )
+from dotmac_numbering.manifest import module as numbering_module
 from dotmac_subscriptions.manifest import module as subscriptions_module
 
 from app.migration_bindings import (
@@ -66,12 +67,12 @@ def _module_imports_under_app() -> list[str]:
 def test_tagged_subscriptions_and_required_kernel_are_exact_pins() -> None:
     data = _pyproject()
     project_dependencies = data["project"]["dependencies"]  # type: ignore[index]
-    assert "dotmac-kernel==0.1.0a97" in project_dependencies
+    assert "dotmac-kernel==0.1.0a98" in project_dependencies
     assert "dotmac-subscriptions==0.1.0a3" in project_dependencies
 
     poetry_dependencies = data["tool"]["poetry"]["dependencies"]  # type: ignore[index]
     assert poetry_dependencies["dotmac-kernel"] == {
-        "version": "0.1.0a97",
+        "version": "0.1.0a98",
         "source": "forgejo",
     }
     assert poetry_dependencies["dotmac-subscriptions"] == {
@@ -125,9 +126,11 @@ def test_alembic_owns_all_installed_module_resources_before_env_runs() -> None:
         "dotmac_billing.migrations:versions",
         "dotmac_collections.migrations:versions",
         "dotmac_inbox.migrations:versions",
+        "dotmac_numbering.migrations:versions",
         "dotmac_payments.migrations:versions",
         "dotmac_service_orders.migrations:versions",
         "dotmac_subscriptions.migrations:versions",
+        "dotmac_tax.migrations:versions",
         "dotmac_template_studio.migrations:versions",
     ]
 
@@ -143,7 +146,7 @@ def test_alembic_owns_all_installed_module_resources_before_env_runs() -> None:
 
 
 def test_subscriptions_has_one_explicit_supported_tenant_selection() -> None:
-    assert len(ASSEMBLY_MODULE_PLANES) == 3
+    assert len(ASSEMBLY_MODULE_PLANES) == 4
     selections = {item.module: item for item in ASSEMBLY_MODULE_PLANES}
     selection = selections["subscriptions"]
     assert selection.module == "subscriptions"
@@ -151,7 +154,12 @@ def test_subscriptions_has_one_explicit_supported_tenant_selection() -> None:
     assert (ModulePlane.TENANT,) in supported_plane_sets(subscriptions_module)
     assert (
         validate_module_plane_selections(
-            (billing_module, collections_module, subscriptions_module),
+            (
+                billing_module,
+                collections_module,
+                numbering_module,
+                subscriptions_module,
+            ),
             ASSEMBLY_MODULE_PLANES,
         )
         == ASSEMBLY_MODULE_PLANES

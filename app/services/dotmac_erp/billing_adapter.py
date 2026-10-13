@@ -21,7 +21,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from dotmac_billing import AccountingFactV1
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.erp_billing_export import (
@@ -30,6 +31,10 @@ from app.models.erp_billing_export import (
     ErpExportStatus,
 )
 from app.services.domain_errors import DomainError
+from app.services.dotmac_erp.billing_accounting_fact import (
+    EXPORT_CONTRACT,
+    map_billing_accounting_fact,
+)
 from app.services.locking import lock_for_update
 from app.services.owner_commands import (
     CommandContext,
@@ -95,6 +100,15 @@ def stage_export(
             "missing_idempotency_key",
             "An ERP export requires the command's business idempotency key.",
         )
+    if command.flow is ErpBillingFlow.accounting_fact or (
+        command.payload.get("contract") == EXPORT_CONTRACT
+        or "fact" in command.payload
+        or "fact_id" in command.payload
+    ):
+        raise _error(
+            "accounting_fact_requires_dedicated_flow",
+            "Released accounting facts require their dedicated typed staging boundary.",
+        )
     missing = [
         field
         for field in _REQUIRED_PAYLOAD_FIELDS
@@ -130,6 +144,92 @@ def stage_export(
     db.add(export)
     db.flush()
     return export
+
+
+@dataclass(frozen=True, slots=True)
+class StageCommittedBillingFactCommand:
+    """For a future trusted committed-Billing owner consumer, never captured JSON.
+
+    The trusted consumer wiring and its source-commit proof are pending. This
+    dormant participant cannot be reached through the preview CLI or an API.
+    Its future consumer must obtain committed Billing outbox evidence and
+    validate source and scope. Active owner transaction authority alone does
+    not prove Billing commitment; parsing captured JSON confers no trust.
+    """
+
+    fact: AccountingFactV1
+
+
+@dataclass(frozen=True, slots=True)
+class StagedBillingFact:
+    export_id: UUID
+    fact_digest: str
+    replayed: bool
+
+
+def stage_committed_billing_fact(
+    db: Session,
+    command: StageCommittedBillingFactCommand,
+    *,
+    context: CommandContext,
+) -> StagedBillingFact:
+    """Flush-only transport participant, using the existing export ledger.
+
+    PostgreSQL transaction advisory serialization follows the existing owner
+    pattern in runtime_durable_timers: it protects an absent first row, then
+    the existing unique constraint remains the structural duplicate backstop.
+    No second idempotency engine, savepoint or transaction completion exists.
+    """
+    if not owner_command_active(db):
+        raise _error(
+            "export_requires_owner_command",
+            "ERP exports are staged only inside an active owner command.",
+        )
+    envelope = map_billing_accounting_fact(command.fact)
+    key = envelope.idempotency_key
+    if db.get_bind().dialect.name.startswith("postgres"):
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"{OWNER}:accounting-fact:{key}"},
+        )
+    payload = envelope.to_payload()
+    existing = db.scalar(
+        select(ErpBillingExport)
+        .where(ErpBillingExport.idempotency_key == key)
+        .with_for_update()
+    )
+    if existing is not None:
+        if (
+            existing.flow is not ErpBillingFlow.accounting_fact
+            or existing.source_kind != "billing.accounting.fact.v1"
+            or existing.source_id != envelope.fact.fact_id
+            or existing.payload_version != 1
+            or existing.payload != payload
+        ):
+            raise ErpBillingAdapterError(
+                code=f"{OWNER}.accounting_fact_identity_conflict",
+                message="A source fact identity cannot carry changed accounting evidence.",
+                details={
+                    "fact_id": str(envelope.fact.fact_id),
+                    "fact_version": envelope.fact.fact_version,
+                },
+                retryable=False,
+            )
+        return StagedBillingFact(existing.id, envelope.fact_digest, True)
+    export = ErpBillingExport(
+        flow=ErpBillingFlow.accounting_fact,
+        source_kind="billing.accounting.fact.v1",
+        source_id=envelope.fact.fact_id,
+        source_event_id=None,
+        payload_version=1,
+        payload=payload,
+        idempotency_key=key,
+        command_id=context.command_id,
+        correlation_id=context.correlation_id,
+    )
+    db.add(export)
+    db.flush()
+    return StagedBillingFact(export.id, envelope.fact_digest, False)
 
 
 def pending_exports(db: Session, *, limit: int = 100) -> list[ErpBillingExport]:
@@ -244,6 +344,9 @@ __all__ = [
     "ErpBillingFlow",
     "ErpExportStatus",
     "StageErpExportCommand",
+    "StageCommittedBillingFactCommand",
+    "StagedBillingFact",
+    "stage_committed_billing_fact",
     "pending_exports",
     "record_delivery_outcome",
     "stage_export",
