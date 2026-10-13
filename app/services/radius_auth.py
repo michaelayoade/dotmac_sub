@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
+from enum import StrEnum
+from uuid import UUID
 
 # `held_secret`, not `get_secret`: `app.services.secrets.get_secret` talks to
 # OpenBao, and this one is a dict lookup over material loaded at boot.
@@ -15,6 +18,39 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusServer
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ObserveRadiusAuthentication:
+    username: str = field(repr=False)
+    password: str = field(repr=False)
+    server_id: UUID | None = None
+
+
+class RadiusAuthenticationObservation(StrEnum):
+    ACCEPTED = "accepted"
+    NOT_ACCEPTED = "not_accepted"
+
+
+def observe_authentication(
+    db: Session, *, query: ObserveRadiusAuthentication
+) -> RadiusAuthenticationObservation:
+    """Observe transport acceptance without assigning customer eligibility.
+
+    Customer compatibility treats refusal and unavailable transport alike;
+    its policy owns whether an existing local access-source fallback is valid.
+    The legacy authenticate interface remains unchanged for other clients.
+    """
+    try:
+        authenticate(
+            db=db,
+            username=query.username,
+            password=query.password,
+            server_id=str(query.server_id) if query.server_id is not None else None,
+        )
+    except Exception:
+        return RadiusAuthenticationObservation.NOT_ACCEPTED
+    return RadiusAuthenticationObservation.ACCEPTED
 
 
 def _setting_value(db: Session, key: str) -> str | None:
