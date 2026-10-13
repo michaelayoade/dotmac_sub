@@ -3,9 +3,10 @@
 `financial.invoices.opening_export` owns the read-only M8 evidence census through
 `preview_billing_opening_export(db, *, query=PreviewBillingOpeningExportQuery(...))`.
 The incumbent `financial.invoices`, Payments, Credit Notes and customer-subledger
-owners retain their mutations and financial interpretations. This is a source
-query, with no adapter, operational export, Starter import, apply option,
-activation, permission, scheduler, schema or data repair.
+owners retain their mutations and financial interpretations. A read-only operator
+CLI calls this source query; this change performs no operational capture. It adds
+no financial-write or import adapter, Starter import, apply option, activation,
+permission, scheduler, schema or data repair.
 
 The caller supplies an already active, clean PostgreSQL READ ONLY transaction at
 REPEATABLE READ or SERIALIZABLE isolation. The query checks actual transaction
@@ -83,3 +84,34 @@ Hosted unit and real migrated PostgreSQL tests cover historical/multiple/unlinke
 items, refunds, exact controls, authority, stable snapshots, source drift and no
 writes. Architecture guards keep this query free of adapters and transaction
 completion and require reuse of the canonical settlement and lane resolvers.
+
+## Read-only operator entry point
+
+After an operator has an approved, explicitly named database target, the existing
+application database configuration supplies that target to this source-only CLI:
+
+```bash
+python -m scripts.migration.billing_opening_export \
+  --source-repository-sha <exact-40-character-source-sha> \
+  --installation-id <installation-uuid> \
+  --economic-cutoff <ISO-timestamp-with-explicit-offset> \
+  --currency-precision NGN:2 \
+  --population-version sub-billing-opening-census-v1 > opening-census.json
+```
+
+Repeat `--currency-precision` once per declared source currency; duplicates and
+unsupported precision are refused before opening a session. All capture coordinates
+are explicit caller declarations, not authenticated installation/source proof.
+The canonical `app.db.read_only_snapshot_session` owns PostgreSQL READ ONLY,
+REPEATABLE READ setup and rollback/close. The CLI calls the census owner, whose
+clean-session and actual database snapshot checks remain authoritative. It performs
+no import, repair, financial mutation or source-authority switch.
+
+Standard output contains sorted-key JSON with exact decimal strings, UUID strings,
+aware ISO timestamps and enum values. Unsupported or non-finite values fail rather
+than becoming approximate floats or arbitrary strings. Exit status 0 means capture
+completed without blocking exceptions, 1 means a completed census has blockers,
+and 2 means invalid arguments or failed capture/serialization. A zero exit status
+is evidence capture only; it never authorizes import, cutover or operational use.
+Database errors emit only `snapshot_unavailable`, with no connection details.
+This entry point has not been executed against any operator target by this change.
