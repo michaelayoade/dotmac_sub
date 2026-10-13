@@ -76,6 +76,38 @@ collision inventory re-verified at each rebase rather than assumed to hold:
 The recon is re-run on every pin and Sub model change because a stale inventory
 would silently under-report the very risk the S7 ADR gate exists to hold.
 
+**2026-10-13 — proposed `dotmac-numbering==0.1.0a2` inert tenant
+composition; validation pending.** The exact released dependency adds its
+installed `dotmac_numbering.migrations:versions` lineage and an explicit TENANT
+selection. Annotated tag `dotmac-numbering-v0.1.0a2` peels to
+`4c282228b53405442effc4159f5db9d50446d335`; publisher run `31908774569`
+verified the released module against published Kernel a66. Sub retains its
+exact Kernel a97 pin. Lock artifact filenames and hashes are carried unchanged
+from ERP's `poetry.lock` at `93d7e111d9278b8377bac311e78308c99f51da79`:
+wheel `ed7711ec3df50ccba066e920d7696ee4b9569fb7356108078719c3b139b184ec`,
+sdist `8e4b53760953ae691eac6923b31f0bf903337037c274d5ed4dd764c078dbffa0`.
+Poetry 2.4.1 serialized the existing resolved graph with that exact package row;
+no dependency moved. The ordinary registry lock attempt was blocked by DNS.
+These are existing adopter artifact oracles, not independent registry read-back
+or byte verification by this slice; hosted installation must fetch and verify
+the actual artifacts before acceptance. Sub supplies declared effects through migrations
+545 (`tenant_scope_catalog.v1`), 546 (`module_database_roles.v1`) and 556
+(`idempotency_ledger.v1`). Kernel migrations remain uncomposed.
+
+This is additive storage composition only. No runtime adapter, caller switch,
+series seed, counter projection or migration execution is included. Sub's
+`app.services.numbering`, document sequences, invoice formatting and registered
+financial owners retain authority. Numbering's platform tables are excluded.
+The hosted acceptance gates are fresh and real-556-predecessor upgrades,
+selected catalogue and FORCE RLS under actual `app_user` own/other/unset scope,
+wrong-tenant writes, read-only preview, exact-key replay, caller rollback of
+allocation and kernel idempotency together, repeated upgrade preservation, and
+incumbent invoice formatting. Tests are declared in
+`tests/integration/test_numbering_module_composition.py`; production activation
+and planted-defect guards are in
+`tests/architecture/test_numbering_module_composition.py`. These unexecuted
+canaries and a dependency pin do not establish adoption or deployment acceptance.
+
 **2026-08-13 — S7 GUC predecessor, no RLS activation.** Sub's existing
 session/transaction authority now applies its one deterministic operator tenant
 to every PostgreSQL SQLAlchemy root transaction through a transaction-local

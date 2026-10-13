@@ -1215,6 +1215,27 @@ url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 reference = "forgejo"
 
 [[package]]
+name = "dotmac-numbering"
+version = "0.1.0a2"
+description = "DotMac dual-plane document-series allocation with immutable receipts"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_numbering-0.1.0a2-py3-none-any.whl", hash = "sha256:ed7711ec3df50ccba066e920d7696ee4b9569fb7356108078719c3b139b184ec"},
+    {file = "dotmac_numbering-0.1.0a2.tar.gz", hash = "sha256:8e4b53760953ae691eac6923b31f0bf903337037c274d5ed4dd764c078dbffa0"},
+]
+
+[package.dependencies]
+dotmac-kernel = ">=0.1.0a66"
+sqlalchemy = ">=2.0,<3.0"
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "dotmac-payments"
 version = "0.1.0a1"
 description = "Payment intent and confirmation correlation"
@@ -4654,6 +4675,7 @@ files = [
 
 [package.dependencies]
 six = "*"
+
 [[package]]
 name = "rsa"
 version = "4.9.1"
@@ -6226,4 +6248,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "a95602bfe224f584451ed1c1fe6574b2c11c3a8367d55ed7b7a4c638e855b55b"
+content-hash = "1eda90511239116abd04e14d76e594af005485a3fb2058a71c4fee58c23aa4eb"

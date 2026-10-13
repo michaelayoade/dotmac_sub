@@ -14,6 +14,7 @@ from dotmac_kernel.planes import (
     supported_plane_sets,
     validate_module_plane_selections,
 )
+from dotmac_numbering.manifest import module as numbering_module
 from dotmac_subscriptions.manifest import module as subscriptions_module
 
 from app.migration_bindings import (
@@ -125,6 +126,7 @@ def test_alembic_owns_all_installed_module_resources_before_env_runs() -> None:
         "dotmac_billing.migrations:versions",
         "dotmac_collections.migrations:versions",
         "dotmac_inbox.migrations:versions",
+        "dotmac_numbering.migrations:versions",
         "dotmac_payments.migrations:versions",
         "dotmac_service_orders.migrations:versions",
         "dotmac_subscriptions.migrations:versions",
@@ -143,7 +145,7 @@ def test_alembic_owns_all_installed_module_resources_before_env_runs() -> None:
 
 
 def test_subscriptions_has_one_explicit_supported_tenant_selection() -> None:
-    assert len(ASSEMBLY_MODULE_PLANES) == 3
+    assert len(ASSEMBLY_MODULE_PLANES) == 4
     selections = {item.module: item for item in ASSEMBLY_MODULE_PLANES}
     selection = selections["subscriptions"]
     assert selection.module == "subscriptions"
@@ -151,7 +153,12 @@ def test_subscriptions_has_one_explicit_supported_tenant_selection() -> None:
     assert (ModulePlane.TENANT,) in supported_plane_sets(subscriptions_module)
     assert (
         validate_module_plane_selections(
-            (billing_module, collections_module, subscriptions_module),
+            (
+                billing_module,
+                collections_module,
+                numbering_module,
+                subscriptions_module,
+            ),
             ASSEMBLY_MODULE_PLANES,
         )
         == ASSEMBLY_MODULE_PLANES
