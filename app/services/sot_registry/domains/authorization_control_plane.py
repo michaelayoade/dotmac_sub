@@ -21,6 +21,119 @@ from app.services.sot_manifest import (
 from app.services.sot_registry.model import DomainSOT
 
 
+def _customer_authentication_service() -> SOTService:
+    inputs = (
+        AuthorityInput(
+            name="customer login identity",
+            owner="auth.customer_login_identity",
+            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+            source="Typed customer identity resolution; staff credentials are excluded.",
+        ),
+        AuthorityInput(
+            name="credential standing and MFA",
+            owner="auth.password_authentication",
+            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+            source="Local credential versions and immutable pre-network RADIUS/access snapshots.",
+        ),
+        AuthorityInput(
+            name="customer account eligibility",
+            owner="customer.accounts",
+            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+            source="Subscriber identity, classification, active state and status.",
+        ),
+        AuthorityInput(
+            name="user password policy",
+            owner="auth.user_passwords",
+            kind=AuthorityKind.CONTROL_INPUT,
+            source="Existing COMPAT user-password verification; no new representations or upgrades.",
+        ),
+        AuthorityInput(
+            name="customer login limits",
+            owner="control.settings_spec",
+            kind=AuthorityKind.CONTROL_INPUT,
+            source="Customer lockout settings and the existing bounded portal RADIUS throttle.",
+        ),
+        AuthorityInput(
+            name="RADIUS acceptance observation",
+            owner="external:radius",
+            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+            source="Typed RADIUS transport acceptance only; immutable database source standing and customer eligibility remain mandatory.",
+        ),
+    )
+    concerns = ("customer password-step preparation", "native customer login admission")
+    codes = tuple(
+        f"auth.customer_authentication.{kind}"
+        for kind in (
+            "invalid_credentials",
+            "locked",
+            "must_change_password",
+            "account_disabled",
+            "customer_required",
+        )
+    )
+    return SOTService(
+        name="auth.customer_authentication",
+        module="app.services.customer_authentication",
+        owns=concerns,
+        depends_on=tuple(
+            dict.fromkeys(
+                item.owner
+                for item in inputs
+                if item.kind is not AuthorityKind.EXTERNAL_OBSERVATION
+            )
+        ),
+        notes="One customer password policy prepares immutable standing for browser and native adapters. Native admission excludes every non-customer principal. Password/MFA completion and denial writes remain with auth.password_authentication.",
+        contract=ServiceContract(
+            concerns=tuple(
+                ConcernContract(
+                    name=name,
+                    role=OwnerRole.POLICY,
+                    input_names=tuple(item.name for item in inputs),
+                )
+                for name in concerns
+            ),
+            authoritative_inputs=inputs,
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Preparation performs caller-session reads without flush or commit. Independent denial evidence and counters delegate to the existing password-authentication owner; success enters that owner's version-bound transaction.",
+                locking="Preparation holds no decision lock; the success owner rechecks principal and source standing under its existing locks.",
+                idempotency="Preparation creates no session or challenge. Each failed attempt has its own typed denial evidence.",
+                retries="No password/RADIUS retry or alternate account selection; adapters may offer an explicit user retry.",
+            ),
+            errors=ErrorContract(
+                domain_codes=codes,
+                mapping_owner="app.customer_authentication_http and app.services.web_customer_auth",
+                fail_closed_on=(
+                    "ambiguous identity",
+                    "missing or changed source standing",
+                    "disabled account",
+                    "non-customer native principal",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner="Customer password decisions embedded in app.services.web_customer_auth.customer_login_submit",
+                new_owner="auth.customer_authentication",
+                verification="Customer identity collision, web/native parity, source/byte preservation and customer-only admission tests.",
+                cutover_gate="Both web and native adapters call the same preparation owner before password-authentication completion.",
+                fallback_retirement="The web adapter-local credential lookup and verification branches are removed; approved RADIUS/access compatibility remains inside this one policy.",
+            ),
+            steward="platform security",
+            design_refs=(
+                "docs/designs/CUSTOMER_LOGIN_PARITY.md",
+                "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
+            ),
+            test_refs=(
+                "tests/test_customer_authentication.py",
+                "tests/test_customer_auth_api.py",
+                "tests/test_web_customer_auth.py",
+                "tests/integration/test_password_auth_credential_race.py",
+                "tests/architecture/test_customer_auth_boundary.py",
+            ),
+        ),
+    )
+
+
 def _credential_administration_service(
     name: str,
     module: str,
@@ -880,6 +993,7 @@ DOMAIN = DomainSOT(
                 "auth.permission_key_matching",
             ),
         ),
+        _customer_authentication_service(),
         SOTService(
             name="auth.customer_login_identity",
             module="app.services.customer_login_identity",

@@ -21,6 +21,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _obscure = true;
   bool _submitting = false;
   String? _error;
+  bool _profileLoadPending = false;
 
   @override
   void dispose() {
@@ -36,12 +37,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _error = null;
     });
     try {
+      if (_profileLoadPending) {
+        await ref.read(authControllerProvider.notifier).completeLoginProfile();
+        return;
+      }
       // Customers authenticate against their portal credential; the backend
       // resolves the identifier by username, account number, or email.
       final result = await ref.read(authControllerProvider.notifier).login(
             username: _username.text.trim(),
             password: _password.text,
-            provider: 'local',
           );
       if (!mounted) return;
       // Let the OS offer to save the just-used credentials (iOS Keychain etc.).
@@ -51,11 +55,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       }
       // Otherwise the router redirect reacts to the authenticated state.
     } on ApiException catch (e) {
-      setState(() => _error = e.isPasswordResetRequired
-          ? 'Password reset required. Please reset your password on the web portal.'
-          : e.isUnauthorized
-              ? 'Incorrect username or password.'
-              : e.message);
+      setState(() {
+        _profileLoadPending = e.isLoginProfileUnavailable;
+        _error = e.isLoginProfileUnavailable
+            ? e.message
+            : e.isPasswordResetRequired
+                ? 'Password reset required. Please reset your password on the web portal.'
+                : e.isUnauthorized
+                    ? 'Incorrect username or password.'
+                    : e.message;
+      });
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -113,6 +122,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               ],
                               TextFormField(
                                 controller: _username,
+                                onChanged: (_) => setState(() {
+                                  _profileLoadPending = false;
+                                  _error = null;
+                                }),
                                 enabled: !_submitting,
                                 autocorrect: false,
                                 enableSuggestions: false,
@@ -134,6 +147,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               const SizedBox(height: 16),
                               TextFormField(
                                 controller: _password,
+                                onChanged: (_) => setState(() {
+                                  _profileLoadPending = false;
+                                  _error = null;
+                                }),
                                 enabled: !_submitting,
                                 obscureText: _obscure,
                                 textInputAction: TextInputAction.done,
@@ -169,7 +186,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                         child: CircularProgressIndicator(
                                             strokeWidth: 2),
                                       )
-                                    : const Text('Sign in'),
+                                    : Text(_profileLoadPending
+                                        ? 'Retry loading account'
+                                        : 'Sign in'),
                               ),
                               TextButton(
                                 onPressed: _submitting

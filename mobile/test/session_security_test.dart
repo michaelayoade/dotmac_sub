@@ -632,11 +632,13 @@ void main() {
   // ---------------------------------------------------------------------
   group('AuthController teardown', () {
     ProviderContainer build(TokenStorage ts, _FakeAuthRepository repo,
-        {ResponseCache? cache}) {
+        {ResponseCache? cache, bool autoBootstrap = true}) {
       final c = ProviderContainer(overrides: [
         tokenStorageProvider.overrideWithValue(ts),
         authRepositoryProvider.overrideWithValue(repo),
         biometricServiceProvider.overrideWithValue(_NoBiometrics()),
+        if (!autoBootstrap)
+          authControllerProvider.overrideWith((ref) => AuthController(ref)),
         if (cache != null) responseCacheProvider.overrideWithValue(cache)
       ]);
       addTearDown(c.dispose);
@@ -723,6 +725,68 @@ void main() {
           reason: 'a dropped connection is not a revocation');
     });
 
+    test('legacy unclassified cache waits for customer verification', () async {
+      final ts = TokenStorage();
+      await ts.beginSession(accessToken: 'a1', refreshToken: 'r1');
+      await ts.saveProfile('{"id":"1","first_name":"A"}');
+      final repo = _FakeAuthRepository(ts)..meThrows = ApiException('Offline');
+      final c = build(ts, repo);
+      await c.read(authControllerProvider.notifier).bootstrap();
+      expect(await ts.readBundle(), isNotNull);
+      expect(c.read(authControllerProvider).isAuthenticated, isFalse);
+    });
+
+    test('cached reseller session is wiped before rendering', () async {
+      final ts = TokenStorage();
+      await ts.beginSession(accessToken: 'a1', refreshToken: 'r1');
+      final reseller = Me(
+          id: '1',
+          firstName: 'A',
+          lastName: 'B',
+          email: 'a@b.c',
+          userType: 'reseller');
+      await ts.saveProfile(jsonEncode(reseller.toJson()));
+      final c = build(ts, _FakeAuthRepository(ts, me0: reseller));
+      await c.read(authControllerProvider.notifier).bootstrap();
+      expect(await ts.readBundle(), isNull);
+      expect(await ts.readProfile(), isNull);
+      expect(c.read(authControllerProvider).isAuthenticated, isFalse);
+    });
+
+    test('fresh non-customer profile cannot adopt a session', () async {
+      final ts = TokenStorage();
+      await ts.beginSession(accessToken: 'a1', refreshToken: 'r1');
+      final staff = Me(
+          id: '1',
+          firstName: 'A',
+          lastName: 'B',
+          email: 'a@b.c',
+          userType: 'system_user');
+      final c =
+          build(ts, _FakeAuthRepository(ts, me0: staff), autoBootstrap: false);
+      await c.read(authControllerProvider.notifier).bootstrap();
+      expect(await ts.readBundle(), isNull);
+      expect(c.read(authControllerProvider).isAuthenticated, isFalse);
+    });
+
+    test('profile retry failure preserves the session and correlation',
+        () async {
+      final ts = TokenStorage();
+      await ts.beginSession(accessToken: 'a1', refreshToken: 'r1');
+      final repo = _FakeAuthRepository(ts)
+        ..meThrows = ApiException('Server unavailable',
+            statusCode: 503, requestId: 'synthetic-request-id');
+      final c = build(ts, repo);
+      await c.read(authControllerProvider.notifier).bootstrap();
+      await expectLater(
+        c.read(authControllerProvider.notifier).completeLoginProfile(),
+        throwsA(isA<ApiException>()
+            .having((e) => e.isLoginProfileUnavailable, 'profile error', isTrue)
+            .having((e) => e.requestId, 'correlation', 'synthetic-request-id')),
+      );
+      expect(await ts.readBundle(), isNotNull);
+    });
+
     test('bootstrap wipes when the server rejects the session', () async {
       final ts = TokenStorage();
       await ts.beginSession(accessToken: 'a1', refreshToken: 'r1');
@@ -736,6 +800,19 @@ void main() {
 
       expect(await ts.readBundle(), isNull);
       expect(await ts.readProfile(), isNull);
+      expect(c.read(authControllerProvider).isAuthenticated, isFalse);
+    });
+
+    test('profile retry requires a session after revocation', () async {
+      final ts = TokenStorage();
+      final c = build(ts, _FakeAuthRepository(ts), autoBootstrap: false);
+      await expectLater(
+        c.read(authControllerProvider.notifier).completeLoginProfile(),
+        throwsA(isA<ApiException>()
+            .having((e) => e.code, 'ended session', 'LOGIN_SESSION_ENDED')
+            .having(
+                (e) => e.isUnauthorized, 'not a password refusal', isFalse)),
+      );
       expect(c.read(authControllerProvider).isAuthenticated, isFalse);
     });
 

@@ -13,6 +13,7 @@ from app.models.auth import AuthProvider, UserCredential
 from app.models.catalog import AccessCredential
 from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.models.system_user import SystemUser
+from app.services import customer_authentication as customer_authentication_service
 from app.services import customer_portal
 from app.services import web_customer_auth as web_customer_auth_service
 from app.services.auth_flow import hash_password
@@ -208,7 +209,7 @@ def test_customer_login_allows_pppoe_when_local_credential_password_differs(
     db_session, subscriber, monkeypatch, portal_successes
 ):
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth,
+        customer_authentication_service.radius_auth,
         "authenticate",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
     )
@@ -248,7 +249,7 @@ def test_customer_login_allows_pppoe_when_local_credential_password_differs(
 
 def test_customer_login_ignores_staff_local_credential(db_session, monkeypatch):
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth,
+        customer_authentication_service.radius_auth,
         "authenticate",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
     )
@@ -289,7 +290,7 @@ def test_customer_login_unique_email_uses_portal_password(
     db_session, subscriber, monkeypatch
 ):
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth,
+        customer_authentication_service.radius_auth,
         "authenticate",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
     )
@@ -322,7 +323,7 @@ def test_customer_login_shared_email_asks_for_customer_number(
     db_session, subscriber, monkeypatch
 ):
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth,
+        customer_authentication_service.radius_auth,
         "authenticate",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
     )
@@ -383,7 +384,7 @@ def test_existing_email_username_wrong_password_does_not_try_pppoe(
         return None
 
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth,
+        customer_authentication_service.radius_auth,
         "authenticate",
         _unexpected_radius_attempt,
     )
@@ -417,7 +418,7 @@ def test_customer_login_records_local_failure_when_pppoe_fallback_fails(
     db_session, subscriber, monkeypatch
 ):
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth,
+        customer_authentication_service.radius_auth,
         "authenticate",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
     )
@@ -456,7 +457,7 @@ def test_customer_login_locked_account_shows_remaining_cooldown(
     db_session, subscriber, monkeypatch
 ):
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth,
+        customer_authentication_service.radius_auth,
         "authenticate",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("radius unavailable")),
     )
@@ -490,7 +491,7 @@ def test_customer_login_radius_throttle_shows_remaining_cooldown(
     db_session, monkeypatch
 ):
     monkeypatch.setattr(
-        web_customer_auth_service,
+        customer_authentication_service,
         "allow_operation",
         lambda *_args, **_kwargs: SimpleNamespace(
             allowed=False,
@@ -878,7 +879,9 @@ def test_radius_customer_mfa_preserves_source_and_rejects_marker_change(
 
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth, "authenticate", lambda **_kwargs: None
+        customer_authentication_service.radius_auth,
+        "authenticate",
+        lambda **_kwargs: None,
     )
     access = AccessCredential(
         subscriber_id=subscriber.id,
@@ -939,7 +942,7 @@ def test_pppoe_customer_login_leaves_local_counters_unchanged(
     db_session, subscriber, monkeypatch
 ):
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth,
+        customer_authentication_service.radius_auth,
         "authenticate",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable")),
     )
@@ -999,7 +1002,9 @@ def test_radius_without_projection_rechecks_pre_network_access_secret(
     import bcrypt
 
     monkeypatch.setattr(
-        web_customer_auth_service.radius_auth, "authenticate", lambda **_kwargs: None
+        customer_authentication_service.radius_auth,
+        "authenticate",
+        lambda **_kwargs: None,
     )
     access = AccessCredential(
         subscriber_id=subscriber.id,
