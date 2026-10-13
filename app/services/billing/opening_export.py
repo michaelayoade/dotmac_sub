@@ -204,7 +204,7 @@ def _capture(db: Session, query: PreviewBillingOpeningExportQuery) -> CaptureEvi
 
 def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
     result: list[FinancialSourceEvidence] = []
-    for r in db.execute(
+    for payment_row in db.execute(
         select(
             Payment.id,
             Payment.account_id,
@@ -221,23 +221,23 @@ def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
         result.append(
             FinancialSourceEvidence(
                 SourceKind.payment,
-                r.id,
-                r.account_id,
-                r.currency,
-                r.amount,
-                r.refunded_amount,
-                r.status.value,
-                r.is_active,
+                payment_row.id,
+                payment_row.account_id,
+                payment_row.currency,
+                payment_row.amount,
+                payment_row.refunded_amount,
+                payment_row.status.value,
+                payment_row.is_active,
                 None,
-                r.id,
+                payment_row.id,
                 None,
                 None,
-                r.created_at,
-                r.updated_at,
-                r.paid_at,
+                payment_row.created_at,
+                payment_row.updated_at,
+                payment_row.paid_at,
             )
         )
-    for r in db.execute(
+    for credit_note_row in db.execute(
         select(
             CreditNote.id,
             CreditNote.account_id,
@@ -257,23 +257,23 @@ def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
         result.append(
             FinancialSourceEvidence(
                 SourceKind.credit_note,
-                r.id,
-                r.account_id,
-                r.currency,
-                r.total,
-                r.applied_total,
-                r.status.value,
-                r.is_active,
-                r.invoice_id,
+                credit_note_row.id,
+                credit_note_row.account_id,
+                credit_note_row.currency,
+                credit_note_row.total,
+                credit_note_row.applied_total,
+                credit_note_row.status.value,
+                credit_note_row.is_active,
+                credit_note_row.invoice_id,
                 None,
-                r.funding_ledger_entry_id,
-                r.void_ledger_entry_id,
-                r.created_at,
-                r.updated_at,
-                r.issued_at,
+                credit_note_row.funding_ledger_entry_id,
+                credit_note_row.void_ledger_entry_id,
+                credit_note_row.created_at,
+                credit_note_row.updated_at,
+                credit_note_row.issued_at,
             )
         )
-    for r in db.execute(
+    for ledger_row in db.execute(
         select(
             LedgerEntry.id,
             LedgerEntry.account_id,
@@ -293,24 +293,24 @@ def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
         result.append(
             FinancialSourceEvidence(
                 SourceKind.ledger,
-                r.id,
-                r.account_id,
-                r.currency,
-                r.amount,
+                ledger_row.id,
+                ledger_row.account_id,
+                ledger_row.currency,
+                ledger_row.amount,
                 None,
-                r.entry_type.value,
-                r.is_active,
-                r.invoice_id,
-                r.payment_id,
-                r.id,
-                r.reversal_of_entry_id,
-                r.created_at,
-                r.updated_at,
-                r.effective_date,
-                source_kind=r.source.value if r.source else None,
+                ledger_row.entry_type.value,
+                ledger_row.is_active,
+                ledger_row.invoice_id,
+                ledger_row.payment_id,
+                ledger_row.id,
+                ledger_row.reversal_of_entry_id,
+                ledger_row.created_at,
+                ledger_row.updated_at,
+                ledger_row.effective_date,
+                source_kind=ledger_row.source.value if ledger_row.source else None,
             )
         )
-    for r in db.execute(
+    for group_row in db.execute(
         select(
             CustomerPostingGroup.id,
             CustomerPostingGroup.account_id,
@@ -327,30 +327,30 @@ def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
         result.append(
             FinancialSourceEvidence(
                 SourceKind.posting_group,
-                r.id,
-                r.account_id,
-                r.currency,
+                group_row.id,
+                group_row.account_id,
+                group_row.currency,
                 None,
                 None,
-                r.command_kind.value,
+                group_row.command_kind.value,
                 True,
                 None,
                 None,
                 None,
-                r.reverses_group_id,
-                r.recorded_at,
+                group_row.reverses_group_id,
+                group_row.recorded_at,
                 None,
-                r.occurred_at,
-                r.authority,
-                r.source_kind,
-                r.source_id,
+                group_row.occurred_at,
+                group_row.authority,
+                group_row.source_kind,
+                group_row.source_id,
             )
         )
     for model, kind in (
         (PaymentRefund, SourceKind.refund),
         (PaymentReversal, SourceKind.reversal),
     ):
-        for r in db.execute(
+        for adjustment_row in db.execute(
             select(
                 model.id,
                 model.payment_id,
@@ -369,25 +369,25 @@ def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
             result.append(
                 FinancialSourceEvidence(
                     kind,
-                    r.id,
-                    r.account_id,
-                    r.currency,
-                    r.amount,
+                    adjustment_row.id,
+                    adjustment_row.account_id,
+                    adjustment_row.currency,
+                    adjustment_row.amount,
                     None,
-                    r.origin.value,
+                    adjustment_row.origin.value,
                     True,
                     None,
-                    r.payment_id,
-                    r.ledger_entry_id,
+                    adjustment_row.payment_id,
+                    adjustment_row.ledger_entry_id,
                     None,
-                    r.created_at,
+                    adjustment_row.created_at,
                     None,
-                    r.created_at,
-                    evidence_fingerprint=r.preview_fingerprint,
-                    consumption_ledger_entry_id=r.credit_consumption_ledger_entry_id,
+                    adjustment_row.created_at,
+                    evidence_fingerprint=adjustment_row.preview_fingerprint,
+                    consumption_ledger_entry_id=adjustment_row.credit_consumption_ledger_entry_id,
                 )
             )
-    for r in db.execute(
+    for baseline_row in db.execute(
         select(
             PrepaidFundingBaseline.id,
             PrepaidFundingBaseline.account_id,
@@ -403,25 +403,25 @@ def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
         result.append(
             FinancialSourceEvidence(
                 SourceKind.funding_baseline,
-                r.id,
-                r.account_id,
-                r.currency,
-                r.amount,
+                baseline_row.id,
+                baseline_row.account_id,
+                baseline_row.currency,
+                baseline_row.amount,
                 None,
                 "reviewed_baseline",
-                r.is_active,
+                baseline_row.is_active,
                 None,
                 None,
                 None,
                 None,
-                r.created_at,
-                r.superseded_at,
-                r.position_at,
+                baseline_row.created_at,
+                baseline_row.superseded_at,
+                baseline_row.position_at,
                 source_kind="reconstruction_batch",
-                source_id=r.batch_id,
+                source_id=baseline_row.batch_id,
             )
         )
-    for r in db.execute(
+    for opening_row in db.execute(
         select(
             CustomerSubledgerOpeningPosition.id,
             CustomerSubledgerOpeningPosition.account_id,
@@ -437,23 +437,23 @@ def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
         result.append(
             FinancialSourceEvidence(
                 SourceKind.opening_position,
-                r.id,
-                r.account_id,
-                r.currency,
-                r.legacy_position,
-                r.opening_delta,
+                opening_row.id,
+                opening_row.account_id,
+                opening_row.currency,
+                opening_row.legacy_position,
+                opening_row.opening_delta,
                 "reviewed_opening",
                 True,
                 None,
                 None,
                 None,
                 None,
-                r.created_at,
+                opening_row.created_at,
                 None,
-                r.occurred_at,
+                opening_row.occurred_at,
                 source_kind="funding_baseline",
-                source_id=r.baseline_id,
-                evidence_fingerprint=r.evidence_fingerprint,
+                source_id=opening_row.baseline_id,
+                evidence_fingerprint=opening_row.evidence_fingerprint,
             )
         )
     return tuple(result)
@@ -461,7 +461,7 @@ def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
 
 def _settlements(db: Session) -> tuple[SettlementEvidence, ...]:
     rows: list[SettlementEvidence] = []
-    for r in db.execute(
+    for payment_allocation_row in db.execute(
         select(
             PaymentAllocation.id,
             PaymentAllocation.invoice_id,
@@ -473,8 +473,8 @@ def _settlements(db: Session) -> tuple[SettlementEvidence, ...]:
             PaymentAllocation.created_at,
         ).order_by(PaymentAllocation.id)
     ):
-        rows.append(SettlementEvidence(SettlementKind.payment, *r))
-    for r in db.execute(
+        rows.append(SettlementEvidence(SettlementKind.payment, *payment_allocation_row))
+    for credit_application_row in db.execute(
         select(
             CreditNoteApplication.id,
             CreditNoteApplication.invoice_id,
@@ -488,17 +488,17 @@ def _settlements(db: Session) -> tuple[SettlementEvidence, ...]:
         rows.append(
             SettlementEvidence(
                 SettlementKind.credit_note,
-                r.id,
-                r.invoice_id,
-                r.credit_note_id,
-                r.amount,
-                r.ledger_entry_id,
-                r.consumption_ledger_entry_id,
+                credit_application_row.id,
+                credit_application_row.invoice_id,
+                credit_application_row.credit_note_id,
+                credit_application_row.amount,
+                credit_application_row.ledger_entry_id,
+                credit_application_row.consumption_ledger_entry_id,
                 True,
-                r.created_at,
+                credit_application_row.created_at,
             )
         )
-    for r in db.execute(
+    for opening_consumption_row in db.execute(
         select(
             PrepaidOpeningFundingConsumption.id,
             PrepaidOpeningFundingConsumption.invoice_id,
@@ -513,7 +513,10 @@ def _settlements(db: Session) -> tuple[SettlementEvidence, ...]:
             PrepaidOpeningFundingConsumption.reconciliation_fingerprint,
         ).order_by(PrepaidOpeningFundingConsumption.id)
     ):
-        source_id = r.opening_position_id or r.baseline_id
+        source_id = (
+            opening_consumption_row.opening_position_id
+            or opening_consumption_row.baseline_id
+        )
         # The schema requires one structural source; missing evidence is a capture failure.
         if source_id is None:
             raise _fail(
@@ -523,18 +526,18 @@ def _settlements(db: Session) -> tuple[SettlementEvidence, ...]:
         rows.append(
             SettlementEvidence(
                 SettlementKind.opening_funding,
-                r.id,
-                r.invoice_id,
+                opening_consumption_row.id,
+                opening_consumption_row.invoice_id,
                 source_id,
-                r.amount,
-                r.ledger_entry_id,
+                opening_consumption_row.amount,
+                opening_consumption_row.ledger_entry_id,
                 None,
                 True,
-                r.created_at,
-                r.account_id,
-                r.currency,
-                r.consumed_at,
-                r.reconciliation_fingerprint,
+                opening_consumption_row.created_at,
+                opening_consumption_row.account_id,
+                opening_consumption_row.currency,
+                opening_consumption_row.consumed_at,
+                opening_consumption_row.reconciliation_fingerprint,
             )
         )
     return tuple(rows)
@@ -713,18 +716,18 @@ def _classify(
     effects: tuple[PositionEffectEvidence, ...],
     cutover_id: UUID | None,
 ) -> BillingOpeningExportPreview:
-    for invoice in invoices:
+    for finite_invoice in invoices:
         _finite(
-            invoice.total,
-            invoice.stored_residual,
-            invoice.payments_applied,
-            invoice.credits_applied,
-            invoice.opening_funding_applied,
-            invoice.canonical_discharge,
-            invoice.residual,
+            finite_invoice.total,
+            finite_invoice.stored_residual,
+            finite_invoice.payments_applied,
+            finite_invoice.credits_applied,
+            finite_invoice.opening_funding_applied,
+            finite_invoice.canonical_discharge,
+            finite_invoice.residual,
         )
-    for source in sources:
-        _finite(source.amount, source.secondary_amount)
+    for finite_source in sources:
+        _finite(finite_source.amount, finite_source.secondary_amount)
     for settlement in settlements:
         _finite(settlement.amount)
     for line in lines:
@@ -828,8 +831,11 @@ def _classify(
                 "Source currency precision missing, unsupported or amounts not exact.",
             )
         if source.invoice_id is not None:
-            linked = invoice_map.get(source.invoice_id)
-            if linked is None or (linked.account_id, linked.currency) != (
+            source_invoice = invoice_map.get(source.invoice_id)
+            if source_invoice is None or (
+                source_invoice.account_id,
+                source_invoice.currency,
+            ) != (
                 source.account_id,
                 source.currency,
             ):
@@ -852,7 +858,11 @@ def _classify(
                 "Shadow posting retained only as comparison evidence.",
             )
         if source.kind in {SourceKind.refund, SourceKind.reversal}:
-            payment = source_map.get((SourceKind.payment, source.payment_id))
+            payment = (
+                source_map.get((SourceKind.payment, source.payment_id))
+                if source.payment_id is not None
+                else None
+            )
             if payment is None or (payment.account_id, payment.currency) != (
                 source.account_id,
                 source.currency,
@@ -879,8 +889,8 @@ def _classify(
             )
 
     for line in lines:
-        invoice = invoice_map.get(line.invoice_id)
-        if invoice is None:
+        line_invoice = invoice_map.get(line.invoice_id)
+        if line_invoice is None:
             block(
                 ExceptionCode.settlement_mapping,
                 None,
@@ -891,8 +901,8 @@ def _classify(
         elif late(line.created_at, line.updated_at):
             block(
                 ExceptionCode.source_after_cutoff,
-                invoice.account_id,
-                invoice.currency,
+                line_invoice.account_id,
+                line_invoice.currency,
                 line.id,
                 "Current invoice line crosses cutoff.",
             )
@@ -908,10 +918,10 @@ def _classify(
         and s.ledger_entry_id is not None
     }
     for settlement in settlements:
-        invoice = invoice_map.get(settlement.invoice_id)
-        account = invoice.account_id if invoice else None
-        currency = invoice.currency if invoice else None
-        if invoice is None:
+        settlement_invoice = invoice_map.get(settlement.invoice_id)
+        account = settlement_invoice.account_id if settlement_invoice else None
+        currency = settlement_invoice.currency if settlement_invoice else None
+        if settlement_invoice is None:
             block(
                 ExceptionCode.settlement_mapping,
                 account,
@@ -959,11 +969,12 @@ def _classify(
                 if settlement.kind == SettlementKind.payment
                 else SourceKind.credit_note
             )
-            source = source_map.get((kind, settlement.source_id))
+            settlement_source = source_map.get((kind, settlement.source_id))
             if (
-                source is None
-                or invoice is None
-                or (source.account_id, source.currency) != (account, currency)
+                settlement_source is None
+                or settlement_invoice is None
+                or (settlement_source.account_id, settlement_source.currency)
+                != (account, currency)
             ):
                 block(
                     ExceptionCode.settlement_mapping,
@@ -1060,7 +1071,8 @@ def _classify(
             )
             original = (
                 applications_by_ledger.get(reversal_ledger.reverses_id)
-                if reversal_ledger
+                if reversal_ledger is not None
+                and reversal_ledger.reverses_id is not None
                 else None
             )
             if original is None or (
@@ -1087,14 +1099,15 @@ def _classify(
                     "Credit reversal releases funding that its original application never consumed.",
                 )
             elif original.consumption_ledger_entry_id is not None:
-                consumption = (
+                consumption_ledger = (
                     ledger_map.get(settlement.consumption_ledger_entry_id)
                     if settlement.consumption_ledger_entry_id
                     else None
                 )
                 if (
-                    consumption is None
-                    or consumption.reverses_id != original.consumption_ledger_entry_id
+                    consumption_ledger is None
+                    or consumption_ledger.reverses_id
+                    != original.consumption_ledger_entry_id
                 ):
                     block(
                         ExceptionCode.settlement_provenance,
@@ -1109,16 +1122,16 @@ def _classify(
         l.billing_line_key for l in lines if l.active and l.billing_line_key
     )
     for line in lines:
-        invoice = invoice_map.get(line.invoice_id)
+        duplicate_line_invoice = invoice_map.get(line.invoice_id)
         if (
             line.billing_line_key
             and line_keys[line.billing_line_key] > 1
-            and invoice is not None
+            and duplicate_line_invoice is not None
         ):
             block(
                 ExceptionCode.duplicate_identity,
-                invoice.account_id,
-                invoice.currency,
+                duplicate_line_invoice.account_id,
+                duplicate_line_invoice.currency,
                 line.id,
                 "Duplicate active billing line identity.",
             )
