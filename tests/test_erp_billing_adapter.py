@@ -350,20 +350,50 @@ def test_fact_identity_reuse_with_changed_evidence_fails_closed(
     assert len(pending_exports(db_session)) == 1
 
 
-def test_fact_scope_and_version_partition_export_identity(db_session: Session) -> None:
+def test_fact_scope_source_and_version_partition_export_identity(
+    db_session: Session,
+) -> None:
     from dataclasses import replace
 
-    from dotmac_kernel.cache import PlatformScope, TenantScope
+    from dotmac_kernel.cache import TenantScope
 
     fact = _released_fact()
     identities = {
         _stage_released_fact(db_session, value).export_id
         for value in (
             fact,
-            replace(fact, scope=PlatformScope()),
+            replace(fact, source_system="another-billing-source"),
             replace(fact, scope=TenantScope(uuid4())),
             replace(fact, fact_version=2),
         )
     }
     assert len(identities) == 4
     assert len(pending_exports(db_session)) == 4
+
+
+def test_fact_staging_refuses_platform_scope_without_side_effects(
+    db_session: Session,
+) -> None:
+    from dataclasses import asdict, replace
+
+    from dotmac_kernel.cache import PlatformScope
+    from sqlalchemy import func, select
+
+    from app.models.erp_billing_export import ErpBillingExport
+    from app.services.dotmac_erp.billing_accounting_fact import (
+        BillingAccountingFactError,
+    )
+
+    fact = replace(_released_fact(), scope=PlatformScope())
+    source_before = asdict(fact)
+    with pytest.raises(BillingAccountingFactError) as excinfo:
+        _stage_released_fact(db_session, fact)
+
+    assert excinfo.value.code == (
+        "integration.dotmac_erp_billing_adapter.invalid_accounting_fact"
+    )
+    assert not excinfo.value.retryable
+    assert asdict(fact) == source_before
+    assert not db_session.new and not db_session.dirty and not db_session.deleted
+    assert not db_session.in_transaction()
+    assert db_session.scalar(select(func.count()).select_from(ErpBillingExport)) == 0
