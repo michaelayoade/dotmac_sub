@@ -40,10 +40,11 @@
                         <input type="text" id="location-address-search" autocomplete="off" placeholder="Search for a street or area..." class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                         <div id="location-address-results" class="absolute inset-x-0 top-full z-[1100] mt-1 hidden overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lg dark:border-stone-600 dark:bg-stone-800"></div>
                     </div>
-                    <button type="button" id="location-use-gps" class="inline-flex shrink-0 items-center rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-200"><span id="location-use-gps-label">Use my location</span></button>
+                    <button type="button" id="location-use-gps" aria-describedby="location-geolocation-status" class="inline-flex shrink-0 items-center rounded-xl border-2 border-stone-200 bg-white px-3 py-2 text-sm font-medium text-stone-700 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-200"><span id="location-use-gps-label">Use my location</span></button>
                 </div>
+                <p id="location-geolocation-status" class="mt-2 text-sm text-stone-500 dark:text-stone-400" role="status" aria-live="polite">{% if current_latitude is not none and current_longitude is not none %}Drag the pin or click/tap the map to fine-tune your location.{% else %}A pin is ready at the map center. Drag it or click/tap the map to set your location.{% endif %}</p>
             </div>
-            <div id="customer-location-map" class="h-[28rem] w-full"></div>
+            <div id="customer-location-map" class="h-[28rem] w-full" aria-label="Service location map"></div>
             <div id="customer-location-map-fallback" class="hidden border-t border-stone-200 px-6 py-4 text-sm text-amber-800">The map could not be loaded. You can still enter the address, but a pin is required to save.</div>
         </div>
 
@@ -82,6 +83,14 @@
     </div>
 </div>
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
+<style>
+#customer-location-map .leaflet-marker-draggable {
+    cursor: grab;
+    touch-action: none;
+    -webkit-user-drag: none;
+}
+#customer-location-map .leaflet-marker-draggable:active { cursor: grabbing; }
+</style>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
@@ -91,6 +100,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const lonInput = document.getElementById('location-longitude');
     const coordinatesLabel = document.getElementById('selected-coordinates');
     const submitButton = document.getElementById('submit-location');
+    const gpsButton = document.getElementById('location-use-gps');
+    const gpsLabel = document.getElementById('location-use-gps-label');
+    const locationStatus = document.getElementById('location-geolocation-status');
     const initialLat = {{ current_latitude | tojson }};
     const initialLon = {{ current_longitude | tojson }};
     const center = {{ map_center | tojson }};
@@ -105,20 +117,28 @@ document.addEventListener('DOMContentLoaded', function() {
         coordinatesLabel.textContent = lat.toFixed(6) + ', ' + lon.toFixed(6);
         submitButton.disabled = false;
     }
-    function placeMarker(lat, lon) {
+    function placeMarker(lat, lon, selectCoordinates) {
         if (!marker) {
-            marker = L.marker([lat, lon], {draggable: true}).addTo(map);
-            marker.bindPopup('Drag this pin to the exact installation point');
+            marker = L.marker([lat, lon], {
+                draggable: true,
+                autoPan: true,
+                keyboard: true,
+                title: 'Service location pin',
+                alt: 'Service location pin'
+            }).addTo(map);
+            if (marker.dragging && !marker.dragging.enabled()) marker.dragging.enable();
+            marker.bindPopup('Drag this pin or click/tap the map to set the exact installation point');
             marker.on('dragend', function(event) { const p = event.target.getLatLng(); updateCoordinates(p.lat, p.lng); });
         } else { marker.setLatLng([lat, lon]); }
-        updateCoordinates(lat, lon);
+        if (selectCoordinates !== false) updateCoordinates(lat, lon);
     }
     if (initialLat !== null && initialLon !== null) { placeMarker(initialLat, initialLon); }
+    else { placeMarker(center[0], center[1], false); }
     map.on('click', function(event) { placeMarker(event.latlng.lat, event.latlng.lng); });
     document.getElementById('clear-location').addEventListener('click', function() {
         Object.keys(initialValues).forEach(function(name) { document.getElementById(name).value = initialValues[name]; });
         if (initialLat !== null && initialLon !== null) { placeMarker(initialLat, initialLon); map.setView([initialLat, initialLon], 16); }
-        else { if (marker) { map.removeLayer(marker); marker = null; } latInput.value = ''; lonInput.value = ''; coordinatesLabel.textContent = 'Select a point on the map'; submitButton.disabled = true; map.setView(center, 16); }
+        else { placeMarker(center[0], center[1], false); latInput.value = ''; lonInput.value = ''; coordinatesLabel.textContent = 'Select a point on the map'; submitButton.disabled = true; map.setView(center, 16); }
     });
     const searchInput = document.getElementById('location-address-search');
     const searchResults = document.getElementById('location-address-results');
@@ -128,8 +148,41 @@ document.addEventListener('DOMContentLoaded', function() {
         clearTimeout(searchTimer); const query = searchInput.value.trim(); if (query.length < 3) { hideResults(); return; }
         searchTimer = setTimeout(function() { fetch('/portal/location/geocode-search?q=' + encodeURIComponent(query)).then(function(r) { return r.ok ? r.json() : []; }).then(function(items) { searchResults.replaceChildren(); items.forEach(function(item) { if (item.latitude === null || item.longitude === null) return; const option = document.createElement('button'); option.type = 'button'; option.className = 'block w-full px-4 py-2.5 text-left text-sm hover:bg-stone-100'; option.textContent = item.display_name || (item.latitude + ', ' + item.longitude); option.onclick = function() { hideResults(); map.setView([item.latitude, item.longitude], 17); placeMarker(item.latitude, item.longitude); }; searchResults.appendChild(option); }); searchResults.classList.toggle('hidden', !searchResults.children.length); }).catch(hideResults); }, 350);
     });
-    const gpsButton = document.getElementById('location-use-gps');
-    gpsButton.addEventListener('click', function() { gpsButton.disabled = true; document.getElementById('location-use-gps-label').textContent = 'Locating...'; navigator.geolocation.getCurrentPosition(function(pos) { map.setView([pos.coords.latitude, pos.coords.longitude], 17); placeMarker(pos.coords.latitude, pos.coords.longitude); gpsButton.disabled = false; document.getElementById('location-use-gps-label').textContent = 'Use my location'; }, function() { gpsButton.disabled = false; document.getElementById('location-use-gps-label').textContent = 'Location unavailable'; }); });
+    function resetGpsButton() { gpsButton.disabled = false; gpsLabel.textContent = 'Use my location'; }
+    function geolocationErrorMessage(error) {
+        if (!error) return 'Your location could not be determined. Place the pin manually on the map.';
+        if (error.code === 1) return 'Location permission is off. Enable it in your browser/system settings, or place the pin manually on the map.';
+        if (error.code === 2) return 'Your location could not be determined. Check Wi-Fi and Location Services, or place the pin manually on the map.';
+        if (error.code === 3) return 'Finding your location took too long. Try again, or place the pin manually on the map.';
+        return 'Your location could not be determined. Place the pin manually on the map.';
+    }
+    gpsButton.addEventListener('click', function() {
+        if (!navigator.geolocation) {
+            locationStatus.textContent = 'This browser does not support location lookup. Place the pin manually on the map.';
+            return;
+        }
+        gpsButton.disabled = true;
+        gpsLabel.textContent = 'Locating...';
+        locationStatus.textContent = 'Finding your location...';
+        try {
+            navigator.geolocation.getCurrentPosition(function(pos) {
+                map.setView([pos.coords.latitude, pos.coords.longitude], 17);
+                placeMarker(pos.coords.latitude, pos.coords.longitude);
+                resetGpsButton();
+                locationStatus.textContent = 'Location found. Drag the pin or click/tap the map to fine-tune it.';
+            }, function(error) {
+                resetGpsButton();
+                locationStatus.textContent = geolocationErrorMessage(error);
+            }, {
+                enableHighAccuracy: false,
+                timeout: 20000,
+                maximumAge: 300000
+            });
+        } catch (error) {
+            resetGpsButton();
+            locationStatus.textContent = 'Location lookup could not start. Place the pin manually on the map.';
+        }
+    });
 });
 </script>
 {% endblock %}
