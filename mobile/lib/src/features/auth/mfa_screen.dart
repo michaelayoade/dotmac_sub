@@ -19,7 +19,6 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
   final _code = TextEditingController();
   bool _submitting = false;
   String? _error;
-  bool _profileLoadPending = false;
 
   @override
   void dispose() {
@@ -29,7 +28,7 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
 
   Future<void> _submit() async {
     final code = _code.text.trim();
-    if (!_profileLoadPending && code.length < 6) {
+    if (code.length < 6) {
       setState(() => _error = 'Enter the 6-digit code');
       return;
     }
@@ -38,20 +37,13 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
       _error = null;
     });
     try {
-      if (_profileLoadPending) {
-        await ref.read(authControllerProvider.notifier).completeLoginProfile();
-        return;
-      }
       await ref.read(authControllerProvider.notifier).verifyMfa(
             mfaToken: widget.mfaToken,
             code: code,
           );
       // Router redirect handles navigation once authenticated.
     } on ApiException catch (e) {
-      setState(() {
-        _profileLoadPending = e.isLoginProfileUnavailable;
-        _error = e.message;
-      });
+      setState(() => _error = e.message);
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -108,9 +100,7 @@ class _MfaScreenState extends ConsumerState<MfaScreen> {
                             height: 20,
                             width: 20,
                             child: CircularProgressIndicator(strokeWidth: 2))
-                        : Text(_profileLoadPending
-                            ? 'Retry loading account'
-                            : 'Verify'),
+                        : const Text('Verify'),
                   ),
                 ],
               ),

@@ -15,8 +15,6 @@ class ApiException implements Exception {
 
   bool get isUnauthorized => statusCode == 401;
 
-  bool get isLoginProfileUnavailable => code == 'LOGIN_PROFILE_UNAVAILABLE';
-
   /// True when the backend signals the password must be reset before login
   /// can complete (HTTP 428, code PASSWORD_RESET_REQUIRED).
   bool get isPasswordResetRequired =>

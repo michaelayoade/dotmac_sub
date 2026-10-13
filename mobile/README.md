@@ -7,19 +7,13 @@ FastAPI backend in this repo (`app/`, served at `/api/v1`).
 
 | Area | Screens | Backend |
 | --- | --- | --- |
-| **Auth** | Customer portal login, MFA (TOTP), profile, change password | `POST /customer/auth/login`, `/customer/auth/mfa/verify`, `/auth/refresh`, `/auth/logout`, `GET·PATCH /auth/me`, `POST /auth/me/password` |
+| **Auth** | Login (local / RADIUS), MFA (TOTP), profile, change password | `POST /auth/login`, `/auth/mfa/verify`, `/auth/refresh`, `/auth/logout`, `GET·PATCH /auth/me`, `POST /auth/me/password` |
 | **Billing** | Invoice/payment/activity lists and details, PDF invoice and receipt downloads | Self-scoped `GET /me/invoices`, `/me/payments`, `/me/ledger` detail and PDF routes |
 | **Usage** | Data quota buckets with progress, per-period stats | `GET /quota-buckets`, `/radius-accounting-sessions` |
 | **Subscriptions** | Service list on the dashboard | `GET /subscriptions` |
 | **Support** | Ticket list, detail + replies, create ticket | `GET·POST /support/tickets`, `/support/tickets/{id}`, `/support/tickets/{id}/comments` |
 
 ## Tech stack
-
-This app admits customer accounts only. Customer login uses the same backend
-password-step policy as `/portal/auth/login`; the API returns native tokens
-rather than browser cookies. Deploy the customer auth endpoints before updating
-the app. A failure loading the profile after login can retry the profile without
-submitting the password again. Existing staff/reseller sessions are not admitted.
 
 - **State / DI:** `flutter_riverpod`
 - **HTTP:** `dio` with a token-refresh interceptor
