@@ -7,16 +7,23 @@ All secret resolution goes through this module. Supports:
 - ``get_secret(path, field)`` convenience helper for direct lookups
 """
 
+import hmac
 import logging
 import os
+import re
 import time
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import NewType
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 from fastapi import HTTPException
+from pydantic import SecretStr
+
+from app.services.domain_errors import DomainError
 
 logger = logging.getLogger(__name__)
 
@@ -427,6 +434,8 @@ def list_secret_field_names(path: str) -> list[str]:
 
 def write_secret(path: str, data: dict[str, str]) -> bool:
     """Write/update a secret at the given path."""
+    if is_managed_secret_path(path):
+        return False
     try:
         addr, token, namespace, _kv = _openbao_config()
         url = f"{addr}/v1/secret/data/{path}"
@@ -447,6 +456,8 @@ def write_secret(path: str, data: dict[str, str]) -> bool:
 
 def delete_secret(path: str) -> bool:
     """Delete a secret at the given path (metadata delete)."""
+    if is_managed_secret_path(path):
+        return False
     try:
         addr, token, namespace, _kv = _openbao_config()
         url = f"{addr}/v1/secret/metadata/{path}"
@@ -460,3 +471,124 @@ def delete_secret(path: str) -> bool:
     except Exception as exc:
         logger.error("Failed to delete OpenBao secret %s: %s", path, exc)
         return False
+
+
+IMMUTABLE_TALK_PREFIX = "integrations/nextcloud-talk-credentials"
+
+
+def is_managed_secret_path(path: str) -> bool:
+    """Reject aliases as well as canonical integration-owned paths."""
+    decoded = path
+    for _ in range(8):
+        normalized = unquote(decoded)
+        if normalized == decoded:
+            break
+        decoded = normalized
+    decoded = decoded.split("?", 1)[0].split("#", 1)[0]
+    parts: list[str] = []
+    for part in decoded.replace("\\", "/").split("/"):
+        if part == "..":
+            if parts:
+                parts.pop()
+        elif part and part != ".":
+            parts.append(part)
+    normalized = "/".join(parts)
+    return normalized == IMMUTABLE_TALK_PREFIX or normalized.startswith(
+        IMMUTABLE_TALK_PREFIX + "/"
+    )
+
+
+class ImmutableSecretError(DomainError):
+    """Safe credential-store failure without transport payloads."""
+
+
+@dataclass(frozen=True, slots=True)
+class CreateTalkCredential:
+    installation_id: UUID
+    operation_id: UUID
+    environment: str
+    password: SecretStr = field(repr=False)
+    configuration_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ImmutableCredentialResult:
+    reference: str
+    replayed: bool
+
+
+def talk_credential_reference(command: CreateTalkCredential) -> str:
+    namespace = os.getenv("OPENBAO_NAMESPACE") or os.getenv("VAULT_NAMESPACE") or "root"
+    deployment = uuid5(NAMESPACE_URL, f"dotmac-sub:{namespace}:{command.environment}")
+    return (
+        f"bao://secret/{IMMUTABLE_TALK_PREFIX}/{deployment}/"
+        f"{command.installation_id}/{command.operation_id}#app_password"
+    )
+
+
+def _immutable_error(code: str) -> ImmutableSecretError:
+    return ImmutableSecretError(
+        code=f"secrets.reference_store.{code}",
+        message="Credential storage is unavailable. Contact your administrator.",
+    )
+
+
+def create_talk_credential(command: CreateTalkCredential) -> ImmutableCredentialResult:
+    """Create once with KV2 CAS0, then verify exact readback; never overwrite."""
+    if not re.fullmatch(r"[0-9a-f]{64}", command.configuration_digest):
+        raise _immutable_error("conflict")
+    try:
+        addr, token, namespace, kv = _openbao_config()
+    except Exception:
+        raise _immutable_error("unavailable") from None
+    if kv != "2":
+        raise _immutable_error("kv2_required")
+    reference = talk_credential_reference(command)
+    mount, path, _ = _parse_ref(reference)
+    url = f"{addr}/v1/{mount}/data/{path}"
+    headers = {"X-Vault-Token": token}
+    if namespace:
+        headers["X-Vault-Namespace"] = namespace
+    replayed = False
+    try:
+        response = httpx.post(
+            url,
+            headers=headers,
+            json={
+                "options": {"cas": 0},
+                "data": {
+                    "app_password": command.password.get_secret_value(),
+                    "configuration_digest": command.configuration_digest,
+                },
+            },
+            timeout=5.0,
+        )
+        # A create/read-only token cannot POST an existing KV2 key: OpenBao
+        # requires update permission before CAS0 can reject that retry. Read
+        # the exact immutable path once and accept only verified replay.
+        if response.status_code not in (200, 204, 400, 403, 409):
+            raise _immutable_error("unavailable")
+        replayed = response.status_code in (400, 403, 409)
+    except httpx.HTTPError:
+        # The write may have succeeded. One bounded readback resolves ambiguity.
+        replayed = True
+    try:
+        response = httpx.get(url, headers=headers, timeout=5.0)
+        if response.status_code == 403:
+            raise _immutable_error("denied")
+        if response.status_code != 200:
+            raise _immutable_error("unavailable")
+        data = response.json()["data"]["data"]
+        if not isinstance(data, dict):
+            raise _immutable_error("unavailable")
+        if data.get("configuration_digest") != command.configuration_digest:
+            raise _immutable_error("conflict")
+        stored = data.get("app_password")
+        if not isinstance(stored, str) or not hmac.compare_digest(
+            stored.encode(), command.password.get_secret_value().encode()
+        ):
+            raise _immutable_error("conflict")
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        raise _immutable_error("unavailable") from None
+    clear_cache()
+    return ImmutableCredentialResult(reference=reference, replayed=replayed)

@@ -140,6 +140,9 @@ class EventType(enum.Enum):
     integration_installation_capability_provisioned = (
         "integration.installation.capability_provisioned"
     )
+    integration_installation_talk_credential_configured = (
+        "integration.installation.talk_credential_configured"
+    )
     integration_installation_meta_social_configured = (
         "integration.installation.meta_social_configured"
     )
