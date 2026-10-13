@@ -123,6 +123,7 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_integration_meta_social.py` | `test_typed_facade_returns_sanitized_outcome` | `outbound_transport` | `358e9784cd774b9cdd9e693c57365fc3842862f6cf7d8653bf3c4fcf53a13959` |
 | `tests/test_meta_capi_fiber_leads.py` | `<module>` | `outbound_transport` | `8128bc3956ebaff578adbfe2de1fec12f415e084450036187409e8c86beaf8ed` |
 | `tests/test_meta_oauth.py` | `test_provider_rejection_records_only_sanitized_evidence` | `outbound_transport` | `d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582` |
+| `tests/test_nextcloud_talk_credential_setup.py` | `<module>` | `outbound_transport` | `93e33b5e252bfb463ce9a622f08b0c3108147a37e1122629ba9c0489048ec48b` |
 | `tests/test_nextcloud_talk_staff_notifications.py` | `<module>` | `delivery_retry` | `e6a540dee1e6ddfb5448aef0a667aef1f3b7bf54e955fbcd9bd7ae86e2dbd315` |
 | `tests/test_router_management_connection.py` | `test_execute_honors_tunable_overrides` | `delivery_retry` | `c887e359adc3583a9c7332c37a3fb951afdad207057a5e96fb02cd136463d31e` |
 | `tests/test_team_inbox_meta_social_webhook.py` | `<module>` | `provider_credential` | `24ef8ff0b3d4670d3cc08efed8d4b43a85d4824b88e5f78d30bc08436e58cde0` |
@@ -153,3 +154,8 @@ cutover to a named connector distribution behind Dotmac Integrator.
 The ratchet reaches its sunset only when all baselines and conserved findings
 are zero and ADR 0011's runtime package, secret, egress, ingress, and contract
 conditions hold simultaneously.
+
+The Nextcloud Talk credential setup test module uses fake OpenBao HTTP responses
+and a GET-only validation harness. It declares tests, offers no public runtime
+definition, and no source outside the excluded set imports it. Its conserved
+exclusion adds no runtime exclusion or production surface allowance.
