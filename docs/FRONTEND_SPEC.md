@@ -1174,7 +1174,9 @@ The filtered payment CSV at `GET /admin/billing/payments/export.csv` uses the
 same uncapped filter and stable-sort scope as the payments list. Its customer
 identity column is `customer_name`, populated from the canonical customer
 account display name; internal account UUIDs are not exported. Rows stream
-incrementally so large reconciliation exports are not held entirely in memory.
+in database-sized chunks so large reconciliation exports are not held entirely
+in memory or delivered through one response handoff per row. The export adapter
+owns its database session until the final chunk is sent.
 
 #### `GET /admin/billing/payments`
 **Template:** `admin/billing/payments/index.html`
