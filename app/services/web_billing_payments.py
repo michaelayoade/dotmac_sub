@@ -1106,11 +1106,14 @@ def render_payments_csv(payments: list[Payment]) -> str:
 
 
 def stream_payments_csv(db: Session, *, list_query: ListQuery) -> Iterator[str]:
-    """Yield the canonical payment-scope CSV one row at a time.
+    """Yield the canonical payment-scope CSV in bounded database-sized chunks.
 
     The export reuses the list owner's filters and stable ordering without a
     page cap. Scalar relationships needed for customer identity and display
     enrichment are joined in the streaming query to avoid per-row selects.
+    Each database partition becomes one response chunk, avoiding one ASGI
+    thread-pool handoff per payment while keeping memory bounded to
+    ``_PAYMENT_CSV_YIELD_PER`` rows.
     """
     if list_query.definition.key != PAYMENTS_LIST_DEFINITION.key:
         raise ValueError("Payment scope requires the payments definition")
@@ -1140,10 +1143,19 @@ def stream_payments_csv(db: Session, *, list_query: ListQuery) -> Iterator[str]:
         writer.writerow(values)
         return buffer.getvalue()
 
-    yield _emit(_PAYMENT_CSV_HEADER)
-    for payment in db.scalars(stmt):
-        _enrich_payment_row(payment)
-        yield _emit(_payment_csv_row(payment))
+    emitted = False
+    for partition in db.scalars(stmt).partitions():
+        buffer.seek(0)
+        buffer.truncate(0)
+        if not emitted:
+            writer.writerow(_PAYMENT_CSV_HEADER)
+        for payment in partition:
+            _enrich_payment_row(payment)
+            writer.writerow(_payment_csv_row(payment))
+        emitted = True
+        yield buffer.getvalue()
+    if not emitted:
+        yield _emit(_PAYMENT_CSV_HEADER)
 
 
 def resolve_default_currency(db: Session) -> str:

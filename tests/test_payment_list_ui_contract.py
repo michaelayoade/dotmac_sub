@@ -20,11 +20,27 @@ def test_payment_export_route_delegates_complete_csv_scope_to_list_owner():
     source = ast.unparse(route)
 
     assert "web_billing_payments_service.build_payments_list_query" in calls
-    assert "web_billing_payments_service.stream_payments_csv" in calls
+    assert "_stream_payments_csv" in calls
     assert "web_billing_payments_service.build_payments_list_data" not in calls
     assert "web_billing_payments_service.render_payments_csv" not in calls
     assert "10000" not in source
     assert "csv.writer" not in calls
+
+
+def test_payment_export_stream_owns_and_closes_its_session():
+    route_path = PROJECT_ROOT / "app/web/admin/billing_payments.py"
+    tree = ast.parse(route_path.read_text(encoding="utf-8"))
+    helper = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_stream_payments_csv"
+    )
+    source = ast.unparse(helper)
+
+    assert "db_session_adapter.create_session()" in source
+    assert "web_billing_payments_service.stream_payments_csv" in source
+    assert "finally:" in source
+    assert "db.close()" in source
 
 
 def test_payment_routes_normalize_empty_html_date_filters():
