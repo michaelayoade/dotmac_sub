@@ -14,12 +14,13 @@ from __future__ import annotations
 import unicodedata
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
 
-from app.migration_source import canonical, digest, snapshot
+from app.migration_source import canonical, digest, programme, snapshot
 from app.migration_source.cohort import CohortEntityType
 
 TENANT = snapshot.TenantScope(tenant_id=UUID("8c7ae830-51fc-52ae-9818-d84b2a35e568"))
@@ -300,6 +301,67 @@ def test_the_source_revision_is_inside_the_aggregate() -> None:
         generated_at=CAPTURED,
     )
     assert baseline.aggregate != other_revision.aggregate
+
+
+def test_new_snapshots_default_to_the_current_in_place_binding() -> None:
+    assert REVISION.source_assembly_id == programme.SOURCE_ASSEMBLY_ID
+    assert REVISION.governance_revision == programme.ACCEPTED_REVISION
+
+
+def _historical_digest() -> digest.CohortDigest:
+    # Captured from the unchanged pre-repin source at b69f1b4a6d08. This fixture
+    # must never be regenerated merely because the current binding changes.
+    return digest.CohortDigest.model_validate_json(
+        (
+            Path(__file__).parent
+            / "fixtures/migration_source/legacy_cohort_digest_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
+def test_historical_digest_round_trips_and_recomputes_without_relabelling() -> None:
+    historical = _historical_digest()
+    loaded = digest.CohortDigest.model_validate_json(historical.model_dump_json())
+    rebuilt = digest.build_cohort_digest(
+        tenant=loaded.tenant,
+        source_revision=loaded.source_revision,
+        entity_types=loaded.entity_types,
+        contract_version=loaded.contract_version,
+        schema_version=loaded.schema_version,
+        generated_at=loaded.generated_at,
+    )
+    assert loaded.source_revision.source_assembly_id == "asm-dotmac-sub-legacy"
+    assert loaded.source_revision.governance_revision == (
+        "d91a87f6823bfd2afa6c2025bdb1af644331fa39"
+    )
+    assert (
+        rebuilt.aggregate
+        == historical.aggregate
+        == ("8b7357a41952bafa95ebf15c6bea1865c0dd82fa11c27e58d1b24df0afac8c1f")
+    )
+    assert digest.compare(historical, rebuilt) == ()
+
+
+@pytest.mark.parametrize("field", ["source_assembly_id", "governance_revision"])
+def test_different_programme_bindings_cannot_claim_a_clean_shadow(field: str) -> None:
+    historical = _historical_digest()
+    revised = historical.source_revision.model_copy(
+        update={field: getattr(REVISION, field)}
+    )
+    other = digest.build_cohort_digest(
+        tenant=historical.tenant,
+        source_revision=revised,
+        entity_types=historical.entity_types,
+        contract_version=historical.contract_version,
+        generated_at=CAPTURED,
+    )
+    assert historical.aggregate != other.aggregate
+    mismatches = digest.compare(historical, other)
+    assert {item.entity_type for item in mismatches} == set(CohortEntityType)
+    assert all(
+        item.category is digest.MismatchCategory.UNSUPPORTED_VERSION
+        for item in mismatches
+    )
 
 
 def test_a_content_change_changes_the_cohort_aggregate() -> None:

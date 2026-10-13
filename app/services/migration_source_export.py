@@ -36,9 +36,10 @@ indistinguishable to an importer, and only one of them is safe to retry.
 
 It does not write to a destination, does not dual-write, does not decide a
 row's disposition, and does not speak the target's status vocabulary. Sub is
-`asm-dotmac-sub-legacy` and remains the sole production writer of every fact
-below until a separately authorised sealed switch. A snapshot describes what
-Sub holds; what the destination concludes is the destination's resolver's job,
+`asm-dotmac-sub-legacy-domains`; its existing owners remain authoritative until
+each selected module's separately authorised one-writer switch. Sub hosts the
+candidate composed assembly in the same database. A snapshot describes what
+Sub holds; what the candidate concludes is its owning module resolver's job,
 and moving that judgement here would give the cohort two authorities before it
 has one.
 """
