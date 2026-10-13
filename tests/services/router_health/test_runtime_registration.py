@@ -59,7 +59,7 @@ def test_settings_loader_defaults_match_the_dataclass(db_session) -> None:
 
 
 def test_poll_task_is_routed_to_ingestion_and_classified() -> None:
-    name = "app.tasks.router_health.poll_router_runtime"
+    name = "app.tasks.router_health.observe_router_runtime"
     route = celery_app.conf.task_routes[name]
     assert route == {"queue": "ingestion"}
     assert name in TASK_RELIABILITY_CONTRACTS

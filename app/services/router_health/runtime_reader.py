@@ -15,15 +15,12 @@ from __future__ import annotations
 
 import logging
 import re
-import ssl
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
-
-import httpx
 
 from app.models.router_management import Router
 from app.services.router_health.contracts import (
@@ -94,25 +91,8 @@ class _EndpointUnavailable(Exception):
 
 def classify_exception(exc: BaseException) -> RestFailure | None:
     """Map a transport exception to an access failure; ``None`` = endpoint-local."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        code = exc.response.status_code
-        if code == 401:
-            return RestFailure.auth_failed
-        if code == 403:
-            return RestFailure.forbidden
-        return None
-    if isinstance(exc, httpx.ConnectError):
-        cause = exc.__cause__ or exc.__context__
-        if isinstance(cause, ssl.SSLError) or "CERTIFICATE" in str(exc).upper():
-            return RestFailure.tls
-        return RestFailure.unreachable
-    if isinstance(exc, ssl.SSLError):
-        return RestFailure.tls
-    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
-        return RestFailure.unreachable
-    if isinstance(exc, httpx.TransportError):
-        return RestFailure.unreachable
-    return RestFailure.other
+    label = RouterConnectionService.classify_rest_failure(exc)
+    return None if label is None else RestFailure(label)
 
 
 def _text_row(row: Mapping[str, Any]) -> RuntimeRow:

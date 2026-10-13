@@ -330,6 +330,6 @@ def test_task_adapter_gates_on_its_control_and_calls_one_function(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(tasks.control_registry, "is_enabled", lambda db, key: False)
-    assert tasks.poll_router_runtime.run() == {"skipped": "control_disabled"}
-    assert tasks.TASK_RUNTIME == "app.tasks.router_health.poll_router_runtime"
+    assert tasks.observe_router_runtime.run() == {"skipped": "control_disabled"}
+    assert tasks.TASK_RUNTIME == "app.tasks.router_health.observe_router_runtime"
     assert tasks.SOFT_LIMIT_SECONDS[tasks.TASK_RUNTIME] <= 8 * 60

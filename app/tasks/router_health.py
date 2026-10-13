@@ -28,7 +28,7 @@ TASK_POSTURE = "app.tasks.router_health.reconcile_router_posture"
 TASK_SERVICE = "app.tasks.router_health.reconcile_service_path"
 TASK_CANARY = "app.tasks.router_health.run_coa_canary"
 TASK_REPROBE = "app.tasks.router_health.reprobe_coa_canary"
-TASK_RUNTIME = "app.tasks.router_health.poll_router_runtime"
+TASK_RUNTIME = "app.tasks.router_health.observe_router_runtime"
 CANARY_SOFT_LIMIT_SECONDS = 15 * 60
 _LOCK_TIMEOUT_MS = 2000
 
@@ -161,7 +161,7 @@ def reprobe_coa_canary(nas_device_id: str, run_id: str) -> dict[str, Any]:
 
 
 @celery_app.task(name=TASK_RUNTIME, soft_time_limit=SOFT_LIMIT_SECONDS[TASK_RUNTIME])
-def poll_router_runtime() -> dict[str, Any]:
+def observe_router_runtime() -> dict[str, Any]:
     def body(db: Session) -> dict[str, Any]:
         stats = runtime_poll.poll_router_runtime(db, task_name=TASK_RUNTIME)
         return {

@@ -887,7 +887,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "One follow-up probe after a canary timeout; not retried, the next "
         "daily canary re-attempts.",
     ),
-    "app.tasks.router_health.poll_router_runtime": _c(
+    "app.tasks.router_health.observe_router_runtime": _c(
         "network",
         SWEEP,
         IDEMP,

@@ -1850,8 +1850,8 @@ def build_beat_schedule() -> dict:
         )
         _sync_scheduled_task(
             session,
-            name="router_health_runtime_poll",
-            task_name="app.tasks.router_health.poll_router_runtime",
+            name="router_health_runtime",
+            task_name="app.tasks.router_health.observe_router_runtime",
             enabled=control_registry.is_enabled(
                 session, "network.router_health_runtime_poll"
             ),
