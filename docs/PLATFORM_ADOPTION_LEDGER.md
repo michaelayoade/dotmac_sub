@@ -8,7 +8,8 @@ to `dotmac-kernel==0.1.0a81` on 2026-08-20, to
 `dotmac-kernel==0.1.0a90` on 2026-08-22, to `dotmac-kernel==0.1.0a91` the same
 day, to `dotmac-kernel==0.1.0a94` on 2026-08-25, and to
 `dotmac-kernel==0.1.0a97` for the proposed Template Studio shadow composition
-on 2026-09-30 — see "Pin history".
+on 2026-09-30, followed by the source-only `0.1.0a98` / Tax a4 candidate
+on 2026-10-13 — see "Pin history".
 Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
@@ -380,6 +381,77 @@ per-table cutover decisions.
 
 
 ## Pin history
+
+**2026-10-13 — `0.1.0a97` → `0.1.0a98` and Tax `0.1.0a4` (source-only candidate).**
+Tax's released installed metadata declares Kernel `>=0.1.0a98`; its public
+`ensure_tax_authority`, `ensure_tax_jurisdiction`, `ensure_tax_code` and
+`ensure_tax_rule` implementations call the engine-free
+`dotmac_kernel.transactions.conflict_savepoint`. This is a real composed
+artifact floor, not an unused import added to justify a higher pin. ADR 0021's
+exact-pin rule derives the maximum of installed artifact floors and actual
+assembly imports. The existing Sub assembly imports retain their reviewed
+surfaces; no new production Kernel import is admitted by this candidate.
+Kernel a104 is excluded from this slice.
+
+Kernel tag `dotmac-kernel-v0.1.0a98` peels to
+`ae7320876ad91d5bf4639d634d65a6e8fd36bb00`; the prior a97 source is
+`548084fd74779ccf1ad436e1201e03cb9239631a`. The historical Kernel a98
+protected release run `32963545658` succeeded and
+retained artifact `9604819651` is reported available through 2026-11-24. The
+candidate copies the existing ERP lock coordinates (ERP `93d7e111d9278b8377bac311e78308c99f51da79`): wheel
+SHA256 `27405c57c4af395224cdd2f4366c0144207e9df2eab4ca8a8ed1142c1d0859fa`
+and sdist SHA256
+`597acda6b7d1046650aa17b5d847f581b05ee577e7893067762f3bb2790c38af`.
+These are candidate byte identities, not a new registry readback or proof that
+historical retained bytes equal registry bytes. That comparison remains pending;
+a modern receipt must not substitute for the original release artifact.
+
+Tax `dotmac-tax-v0.1.0a4` peels to
+`fb7fb252c6fba8e15d7c39ed18f8057057adfbab`; protected release run
+`34711205539` verified install-back, and release-record PR #701 landed as
+`60b31b8a0543165d42c974dcc26fdc0948d99e35`. The same ERP lock supplies wheel
+SHA256 `032908e1ca862b03ff9e649c1415bfcc067d3cd426ed1843ee4bf4693b0bd95e`
+and sdist SHA256
+`def1de45e6562a09dd400af52c11077892dad70f08294c59fee2757808e8498c`.
+`alembic.ini` composes the installed `tx_0001_tax`, `tx_0002_multi_tax`, and
+`tx_0003_result_fingerprint` chain. Its manifest is atomic TENANT-only, so
+there is no selectable-plane entry. Sub's existing 545/546 providers satisfy
+its tenant-catalog and module-role prerequisites; 556/557 remain unchanged.
+No Tax schema history is copied into Sub. The derived schema contract includes
+`mod_tax`, keeping privileged bootstrap and verification aligned.
+
+The a97/a98 source comparison leaves models, platform models, modules, planes,
+prerequisites, Kernel migrations and dependency contracts unchanged. a98's
+package root additionally imports `capability_composition` and
+`capability_contract`; both reach already-reviewed `product_manifest` values.
+The runtime snapshot admits only these two traced transitive modules. This
+does not widen the production source import allowlist. a98 also extracts
+`DatabaseRuntime` and tightens the web facet contract. Sub declares no such web
+facet and retains its own `app.db` engine/session owner. The known a98
+`create_app` / reference web-factory defect means this release is not
+universally adoptable. Sub's selective candidate explicitly excludes the
+factory, reference engine, database runtime and session runtime; a real boot
+subprocess guard must prove none enters its runtime graph.
+
+Authored tests cover real fresh and Sub-predecessor migration chains, forced RLS,
+non-superuser/non-bypass app-role tenant isolation, synthetic catalog/rule
+configuration, exact determination retry, caller rollback and post-rollback
+retry. Architecture plants reject production Tax imports, dynamic imports and
+SQL writers. Test construction grows only by the reviewed fixture sites;
+production remains 17 sites across 15 files. No tests were executed for this
+source-authoring slice. Exact locked hosted install/hash checks, current-root
+and application boot compatibility, falsifiable excluded-version resolution/import
+proof, all provider observables, both PostgreSQL
+chains and full repository checks remain acceptance gates. Generator-only
+observation used already-installed ERP Kernel a98 and Tax a4 first on
+`PYTHONPATH`, with existing Sub dependencies as fallback; it is not exact-graph
+installation or runtime acceptance evidence.
+
+Tax presence is not policy. No production Tax service caller, determination,
+classification, jurisdiction, category, rate or configuration write is added.
+The incumbent VAT resolver remains authoritative and unchanged. M7 prepaid
+VAT/WHT decisions, policy activation and any authority cutover remain pending.
+
 
 **2026-09-30 — `0.1.0a94` → `0.1.0a97` (source-only candidate).** Template
 Studio `0.2.0a5` requires Kernel `>=0.1.0a97` for its versioned web-surface

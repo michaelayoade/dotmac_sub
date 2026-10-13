@@ -67,12 +67,12 @@ def _module_imports_under_app() -> list[str]:
 def test_tagged_subscriptions_and_required_kernel_are_exact_pins() -> None:
     data = _pyproject()
     project_dependencies = data["project"]["dependencies"]  # type: ignore[index]
-    assert "dotmac-kernel==0.1.0a97" in project_dependencies
+    assert "dotmac-kernel==0.1.0a98" in project_dependencies
     assert "dotmac-subscriptions==0.1.0a3" in project_dependencies
 
     poetry_dependencies = data["tool"]["poetry"]["dependencies"]  # type: ignore[index]
     assert poetry_dependencies["dotmac-kernel"] == {
-        "version": "0.1.0a97",
+        "version": "0.1.0a98",
         "source": "forgejo",
     }
     assert poetry_dependencies["dotmac-subscriptions"] == {
