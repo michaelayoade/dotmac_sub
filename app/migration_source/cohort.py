@@ -23,7 +23,8 @@ name to class lives in the reader, which is allowed to import models.
 ## Scope, and what deliberately sits outside it
 
 Governance names cohort 1 "Foundation party and customer" with components
-`dotmac-party` (release), `dotmac-customers` (build) and
+`dotmac-kernel` and `dotmac-ui` (reuse), `dotmac-party` (release),
+`dotmac-customers` and `dotmac-addresses` (build), and
 `dotmac-brand-profiles` (adopt). The tables below are Sub's side of exactly
 that. Resellers, subscriptions, invoices, network and access state are later
 cohorts and are absent: pulling a table forward because it is convenient to

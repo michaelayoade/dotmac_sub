@@ -41,6 +41,32 @@ def test_the_runbook_names_every_cutover_control() -> None:
     )
 
 
+def test_runbook_control_states_match_the_binding() -> None:
+    rows = {
+        cells[1].strip().strip("`"): cells[2].strip()
+        for line in _runbook().splitlines()
+        if line.startswith("| `ctl-isp-") and len(cells := line.split("|")) >= 4
+    }
+    assert rows == {
+        control.control_id: control.state for control in programme.BINDING.controls
+    }
+
+
+def test_current_readiness_documents_name_the_same_in_place_authorities() -> None:
+    for name in (
+        "ISP_COHORT1_MIGRATION_READINESS.md",
+        "ISP_COHORT1_SOURCE_OWNERSHIP.md",
+        "adr/0012-isp-cohort-source-readiness.md",
+    ):
+        body = (PROJECT_ROOT / "docs" / name).read_text(encoding="utf-8")
+        for identity in (
+            programme.SOURCE_ASSEMBLY_ID,
+            programme.TARGET_ASSEMBLY_ID,
+            programme.ACCEPTED_REVISION,
+        ):
+            assert identity in body, (name, identity)
+
+
 def test_the_runbook_names_the_open_decisions_that_block_the_cohort() -> None:
     body = _runbook()
     missing = sorted(
@@ -229,9 +255,9 @@ def test_no_online_surface_reaches_the_cohort_export() -> None:
 
     ADR 0012's 2026-08-21 amendment declines an HTTP export route: it would be
     a standing network-reachable egress surface for the whole cohort's customer
-    identity data, and `ctl-isp-002` is open so nothing is positioned to call
-    it. A decision recorded only in prose is a decision the next contributor
-    reverses by accident, so this fails the build if any route module imports
+    identity data. In-place composition supplies no remote export consumer;
+    `ctl-isp-002` is superseded, not a gate to reopen. A prose-only decision
+    can be reversed by accident, so this fails if any route module imports
     the export owner.
 
     When the conditions in the ADR amendment are met, this test is deleted in

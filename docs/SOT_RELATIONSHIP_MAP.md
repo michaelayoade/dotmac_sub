@@ -21,6 +21,23 @@ The manifest has one canonical graph. Domain, capability/module, and journey
 hierarchies are derived navigation views; they do not own parallel dependency
 lists or service declarations.
 
+## Modular conversion source evidence
+
+`migration.cohort_export` owns the read-only cohort snapshot and digest boundary.
+`app/migration_source/programme.py` pins accepted Governance identity; Sub's
+legacy domains convert to composed module authority inside the same product and
+database. Existing owners remain authoritative until each module's approved
+one-writer switch. The writer census supplies retirement evidence, not a blanket
+pre-cutover refactoring backlog.
+
+New snapshots carry the current binding. Explicit historical provenance is
+preserved, and digest comparison refuses mismatched programme bindings as
+`unsupported-version`; historical export receipts cannot prove current shadow
+or cutover acceptance. This source boundary supplies `ctl-isp-006` and
+`ctl-isp-011` inputs without verifying either control. See
+`docs/ISP_COHORT1_MIGRATION_READINESS.md` and
+`tests/test_isp_cohort_export_contract.py`.
+
 ## Expired services and account deletion
 
 `access.subscription_lifecycle` derives `suspended` when a customer has only

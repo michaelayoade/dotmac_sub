@@ -1,7 +1,7 @@
 """Two-directional ratchet on the cohort-isp-01 source writer surface.
 
 Governance cohort 1 — party, customers and brand profiles — will eventually
-move to `asm-dotmac-isp`. Before that can be considered, the set of Sub code
+move to `asm-dotmac-sub-composed`. Before that can be considered, the set of Sub code
 that writes those facts has to be known and has to stop growing. This guard
 does exactly that and nothing more: it records today's writers and fails on
 movement in either direction.
