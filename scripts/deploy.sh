@@ -41,7 +41,7 @@
 #
 # Procedure:
 #   pull image from GHCR -> verify OCI revision + exact GitHub CI evidence ->
-#   DB backup -> pin APP_IMAGE + GIT_SHA in .env ->
+#   candidate secret readiness -> DB prerequisites + backup -> pin APP_IMAGE + GIT_SHA in .env ->
 #   migrate + verify -> warm candidate -> recreate app+workers ->
 #   web + background-runtime health gates.
 #
@@ -1335,6 +1335,68 @@ if ! preflight_service_config; then
   exit 1
 fi
 
+preflight_feature_secret_requirements() {
+  local phase="${1:-before_migrations}"
+  local args=(--component app)
+  local compose_args=(run --rm --no-deps --entrypoint /opt/venv/bin/python)
+  if [[ "${phase}" == "after_migrations" ]]; then
+    args+=(--require-installed-schema)
+  elif [[ -n "${PRODUCTION_BOOTSTRAP_AUTHORIZATION_FILE:-}" ]]; then
+    [[ "${DEPLOYMENT_TARGET}" == "production" && -f "${PRODUCTION_BOOTSTRAP_AUTHORIZATION_FILE}" ]] || return 1
+    compose_args+=(-v "${PRODUCTION_BOOTSTRAP_AUTHORIZATION_FILE}:/run/deployment-bootstrap-authorization.json:ro")
+    args+=(--bootstrap-authorization /run/deployment-bootstrap-authorization.json
+      --candidate-revision "${FULL_SHA}" --target-server dotmac-sub-prod)
+  fi
+  if ! APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" "${compose_args[@]}" app \
+    -m scripts.setup.verify_deployment_secret_requirements "${args[@]}" 2>/dev/null; then
+    echo "DEPLOY REFUSED: declared deployment secret requirements are not ready." >&2
+    return 1
+  fi
+}
+
+preflight_deployment_secrets() {
+  local component plan
+  local boot_components=(app "${CELERY_WORKER_SERVICES[@]}")
+  local plan_args=(--image "${IMAGE}")
+  if service_is_declared "${CELERY_BEAT_SERVICE}"; then
+    boot_components+=("${CELERY_BEAT_SERVICE}")
+  fi
+  for component in "${boot_components[@]}"; do
+    plan_args+=(--component "${component}")
+  done
+  # Resolved Compose JSON contains host secrets. Consume it only in the typed
+  # parser; neither raw config nor host-controlled errors reach deploy output.
+  if ! plan="$(
+    APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" config --format json 2>/dev/null |
+      run_repo_module scripts.deployment_secret_readiness "${plan_args[@]}" 2>/dev/null
+  )"; then
+    echo "DEPLOY REFUSED: candidate secret component graph is unavailable or mismatched." >&2
+    return 1
+  fi
+  while IFS= read -r component; do
+    [[ -n "${component}" ]] || return 1
+    log "Checking candidate boot-secret readiness for ${component}"
+    # Bypass service startup commands: this one-off only evaluates readiness.
+    # --no-deps never starts backing services or a profile-gated scheduler.
+    if ! APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" run --rm --no-deps --entrypoint /opt/venv/bin/python "${component}" \
+      -m scripts.setup.verify_openbao_boot_secrets --component "${component}" 2>/dev/null; then
+      echo "DEPLOY REFUSED: candidate boot secrets are not ready for ${component}." >&2
+      return 1
+    fi
+  done <<<"${plan}"
+  log "Checking declared feature and enabled-integration secret requirements"
+  preflight_feature_secret_requirements before_migrations
+}
+
+log "Verifying candidate secret readiness before database work"
+if ! preflight_deployment_secrets; then
+  echo "DEPLOY REFUSED before database bootstrap, backup, migrations or service replacement." >&2
+  exit 1
+fi
+
 run_database_prerequisite_bootstrap
 verify_database_prerequisites
 
@@ -1467,11 +1529,6 @@ install_deploy_interrupt_trap() {
   trap 'cleanup_children; if restore_prev; then echo "Deploy interrupted — previous image restored and healthy" >&2; else report_rollback_outcome; fi; exit 130' INT TERM HUP
 }
 install_deploy_interrupt_trap
-
-log "Verifying mandatory OpenBao boot secrets"
-APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
-  "${COMPOSE[@]}" run --rm --no-deps app \
-  python -m scripts.setup.verify_openbao_boot_secrets
 
 log "Verifying pre-migration service-extension identity state"
 APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
@@ -1638,6 +1695,9 @@ log "Verifying database schema contracts"
 log "Verifying enabled integration manifest pins"
 "${COMPOSE[@]}" run --rm --no-deps app \
   python -m scripts.integrations.verify_manifest_pins
+
+log "Rechecking installed feature secret requirements before service replacement"
+preflight_feature_secret_requirements after_migrations
 
 log "Starting warm candidate on 127.0.0.1:${CANDIDATE_PORT} (health timeout ${CANDIDATE_HEALTH_TIMEOUT_SECONDS}s)"
 docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true

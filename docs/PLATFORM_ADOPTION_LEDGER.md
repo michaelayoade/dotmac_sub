@@ -872,6 +872,26 @@ modules (including any `dotmac_kernel._*` and `display`) are forbidden outright.
 
 ## Kernel import allowlist (`app/`)
 
+### 2026-10-13: deployment requirement observation
+
+`dotmac_kernel.machine_models.MachineCredential` is admitted as a read-only
+input to `secrets.deployment_readiness`. Sub already hosts its table through
+migration 551; this change composes no Kernel lineage and declares no second
+model or credential writer. The query reads lifecycle/attribution predicates
+under Sub's canonical operator-tenant transaction scope and never reads hashes
+or raw tokens. The import guard admits only that named model, not a bare module
+import or other model names. Earlier transitive-only admission statements are
+historical; all unrelated Kernel adoption limits remain.
+
+The readiness owner may require the already-owned machine HMAC when live
+credentials depend on it. It neither issues credentials nor changes their
+lifecycle, scopes, identity authority or storage. Schema/RLS acceptance comes
+from the migrated PostgreSQL lane, not metadata-based unit tests. See
+`docs/runbooks/PRODUCTION_DEPLOYMENT.md` and
+`tests/integration/test_deployment_secret_requirements_pg.py`.
+
+### Admitted modules
+
 The executable form of the table above, enforced by
 `tests/architecture/test_kernel_import_boundary.py`. Only these modules may ever
 be imported under `app/`, and only once the dependency lands (S2). This section
@@ -889,6 +909,8 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.exceptions`
 - `dotmac_kernel.features`
 - `dotmac_kernel.machine_auth`
+- `dotmac_kernel.machine_models` — `MachineCredential` only, for the read-only
+  deployment requirement query. The 2026-10-13 amendment below narrows its use.
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
 - `dotmac_kernel.namespaces`
