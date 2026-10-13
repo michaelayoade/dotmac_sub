@@ -18,6 +18,9 @@ concurrency:
   group: mobile-release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CUSTOMER_ANDROID_BUILD_TOOLS_VERSION: "36.0.0"
+
 jobs:
   android-release:
     name: Android signed release
@@ -28,11 +31,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Require all Customer signing secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Required repository secret '$name' is not set. See mobile/README.md."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          for leftover in android/key.properties android/app/release.jks; do
+            [ ! -e "$leftover" ] || { echo "::error::Stale signing material exists: $leftover"; exit 1; }
+          done
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Install pinned Android build tools
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          [ -n "$SDK" ] || { echo "::error::Android SDK missing."; exit 1; }
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || { echo "::error::Android sdkmanager missing."; exit 1; }
+          "$SDKMANAGER" "build-tools;$CUSTOMER_ANDROID_BUILD_TOOLS_VERSION"
+          BT="$SDK/build-tools/$CUSTOMER_ANDROID_BUILD_TOOLS_VERSION"
+          [ -x "$BT/apksigner" ] && [ -x "$BT/aapt2" ] || {
+            echo "::error::Pinned Android verification tools unavailable."; exit 1;
+          }
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -54,11 +90,14 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set — cannot produce a shippable build."
-            exit 1
-          fi
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release.jks
+          set -euo pipefail
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release.jks
+          [ -s android/app/release.jks ] || { echo "::error::Empty signing keystore."; exit 1; }
+          keytool -list -keystore android/app/release.jks -alias "$ANDROID_KEY_ALIAS" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD > /dev/null 2>&1 || {
+              echo "::error::Upload keystore password or alias is invalid."; exit 1;
+            }
           cat > android/key.properties <<EOF
           storePassword=$ANDROID_KEYSTORE_PASSWORD
           keyPassword=$ANDROID_KEY_PASSWORD
@@ -72,26 +111,43 @@ jobs:
       - name: Build signed ${{ github.event.inputs.track || 'appbundle' }}
         env:
           GLITCHTIP_DSN: ${{ secrets.MOBILE_GLITCHTIP_DSN }}
+          TRACK: ${{ github.event.inputs.track || 'appbundle' }}
         run: |
-          TRACK="${{ github.event.inputs.track || 'appbundle' }}"
+          set -euo pipefail
           flutter build "$TRACK" --release \
             --dart-define-from-file=../brand.json \
             --dart-define=GLITCHTIP_DSN="$GLITCHTIP_DSN"
 
-      - name: Verify the artifact is not debug-signed
+      - name: Verify the artifact signature and Customer application id
+        id: verified-artifact
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          TRACK: ${{ github.event.inputs.track || 'appbundle' }}
         run: |
-          OUT=$(find build/app/outputs -name '*.aab' -o -name '*-release.apk' | head -1)
-          echo "Artifact: $OUT"
-          test -n "$OUT"
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          [ -n "$SDK" ] || { echo "::error::Android SDK missing."; exit 1; }
+          BT="$SDK/build-tools/$CUSTOMER_ANDROID_BUILD_TOOLS_VERSION"
+          [ -x "$BT/apksigner" ] && [ -x "$BT/aapt2" ] || {
+            echo "::error::Required Android build-tools $CUSTOMER_ANDROID_BUILD_TOOLS_VERSION missing."; exit 1;
+          }
+          case "$TRACK" in
+            appbundle) ART=build/app/outputs/bundle/release/app-release.aab ;;
+            apk) ART=build/app/outputs/flutter-apk/app-release.apk ;;
+            *) echo "::error::Unsupported release track."; exit 1 ;;
+          esac
+          python3 ../scripts/verify_customer_android_release.py \
+            --artifact "$ART" --keystore android/app/release.jks \
+            --key-alias "$ANDROID_KEY_ALIAS" --build-tools "$BT"
+          printf 'path=mobile/%s\n' "$ART" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dotmac-android-release
-          path: |
-            mobile/build/app/outputs/bundle/release/*.aab
-            mobile/build/app/outputs/flutter-apk/*-release.apk
-          if-no-files-found: warn
+          path: ${{ steps.verified-artifact.outputs.path }}
+          if-no-files-found: error
 
       - name: Clean up signing material
         if: always()
