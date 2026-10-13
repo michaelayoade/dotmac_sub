@@ -1843,6 +1843,20 @@ def build_beat_schedule() -> dict:
             ),
             interval_seconds=max(router_health_canary_hours * 3600, 12 * 3600),
         )
+        router_health_runtime_minutes = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "router_health_runtime_interval_minutes",
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_health_runtime",
+            task_name="app.tasks.router_health.observe_router_runtime",
+            enabled=control_registry.is_enabled(
+                session, "network.router_health_runtime_poll"
+            ),
+            interval_seconds=max(router_health_runtime_minutes * 60, 600),
+        )
         # NAS config backup orchestrator. The task itself honors each device's
         # backup_enabled + backup_schedule, so this just needs to run often
         # enough to catch due devices (hourly).

@@ -207,7 +207,7 @@ def subject_target_url(
     subject_kind: SubjectKind, *, router_id: UUID | None, nas_device_id: UUID | None
 ) -> str:
     if router_id is not None:
-        return f"/admin/network/routers/{router_id}"
+        return f"/admin/network/routers/{router_id}#health"
     if nas_device_id is not None:
         return f"/admin/network/nas/devices/{nas_device_id}"
     return "/admin/alerts?category=network"

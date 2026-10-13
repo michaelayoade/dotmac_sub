@@ -128,6 +128,7 @@ celery_app.conf.task_routes = {
     "app.tasks.router_health.reconcile_service_path": {"queue": "ingestion"},
     "app.tasks.router_health.run_coa_canary": {"queue": "ingestion"},
     "app.tasks.router_health.reprobe_coa_canary": {"queue": "ingestion"},
+    "app.tasks.router_health.observe_router_runtime": {"queue": "ingestion"},
     "router_sync.reconcile_config_push_readback": {"queue": "ingestion"},
     "router_sync.audit_sot_drift": {"queue": "ingestion"},
     "router_sync.reconcile_nas_vlan_readback": {"queue": "ingestion"},
