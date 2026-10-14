@@ -127,18 +127,6 @@ DEFAULT_PERMISSIONS = [
     # Billing - Invoices
     ("billing:invoice:read", "View invoices"),
     ("billing:invoice:create", "Create invoices"),
-    (
-        "billing:invoice:create_subscription_service",
-        "Issue a reviewed invoice for a subscription's exact next service period",
-    ),
-    (
-        "billing:invoice:create_backdated_service",
-        "Create reviewed draft invoices for consumed subscription service",
-    ),
-    (
-        "billing:invoice:reconstruct_backdated_service",
-        "Link an eligible existing invoice to reviewed subscription service",
-    ),
     ("billing:invoice:update", "Update invoices"),
     ("billing:invoice:delete", "Delete/void invoices"),
     # Billing - Payments
