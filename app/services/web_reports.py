@@ -7,7 +7,7 @@ import io
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, TypedDict, cast
 from urllib.parse import urlencode
@@ -108,6 +108,15 @@ class RevenueReportData:
     collection_rate: float
     recent_payments: tuple[Payment, ...]
     revenue_chart: ChartProjection
+
+
+@dataclass(frozen=True, slots=True)
+class RegionalReportQuery:
+    """Validated filters for the regional performance projection."""
+
+    date_from: date | None
+    date_to: date | None
+    region_id: UUID | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -627,9 +636,7 @@ def _regional_report_window(
 def get_regional_report_data(
     db: Session,
     *,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    region_id: UUID | None = None,
+    query: RegionalReportQuery,
 ) -> RegionalReportData:
     """Aggregate regional customer and billing facts without loading customers.
 
@@ -639,8 +646,10 @@ def get_regional_report_data(
     """
 
     start, end, effective_from, effective_to = _regional_report_window(
-        date_from=date_from, date_to=date_to
+        date_from=query.date_from.isoformat() if query.date_from else None,
+        date_to=query.date_to.isoformat() if query.date_to else None,
     )
+    region_id = query.region_id
     regions = list_regions(db, include_inactive=False)
     connection_type_definitions = customer_connection_types_service.list_definitions(db)
     connection_type_columns = tuple(
