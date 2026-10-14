@@ -52,6 +52,7 @@ CODEOWNERS on that file:
 | `feature-exception` | new capability truly must land in Sub first | `starter_contract`: the Starter contract it consumes or will extract to |
 | `schema` | corrective migration (e.g. a constraining index) | `reason` naming the defect it corrects |
 | `transitional-tool` | time-boxed cutover evidence/proof tooling | `deletion_trigger`: the event that deletes it, plus registration in `billing_transitional_tools.json` |
+| `approved-growth` | owner-approved net growth of the pinned billing surface with no new capability (e.g. an approved batch landed before this guard) | `reason` citing the approval; the baseline raise is reviewed in the same change |
 
 An exception covers only the `paths` globs it lists. "We'll move it to
 Starter later" is not an exception reason; extraction to Starter is the

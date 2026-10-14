@@ -11,14 +11,14 @@
     {
       "path": "app/services/billing/opening_export.py",
       "purpose": "Read-only opening/cash-receipt evidence census export for the Starter cutover (PRs #3600/#3606).",
-      "baseline_lines": 1982,
+      "baseline_lines": 2072,
       "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived.",
       "owner": "michaelayoade"
     },
     {
       "path": "app/services/billing/opening_export_contracts.py",
       "purpose": "Typed contracts for the opening evidence census export.",
-      "baseline_lines": 451,
+      "baseline_lines": 527,
       "deletion_trigger": "Delete with opening_export.py after the opening import is sealed in dotmac-billing.",
       "owner": "michaelayoade"
     },
@@ -53,7 +53,7 @@
     {
       "path": "scripts/migration/billing_opening_export.py",
       "purpose": "CLI entry for the read-only opening evidence census export.",
-      "baseline_lines": 140,
+      "baseline_lines": 149,
       "deletion_trigger": "Delete with opening_export.py after the opening import is sealed in dotmac-billing.",
       "owner": "michaelayoade"
     }

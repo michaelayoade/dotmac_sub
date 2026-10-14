@@ -113,6 +113,13 @@ def test_transitional_exception_without_deletion_trigger_does_not_cover() -> Non
     assert freeze.exception_covers([entry], "transitional-tool", "scripts/billing/x.py")
 
 
+def test_approved_growth_kind_validates_without_starter_contract() -> None:
+    entry = _entry(kind="approved-growth", starter_contract="")
+    assert freeze.validate_exceptions([entry]) == []
+    bad = _entry(kind="approved-growth", approved_by="collaborator")
+    assert freeze.validate_exceptions([bad])
+
+
 def test_validate_exceptions_requires_starter_contract_for_features() -> None:
     problems = freeze.validate_exceptions([_entry(starter_contract="")])
     assert any("Starter contract" in p for p in problems)

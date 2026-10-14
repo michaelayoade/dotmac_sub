@@ -60,7 +60,12 @@ ALWAYS_ALLOWED_PATTERNS = (
     "**/*.md",
 )
 
-EXCEPTION_KINDS = {"feature-exception", "schema", "transitional-tool"}
+EXCEPTION_KINDS = {
+    "approved-growth",
+    "feature-exception",
+    "schema",
+    "transitional-tool",
+}
 
 
 def _matches(path: str, patterns: tuple[str, ...]) -> bool:
