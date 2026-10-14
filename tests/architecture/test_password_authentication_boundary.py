@@ -191,7 +191,6 @@ def test_customer_password_and_mfa_adapters_use_owner_without_commits() -> None:
     for name in (
         "customer_login_submit",
         "_verify_customer_mfa_token",
-        "_record_customer_local_login_failure",
     ):
         function = _function(tree, name)
         assert not {
@@ -204,6 +203,20 @@ def test_customer_password_and_mfa_adapters_use_owner_without_commits() -> None:
         _function(tree, "customer_login_submit")
     )
     assert "complete_mfa" in _attr_calls(_function(tree, "_verify_customer_mfa_token"))
+
+
+def test_shared_customer_failure_policy_delegates_without_commits() -> None:
+    tree = _tree(PROJECT_ROOT / "app/services/customer_authentication.py")
+    for name in ("_record_customer_local_login_failure", "_portal_denial"):
+        assert not {"commit", "rollback", "execute_owner_command"} & (
+            _attr_calls(_function(tree, name)) | _name_calls(_function(tree, name))
+        )
+    assert "PasswordFailureEffect" in _attr_calls(
+        _function(tree, "_record_customer_local_login_failure")
+    )
+    assert "record_authentication_denial" in _attr_calls(
+        _function(tree, "_portal_denial")
+    )
 
 
 def test_customer_session_resolution_has_no_impersonation_flag_exception() -> None:
