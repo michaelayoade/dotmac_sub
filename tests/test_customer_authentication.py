@@ -17,7 +17,9 @@ from app.services.auth_flow import LoginAudience, hash_password, principal_refus
 from tests.authentication_denial_unit import (
     authentication_denial_unit_session as authentication_denial_unit_session,
 )
+from tests.customer_login_fixtures import radius_not_accepted
 
+pytest_plugins = ("tests.customer_login_fixtures",)
 pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
@@ -28,15 +30,21 @@ def _query(
         identifier=identifier,
         password=password,
         evidence=owner.CustomerLoginEvidence(
-            uuid4(), None, pa.DenialSurface.CUSTOMER_API
+            uuid4(),
+            None,
+            pa.DenialSurface.CUSTOMER_PORTAL
+            if audience is owner.CustomerLoginAudience.BROWSER
+            else pa.DenialSurface.CUSTOMER_API,
         ),
         audience=audience,
     )
 
 
-def _credential(db: Session, subscriber: Subscriber, username: str) -> UserCredential:
+def _credential(
+    db: Session, customer_subscriber: Subscriber, username: str
+) -> UserCredential:
     credential = UserCredential(
-        subscriber_id=subscriber.id,
+        subscriber_id=customer_subscriber.id,
         username=username,
         provider=AuthProvider.local,
         password_hash=hash_password("customer-password"),
@@ -48,14 +56,14 @@ def _credential(db: Session, subscriber: Subscriber, username: str) -> UserCrede
 
 
 def test_customer_email_collision_never_selects_or_counts_staff_credential(
-    db_session: Session, subscriber: Subscriber
+    db_session: Session, customer_subscriber: Subscriber
 ) -> None:
-    subscriber.email = "shared-login@example.test"
-    customer = _credential(db_session, subscriber, "CUSTOMER-100")
+    customer_subscriber.email = "shared-login@example.test"
+    customer = _credential(db_session, customer_subscriber, "CUSTOMER-100")
     staff = SystemUser(
         first_name="Staff",
         last_name="Collision",
-        email=subscriber.email,
+        email=customer_subscriber.email,
         user_type=UserType.system_user,
         is_active=True,
     )
@@ -72,9 +80,9 @@ def test_customer_email_collision_never_selects_or_counts_staff_credential(
     db_session.commit()
     for audience in owner.CustomerLoginAudience:
         prepared = owner.prepare_customer_login(
-            db_session, _query(subscriber.email, "customer-password", audience)
+            db_session, _query(customer_subscriber.email, "customer-password", audience)
         )
-        assert prepared.subscriber_id == subscriber.id
+        assert prepared.subscriber_id == customer_subscriber.id
         assert prepared.verified.credential_id == customer.id
         assert prepared.verified.audience == audience.value
     db_session.refresh(staff_credential)
@@ -84,13 +92,13 @@ def test_customer_email_collision_never_selects_or_counts_staff_credential(
 
 @pytest.mark.parametrize("identifier_kind", ["username", "email"])
 def test_web_and_native_resolve_the_same_customer(
-    db_session: Session, subscriber: Subscriber, identifier_kind: str
+    db_session: Session, customer_subscriber: Subscriber, identifier_kind: str
 ) -> None:
-    credential = _credential(db_session, subscriber, "CUSTOMER-200")
+    credential = _credential(db_session, customer_subscriber, "CUSTOMER-200")
     identifier = (
         credential.username
         if identifier_kind == "username"
-        else subscriber.email.upper()
+        else customer_subscriber.email.upper()
     )
     web = owner.prepare_customer_login(
         db_session,
@@ -102,21 +110,21 @@ def test_web_and_native_resolve_the_same_customer(
             identifier, "customer-password", owner.CustomerLoginAudience.NATIVE_CUSTOMER
         ),
     )
-    assert web.subscriber_id == native.subscriber_id == subscriber.id
+    assert web.subscriber_id == native.subscriber_id == customer_subscriber.id
     assert web.verified.credential_id == native.verified.credential_id == credential.id
 
 
 @pytest.mark.parametrize("representation", ["bare", "plain"])
 def test_native_preserves_portal_access_fallback_and_password_bytes(
     db_session: Session,
-    subscriber: Subscriber,
+    customer_subscriber: Subscriber,
     monkeypatch: pytest.MonkeyPatch,
     representation: str,
 ) -> None:
     password = "  reversible password  "
     db_session.add(
         AccessCredential(
-            subscriber_id=subscriber.id,
+            subscriber_id=customer_subscriber.id,
             username="pppoe-parity",
             secret_hash=password if representation == "bare" else "plain:" + password,
             is_active=True,
@@ -125,33 +133,37 @@ def test_native_preserves_portal_access_fallback_and_password_bytes(
     db_session.commit()
     monkeypatch.setattr(
         owner.radius_auth,
-        "authenticate",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("offline test radius")),
+        "observe_authentication",
+        radius_not_accepted,
     )
     for audience in owner.CustomerLoginAudience:
         prepared = owner.prepare_customer_login(
             db_session, _query("pppoe-parity", password, audience)
         )
-        assert prepared.subscriber_id == subscriber.id
+        assert prepared.subscriber_id == customer_subscriber.id
         assert prepared.verified.src == pa.SRC_ACCESS_CREDENTIAL
 
 
 def test_wrong_customer_email_password_never_tries_radius(
-    db_session: Session, subscriber: Subscriber, monkeypatch: pytest.MonkeyPatch
+    db_session: Session,
+    customer_subscriber: Subscriber,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    credential = _credential(db_session, subscriber, "CUSTOMER-300")
+    credential = _credential(db_session, customer_subscriber, "CUSTOMER-300")
 
-    def unexpected_radius(**kwargs: object) -> None:
+    def unexpected_radius(
+        db: Session, *, query: owner.radius_auth.ObserveRadiusAuthentication
+    ) -> owner.radius_auth.RadiusAuthenticationObservation:
         pytest.fail(
             "Contact-email password failure must not hop to network credentials"
         )
 
-    monkeypatch.setattr(owner.radius_auth, "authenticate", unexpected_radius)
+    monkeypatch.setattr(owner.radius_auth, "observe_authentication", unexpected_radius)
     with pytest.raises(owner.CustomerLoginError) as refusal:
         owner.prepare_customer_login(
             db_session,
             _query(
-                subscriber.email,
+                customer_subscriber.email,
                 "wrong-password",
                 owner.CustomerLoginAudience.NATIVE_CUSTOMER,
             ),
@@ -161,16 +173,17 @@ def test_wrong_customer_email_password_never_tries_radius(
     assert credential.failed_login_attempts == 1
 
 
-def test_native_rejects_reseller_before_session_issuance(
-    db_session: Session, subscriber: Subscriber
+@pytest.mark.parametrize("user_type", [UserType.system_user, UserType.reseller])
+def test_native_rejects_non_customer_before_session_issuance(
+    db_session: Session, customer_subscriber: Subscriber, user_type: UserType
 ) -> None:
-    subscriber.user_type = UserType.reseller
-    _credential(db_session, subscriber, "reseller-is-not-customer")
+    customer_subscriber.user_type = user_type
+    _credential(db_session, customer_subscriber, "non-customer-native-account")
     with pytest.raises(owner.CustomerLoginError) as refusal:
         owner.prepare_customer_login(
             db_session,
             _query(
-                "reseller-is-not-customer",
+                "non-customer-native-account",
                 "customer-password",
                 owner.CustomerLoginAudience.NATIVE_CUSTOMER,
             ),
@@ -182,10 +195,10 @@ def test_native_rejects_reseller_before_session_issuance(
     "status", [SubscriberStatus.disabled, SubscriberStatus.canceled]
 )
 def test_native_preserves_portal_disabled_account_refusal(
-    db_session: Session, subscriber: Subscriber, status: SubscriberStatus
+    db_session: Session, customer_subscriber: Subscriber, status: SubscriberStatus
 ) -> None:
-    subscriber.status = status
-    _credential(db_session, subscriber, "disabled-customer")
+    customer_subscriber.status = status
+    _credential(db_session, customer_subscriber, "disabled-customer")
     with pytest.raises(owner.CustomerLoginError) as refusal:
         owner.prepare_customer_login(
             db_session,
@@ -199,16 +212,19 @@ def test_native_preserves_portal_disabled_account_refusal(
 
 
 def test_customer_admission_does_not_change_general_or_admin_eligibility(
-    subscriber: Subscriber,
+    customer_subscriber: Subscriber,
 ) -> None:
-    subscriber.user_type = UserType.reseller
+    customer_subscriber.user_type = UserType.reseller
     assert (
-        principal_refusal("subscriber", subscriber, LoginAudience.customer)
+        principal_refusal("subscriber", customer_subscriber, LoginAudience.customer)
         == "customer_required"
     )
-    assert principal_refusal("subscriber", subscriber, LoginAudience.general) is None
     assert (
-        principal_refusal("subscriber", subscriber, LoginAudience.admin)
+        principal_refusal("subscriber", customer_subscriber, LoginAudience.general)
+        is None
+    )
+    assert (
+        principal_refusal("subscriber", customer_subscriber, LoginAudience.admin)
         == "admin_required"
     )
 

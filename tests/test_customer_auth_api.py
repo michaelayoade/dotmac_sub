@@ -25,6 +25,7 @@ from tests.authentication_denial_unit import (
 )
 from tests.subscriber_mfa_fixtures import seed_enabled_subscriber_mfa
 
+pytest_plugins = ("tests.customer_login_fixtures",)
 pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
@@ -39,9 +40,9 @@ def customer_client(db_session: Session, monkeypatch: pytest.MonkeyPatch):
         yield client
 
 
-def _credential(db: Session, subscriber: Subscriber) -> UserCredential:
+def _credential(db: Session, customer_subscriber: Subscriber) -> UserCredential:
     credential = UserCredential(
-        subscriber_id=subscriber.id,
+        subscriber_id=customer_subscriber.id,
         username="CUSTOMER-API-100",
         provider=AuthProvider.local,
         password_hash=hash_password("customer-password"),
@@ -53,14 +54,14 @@ def _credential(db: Session, subscriber: Subscriber) -> UserCredential:
 
 
 def test_native_customer_login_ignores_staff_email_collision(
-    customer_client: TestClient, db_session: Session, subscriber: Subscriber
+    customer_client: TestClient, db_session: Session, customer_subscriber: Subscriber
 ) -> None:
-    subscriber.email = "native-collision@example.test"
-    _credential(db_session, subscriber)
+    customer_subscriber.email = "native-collision@example.test"
+    _credential(db_session, customer_subscriber)
     staff = SystemUser(
         first_name="Staff",
         last_name="NativeCollision",
-        email=subscriber.email,
+        email=customer_subscriber.email,
         user_type=UserType.system_user,
         is_active=True,
     )
@@ -78,7 +79,7 @@ def test_native_customer_login_ignores_staff_email_collision(
     db_session.commit()
     response = customer_client.post(
         "/api/v1/customer/auth/login",
-        json={"username": subscriber.email, "password": "customer-password"},
+        json={"username": customer_subscriber.email, "password": "customer-password"},
         headers={"X-Request-ID": str(uuid4())},
     )
     assert response.status_code == 200
@@ -87,7 +88,7 @@ def test_native_customer_login_ignores_staff_email_collision(
     assert "refresh_token" not in response.cookies
     sessions = db_session.query(AuthSession).all()
     assert len(sessions) == 1
-    assert sessions[0].subscriber_id == subscriber.id
+    assert sessions[0].subscriber_id == customer_subscriber.id
     assert sessions[0].system_user_id is None
 
 
@@ -105,11 +106,15 @@ def test_customer_endpoint_rejects_provider_and_never_runs_general_login(
     assert response.status_code == 422
 
 
-def test_customer_endpoint_rejects_reseller_without_a_session(
-    customer_client: TestClient, db_session: Session, subscriber: Subscriber
+@pytest.mark.parametrize("user_type", [UserType.system_user, UserType.reseller])
+def test_customer_endpoint_rejects_non_customer_without_a_session(
+    customer_client: TestClient,
+    db_session: Session,
+    customer_subscriber: Subscriber,
+    user_type: UserType,
 ) -> None:
-    subscriber.user_type = UserType.reseller
-    _credential(db_session, subscriber)
+    customer_subscriber.user_type = user_type
+    _credential(db_session, customer_subscriber)
     response = customer_client.post(
         "/api/v1/customer/auth/login",
         json={"username": "CUSTOMER-API-100", "password": "customer-password"},
@@ -119,11 +124,11 @@ def test_customer_endpoint_rejects_reseller_without_a_session(
 
 
 def test_native_mfa_challenge_is_bound_to_customer_audience(
-    customer_client: TestClient, db_session: Session, subscriber: Subscriber
+    customer_client: TestClient, db_session: Session, customer_subscriber: Subscriber
 ) -> None:
-    _credential(db_session, subscriber)
+    _credential(db_session, customer_subscriber)
     seed_enabled_subscriber_mfa(
-        db_session, subscriber_id=subscriber.id, label="native-test"
+        db_session, subscriber_id=customer_subscriber.id, label="native-test"
     )
     response = customer_client.post(
         "/api/v1/customer/auth/login",
@@ -140,14 +145,18 @@ def test_native_mfa_challenge_is_bound_to_customer_audience(
 
 
 def test_native_customer_mfa_completes_with_portal_totp_whitespace_policy(
-    customer_client: TestClient, db_session: Session, subscriber: Subscriber
+    customer_client: TestClient, db_session: Session, customer_subscriber: Subscriber
 ) -> None:
-    _credential(db_session, subscriber)
-    factor = seed_enabled_subscriber_mfa(db_session, subscriber_id=subscriber.id)
+    _credential(db_session, customer_subscriber)
+    factor = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=customer_subscriber.id
+    )
     login = customer_client.post(
         "/api/v1/customer/auth/login",
         json={"username": "CUSTOMER-API-100", "password": "customer-password"},
     )
+    assert login.status_code == 200
+    assert login.json()["mfa_required"] is True
     response = customer_client.post(
         "/api/v1/customer/auth/mfa/verify",
         json={
@@ -162,13 +171,15 @@ def test_native_customer_mfa_completes_with_portal_totp_whitespace_policy(
 
 
 def test_customer_mfa_rejects_general_challenge_before_issuing_session(
-    customer_client: TestClient, db_session: Session, subscriber: Subscriber
+    customer_client: TestClient, db_session: Session, customer_subscriber: Subscriber
 ) -> None:
     from app.services.auth_flow import AuthFlow
     from tests.test_auth_flow import _make_request
 
-    _credential(db_session, subscriber)
-    factor = seed_enabled_subscriber_mfa(db_session, subscriber_id=subscriber.id)
+    _credential(db_session, customer_subscriber)
+    factor = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=customer_subscriber.id
+    )
     general = AuthFlow.login(
         db=db_session,
         username="CUSTOMER-API-100",
@@ -176,6 +187,7 @@ def test_customer_mfa_rejects_general_challenge_before_issuing_session(
         request=_make_request(),
         provider=None,
     )
+    assert general["mfa_required"] is True
     response = customer_client.post(
         "/api/v1/customer/auth/mfa/verify",
         json={
@@ -188,15 +200,19 @@ def test_customer_mfa_rejects_general_challenge_before_issuing_session(
 
 
 def test_customer_mfa_rechecks_customer_classification(
-    customer_client: TestClient, db_session: Session, subscriber: Subscriber
+    customer_client: TestClient, db_session: Session, customer_subscriber: Subscriber
 ) -> None:
-    _credential(db_session, subscriber)
-    factor = seed_enabled_subscriber_mfa(db_session, subscriber_id=subscriber.id)
+    _credential(db_session, customer_subscriber)
+    factor = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=customer_subscriber.id
+    )
     login = customer_client.post(
         "/api/v1/customer/auth/login",
         json={"username": "CUSTOMER-API-100", "password": "customer-password"},
     )
-    subscriber.user_type = UserType.reseller
+    assert login.status_code == 200
+    assert login.json()["mfa_required"] is True
+    customer_subscriber.user_type = UserType.reseller
     db_session.commit()
     response = customer_client.post(
         "/api/v1/customer/auth/mfa/verify",

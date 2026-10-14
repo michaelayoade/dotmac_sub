@@ -1,9 +1,9 @@
 // Auth-flow models mirroring app/schemas/auth_flow.py.
 
-/// Response from POST /auth/login.
+/// Response from POST /customer/auth/login.
 ///
 /// When MFA is enabled, `accessToken` is null, `mfaRequired` is true and
-/// `mfaToken` must be exchanged at POST /auth/mfa/verify.
+/// `mfaToken` must be exchanged at POST /customer/auth/mfa/verify.
 class LoginResult {
   LoginResult({
     this.accessToken,
@@ -30,7 +30,7 @@ class LoginResult {
       );
 }
 
-/// Response from POST /auth/mfa/verify and POST /auth/refresh.
+/// Response from POST /customer/auth/mfa/verify and POST /auth/refresh.
 class TokenPair {
   TokenPair({required this.accessToken, this.refreshToken});
 

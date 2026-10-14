@@ -129,6 +129,10 @@ def _customer_authentication_service() -> SOTService:
                 "tests/test_web_customer_auth.py",
                 "tests/integration/test_password_auth_credential_race.py",
                 "tests/architecture/test_customer_auth_boundary.py",
+                "tests/architecture/test_customer_login_identity_boundary.py",
+                "tests/architecture/test_password_authentication_boundary.py",
+                "tests/architecture/test_adapter_identifiability.py",
+                "tests/architecture/test_openapi_contract_surface.py",
             ),
         ),
     )

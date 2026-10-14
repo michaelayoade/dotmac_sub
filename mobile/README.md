@@ -163,9 +163,9 @@ in-memory checkout context required to open `/pay`.
 
 ## How auth works
 
-1. `POST /auth/login` returns either a token pair **or** an MFA challenge
+1. `POST /customer/auth/login` returns either a token pair **or** an MFA challenge
    (`mfa_required: true`, `mfa_token`). The app routes to the MFA screen and
-   completes via `POST /auth/mfa/verify`.
+   completes via `POST /customer/auth/mfa/verify`.
 2. Tokens are stored in the secure store. Every request carries
    `Authorization: Bearer <access_token>`.
 3. On a `401`, `ApiClient` transparently calls `POST /auth/refresh` once and

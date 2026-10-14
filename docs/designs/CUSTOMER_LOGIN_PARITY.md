@@ -37,8 +37,8 @@ The customer app uses those endpoints. An existing unsupported cached/profile
 identity is discarded through the existing session-wipe coordinator.
 An old cache without account classification waits for a fresh customer profile;
 an unavailable server preserves its credentials without rendering that cache.
-Login or MFA success followed by a failed profile read is reported separately and can
-retry the profile without repeating password or MFA verification. Requests have
+Login or MFA success followed by a failed profile read is reported separately
+and can retry the profile without repeating password or MFA verification. Requests have
 a stable UUID request ID across transport replay; diagnostic breadcrumbs include
 only method, redacted path, status and request ID. Shared policy denial logs
 contain correlation, bounded reason/surface and target kind, never entered
@@ -46,6 +46,13 @@ identifier, password, hash, tokens or raw headers.
 
 Unit parity tests are non-authoritative fast-lane evidence. PostgreSQL tests
 using the real migration chain must prove native source-standing/reset behavior.
+Customer authentication tests use an explicit customer fixture, matching the
+account-creation owner's classification rather than the direct ORM staff
+default. Non-customer fixtures remain explicit refusal cases. Customer RADIUS
+policy tests patch the typed observation boundary; general RADIUS transport
+tests retain the legacy transport facade. Architecture guards follow both
+customer adapters to shared preparation, then the typed identity resolver and
+independent denial owner. API and composition snapshots describe that same tree.
 The backend must be deployed and accepted before the new mobile build: the app
 does not silently fall back to the general login endpoint on 404. No deployment,
 production credential change or broad rollback of previous auth protections is

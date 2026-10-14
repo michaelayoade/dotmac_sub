@@ -1191,6 +1191,10 @@ def test_customer_native_reset_after_preparation_mints_no_session(factory, accou
     from app.services import customer_authentication as customer_auth
 
     with factory() as session:
+        subscriber = session.get(Subscriber, account.subscriber_id)
+        assert subscriber is not None
+        subscriber.user_type = UserType.customer
+        session.commit()
         prepared = customer_auth.prepare_customer_login(
             db=session,
             query=customer_auth.PrepareCustomerLogin(
