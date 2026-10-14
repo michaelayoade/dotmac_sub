@@ -1209,14 +1209,22 @@ def test_customer_native_reset_after_preparation_mints_no_session(factory, accou
             ),
         )
     _reset(factory, account)
+    reset_row = _credential_row(factory, account)
+    assert reset_row.credential_version > prepared.verified.credential_version
     with factory() as session:
         with pytest.raises(pa.PasswordAuthenticationError) as denied:
             pa.complete_password_step(
                 db=session, verified=prepared.verified, request=_make_request()
             )
-    assert denied.value.kind == "credential_changed"
+    # Login gate misses deliberately return the same generic credential refusal
+    # as the customer portal; credential_changed belongs to password-change CAS.
+    assert denied.value.kind == pa.DenialReason.INVALID_CREDENTIALS
     assert _session_count(factory, account) == 0
-    assert _credential_row(factory, account).last_login_at is None
+    after = _credential_row(factory, account)
+    assert after.credential_version == reset_row.credential_version
+    assert after.password_hash == reset_row.password_hash
+    assert after.failed_login_attempts == reset_row.failed_login_attempts
+    assert after.last_login_at is None
     assert _audit_count(factory, account, "auth.login_succeeded") == 0
 
 

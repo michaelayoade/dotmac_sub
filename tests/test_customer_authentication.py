@@ -7,7 +7,9 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, UserCredential
+from app.models.auth import Session as AuthSession
 from app.models.catalog import AccessCredential
 from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.models.system_user import SystemUser
@@ -18,6 +20,7 @@ from tests.authentication_denial_unit import (
     authentication_denial_unit_session as authentication_denial_unit_session,
 )
 from tests.customer_login_fixtures import radius_not_accepted
+from tests.test_auth_flow import _make_request
 
 pytest_plugins = ("tests.customer_login_fixtures",)
 pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
@@ -226,6 +229,48 @@ def test_customer_admission_does_not_change_general_or_admin_eligibility(
     assert (
         principal_refusal("subscriber", customer_subscriber, LoginAudience.admin)
         == "admin_required"
+    )
+
+
+def test_native_stale_preparation_uses_login_gate_refusal_without_success(
+    db_session: Session, customer_subscriber: Subscriber
+) -> None:
+    """Logic-only version change; the migrated PostgreSQL test owns reset proof."""
+    credential = _credential(db_session, customer_subscriber, "CUSTOMER-STALE")
+    prepared = owner.prepare_customer_login(
+        db_session,
+        _query(
+            credential.username,
+            "customer-password",
+            owner.CustomerLoginAudience.NATIVE_CUSTOMER,
+        ),
+    )
+    assert prepared.verified.credential_id == credential.id
+    assert prepared.verified.credential_version == credential.credential_version
+    credential.password_hash = hash_password("Changed-after-preparation1!")
+    credential.credential_version += 1
+    db_session.commit()
+    changed_version = credential.credential_version
+    changed_hash = credential.password_hash
+    failed_attempts = credential.failed_login_attempts
+
+    with pytest.raises(pa.PasswordAuthenticationError) as denied:
+        pa.complete_password_step(
+            db=db_session, verified=prepared.verified, request=_make_request()
+        )
+
+    assert denied.value.kind == pa.DenialReason.INVALID_CREDENTIALS
+    db_session.refresh(credential)
+    assert credential.credential_version == changed_version
+    assert credential.password_hash == changed_hash
+    assert credential.failed_login_attempts == failed_attempts
+    assert credential.last_login_at is None
+    assert db_session.query(AuthSession).count() == 0
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "auth.login_succeeded")
+        .count()
+        == 0
     )
 
 

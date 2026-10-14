@@ -46,6 +46,10 @@ identifier, password, hash, tokens or raw headers.
 
 Unit parity tests are non-authoritative fast-lane evidence. PostgreSQL tests
 using the real migration chain must prove native source-standing/reset behavior.
+After a reset advances the local credential version, stale prepared login
+evidence is refused as `invalid_credentials`, matching the existing login owner.
+`credential_changed` is the password-change compare-and-swap refusal. Neither
+login transport creates a session or success audit from stale evidence.
 Customer authentication tests use an explicit customer fixture, matching the
 account-creation owner's classification rather than the direct ORM staff
 default. Non-customer fixtures remain explicit refusal cases. Customer RADIUS
