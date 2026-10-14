@@ -1006,6 +1006,61 @@ def customer_financial_balances_by_currency(
         )
     add(payment_query.group_by(Payment.account_id, payment_currency).all())
 
+    # A payment received after a reviewed opening is a new customer credit.
+    # When that credit is later applied to a collectible invoice which was
+    # already absorbed by the opening, the allocation is the post-opening
+    # debit. The ordinary invoice projection cannot carry that debit because
+    # the invoice itself correctly remains before the boundary. Without this
+    # bounded allocation leg, prepaid funding is overstated by the amount
+    # applied (while the payment owner correctly reports less reusable cash).
+    if start is not None:
+        consumed_currency = func.coalesce(Payment.currency, Invoice.currency, "NGN")
+        consumed_query = (
+            db.query(
+                Payment.account_id,
+                consumed_currency.label("currency"),
+                (-func.sum(PaymentAllocation.amount)).label("balance"),
+            )
+            .join(Payment, Payment.id == PaymentAllocation.payment_id)
+            .join(Invoice, Invoice.id == PaymentAllocation.invoice_id)
+            .filter(Payment.account_id.in_(account_uuids))
+            .filter(Invoice.account_id == Payment.account_id)
+            .filter(PaymentAllocation.is_active.is_(True))
+            .filter(Payment.is_active.is_(True))
+            .filter(Invoice.is_active.is_(True))
+            .filter(Invoice.is_proforma.is_(False))
+            .filter(
+                Payment.status.in_(
+                    [
+                        PaymentStatus.succeeded,
+                        PaymentStatus.partially_refunded,
+                        PaymentStatus.refunded,
+                    ]
+                )
+            )
+            .filter(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                        InvoiceStatus.paid,
+                    ]
+                )
+            )
+            .filter(collectible_ar_invoice_filter())
+            .filter(PaymentAllocation.created_at > start)
+            .filter(Invoice.created_at <= start)
+            .filter(func.coalesce(Invoice.issued_at, Invoice.created_at) <= start)
+        )
+        if end is not None:
+            consumed_query = consumed_query.filter(
+                PaymentAllocation.created_at <= end
+            )
+        add(
+            consumed_query.group_by(Payment.account_id, consumed_currency).all()
+        )
+
     allocation_currency = func.coalesce(Payment.currency, Invoice.currency, "NGN")
     allocation_query = (
         db.query(

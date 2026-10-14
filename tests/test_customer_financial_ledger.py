@@ -347,6 +347,68 @@ def test_reviewed_opening_position_keeps_late_recorded_backdated_money(
     )
 
 
+def test_post_opening_payment_allocation_to_pre_opening_invoice_reduces_funding(
+    db_session, subscriber
+):
+    position_at = datetime(2026, 7, 1, tzinfo=UTC)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-PRE-OPENING",
+        status=InvoiceStatus.partially_paid,
+        currency="NGN",
+        subtotal=Decimal("140.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("140.00"),
+        balance_due=Decimal("27.75"),
+        issued_at=position_at - timedelta(days=1),
+        created_at=position_at - timedelta(days=1),
+        is_proforma=False,
+    )
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("150.50"),
+        refunded_amount=Decimal("0.00"),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
+        paid_at=position_at + timedelta(days=1),
+        created_at=position_at + timedelta(days=1),
+    )
+    db_session.add_all([invoice, payment])
+    db_session.flush()
+    db_session.add(
+        PaymentAllocation(
+            payment_id=payment.id,
+            invoice_id=invoice.id,
+            amount=Decimal("112.25"),
+            created_at=position_at + timedelta(days=1, minutes=1),
+        )
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("46.63"),
+        position_at=position_at,
+    )
+
+    # The pre-opening invoice remains absorbed by the reviewed opening. Its
+    # later payment allocation consumes only the new post-opening credit.
+    assert customer_financial_balances_by_currency(
+        db_session,
+        [subscriber.id],
+        start=position_at,
+    ) == {subscriber.id: {"NGN": Decimal("38.25")}}
+    assert verified_prepaid_funding_balance(db_session, subscriber.id) == Decimal(
+        "84.88"
+    )
+    # Full-history reporting continues to use the invoice and payment facts;
+    # the boundary-only consumption must not be counted there a second time.
+    assert customer_financial_balances_by_currency(
+        db_session,
+        [subscriber.id],
+    ) == {subscriber.id: {"NGN": Decimal("10.50")}}
+
+
 def test_paid_prepaid_invoice_consumes_payment_from_canonical_position(
     db_session, subscriber, subscription
 ):
