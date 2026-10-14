@@ -47,9 +47,11 @@ domain path. Startup before the first loop progression, bind failure, transport
 closure/error, stop and stale loop progress do not pass. A blocked event loop
 cannot answer the challenge within the client deadline.
 
-The default socket is `/tmp/dotmac-syslog-<uid>/health.sock` (canonical temporary
-path on systems where `/tmp` is a symlink). Set `SYSLOG_HEALTH_SOCKET` in the
-listener and query, or pass `--socket` to the query, for another absolute path or
+The default socket is `dotmac-syslog-<uid>/health.sock` beneath the canonical
+system temporary directory selected by Python's `tempfile.gettempdir()` (commonly
+`/tmp`). The listener and query must share the temporary-directory environment,
+or use an explicit socket path. Set `SYSLOG_HEALTH_SOCKET` in the listener and
+query, or pass `--socket` to the query, for another absolute path or
 multiple instances. Its immediate parent must be owned by the service UID,
 mode 0700 and free of symlink traversal. The socket and lifetime lock are mode
 0600. Run probes as that same UID and within the same local mount/network/clock

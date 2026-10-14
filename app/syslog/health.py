@@ -10,6 +10,7 @@ import math
 import os
 import socket
 import stat
+import tempfile
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -58,10 +59,12 @@ def default_socket_path() -> Path:
         os.getenv(
             "SYSLOG_HEALTH_SOCKET",
             str(
-                Path("/tmp").resolve() / f"dotmac-syslog-{os.getuid()}" / "health.sock"
+                Path(tempfile.gettempdir()).resolve()
+                / f"dotmac-syslog-{os.getuid()}"
+                / "health.sock"
             ),
         )
-    )  # noqa: S108
+    )
 
 
 def validate_socket_parent(*, path: Path, create: bool = False) -> None:
@@ -123,16 +126,17 @@ def bind_health_socket(*, path: Path) -> HealthSocketBinding:
             raise OSError("invalid health lifetime lock")
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         previous = os.read(lock_fd, 128).decode("ascii")
+        socket_info: os.stat_result | None
         try:
-            info = path.lstat()
+            socket_info = path.lstat()
         except FileNotFoundError:
-            info = None
-        if info is not None:
-            recorded = f"{info.st_dev}:{info.st_ino}"
+            socket_info = None
+        if socket_info is not None:
+            recorded = f"{socket_info.st_dev}:{socket_info.st_ino}"
             if (
-                not stat.S_ISSOCK(info.st_mode)
-                or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) != 0o600
+                not stat.S_ISSOCK(socket_info.st_mode)
+                or socket_info.st_uid != os.getuid()
+                or stat.S_IMODE(socket_info.st_mode) != 0o600
                 or previous != recorded
             ):
                 raise OSError("unknown health socket collision")

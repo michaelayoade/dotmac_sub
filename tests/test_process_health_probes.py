@@ -83,7 +83,13 @@ def test_fresh_failed_cycle_and_idle_only_prove_liveness(
 ) -> None:
     # This is exactly the incumbent post-caught-failure wire contract: no success marker.
     for snapshot in (_snapshot(failing=2), PollerSnapshot(NOW, 0, 0, 0, 0, 0)):
-        monkeypatch.setattr(poller_health, "load_poller_health", lambda: snapshot)
+
+        def load_snapshot(
+            current_snapshot: PollerSnapshot = snapshot,
+        ) -> PollerSnapshot:
+            return current_snapshot
+
+        monkeypatch.setattr(poller_health, "load_poller_health", load_snapshot)
         outcome = poller_health.query_poller_liveness(
             query=PollerLivenessQuery(60, NOW)
         )
