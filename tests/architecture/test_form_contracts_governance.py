@@ -10,6 +10,8 @@ command owners.
 
 from __future__ import annotations
 
+# Importing the flow module executes its register() call — mirrors app import.
+import app.services.advance_renewal_invoicing  # noqa: F401
 import app.services.billing_mode_transitions  # noqa: F401
 import app.services.customer_portal_flow_changes  # noqa: F401
 import app.services.field_completion_review_projection  # noqa: F401

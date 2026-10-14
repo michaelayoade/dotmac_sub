@@ -16,6 +16,7 @@ import '../../core/offline/draft_store.dart';
 import '../jobs/job_models.dart';
 import '../jobs/jobs_providers.dart';
 import '../manager/manager_providers.dart';
+import 'expense_description_field.dart';
 import 'expense_models.dart';
 import 'expenses_providers.dart';
 
@@ -790,8 +791,9 @@ class _NewExpenseRequestScreenState
       setState(() => _lineError = 'Pick an expense category.');
       return;
     }
-    if (description.isEmpty) {
-      setState(() => _lineError = 'Describe what the expense was for.');
+    final descriptionError = validateExpenseDescription(description);
+    if (descriptionError != null) {
+      setState(() => _lineError = descriptionError);
       return;
     }
     if (amount <= 0) {
@@ -1219,6 +1221,17 @@ class _NewExpenseRequestScreenState
     if (_deliveryFailed && _submittedRequestId != null) {
       await _retryCreatedSubmission();
       return;
+    }
+    for (final (index, item) in _items.indexed) {
+      final descriptionError = item.descriptionError;
+      if (descriptionError != null) {
+        setState(
+          () => _submitError =
+              'Expense ${index + 1}: $descriptionError '
+              'Remove it and add it again with a valid description.',
+        );
+        return;
+      }
     }
     if (_purpose.text.trim().isEmpty) {
       setState(() => _submitError = 'Purpose is required.');
@@ -1817,11 +1830,7 @@ class _NewExpenseRequestScreenState
             ),
           ),
           const SizedBox(height: 12),
-          TextField(
-            key: const Key('expense-description'),
-            controller: _description,
-            decoration: const InputDecoration(labelText: 'Description'),
-          ),
+          ExpenseDescriptionField(controller: _description),
           const SizedBox(height: 12),
           Row(
             children: [
@@ -1949,6 +1958,13 @@ class _NewExpenseRequestScreenState
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
+                        if (item.descriptionError != null)
+                          Text(
+                            '${item.descriptionError} Remove this expense and add it again.',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
                       ],
                     ),
                   ),

@@ -13,7 +13,13 @@ from sqlalchemy.exc import OperationalError
 
 from app.models.auth import Session as AuthSession
 from app.models.auth import SessionStatus
-from app.models.subscriber import Reseller, ResellerUser, Subscriber
+from app.models.subscriber import (
+    Reseller,
+    ResellerUser,
+    Subscriber,
+    SubscriberStatus,
+    UserType,
+)
 from app.services import reseller_portal as portal
 from app.services.reseller_session_standing import (
     ResellerSessionStandingQuery,
@@ -344,16 +350,21 @@ def test_invalid_or_exhausted_refresh_clock_never_writes(
     portal.store_session.assert_not_called()
 
 
-def test_first_class_subscriber_link_must_still_be_active(
+def test_first_class_historical_subscriber_link_is_not_standing_authority(
     db_session, bound_session, subscriber
 ):
     query, _, user, _ = bound_session
     if query.principal_type != "reseller_user":
         return
     user.subscriber_id = subscriber.id
+    subscriber.user_type = UserType.reseller
+    subscriber.status = SubscriberStatus.canceled
     subscriber.is_active = False
     db_session.flush()
-    assert resolve_reseller_session_standing(db_session, query=query) is None
+    assert resolve_reseller_session_standing(db_session, query=query)
+    context = portal.get_context(db_session, "cookie")
+    assert context["principal_id"] == str(user.id)
+    assert portal.refresh_session("cookie", db_session)
 
 
 def test_inactive_reseller_is_freshly_denied(db_session, bound_session):

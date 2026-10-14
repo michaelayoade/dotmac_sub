@@ -723,32 +723,6 @@ def update_invoice_web(
     return invoice
 
 
-def generate_invoice_from_subscription_web(
-    db: Session,
-    *,
-    request,
-    actor_id: str | None,
-    subscriber_id: str,
-    subscription_id: str,
-) -> Invoice:
-    from app.services.billing.invoices import Invoices
-
-    invoice = Invoices.create_for_subscription(db, subscriber_id, subscription_id)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="generate_from_subscription",
-        entity_type="invoice",
-        entity_id=str(invoice.id),
-        actor_id=actor_id,
-        metadata={
-            "invoice_number": invoice.invoice_number,
-            "subscription_id": subscription_id,
-        },
-    )
-    return invoice
-
-
 def preview_credit_note_application(
     db: Session,
     *,

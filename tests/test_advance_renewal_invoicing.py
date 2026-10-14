@@ -4,8 +4,14 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.billing import Invoice, InvoiceLine, TaxApplication
-from app.models.catalog import BillingCycle, SubscriptionStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceLine,
+    InvoiceStatus,
+    ServiceEntitlement,
+    TaxApplication,
+)
+from app.models.catalog import BillingCycle, BillingMode, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.durable_timer import DurableTimer, TimerStatus
 from app.models.subscription_engine import SettingValueType
@@ -17,6 +23,10 @@ from app.services.billing_automation import (
     RecurringChargeComponentKind,
 )
 from app.services.owner_commands import CommandContext
+from app.services.prepaid_service_renewals import PrepaidRecurringChargePreview
+from app.services.service_entitlements import (
+    ensure_prepaid_entitlements_for_paid_invoice,
+)
 from app.services.settings_cache import SettingsCache
 from app.services.web_system_config import save_billing_config
 
@@ -222,3 +232,269 @@ def test_subscription_timer_uses_exact_configured_boundary(db_session, subscript
 
     assert outcome.scheduled is True
     assert outcome.due_at == boundary - timedelta(days=7)
+
+
+def _manual_postpaid_preview(subscription, *, evaluated_at, period_start, period_end):
+    return PostpaidChargePreview(
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+        period_start=period_start,
+        period_end=period_end,
+        currency="NGN",
+        net_amount=Decimal("12500.00"),
+        tax_amount=Decimal("0.00"),
+        gross_amount=Decimal("12500.00"),
+        billing_cycle=BillingCycle.monthly,
+        tax_application=TaxApplication.exempt,
+        tax_rate_percent=Decimal("0"),
+        tax_rate_id=None,
+        disposition=PostpaidChargePreviewDisposition.comparable,
+        components=(
+            PostpaidChargeComponentPreview(
+                kind=RecurringChargeComponentKind.base_service,
+                component_key="base_service",
+                quantity=Decimal("1"),
+                unit_price=Decimal("12500.00"),
+                net_amount=Decimal("12500.00"),
+                tax_amount=Decimal("0.00"),
+                gross_amount=Decimal("12500.00"),
+                tax_application=TaxApplication.exempt,
+                tax_rate_id=None,
+            ),
+        ),
+        issues=(),
+    )
+
+
+def _manual_command(preview, *, evaluated_at, permission=True, fingerprint=None):
+    command_id = uuid4()
+    return renewal.CreateManualSubscriptionServiceInvoiceCommand(
+        context=CommandContext.system(
+            actor="user:test-billing-operator",
+            scope=renewal.MANUAL_SUBSCRIPTION_SERVICE_INVOICE_SCOPE,
+            reason="Customer requested an early invoice for the next period.",
+            command_id=command_id,
+            correlation_id=command_id,
+            idempotency_key=f"manual-service:{preview.subscription_id}",
+        ),
+        query=renewal.ManualSubscriptionServiceInvoiceQuery(
+            account_id=preview.account_id,
+            subscription_id=preview.subscription_id,
+            evaluated_at=evaluated_at,
+        ),
+        expected_preview_fingerprint=fingerprint or preview.fingerprint,
+        permission_granted=permission,
+        confirmation=True,
+    )
+
+
+def test_manual_next_period_preview_and_issue_are_fingerprint_bound_and_idempotent(
+    db_session, subscription, monkeypatch
+):
+    evaluated_at = datetime(2026, 8, 20, 9, tzinfo=UTC)
+    period_start = datetime(2026, 9, 1, tzinfo=UTC)
+    period_end = datetime(2026, 10, 1, tzinfo=UTC)
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = period_start
+    subscription.end_at = None
+    db_session.commit()
+    charge = _manual_postpaid_preview(
+        subscription,
+        evaluated_at=evaluated_at,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    monkeypatch.setattr(
+        renewal,
+        "preview_postpaid_recurring_charge",
+        lambda *_args, **_kwargs: charge,
+    )
+    monkeypatch.setattr(renewal, "emit_event", lambda *_args, **_kwargs: None)
+
+    preview = renewal.preview_manual_subscription_service_invoice(
+        db_session,
+        renewal.ManualSubscriptionServiceInvoiceQuery(
+            account_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
+            evaluated_at=evaluated_at,
+        ),
+    )
+    assert preview.period_start == period_start
+    assert preview.period_end == period_end
+    assert preview.total == Decimal("12500.00")
+    assert len(preview.fingerprint) == 64
+    db_session.rollback()
+
+    first = renewal.create_manual_subscription_service_invoice(
+        db_session,
+        _manual_command(preview, evaluated_at=evaluated_at),
+    )
+    second = renewal.create_manual_subscription_service_invoice(
+        db_session,
+        _manual_command(preview, evaluated_at=evaluated_at),
+    )
+
+    invoice = db_session.get(Invoice, first.invoice_id)
+    line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    assert first.disposition is renewal.AdvanceRenewalInvoiceDisposition.created
+    assert second.disposition is renewal.AdvanceRenewalInvoiceDisposition.replayed
+    assert second.invoice_id == invoice.id
+    assert invoice.status.value == "issued"
+    assert invoice.billing_period_start.replace(tzinfo=UTC) == period_start
+    assert invoice.billing_period_end.replace(tzinfo=UTC) == period_end
+    assert invoice.balance_due == Decimal("12500.00")
+    assert line.subscription_id == subscription.id
+    assert line.metadata_["manual_subscription_service_invoice"] is True
+    assert (
+        db_session.query(InvoiceLine).filter_by(subscription_id=subscription.id).count()
+        == 1
+    )
+
+
+def test_manual_next_period_issue_fails_closed_without_dedicated_permission(
+    db_session, subscription, monkeypatch
+):
+    evaluated_at = datetime(2026, 8, 20, 9, tzinfo=UTC)
+    period_start = datetime(2026, 9, 1, tzinfo=UTC)
+    period_end = datetime(2026, 10, 1, tzinfo=UTC)
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = period_start
+    db_session.commit()
+    charge = _manual_postpaid_preview(
+        subscription,
+        evaluated_at=evaluated_at,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    monkeypatch.setattr(
+        renewal,
+        "preview_postpaid_recurring_charge",
+        lambda *_args, **_kwargs: charge,
+    )
+    preview = renewal.preview_manual_subscription_service_invoice(
+        db_session,
+        renewal.ManualSubscriptionServiceInvoiceQuery(
+            account_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
+            evaluated_at=evaluated_at,
+        ),
+    )
+    db_session.rollback()
+
+    with pytest.raises(renewal.AdvanceRenewalInvoiceError) as exc_info:
+        renewal.create_manual_subscription_service_invoice(
+            db_session,
+            _manual_command(preview, evaluated_at=evaluated_at, permission=False),
+        )
+
+    assert exc_info.value.code.endswith("permission_denied")
+    assert (
+        db_session.query(InvoiceLine).filter_by(subscription_id=subscription.id).count()
+        == 0
+    )
+
+
+def test_manual_prepaid_invoice_settlement_creates_one_exact_entitlement(
+    db_session, subscription, monkeypatch
+):
+    evaluated_at = datetime(2026, 8, 20, 9, tzinfo=UTC)
+    period_start = datetime(2026, 9, 1, tzinfo=UTC)
+    period_end = datetime(2026, 10, 1, tzinfo=UTC)
+    subscription.status = SubscriptionStatus.active
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.next_billing_at = period_start
+    db_session.commit()
+    prepaid_charge = PrepaidRecurringChargePreview(
+        subscription_id=subscription.id,
+        account_id=subscription.subscriber_id,
+        period_start=period_start,
+        period_end=period_end,
+        gross_amount=Decimal("12500.00"),
+        currency="NGN",
+        billing_cycle=BillingCycle.monthly,
+        excluded_recurring_addon_ids=(),
+    )
+    monkeypatch.setattr(
+        renewal,
+        "_renewal_boundary",
+        lambda *_args, **_kwargs: period_start,
+    )
+    monkeypatch.setattr(
+        renewal,
+        "preview_prepaid_recurring_charge",
+        lambda *_args, **_kwargs: prepaid_charge,
+    )
+    preview = renewal.preview_manual_subscription_service_invoice(
+        db_session,
+        renewal.ManualSubscriptionServiceInvoiceQuery(
+            account_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
+            evaluated_at=evaluated_at,
+        ),
+    )
+    db_session.rollback()
+    outcome = renewal.create_manual_subscription_service_invoice(
+        db_session,
+        _manual_command(preview, evaluated_at=evaluated_at),
+    )
+    invoice = db_session.get(Invoice, outcome.invoice_id)
+    invoice.status = InvoiceStatus.paid
+    invoice.balance_due = Decimal("0.00")
+    db_session.flush()
+
+    first = ensure_prepaid_entitlements_for_paid_invoice(db_session, invoice)
+    second = ensure_prepaid_entitlements_for_paid_invoice(db_session, invoice)
+
+    assert len(first) == 1
+    assert second == []
+    entitlement = db_session.query(ServiceEntitlement).one()
+    assert entitlement.subscription_id == subscription.id
+    assert entitlement.starts_at.replace(tzinfo=UTC) == period_start
+    assert entitlement.ends_at.replace(tzinfo=UTC) == period_end
+
+
+def test_manual_next_period_issue_rejects_stale_preview_without_writes(
+    db_session, subscription, monkeypatch
+):
+    evaluated_at = datetime(2026, 8, 20, 9, tzinfo=UTC)
+    period_start = datetime(2026, 9, 1, tzinfo=UTC)
+    period_end = datetime(2026, 10, 1, tzinfo=UTC)
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = period_start
+    db_session.commit()
+    charge = _manual_postpaid_preview(
+        subscription,
+        evaluated_at=evaluated_at,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    monkeypatch.setattr(
+        renewal,
+        "preview_postpaid_recurring_charge",
+        lambda *_args, **_kwargs: charge,
+    )
+    preview = renewal.preview_manual_subscription_service_invoice(
+        db_session,
+        renewal.ManualSubscriptionServiceInvoiceQuery(
+            account_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
+            evaluated_at=evaluated_at,
+        ),
+    )
+    db_session.rollback()
+
+    with pytest.raises(renewal.AdvanceRenewalInvoiceError) as exc_info:
+        renewal.create_manual_subscription_service_invoice(
+            db_session,
+            _manual_command(
+                preview,
+                evaluated_at=evaluated_at,
+                fingerprint="0" * 64,
+            ),
+        )
+
+    assert exc_info.value.code.endswith("stale_preview")
+    assert (
+        db_session.query(InvoiceLine).filter_by(subscription_id=subscription.id).count()
+        == 0
+    )

@@ -94,6 +94,14 @@ remain visible and retryable. Installation projects remain a separate workflow.
 This change requires backend migration 668 and a new mobile build; earlier
 TestFlight builds do not include native vendor work-order execution.
 
+## Expense descriptions
+
+Each expense item shows a live character counter and accepts at most 500
+characters, matching the Sub and ERP description contracts. Spaces and
+punctuation count. Unicode text uses the backend's code-point count; typing and
+pasting never split a grapheme to fit the limit. Saved descriptions remain
+intact, and invalid saved items must be removed and added again before submission.
+
 ## Useful Commands
 
 ```sh
