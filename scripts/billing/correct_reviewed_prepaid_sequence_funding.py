@@ -28,6 +28,7 @@ from app.services.prepaid_draft_reconciliation import (
     preview_reviewed_prepaid_sequence_funding_correction,
 )
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 JsonObject: TypeAlias = dict[str, object]
 
@@ -188,6 +189,7 @@ def main() -> int:
     parser.add_argument("--actor-system-user-id", type=UUID)
     parser.add_argument("--reason")
     args = parser.parse_args()
+    refuse_apply(args.apply)
     try:
         query = _manifest(args.manifest)
     except (OSError, json.JSONDecodeError, ValueError) as exc:

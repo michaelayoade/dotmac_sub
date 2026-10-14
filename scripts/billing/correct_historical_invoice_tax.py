@@ -23,6 +23,7 @@ from app.services.historical_invoice_tax_corrections import (
 )
 from app.services.owner_commands import CommandContext
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _aware_datetime(value: str) -> datetime:
@@ -134,6 +135,7 @@ def _permission_granted(db: Session, actor_system_user_id: UUID | None) -> bool:
 
 def main() -> int:
     args = _parser().parse_args()
+    refuse_apply(args.apply)
     query = _query(args)
     try:
         with db_session_adapter.read_session() as db:

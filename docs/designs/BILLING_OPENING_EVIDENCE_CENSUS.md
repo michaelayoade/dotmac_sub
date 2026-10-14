@@ -170,3 +170,52 @@ qualification. The raw populations and identifiers support future review; this
 slice performs no capture on an operator target, money mutation, import, repair,
 namespace assignment or writer switch. Hosted PostgreSQL canaries own execution
 acceptance; local static checks are not database or cash-qualification evidence.
+
+## V3 current documentary and tax observations
+
+The same owner and operator entry point accept explicit
+`--population-version sub-billing-opening-census-v3`. V1 and V2 retain their exact
+contracts, selected columns and fingerprint algorithm. V3 inherits V2 and adds
+`documentary_observations`, covered by its separate version and content fingerprint.
+Existing AR eligibility remains a separate classification, never documentary
+qualification. The CLI returns 1 for any unavailable original-evidence record as
+well as existing AR or cash blockers.
+
+V3 selects every Invoice's current subtotal, discount amount, tax total, total and
+billing-period bounds, and every InvoiceLine's current description, tax-rate ID,
+tax snapshot version/code/percent/active flag and tax application. Both complete
+populations are ID-ordered in the same PostgreSQL snapshot. Existing inherited
+invoice/line IDs, dates, amounts, activity, quantities and unit prices remain
+available for structural correlation. Non-finite new numeric observations fail
+capture. These are current persisted observations; a persisted tax snapshot does
+not authenticate the original document or establish its original applied tax.
+Missing snapshots remain null. A null tax-rate ID does not mean zero VAT, exemption
+or non-applicability. V3 never joins live TaxRate, party, branding, bank/settings or
+PDF data to invent historical values, and never exports metadata or file locations.
+
+Every invoice, including closed, draft or otherwise excluded rows, has an explicit
+`unavailable_original_evidence` record. Its typed requirements name every mandatory
+`OpeningOriginalDocumentV1` field: original number/issue instant, documentary
+reference/digest, monetary totals, seller/customer and party tax identities,
+applied tax snapshots and evidence reference, FX evidence reference, profile
+code/version, payment instructions, brand asset, locale and timezone. The optional
+FX snapshot is not asserted applicable or absent; required FX evidence is still
+unavailable. Current values of even matching fields cannot satisfy these original
+requirements without authentic frozen evidence. Historical-discharge source/live
+namespace mapping, tax provenance, and withholding/non-cash replay bindings remain
+separate named unavailable requirements. Raw proof WHT amounts or credit-note
+applications never establish accepted withholding, non-cash entitlement or replay
+identity. The two explicit reasons are missing authenticated frozen document and
+missing qualified discharge/replay evidence. These conservative records report
+what this exporter cannot establish, rather than asserting no external evidence
+exists or zero historical discharge.
+
+Source model evidence is `app/models/billing.py::Invoice` and `InvoiceLine`.
+Incumbent PDF export metadata has no authentic original documentary digest;
+Subscriber and TaxRate are current mutable records. Original document bytes,
+frozen party/tax/FX/presentation provenance, qualified historical discharge and
+source mapping, and external human validation remain prerequisites for any future
+opening-import qualification. This slice performs no original-document recovery,
+financial replay, source correction, external validation or authority change.
+Hosted tests own runtime acceptance; local AST and pinned Ruff checks do not prove
+PostgreSQL acceptance or original-document qualification.

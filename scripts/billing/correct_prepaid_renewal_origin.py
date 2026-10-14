@@ -53,6 +53,7 @@ from app.services.prepaid_renewal_origin_correction import (
     correct_renewal_origin,
     preview_renewal_origin_correction,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 _EXIT_BLOCKED = 2
 _EXIT_REFUSED = 3
@@ -338,6 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    refuse_apply(args.command == "confirm")
     try:
         return int(args.func(args))
     except DomainError as exc:

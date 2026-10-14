@@ -57,6 +57,7 @@ from app.services.prepaid_paid_invoice_period_repair import (
     preview_paid_invoice_period_repair,
     request_paid_invoice_period_repair,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 _EXIT_BLOCKED = 2
 _EXIT_REFUSED = 3
@@ -430,6 +431,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    refuse_apply(args.command == "approve")
     try:
         return int(args.func(args))
     except DomainError as exc:

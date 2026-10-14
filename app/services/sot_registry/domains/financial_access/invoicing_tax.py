@@ -33,7 +33,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.customer_subledger",
             "customer.accounts",
         ),
-        notes="Read-only invoice-domain evidence; incumbent owners retain every mutation and authority decision. V2 separately captures unqualified cash receipts; V1 output remains unchanged. No import or activation command.",
+        notes="Read-only invoice-domain evidence; incumbent owners retain every mutation and authority decision. V2 separately captures unqualified cash receipts. V3 adds current documentary/tax observations with explicit unavailable original-document and discharge/replay evidence; V1/V2 output remains unchanged. No import or activation command.",
         contract=ServiceContract(
             concerns=(
                 ConcernContract(
@@ -52,7 +52,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="current financial source population",
                     owner="financial.invoices",
                     kind=AuthorityKind.OBSERVATION,
-                    source="All subscriber, invoice/line, payment/refund/reversal/allocation, credit/application, ledger, opening/funding baseline and posting/effect rows in one caller-owned current snapshot; no creation window or subscription join. Explicit V2 additionally retains typed payment settlement/provider-event, safe inbox consequence-ID metadata, proof/correction and topup populations as unqualified cash evidence.",
+                    source="All subscriber, invoice/line, payment/refund/reversal/allocation, credit/application, ledger, opening/funding baseline and posting/effect rows in one caller-owned current snapshot; no creation window or subscription join. Explicit V2 additionally retains typed payment settlement/provider-event, safe inbox consequence-ID metadata, proof/correction and topup populations as unqualified cash evidence. Explicit V3 additionally observes current invoice documentary columns and persisted line tax snapshots; unavailable original-document and historical-discharge replay evidence remains explicit per invoice, never inferred from current party, tax, settings or PDF metadata.",
                 ),
                 AuthorityInput(
                     name="canonical invoice settlement",

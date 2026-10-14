@@ -1,8 +1,9 @@
-"""Billing mutation policy guard (decision 2026-10-12: no more mutations).
+"""Billing repair write-mode policy guard (decision 2026-10-12: no more mutations).
 
-Billing repair writes are disabled pending the ADR 0007 obligation-identity
-migration. Guarded scripts call ``refuse_apply`` straight after argument
-parsing, before any database session is opened.
+Billing repair write-mode flags are disabled pending the ADR 0007
+obligation-identity migration. Guarded repair scripts call ``refuse_apply``
+straight after argument parsing, before any database session is opened.
+This helper does not disable every billing writer or operational command.
 """
 
 from __future__ import annotations

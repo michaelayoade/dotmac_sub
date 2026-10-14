@@ -3486,6 +3486,10 @@ SERVICES: tuple[SOTService, ...] = (
             "sole payment timestamp and contracted cadence resolve the WAT "
             "service period; adoption has no economic effect and hands the "
             "resulting financial draft back to the ordinary reconciler. "
+            "Automatic settlement participants retain periodless paid invoice "
+            "evidence in manual review alerts, including exact candidates; "
+            "billing mutation policy disables their historical identity, "
+            "entitlement, anchor and access restoration writes. "
             "A separate reviewed historical repair accepts one already-paid, "
             "periodless document whose sole active allocation is fully backed "
             "by a successful unreturned settlement. Mixed documents require "
@@ -5339,11 +5343,11 @@ SERVICES: tuple[SOTService, ...] = (
             "closed with renewal_terms_unresolved when an active prepaid "
             "subscription has no frozen contracted amount "
             "(Subscription.unit_price NULL or non-positive). This "
-            "temporary owner restores the amount solely from the "
-            "subscription's own PAID base-subscription invoice lines — "
-            "never from the mutable catalog. Absent or contradictory "
-            "paid evidence becomes an owned, SLA-bound finance work "
-            "item and the account stays fail-closed. A never-restored "
+            "temporary owner captures the subscription's own PAID "
+            "base-subscription invoice-line evidence in owned, SLA-bound "
+            "finance work items. Billing mutation policy retires automatic "
+            "historical amount restoration even for exact paid evidence; "
+            "the account stays fail-closed. A never-restored "
             "subscription (no_evidence, ambiguous_amounts, "
             "insufficient_cycle_evidence) receives its amount only through "
             "the four-eyes reviewed renewal-term record: a request by one "
@@ -5441,26 +5445,26 @@ SERVICES: tuple[SOTService, ...] = (
                 boundary=(
                     "The capture command enters execute_owner_command "
                     "once on a transaction-free session; the "
-                    "fingerprint-bound evidence re-check, unit_price "
-                    "writes, and finance work-item sync commit "
-                    "together. The reviewed-record approval enters it once; "
+                    "fingerprint-bound evidence re-check and finance "
+                    "work-item sync commit together without historical "
+                    "unit_price writes or backfilled events. "
+                    "The reviewed-record approval enters it once; "
                     "its unit_price write, work-item resolution, and "
                     "prepaid_renewal_terms.recorded event commit together. "
                     "The request step writes only record-only evidence."
                 ),
                 locking=(
-                    "Each repaired Subscription row is locked FOR "
-                    "UPDATE and re-checked (already-priced rows are "
-                    "skipped) before its contracted amount is written. "
+                    "Capture reads blocked subscriptions and paid evidence "
+                    "without locking or restoring historical amounts. "
                     "Reviewed-record request and approval lock the "
                     "Subscription FOR UPDATE and re-derive cohort, decision, "
                     "treatment, and expected-current-amount under the lock."
                 ),
                 idempotency=(
                     "The capture is fingerprint-bound to the reviewed "
-                    "preview; replay with unchanged evidence rewrites "
-                    "nothing because repaired rows fail the "
-                    "still-unpriced re-check. A reviewed-record request's "
+                    "preview; replay with unchanged evidence synchronizes "
+                    "the same work-item fingerprints without restoring "
+                    "amounts. A reviewed-record request's "
                     "identity is uuid5 of its idempotency key (same key + "
                     "same proposal replays; a different proposal conflicts); "
                     "its approval identity is uuid5 of the request, so a "
@@ -5582,7 +5586,7 @@ SERVICES: tuple[SOTService, ...] = (
                 delivery_owner="events.dispatcher",
                 compatibility=(
                     "Version 1 carries the account, subscription, "
-                    "restored contracted amount, paid-line count, and "
+                    "historically restored contracted amount, paid-line count, and "
                     "the reviewed preview fingerprint. Reviewed-record "
                     "events (version 1) carry the request id, amounts, "
                     "reason, evidence reference and SHA-256, and the "
@@ -5590,9 +5594,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "record_requested is record-only evidence."
                 ),
                 replay=(
-                    "Replay with unchanged evidence rewrites nothing: "
-                    "repaired rows fail the still-unpriced re-check, "
-                    "so no second event is emitted for them."
+                    "Capture never emits backfilled events; the event type "
+                    "is retained for historical audit/correction compatibility. "
+                    "Replay synchronizes the same evidence work items."
                 ),
             ),
             test_refs=(

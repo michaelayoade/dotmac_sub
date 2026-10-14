@@ -3,11 +3,10 @@
 Prepaid enforcement fails closed with ``renewal_terms_unresolved`` when an
 active prepaid subscription carries no frozen contracted amount
 (``Subscription.unit_price`` NULL or <= 0). The contracted amount is never
-inferred from the mutable catalog (ADR 0007 Phase 1): this owner restores it
-only from the subscription's own exact evidence — the base-subscription lines
-of its PAID invoices. A subscription whose paid evidence is absent or
-self-contradictory becomes an owned, SLA-bound finance work item and stays
-fail-closed.
+inferred from the mutable catalog (ADR 0007 Phase 1). Capture retains paid
+base-subscription evidence in owned, SLA-bound finance work items, including
+exact evidence. Automatic historical amount restoration is retired under the
+billing mutation policy; unresolved subscriptions stay fail-closed.
 
 TRANSITIONAL: retire at the ADR 0007 Phase 1 cutover, when
 ``billing.contracts`` becomes authoritative and ``Subscription.unit_price``
@@ -491,10 +490,16 @@ class RenewalTermsNextAction(StrEnum):
 
     reviewed_record = "reviewed_renewal_term_record"
     charge_inputs = "resolve_charge_inputs"
+    manual_exceptions_review = "manual_exceptions_review"
 
 
 #: admin_alerts.summary is VARCHAR(255) in production PostgreSQL.
 WORK_ITEM_SUMMARIES: dict[RenewalTermsNextAction, str] = {
+    RenewalTermsNextAction.manual_exceptions_review: (
+        "Exact paid renewal-term evidence is retained for manual exceptions "
+        "review. Automatic historical amount restoration is disabled by "
+        "billing mutation policy; the subscription stays blocked. See runbook."
+    ),
     RenewalTermsNextAction.reviewed_record: (
         "Prepaid subscription has no contracted amount and its paid evidence "
         "is missing or conflicting. Request and approve a reviewed "
@@ -510,6 +515,8 @@ WORK_ITEM_SUMMARIES: dict[RenewalTermsNextAction, str] = {
 
 
 def _next_action(decision: RenewalTermsDecision) -> RenewalTermsNextAction:
+    if decision is RenewalTermsDecision.repairable:
+        return RenewalTermsNextAction.manual_exceptions_review
     if decision is RenewalTermsDecision.missing_charge_inputs:
         return RenewalTermsNextAction.charge_inputs
     return RenewalTermsNextAction.reviewed_record
@@ -571,7 +578,7 @@ def capture_prepaid_renewal_terms_backfill(
     *,
     context: CommandContext,
 ) -> RenewalTermsBackfillResult:
-    """Apply the fingerprint-bound backfill through the owner boundary."""
+    """Capture fingerprint-bound review evidence through the owner boundary."""
     return execute_owner_command(
         db,
         definition=_CAPTURE_COMMAND,
@@ -598,54 +605,10 @@ def _capture(
             "Evidence changed since the reviewed preview; re-run the preview "
             "and review the new fingerprint.",
         )
-    repaired = 0
-    unresolved: list[RenewalTermsEvidenceItem] = []
-    for item in preview.items:
-        if item.decision is RenewalTermsDecision.repairable:
-            subscription = db.execute(
-                select(Subscription)
-                .where(Subscription.id == item.subscription_id)
-                .with_for_update()
-            ).scalar_one_or_none()
-            if subscription is None:
-                continue
-            if (
-                subscription.unit_price is not None
-                and subscription.unit_price > Decimal("0.00")
-            ):
-                continue
-            subscription.unit_price = item.contracted_amount
-            repaired += 1
-            from app.services.events import EventType, emit_event
-
-            emit_event(
-                db,
-                EventType.prepaid_renewal_terms_backfilled,
-                {
-                    "schema_version": 1,
-                    "account_id": str(item.account_id),
-                    "subscription_id": str(item.subscription_id),
-                    "contracted_amount": str(item.contracted_amount),
-                    "paid_line_count": item.paid_line_count,
-                    "preview_fingerprint": preview.fingerprint,
-                },
-                subscriber_id=item.account_id,
-                account_id=item.account_id,
-                subscription_id=item.subscription_id,
-            )
-            logger.info(
-                "prepaid_renewal_terms_backfilled: subscription=%s amount=%s "
-                "paid_lines=%d",
-                item.subscription_id,
-                item.contracted_amount,
-                item.paid_line_count,
-            )
-        else:
-            unresolved.append(item)
-    _sync_evidence_work_items(db, tuple(unresolved), now=preview.as_of)
+    _sync_evidence_work_items(db, preview.items, now=preview.as_of)
     return RenewalTermsBackfillResult(
-        repaired_count=repaired,
-        work_item_count=len(unresolved),
+        repaired_count=0,
+        work_item_count=len(preview.items),
         fingerprint=preview.fingerprint,
     )
 

@@ -56,6 +56,7 @@ from app.services.billing.customer_subledger import (
 from app.services.billing.opening_export_contracts import (
     BillingOpeningExportPreview,
     BillingOpeningExportPreviewV2,
+    BillingOpeningExportPreviewV3,
     CaptureEvidence,
     CashEvidencePopulation,
     CashInboxEvidence,
@@ -69,6 +70,9 @@ from app.services.billing.opening_export_contracts import (
     CashSourceCount,
     CashSourceKind,
     CashTopupEvidence,
+    CurrentInvoiceDocumentObservation,
+    CurrentInvoiceLineTaxObservation,
+    DocumentaryObservationPopulation,
     ExceptionCode,
     ExclusionReason,
     FinancialSourceEvidence,
@@ -78,11 +82,14 @@ from app.services.billing.opening_export_contracts import (
     OpeningControl,
     OpeningException,
     OpeningExclusion,
+    OriginalEvidenceRequirement,
+    OriginalEvidenceUnavailableReason,
     PositionEffectEvidence,
     PreviewBillingOpeningExportQuery,
     SettlementEvidence,
     SettlementKind,
     SourceKind,
+    UnavailableOriginalInvoiceEvidence,
 )
 from app.services.domain_errors import DomainError
 
@@ -177,7 +184,11 @@ def _capture(db: Session, query: PreviewBillingOpeningExportQuery) -> CaptureEvi
     if (
         re.fullmatch(r"[0-9a-f]{40}", query.source_repository_sha) is None
         or query.population_version
-        not in {"sub-billing-opening-census-v1", "sub-billing-opening-census-v2"}
+        not in {
+            "sub-billing-opening-census-v1",
+            "sub-billing-opening-census-v2",
+            "sub-billing-opening-census-v3",
+        }
         or query.economic_cutoff.tzinfo is None
         or len(dict(query.currency_precisions)) != len(query.currency_precisions)
         or any(
@@ -741,7 +752,86 @@ def preview_billing_opening_export(
             "",
             cash,
         )
-        return replace(extended, content_fingerprint=_fingerprint(extended))
+        if query.population_version == "sub-billing-opening-census-v2":
+            return replace(extended, content_fingerprint=_fingerprint(extended))
+        observations = _documentary_observations(db, report=report)
+        documentary = BillingOpeningExportPreviewV3(
+            report.capture,
+            report.subscriber_ids,
+            report.invoices,
+            report.lines,
+            report.settlements,
+            report.financial_sources,
+            report.lanes,
+            report.effects,
+            report.eligible_invoice_ids,
+            report.exclusions,
+            report.blocking_exceptions,
+            report.controls,
+            "",
+            cash,
+            observations,
+        )
+        return replace(documentary, content_fingerprint=_fingerprint(documentary))
+
+
+def _documentary_observations(
+    db: Session, *, report: BillingOpeningExportPreview
+) -> DocumentaryObservationPopulation:
+    """Observe current columns without reconstructing or qualifying originals.
+
+    No TaxRate, party/settings or PDF lookup can supply an issued snapshot.
+    Null line snapshots remain null, including lines with no tax-rate identity.
+    Existing AR eligibility and cash observations are independent of these gaps.
+    """
+    invoices = tuple(
+        CurrentInvoiceDocumentObservation(*row)
+        for row in db.execute(
+            select(
+                Invoice.id,
+                Invoice.subtotal,
+                Invoice.discount_amount,
+                Invoice.tax_total,
+                Invoice.total,
+                Invoice.billing_period_start,
+                Invoice.billing_period_end,
+            ).order_by(Invoice.id)
+        )
+    )
+    lines = tuple(
+        CurrentInvoiceLineTaxObservation(*row)
+        for row in db.execute(
+            select(
+                InvoiceLine.id,
+                InvoiceLine.invoice_id,
+                InvoiceLine.description,
+                InvoiceLine.tax_rate_id,
+                InvoiceLine.tax_rate_snapshot_version,
+                InvoiceLine.tax_rate_code_snapshot,
+                InvoiceLine.tax_rate_percent_snapshot,
+                InvoiceLine.tax_rate_is_active_snapshot,
+                InvoiceLine.tax_application,
+            ).order_by(InvoiceLine.id)
+        )
+    )
+    for invoice in invoices:
+        _finite(
+            invoice.subtotal, invoice.discount_amount, invoice.tax_total, invoice.total
+        )
+    for line in lines:
+        _finite(line.tax_rate_percent_snapshot)
+    return DocumentaryObservationPopulation(
+        current_invoices=invoices,
+        current_lines=lines,
+        unavailable_original_evidence=tuple(
+            UnavailableOriginalInvoiceEvidence(
+                invoice_id=invoice.invoice_id,
+                requirements=tuple(OriginalEvidenceRequirement),
+                reasons=tuple(OriginalEvidenceUnavailableReason),
+            )
+            for invoice in report.invoices
+        ),
+    )
 
 
 def _classify(

@@ -18,6 +18,7 @@ from app.services.billing.subledger_opening import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _timestamp(value: str) -> datetime:
@@ -87,6 +88,7 @@ def _preview(value) -> dict[str, object]:  # noqa: ANN001
 
 def main() -> int:
     args = _parser().parse_args()
+    refuse_apply(args.apply)
     query = _query(args)
     try:
         with db_session_adapter.read_session() as db:

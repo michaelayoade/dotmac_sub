@@ -24,6 +24,7 @@ from sqlalchemy import text
 from app.db import SessionLocal
 from app.services.common import coerce_uuid, round_money
 from app.services.cutover_balance_audit import _direction, _rows
+from scripts.billing._mutation_policy import refuse_apply
 
 TOLERANCE = Decimal("0.01")
 
@@ -155,6 +156,7 @@ def main() -> None:
         default="scratchpad/cutover_balance_variance_registration_dry_run.csv",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     evidence: list[dict[str, Any]] = []
