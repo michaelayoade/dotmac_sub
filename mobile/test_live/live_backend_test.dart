@@ -96,9 +96,8 @@ void main() {
 
   test('subscriber logs in and reads their own data via /me/* endpoints',
       () async {
-    // 1. Subscriber login (customer portal — provider=local).
-    final result =
-        await auth.login(username: _user, password: _pass, provider: 'local');
+    // 1. Customer login uses the customer portal's source selection.
+    final result = await auth.login(username: _user, password: _pass);
     expect(result.isAuthenticated, isTrue);
     // Mobile clients must receive (and persist) a refresh token — the app sends
     // the X-Auth-Refresh-In-Body header so it arrives in the JSON body.
@@ -109,6 +108,7 @@ void main() {
 
     // 2. /auth/me — confirms this is a customer, not admin.
     final me = await auth.me();
+    expect(me.isCustomer, isTrue);
     print('✅ /auth/me — ${me.fullName} <${me.email}> roles=${me.roles}');
     expect(me.roles, isEmpty,
         reason: 'a real subscriber carries no staff roles/scopes');
@@ -173,7 +173,7 @@ void main() {
 
   test('access token refreshes and rotates via the stored refresh token',
       () async {
-    await auth.login(username: _user, password: _pass, provider: 'local');
+    await auth.login(username: _user, password: _pass);
     final oldRefresh = await storage.readRefreshToken();
     expect(oldRefresh, isNotNull);
 
@@ -191,7 +191,7 @@ void main() {
   }, timeout: const Timeout(Duration(seconds: 30)), skip: _user.isEmpty);
 
   test('lists the caller\'s active sessions with one marked current', () async {
-    await auth.login(username: _user, password: _pass, provider: 'local');
+    await auth.login(username: _user, password: _pass);
     final sessions = await auth.sessions();
     expect(sessions, isNotEmpty);
     expect(sessions.where((s) => s.isCurrent).length, greaterThanOrEqualTo(1));

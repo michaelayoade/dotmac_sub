@@ -14,6 +14,14 @@ class LoginRequest(BaseModel):
     provider: AuthProvider | None = None
 
 
+class CustomerLoginRequest(BaseModel):
+    """Customer portal credentials; verification source is chosen by its owner."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    username: str = Field(min_length=1, repr=False)
+    password: str = Field(min_length=1, repr=False)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str | None = None
