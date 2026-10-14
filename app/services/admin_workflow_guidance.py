@@ -1147,7 +1147,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Billing, operations, network management",
         "Compare revenue, service, customer status, and connection type across configured regions.",
         ("/admin/reports/regional-performance",),
-        "Choose the current-month default or enter an inclusive date range, then optionally narrow the report to one configured region.",
+        "Choose the current-month default or enter an inclusive date range. Leave Region blank to include all configured regions, or choose one region to narrow the report.",
         "Read revenue and collection figures as period-bound financial facts; customer status, connection type, active service, and region assignment are current-state values.",
         "Use the region link in the detail table to inspect the matching customer list, including the Unassigned row when location cleanup is needed.",
         "Confirm the selected period, region, and customer-state totals before exporting the report.",

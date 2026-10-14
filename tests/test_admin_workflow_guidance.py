@@ -270,6 +270,16 @@ def test_workflow_change_without_guidance_update_fails_gate() -> None:
     )
 
 
+def test_regional_performance_guidance_explains_blank_region_scope() -> None:
+    guide = guidance_for_path("/admin/reports/regional-performance")
+
+    assert guide is not None
+    assert guide.id == "regional-performance-report"
+    content = " ".join(guide.steps).lower()
+    assert "leave region blank" in content
+    assert "all configured regions" in content
+
+
 def test_project_infrastructure_guide_is_linked_and_searchable() -> None:
     for path in ("/admin/projects", "/admin/projects/new", "/admin/projects/123/edit"):
         guide = guidance_for_path(path)
