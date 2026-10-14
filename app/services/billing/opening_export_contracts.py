@@ -6,8 +6,19 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from app.models.billing import InvoiceDueDateBasis, InvoiceStatus
+from app.models.billing import (
+    InvoiceDueDateBasis,
+    InvoiceStatus,
+    PaymentProviderEventFinancialEffect,
+    PaymentProviderEventSource,
+    PaymentProviderEventStatus,
+    PaymentRefundOrigin,
+    PaymentReversalOrigin,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+)
 from app.models.billing_contract import BillingRecordAuthority
+from app.models.payment_proof import PaymentProofStatus
 
 
 class SourceKind(StrEnum):
@@ -40,6 +51,8 @@ class ExceptionCode(StrEnum):
     duplicate_identity = "duplicate_identity"
     source_authority = "source_authority"
     unbacked_lane = "unbacked_lane"
+    cash_unqualified = "cash_unqualified"
+    cash_event_ambiguity = "cash_event_ambiguity"
 
 
 class ExclusionReason(StrEnum):
@@ -233,3 +246,206 @@ class BillingOpeningExportPreview:
     blocking_exceptions: tuple[OpeningException, ...]
     controls: tuple[OpeningControl, ...]
     content_fingerprint: str
+
+
+# V2 raw receipt observations. No record attests external cash or source namespace.
+
+
+@dataclass(frozen=True)
+class CashPaymentEvidence:
+    id: UUID
+    account_id: UUID | None
+    billing_account_id: UUID | None
+    provider_id: UUID | None
+    external_id: str | None
+    amount: Decimal
+    provider_fee: Decimal
+    refunded_amount: Decimal
+    currency: str
+    status: PaymentStatus
+    is_active: bool
+    paid_at: datetime | None
+    reserved_for_purchase_id: UUID | None
+    import_run_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class CashSettlementEvidence:
+    id: UUID
+    payment_id: UUID
+    origin: PaymentSettlementOrigin
+    amount: Decimal
+    unallocated_amount: Decimal
+    prepaid_amount: Decimal
+    currency: str
+    unallocated_ledger_entry_id: UUID | None
+    prepaid_ledger_entry_id: UUID | None
+    billing_account_ledger_entry_id: UUID | None
+    preview_fingerprint: str | None
+    idempotency_key: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class CashProviderEventEvidence:
+    id: UUID
+    provider_id: UUID
+    payment_id: UUID | None
+    invoice_id: UUID | None
+    external_id: str | None
+    event_type: str
+    idempotency_key: str | None
+    source: PaymentProviderEventSource
+    status: PaymentProviderEventStatus
+    observed_payment_status: PaymentStatus | None
+    amount: Decimal | None
+    provider_fee: Decimal
+    net_amount: Decimal | None
+    currency: str | None
+    provider_reference: str | None
+    financial_effect: PaymentProviderEventFinancialEffect
+    observation_digest: str | None
+    error_code: str | None
+    received_at: datetime
+    processed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class CashRefundEvidence:
+    id: UUID
+    payment_id: UUID
+    provider_event_id: UUID | None
+    ledger_entry_id: UUID | None
+    billing_account_ledger_entry_id: UUID | None
+    credit_consumption_ledger_entry_id: UUID | None
+    amount: Decimal
+    currency: str
+    origin: PaymentRefundOrigin
+    preview_fingerprint: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class CashReversalEvidence:
+    id: UUID
+    payment_id: UUID
+    provider_event_id: UUID | None
+    ledger_entry_id: UUID | None
+    billing_account_ledger_entry_id: UUID | None
+    credit_consumption_ledger_entry_id: UUID | None
+    amount: Decimal
+    currency: str
+    origin: PaymentReversalOrigin
+    preview_fingerprint: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class CashProofEvidence:
+    id: UUID
+    account_id: UUID | None
+    billing_account_id: UUID | None
+    payment_id: UUID | None
+    amount: Decimal
+    gross_amount: Decimal | None
+    wht_amount: Decimal | None
+    verified_amount: Decimal | None
+    currency: str
+    status: PaymentProofStatus
+    paid_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class CashProofCorrectionEvidence:
+    id: UUID
+    duplicate_proof_id: UUID
+    original_proof_id: UUID
+    duplicate_payment_id: UUID
+    payment_reversal_id: UUID
+    ledger_entry_id: UUID
+    preview_fingerprint: str
+    idempotency_key: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class CashTopupEvidence:
+    id: UUID
+    account_id: UUID | None
+    billing_account_id: UUID | None
+    invoice_id: UUID | None
+    completed_payment_id: UUID | None
+    provider_id: UUID | None
+    capability_binding_id: UUID | None
+    currency: str
+    requested_amount: Decimal
+    actual_amount: Decimal | None
+    external_id: str | None
+    status: str
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class CashInboxEvidence:
+    id: UUID
+    installation_id: UUID
+    capability_binding_id: UUID
+    provider_event_id: str
+    event_type: str
+    payload_digest: str
+    state: str
+    consequence_provider_event_id: UUID | None
+    consequence_payment_id: UUID | None
+    consequence_provider_id: UUID | None
+    consequence_identifiers_valid: bool
+    error_code: str | None
+    received_at: datetime
+    processed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CashSourceKind(StrEnum):
+    payments = "payments"
+    payment_settlements = "payment_settlements"
+    payment_provider_events = "payment_provider_events"
+    integration_inbox = "integration_inbox"
+    payment_refunds = "payment_refunds"
+    payment_reversals = "payment_reversals"
+    payment_proofs = "payment_proofs"
+    payment_proof_corrections = "payment_proof_corrections"
+    topup_intents = "topup_intents"
+
+
+@dataclass(frozen=True)
+class CashSourceCount:
+    table: CashSourceKind
+    count: int
+
+
+@dataclass(frozen=True)
+class CashEvidencePopulation:
+    payments: tuple[CashPaymentEvidence, ...]
+    payment_settlements: tuple[CashSettlementEvidence, ...]
+    provider_events: tuple[CashProviderEventEvidence, ...]
+    inbox_receipts: tuple[CashInboxEvidence, ...]
+    refunds: tuple[CashRefundEvidence, ...]
+    reversals: tuple[CashReversalEvidence, ...]
+    proofs: tuple[CashProofEvidence, ...]
+    proof_corrections: tuple[CashProofCorrectionEvidence, ...]
+    topups: tuple[CashTopupEvidence, ...]
+    source_counts: tuple[CashSourceCount, ...]
+    blocking_exceptions: tuple[OpeningException, ...]
+    # No source verifier or namespace mapper is installed on this query.
+    qualified_payment_ids: tuple[UUID, ...] = ()
+
+
+@dataclass(frozen=True)
+class BillingOpeningExportPreviewV2(BillingOpeningExportPreview):
+    cash_evidence: CashEvidencePopulation
