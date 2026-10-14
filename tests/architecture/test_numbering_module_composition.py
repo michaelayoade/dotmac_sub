@@ -1,4 +1,4 @@
-"""Released numbering storage is composed without activating a product writer."""
+"""Pin released numbering and permit only the reviewed invoice participant."""
 
 from __future__ import annotations
 
@@ -34,6 +34,11 @@ READ_ONLY_IMPORTS = {
         }
     ),
 }
+INVOICE_PARTICIPANT = "app/services/billing/invoices.py"
+INVOICE_IMPORTS = {
+    "dotmac_numbering.models": frozenset({"NumberSeries", "SeriesCounter"}),
+    "dotmac_numbering.service": frozenset({"MAX_DIGITS", "MAX_VALUE", "allocate"}),
+}
 ARTIFACT_HASHES = {
     "dotmac_numbering-0.1.0a2-py3-none-any.whl": (
         "sha256:ed7711ec3df50ccba066e920d7696ee4b9569fb7356108078719c3b139b184ec"
@@ -45,7 +50,7 @@ ARTIFACT_HASHES = {
 
 
 def _activation_errors(root: Path) -> tuple[str, ...]:
-    """No production import, dynamic import, or SQL writer may activate numbering."""
+    """Only exact canonical imports may reach the invoice participant."""
     errors: list[str] = []
     paths = [
         path
@@ -72,6 +77,15 @@ def _activation_errors(root: Path) -> tuple[str, ...]:
                     and node.module in READ_ONLY_IMPORTS
                     and all(
                         alias.name in READ_ONLY_IMPORTS[node.module]
+                        for alias in node.names
+                    )
+                ):
+                    continue
+                if (
+                    path.relative_to(root).as_posix() == INVOICE_PARTICIPANT
+                    and node.module in INVOICE_IMPORTS
+                    and all(
+                        alias.name in INVOICE_IMPORTS[node.module]
                         for alias in node.names
                     )
                 ):
@@ -149,7 +163,7 @@ def test_numbering_installed_lineage_has_one_supported_tenant_selection() -> Non
         assert bindings[prerequisite].provider_owner == "sub"
 
 
-def test_numbering_composition_has_no_production_activation() -> None:
+def test_numbering_composition_has_only_reviewed_invoice_participation() -> None:
     from app.composition import DEDICATED_ISP_PROFILE
 
     assert _activation_errors(ROOT) == ()
@@ -204,3 +218,18 @@ def test_readiness_owner_cannot_activate_a_dynamically_imported_writer(
         f'{alias}("dotmac_numbering.service").allocate()\n'
     )
     assert _activation_errors(tmp_path)
+
+
+def test_invoice_participant_cannot_import_configuration_or_counter_repair(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / INVOICE_PARTICIPANT
+    owner.parent.mkdir(parents=True)
+    owner.write_text(
+        "from dotmac_numbering.models import NumberSeries, SeriesCounter\n"
+        "from dotmac_numbering.service import MAX_DIGITS, MAX_VALUE, allocate\n"
+    )
+    assert _activation_errors(tmp_path) == ()
+    for writer in ("configure_series", "advance_to_at_least"):
+        owner.write_text(f"from dotmac_numbering.service import {writer}\n")
+        assert _activation_errors(tmp_path)

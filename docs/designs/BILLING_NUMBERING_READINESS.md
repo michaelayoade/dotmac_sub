@@ -83,23 +83,21 @@ The runtime caller inventory for the future one-writer switch is:
 - `invoice_draft_authoring` proforma conversion.
 - `CreditNotes.create`, `CreditNotes.issue_with_evidence`.
 
-The architecture audit scans every service Python file, records every function
-definition with its lexical qualified name and occurrence, and compares the
-complete actual caller inventory with nine exact file/function pins plus the
-uniquely discovered top-level installation helper. Its diagnostics report the
-discovered path. N7's current file identity is evidenced by the canonical owner
-chain above and this dynamic audit; the tenth helper's filename affinity is not
-pinned. This limitation does not authorize a file move or claim completed
-retirement. Duplicate top-level definitions, including non-allocating duplicates,
-and class or nested substitutes cannot satisfy the unique helper identity.
+The architecture audit scans every service Python file and records every
+function definition with its lexical qualified name and occurrence. In the
+isolated allocation candidate it pins four invoice participant calls (the
+three constructors and proforma conversion), two incumbent credit-note calls,
+and four upstream delegates (subscription, scheduled cycle, proration and CRM
+installation). The installation helper is pinned to the canonical top-level
+`crm_api.create_installation_invoice` and must occur exactly once across the
+whole service tree. Duplicate top-level definitions, including non-allocating
+duplicates, and class or nested substitutes cannot satisfy its identity.
 
-Future allocation must use stable document UUID identity minted before
-allocation, an explicit authoritative document reference date, and the owning
-financial transaction. Retries must bind the same document UUID, date and
-series to the same allocation identity. These are future cutover requirements;
-this slice changes none of those callers and leaves custom provided labels and
+Stable document UUID, explicit authoritative reference date and caller-owned
+transaction are implemented in that candidate, described below. The census
+owner itself still changes none of the callers and leaves supplied labels and
 credit-note lifecycle semantics unchanged. Existing drift requires review by
-`financial.invoices` or `financial.credit_notes`; this resolver cannot repair it.
+`financial.invoices` or `financial.credit_notes`; the census cannot repair it.
 
 Unit canaries cover grammar, padding, counters, duplicates, configuration,
 completeness and digests. Architecture canaries forbid writer imports/calls and
@@ -107,3 +105,48 @@ transaction completion; PostgreSQL canaries exercise the real migrated schema,
 read-only denial, repeated snapshots, concurrent committed changes, cache
 restoration and absence of new module/idempotency state. Hosted execution is
 required before treating these unexecuted canaries as acceptance evidence.
+
+
+## Isolated invoice allocation candidate — 2026-10-14
+
+The read-only census owner above is unchanged. A separate, unmerged source
+candidate routes all invoice construction and proforma conversion through
+`financial.invoices.next_invoice_number`, which calls the released
+`dotmac-numbering==0.1.0a2` allocator in the caller's transaction. It has no
+runtime selector, incumbent fallback, series configuration or counter seed.
+Credit-note allocation remains a distinct incumbent series.
+
+The invoice owner captures its UUID and creation instant before allocation.
+The reference date is the supplied issue instant, otherwise the captured,
+persisted creation instant, normalized to UTC. It is not the service-period
+start or a retry-time clock. `create_with_lines` carries the original issue
+date separately before making its draft payload. Existing supplied labels and
+adoption of existing documents allocate nothing. Initial and proforma
+conversion requests have distinct identities; conversion additionally binds
+its existing normalized command identity so an edited PF label cannot replay
+an unrelated initial allocation.
+
+This candidate is **not deployable or merge-ready**. A configured series alone
+is not evidence that its counter was safely seeded. The participant requires
+compatible configuration and an existing `*` counter, but those checks do not
+authorize activation or exclude an older worker running incumbent code.
+
+Before activation, exclude and drain every incumbent invoice writer, capture
+and approve the complete census, perform pure historical formatting replay,
+configure the reviewed series and advance its counter with independently
+reviewed evidence, then prove read-only preview parity. The released
+`advance_to_at_least(proven_minimum=X)` makes the next value `X + 1`; a proposed
+next value must never be passed as the proven minimum without that conversion.
+No allocation is spent to obtain preview evidence, and no dual allocation is
+permitted. Legacy numbering configuration controls also need a reviewed
+retirement or module-authoring path before deployment; the compatibility
+check is not a second configuration writer.
+
+The fleet ruling `numbering-cutover-shadow-allocation-is-incoherent` requires
+a sealed one-writer flip with a stated inverse and identifies disjoint grammar
+as the basis for identifying module-issued numbers on rollback. The census
+proposal above preserves legacy grammar. That unresolved inverse conflict is
+an activation blocker: this source candidate does not approve a grammar change
+or a receipt-based exception. Before activation, abandoning the branch is the
+inverse; after activation, incumbent writers cannot resume until the approved
+counter-reconciliation procedure has completed.

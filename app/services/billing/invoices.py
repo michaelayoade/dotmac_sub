@@ -7,11 +7,14 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum, StrEnum
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from dotmac_kernel.cache import TenantScope
+from dotmac_numbering.models import NumberSeries, SeriesCounter
+from dotmac_numbering.service import MAX_DIGITS, MAX_VALUE, allocate
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -50,7 +53,7 @@ from app.schemas.billing import (
     LedgerEntryCreate,
     SystemInvoiceLineCreate,
 )
-from app.services import numbering, settings_spec
+from app.services import settings_spec
 from app.services.audit import AuditEvents
 from app.services.billing._common import (
     _calculate_tax_amount,
@@ -82,6 +85,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.locking import lock_for_update
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import owner_command_active
 from app.services.response import ListResponseMixin
 from app.services.sync_feeds import apply_sync_page, sync_page_response
@@ -1036,16 +1040,130 @@ def reconcile_service_after_invoice_settlement(
     compute_account_status(db, str(account_id))
 
 
-def next_invoice_number(db: Session) -> str:
-    """Generate the next sequential invoice number."""
-    return numbering.generate_required_number(
-        db,
-        SettingDomain.billing,
-        "invoice_number",
-        "invoice_number_prefix",
-        "invoice_number_padding",
-        "invoice_number_start",
+class InvoiceNumberPurpose(StrEnum):
+    """Separate documentary creation from a later proforma conversion."""
+
+    INITIAL = "initial"
+    PROFORMA_CONVERSION = "proforma_conversion"
+
+
+def invoice_number_reference_date(
+    *, issued_at: datetime | None, created_at: datetime
+) -> date:
+    """Use documentary issuance or the captured, persisted creation instant."""
+
+    instant = issued_at if issued_at is not None else created_at
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=UTC)
+    return instant.astimezone(UTC).date()
+
+
+def next_invoice_number(
+    db: Session,
+    *,
+    invoice_id: UUID,
+    reference_date: date,
+    purpose: InvoiceNumberPurpose,
+    conversion_key: str | None = None,
+) -> str:
+    """Flush-only participation in released numbering; never seed or configure.
+
+    This source candidate requires the separately accepted census, parity and
+    single-writer activation. The guard refuses the released allocator's
+    automatic counter creation path.
+    """
+
+    if (
+        not isinstance(invoice_id, UUID)
+        or not isinstance(reference_date, date)
+        or isinstance(reference_date, datetime)
+        or not isinstance(purpose, InvoiceNumberPurpose)
+        or (purpose is InvoiceNumberPurpose.INITIAL and conversion_key is not None)
+        or (
+            purpose is InvoiceNumberPurpose.PROFORMA_CONVERSION
+            and (
+                conversion_key is None
+                or re.fullmatch(r"[0-9a-f]{64}", conversion_key) is None
+            )
+        )
+    ):
+        raise InvoiceOwnerError(
+            code="financial.invoice.numbering_identity_invalid",
+            message="Invoice numbering requires a stable, typed documentary identity.",
+        )
+    prefix = settings_spec.resolve_value(
+        db, SettingDomain.billing, "invoice_number_prefix"
     )
+    padding = settings_spec.resolve_value(
+        db, SettingDomain.billing, "invoice_number_padding"
+    )
+    start = settings_spec.resolve_value(
+        db, SettingDomain.billing, "invoice_number_start"
+    )
+    if (
+        not isinstance(prefix, str)
+        or len(prefix) > 32
+        or type(padding) is not int
+        or not 0 <= padding <= MAX_DIGITS
+        or type(start) is not int
+        or not 1 <= start < MAX_VALUE
+    ):
+        raise InvoiceOwnerError(
+            code="financial.invoice.numbering_configuration_unsupported",
+            message="Invoice numbering configuration is unsupported.",
+        )
+    # Match the released allocator's series -> counter lock order and hold
+    # configuration stable until the composing transaction completes.
+    series = db.scalar(
+        select(NumberSeries)
+        .where(
+            NumberSeries.tenant_id == OPERATOR_TENANT_ID,
+            NumberSeries.series_code == "invoice_number",
+        )
+        .with_for_update()
+    )
+    if series is None or (
+        series.prefix,
+        series.suffix,
+        series.separator,
+        series.min_digits,
+        series.include_year,
+        series.year_digits,
+        series.include_month,
+        series.reset_policy,
+        series.start_value,
+    ) != (prefix, "", "", max(1, padding), 0, 4, 0, "never", start):
+        raise InvoiceOwnerError(
+            code="financial.invoice.numbering_series_unready",
+            message="The configured invoice series is absent or incompatible.",
+        )
+    counter = db.scalar(
+        select(SeriesCounter)
+        .where(
+            SeriesCounter.tenant_id == OPERATOR_TENANT_ID,
+            SeriesCounter.series_code == "invoice_number",
+            SeriesCounter.period_key == "*",
+        )
+        .with_for_update()
+    )
+    # A terminal counter may still replay a previously allocated receipt;
+    # the released allocator alone decides whether a new request is exhausted.
+    if counter is None or not 1 <= counter.next_value <= MAX_VALUE:
+        raise InvoiceOwnerError(
+            code="financial.invoice.numbering_counter_unready",
+            message="The invoice series requires an accepted seeded counter.",
+        )
+    key = f"billing:invoice:{invoice_id}:{purpose.value}"
+    if conversion_key is not None:
+        key = f"{key}:{conversion_key}"
+    return allocate(
+        db,
+        scope=TenantScope(tenant_id=OPERATOR_TENANT_ID),
+        series_code="invoice_number",
+        reference_date=reference_date,
+        idempotency_key=key,
+        allocated_by="financial.invoice",
+    ).formatted_number
 
 
 def _normalize_closure_key(value: str) -> str:
@@ -1452,11 +1570,22 @@ class Invoices(ListResponseMixin):
             )
         lock_account(db, str(payload.account_id))
         target_status = payload.status
+        numbering_reference_date = (
+            invoice_number_reference_date(
+                issued_at=payload.issued_at, created_at=payload.issued_at
+            )
+            if payload.issued_at is not None
+            else None
+        )
         draft_payload = payload.model_copy(
             update={"status": InvoiceStatus.draft, "issued_at": None}
         )
         try:
-            invoice = Invoices.stage_admin_draft(db, draft_payload)
+            invoice = Invoices.stage_admin_draft(
+                db,
+                draft_payload,
+                numbering_reference_date=numbering_reference_date,
+            )
             InvoiceLines.replace_admin_draft_lines(
                 db,
                 invoice.id,
@@ -1540,7 +1669,12 @@ class Invoices(ListResponseMixin):
             raise
 
     @staticmethod
-    def stage_admin_draft(db: Session, payload: InvoiceCreate) -> Invoice:
+    def stage_admin_draft(
+        db: Session,
+        payload: InvoiceCreate,
+        *,
+        numbering_reference_date: date | None = None,
+    ) -> Invoice:
         """Stage one draft header for the contracted authoring coordinator."""
         if payload.status != InvoiceStatus.draft:
             raise DraftInvoiceParticipantError(
@@ -1549,8 +1683,23 @@ class Invoices(ListResponseMixin):
             )
         _validate_account(db, str(payload.account_id))
         data = payload.model_dump()
+        invoice_id = uuid4()
+        created_at = datetime.now(UTC)
+        data["id"] = invoice_id
+        data["created_at"] = created_at
         if not data.get("invoice_number"):
-            data["invoice_number"] = next_invoice_number(db)
+            data["invoice_number"] = next_invoice_number(
+                db,
+                invoice_id=invoice_id,
+                reference_date=(
+                    numbering_reference_date
+                    if numbering_reference_date is not None
+                    else invoice_number_reference_date(
+                        issued_at=payload.issued_at, created_at=created_at
+                    )
+                ),
+                purpose=InvoiceNumberPurpose.INITIAL,
+            )
         _validate_invoice_totals(data)
         invoice = Invoice(**data)
         db.add(invoice)
@@ -2419,12 +2568,23 @@ class Invoices(ListResponseMixin):
         _reject_unverified_native_invoice(payload)
         _validate_account(db, str(payload.account_id))
         data = payload.model_dump()
+        invoice_id = uuid4()
+        created_at = datetime.now(UTC)
+        data["id"] = invoice_id
+        data["created_at"] = created_at
         target_status = payload.status
         if target_status == InvoiceStatus.issued:
             data["status"] = InvoiceStatus.draft
             data["issued_at"] = None
         if not data.get("invoice_number"):
-            data["invoice_number"] = next_invoice_number(db)
+            data["invoice_number"] = next_invoice_number(
+                db,
+                invoice_id=invoice_id,
+                reference_date=invoice_number_reference_date(
+                    issued_at=payload.issued_at, created_at=created_at
+                ),
+                purpose=InvoiceNumberPurpose.INITIAL,
+            )
         _validate_invoice_totals(data)
         invoice = Invoice(**data)
         db.add(invoice)
@@ -3779,6 +3939,10 @@ class Invoices(ListResponseMixin):
     ):
         _validate_account(db, str(payload.account_id))
         data = payload.model_dump()
+        invoice_id = uuid4()
+        created_at = datetime.now(UTC)
+        data["id"] = invoice_id
+        data["created_at"] = created_at
         fields_set = payload.model_fields_set
         if "currency" not in fields_set:
             default_currency = settings_spec.resolve_value(
@@ -3816,9 +3980,14 @@ class Invoices(ListResponseMixin):
                     ),
                 )
         if not data.get("invoice_number"):
-            generated = next_invoice_number(db)
-            if generated:
-                data["invoice_number"] = generated
+            data["invoice_number"] = next_invoice_number(
+                db,
+                invoice_id=invoice_id,
+                reference_date=invoice_number_reference_date(
+                    issued_at=payload.issued_at, created_at=created_at
+                ),
+                purpose=InvoiceNumberPurpose.INITIAL,
+            )
         native_issue = (
             not _allow_unverified_due_date
             and data.get("status") == InvoiceStatus.issued
@@ -3998,15 +4167,6 @@ class Invoices(ListResponseMixin):
             else round_money(subtotal + tax_total)
         )
 
-        # Create invoice
-        invoice_number = numbering.generate_required_number(
-            db,
-            SettingDomain.billing,
-            "invoice_number",
-            "invoice_number_prefix",
-            "invoice_number_padding",
-            "invoice_number_start",
-        )
         # An invoice that calls itself issued must carry the dates that make
         # that true. Declaring the status without them produced invoices with no
         # issue date and no due date: they could never age, never go overdue,
@@ -4023,7 +4183,7 @@ class Invoices(ListResponseMixin):
             db,
             InvoiceCreate(
                 account_id=coerce_uuid(subscriber_id),
-                invoice_number=invoice_number,
+                invoice_number=None,
                 currency=currency,
                 subtotal=subtotal,
                 tax_total=tax_total,

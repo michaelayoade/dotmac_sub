@@ -941,9 +941,14 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 AuthorityInput(
                     name="canonical invoice numbering policy",
-                    owner="control.settings_spec",
+                    owner="financial.invoices",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="billing invoice number settings and sequence",
+                    source=(
+                        "invoice UUID, persisted document reference date and allocation "
+                        "purpose passed to released dotmac_numbering; configured "
+                        "operator-tenant invoice series and seeded counter are "
+                        "required, and incumbent settings are compatibility evidence"
+                    ),
                 ),
             ),
             transaction=TransactionContract(
@@ -1321,7 +1326,16 @@ SERVICES: tuple[SOTService, ...] = (
             "historical observation state: it remains reportable but cannot "
             "drive overdue or Collections. Legacy NULL provenance is a bounded "
             "migration state measured by billing health, not a valid new "
-            "issuance outcome."
+            "issuance outcome. The isolated numbering adoption candidate routes "
+            "invoice construction and proforma conversion through one flush-only "
+            "participant using released dotmac_numbering. UUID, persisted UTC "
+            "document date and allocation purpose bind each request; supplied "
+            "labels and existing-document adoption spend no allocation. No "
+            "runtime selector, automatic series configuration or counter seed "
+            "exists. This candidate is not approved for deployment: complete "
+            "census, preview parity, incumbent-writer exclusion and an accepted "
+            "inverse remain prerequisites. Credit-note numbering stays with its "
+            "separate incumbent owner."
         ),
     ),
     SOTService(

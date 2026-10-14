@@ -8,8 +8,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from threading import Barrier
 
+from dotmac_kernel.cache import TenantScope
+from dotmac_numbering.models import SeriesCounter
+from dotmac_numbering.service import SeriesConfiguration, configure_series
 from sqlalchemy import select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.audit import AuditEvent
 from app.models.billing import (
@@ -20,17 +23,70 @@ from app.models.billing import (
     PaymentAllocation,
 )
 from app.models.catalog import BillingMode
+from app.models.domain_settings import SettingDomain
 from app.models.event_store import EventStore
+from app.models.sequence import DocumentSequence
 from app.models.subscriber import Reseller, Subscriber
-from app.services import invoice_draft_authoring
+from app.services import invoice_draft_authoring, settings_spec
 from app.services.account_credit_deposits import (
     SETTLEMENT_SCOPE,
     AccountCreditDeposits,
     AccountCreditDepositSettlementSource,
     SettleAccountCreditDepositCommand,
 )
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import CommandContext
 from app.services.topup_intents import TopupIntentChannel
+
+
+def _prepare_numbering_fixture(db: Session) -> int | None:
+    """Explicit test preparation; the product participant must never seed.
+
+    This shared migrated PostgreSQL engine does not inherit the separate
+    adoption canary's isolated database. Preserve an existing seeded counter.
+    """
+    prefix = settings_spec.resolve_value(
+        db, SettingDomain.billing, "invoice_number_prefix"
+    )
+    padding = settings_spec.resolve_value(
+        db, SettingDomain.billing, "invoice_number_padding"
+    )
+    start = settings_spec.resolve_value(
+        db, SettingDomain.billing, "invoice_number_start"
+    )
+    configure_series(
+        db,
+        scope=TenantScope(tenant_id=OPERATOR_TENANT_ID),
+        configuration=SeriesConfiguration(
+            series_code="invoice_number",
+            prefix=prefix,
+            separator="",
+            min_digits=max(1, padding),
+            start_value=start,
+        ),
+    )
+    counter = db.scalar(
+        select(SeriesCounter).where(
+            SeriesCounter.tenant_id == OPERATOR_TENANT_ID,
+            SeriesCounter.series_code == "invoice_number",
+            SeriesCounter.period_key == "*",
+        )
+    )
+    if counter is None:
+        db.add(
+            SeriesCounter(
+                tenant_id=OPERATOR_TENANT_ID,
+                series_code="invoice_number",
+                period_key="*",
+                next_value=start,
+            )
+        )
+    db.flush()
+    return db.scalar(
+        select(DocumentSequence.next_value).where(
+            DocumentSequence.key == "invoice_number",
+        )
+    )
 
 
 def test_concurrent_conversion_retry_preserves_paid_status(engine) -> None:
@@ -39,6 +95,7 @@ def test_concurrent_conversion_retry_preserves_paid_status(engine) -> None:
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     suffix = uuid.uuid4().hex[:12]
     with session_factory() as setup:
+        incumbent_invoice_counter = _prepare_numbering_fixture(setup)
         reseller = Reseller(
             name=f"Proforma Conversion {suffix}",
             code=f"proforma-conversion-{suffix}",
@@ -168,3 +225,11 @@ def test_concurrent_conversion_retry_preserves_paid_status(engine) -> None:
         assert allocations[0].amount == Decimal("10000.00")
         assert len(audits) == 1
         assert len(events) == 1
+        assert (
+            check.scalar(
+                select(DocumentSequence.next_value).where(
+                    DocumentSequence.key == "invoice_number",
+                )
+            )
+            == incumbent_invoice_counter
+        )
