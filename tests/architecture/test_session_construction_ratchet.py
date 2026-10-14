@@ -292,8 +292,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +3 from the read-only V2 invoice numbering proof: two session factories
 #: over migrated PostgreSQL fixtures and one clone-bound observer engine.
 #: Production construction allowances are unchanged.
-#: The integrated total is accepted main's 774 plus these independent 1 + 3 sites.
-TEST_FIXTURE_BASELINE_TOTAL = 778
+#: The deferred legacy-numbering canaries add two test-only database
+#: constructions; Numbering activation fixtures are not part of this change.
+#: Production construction remains unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 780
 
 
 def _baseline() -> dict[str, int]:

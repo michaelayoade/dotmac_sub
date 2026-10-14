@@ -1690,4 +1690,133 @@ SERVICES: tuple[SOTService, ...] = (
             ),
         ),
     ),
+    SOTService(
+        name="network.router_control",
+        module="app.services.router_control.report",
+        implementation_modules=(
+            "app.services.router_control.plugin",
+            "app.services.router_control.inputs",
+            "app.services.router_control.seed_layers",
+            "app.services.router_control.surfaces",
+            "app.services.router_control.modules.ntp",
+            "app.services.router_control.modules.snmp",
+            "app.services.router_control.modules.services_hardening",
+        ),
+        owns=(
+            "composed router desired state",
+            "router desired-state drift evaluation",
+        ),
+        depends_on=(
+            "network.identity",
+            "network.router_health",
+        ),
+        notes=(
+            "PR1 is a read-only resolver. app.services.composition is a pure "
+            "library, not an owner: it composes weighted tiered layers into an "
+            "effective desired state with per-value provenance and is "
+            "independent of Sub (import-linter contract). Layers here are a "
+            "PROPOSED synthetic seed or a private file; storage, owner "
+            "commands, approvals, apply and UI belong to later PRs. The "
+            "report compares the effective state with the latest stored "
+            "/export, never contacts a router and writes nothing."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="composed router desired state",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "router desired-state layers",
+                        "router subject declarations",
+                    ),
+                ),
+                ConcernContract(
+                    name="router desired-state drift evaluation",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "router desired-state layers",
+                        "router subject declarations",
+                        "router configuration export snapshots",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="router desired-state layers",
+                    owner="network.router_control",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "PR1: the in-code PROPOSED seed or an operator-supplied "
+                        "layers file; PR2 adds reviewed storage"
+                    ),
+                ),
+                AuthorityInput(
+                    name="router subject declarations",
+                    owner="network.router_control",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "PR1: operator-supplied assignments (site, profiles, "
+                        "policy tags, lifecycle, loopback) or the current "
+                        "network.router_health_policy role; never routers.tags"
+                    ),
+                ),
+                AuthorityInput(
+                    name="router configuration export snapshots",
+                    owner="external:mikrotik_routeros",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "latest router_config_snapshots /export text captured by "
+                        "network.router_health, read through a read-only session"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary=(
+                    "the CLI adapter reads inside one REPEATABLE READ, READ ONLY "
+                    "snapshot session and rolls back; composition is a pure "
+                    "function with no I/O"
+                ),
+                locking="none; reads one consistent snapshot",
+                idempotency=(
+                    "the same layers, subject, exceptions, date and export give "
+                    "the same effective hashes, provenance and report"
+                ),
+                retries="read-only; safe to retry",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "layer_invalid",
+                    "composition_conflict",
+                    "invalid_desired",
+                    "snapshot_unparseable",
+                ),
+                mapping_owner="scripts.network.router_control_report",
+                fail_closed_on=(
+                    "invalid layer, exception or assignment input, or any unexpected error (exit 2)",
+                    "equal-weight composition conflict (exit 2)",
+                    "invalid desired state for an enrolled module (exit 2)",
+                    "missing, stale or unparseable snapshot (module not evaluated, never missing)",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.router_control",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/network/ROUTER_CONTROL_PLANE.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/services/composition/test_spec_vectors.py",
+                "tests/services/composition/test_equal_rank.py",
+                "tests/services/composition/test_widening.py",
+                "tests/services/router_control/test_modules.py",
+                "tests/services/router_control/test_report.py",
+                "tests/services/router_control/test_cli.py",
+                "tests/architecture/test_router_control_boundaries.py",
+            ),
+        ),
+    ),
 )

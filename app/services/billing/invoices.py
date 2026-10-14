@@ -946,7 +946,11 @@ def reconcile_service_after_invoice_settlement(
 
 
 def next_invoice_number(db: Session) -> str:
-    """Generate the next sequential invoice number."""
+    """Generate the next invoice number using the active legacy sequence.
+
+    The released Numbering series remains inactive until its census, parity and
+    single-writer cutover are separately approved.
+    """
     return numbering.generate_required_number(
         db,
         SettingDomain.billing,
@@ -3571,9 +3575,7 @@ class Invoices(ListResponseMixin):
                     ),
                 )
         if not data.get("invoice_number"):
-            generated = next_invoice_number(db)
-            if generated:
-                data["invoice_number"] = generated
+            data["invoice_number"] = next_invoice_number(db)
         native_issue = (
             not _allow_unverified_due_date
             and data.get("status") == InvoiceStatus.issued
@@ -3753,15 +3755,6 @@ class Invoices(ListResponseMixin):
             else round_money(subtotal + tax_total)
         )
 
-        # Create invoice
-        invoice_number = numbering.generate_required_number(
-            db,
-            SettingDomain.billing,
-            "invoice_number",
-            "invoice_number_prefix",
-            "invoice_number_padding",
-            "invoice_number_start",
-        )
         # An invoice that calls itself issued must carry the dates that make
         # that true. Declaring the status without them produced invoices with no
         # issue date and no due date: they could never age, never go overdue,
@@ -3778,7 +3771,7 @@ class Invoices(ListResponseMixin):
             db,
             InvoiceCreate(
                 account_id=coerce_uuid(subscriber_id),
-                invoice_number=invoice_number,
+                invoice_number=None,
                 currency=currency,
                 subtotal=subtotal,
                 tax_total=tax_total,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -11,12 +12,44 @@ from app.services.web_reports import (
     RegionalConnectionTypeCount,
     RegionalReportData,
     RegionalReportMoney,
+    RegionalReportQuery,
     RegionalReportRow,
     _regional_report_window,
     build_regional_report_csv,
 )
+from app.web.admin.reports import _regional_report_query
 
 REGIONAL_REPORT_TEMPLATE = Path("templates/admin/reports/regional_performance.html")
+
+
+def test_regional_report_query_treats_blank_region_as_all_regions():
+    query = _regional_report_query(
+        date_from="2026-06-28",
+        date_to="2026-08-28",
+        region_id="",
+    )
+
+    assert query == RegionalReportQuery(
+        date_from=date(2026, 6, 28),
+        date_to=date(2026, 8, 28),
+        region_id=None,
+    )
+
+
+def test_regional_report_query_preserves_a_selected_region():
+    region_id = uuid4()
+
+    query = _regional_report_query(
+        date_from=None,
+        date_to=None,
+        region_id=str(region_id),
+    )
+
+    assert query == RegionalReportQuery(
+        date_from=None,
+        date_to=None,
+        region_id=region_id,
+    )
 
 
 def test_regional_report_window_treats_end_date_as_inclusive():

@@ -83,23 +83,20 @@ The runtime caller inventory for the future one-writer switch is:
 - `invoice_draft_authoring` proforma conversion.
 - `CreditNotes.create`, `CreditNotes.issue_with_evidence`.
 
-The architecture audit scans every service Python file, records every function
-definition with its lexical qualified name and occurrence, and compares the
-complete actual caller inventory with nine exact file/function pins plus the
-uniquely discovered top-level installation helper. Its diagnostics report the
-discovered path. N7's current file identity is evidenced by the canonical owner
-chain above and this dynamic audit; the tenth helper's filename affinity is not
-pinned. This limitation does not authorize a file move or claim completed
-retirement. Duplicate top-level definitions, including non-allocating duplicates,
-and class or nested substitutes cannot satisfy the unique helper identity.
+The architecture audit scans every service Python file and records every
+function definition with its lexical qualified name and occurrence. Current
+invoice constructors and proforma conversion delegate through the incumbent
+`financial.invoices.next_invoice_number` owner. That owner remains the only
+place where invoice sequence policy is applied. The future inventory above
+identifies the callers that must be reviewed for a one-writer switch; it does
+not activate them. The installation helper remains pinned to its canonical
+top-level definition and must occur exactly once across the whole service tree.
+Duplicate top-level definitions, including non-allocating duplicates, and
+class or nested substitutes cannot satisfy its identity.
 
-Future allocation must use stable document UUID identity minted before
-allocation, an explicit authoritative document reference date, and the owning
-financial transaction. Retries must bind the same document UUID, date and
-series to the same allocation identity. These are future cutover requirements;
-this slice changes none of those callers and leaves custom provided labels and
+The census owner changes none of the callers and leaves supplied labels and
 credit-note lifecycle semantics unchanged. Existing drift requires review by
-`financial.invoices` or `financial.credit_notes`; this resolver cannot repair it.
+`financial.invoices` or `financial.credit_notes`; the census cannot repair it.
 
 Unit canaries cover grammar, padding, counters, duplicates, configuration,
 completeness and digests. Architecture canaries forbid writer imports/calls and
@@ -107,3 +104,22 @@ transaction completion; PostgreSQL canaries exercise the real migrated schema,
 read-only denial, repeated snapshots, concurrent committed changes, cache
 restoration and absence of new module/idempotency state. Hosted execution is
 required before treating these unexecuted canaries as acceptance evidence.
+
+
+## Deferred invoice-numbering activation — 2026-10-14
+
+Invoice creation and proforma conversion continue using the existing
+`public.document_sequences` invoice series and its configured prefix and
+padding. This preserves the current customer-visible format and does not
+require a Numbering series or counter to exist. The separate census above is
+read-only; this change neither seeds Numbering state nor routes runtime writes
+to it.
+
+Activation remains deferred until the complete-population census and historical
+formatting replay are reviewed, an invoice-number grammar and rollback inverse
+are approved, all incumbent writers can be drained, and a single-writer cutover
+has an operator runbook. A proposed target prefix changes the visible format
+of newly issued invoices and therefore requires an explicit business decision;
+it must not be inferred from the readiness report. Any future activation must
+update this design, the typed service registry, migration and repair contracts,
+architecture guards, and PostgreSQL integration evidence together.

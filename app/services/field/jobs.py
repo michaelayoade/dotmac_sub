@@ -186,22 +186,13 @@ def _customer(row: WorkOrder, subscriber: Subscriber | None) -> FieldCustomer | 
 
 def _location(row: WorkOrder) -> FieldJobLocation:
     metadata = row.metadata_ or {}
-    latitude = _first_present(metadata, "latitude", "lat")
-    longitude = _first_present(metadata, "longitude", "lng")
+    coordinates = metadata
     source = "cached"
     if isinstance(metadata.get("location"), dict):
-        location = metadata["location"]
-        latitude = (
-            latitude
-            if latitude is not None
-            else _first_present(location, "latitude", "lat")
-        )
-        longitude = (
-            longitude
-            if longitude is not None
-            else _first_present(location, "longitude", "lng")
-        )
-        source = str(location.get("source") or source)
+        coordinates = metadata["location"]
+        source = str(coordinates.get("source") or source)
+    latitude = _first_present(coordinates, "latitude", "lat")
+    longitude = _first_present(coordinates, "longitude", "lng")
     parsed_latitude = latitude if isinstance(latitude, int | float) else None
     parsed_longitude = longitude if isinstance(longitude, int | float) else None
     return FieldJobLocation(
@@ -631,6 +622,8 @@ class FieldJobs:
             )
             latitude, longitude = command.latitude, command.longitude
             metadata = dict(row.metadata_ or {})
+            for alias in ("lat", "latitude", "lng", "longitude"):
+                metadata.pop(alias, None)
             metadata["location"] = {
                 "lat": float(latitude),
                 "lng": float(longitude),
