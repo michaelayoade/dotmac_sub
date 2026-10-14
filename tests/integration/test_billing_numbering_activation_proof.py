@@ -265,7 +265,9 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
                     )
                 )
                 assert series is not None
-                series.suffix = "CHANGED"
+                # Released a2 freezes rendered identity once a counter exists.
+                # The prospective start value remains mutable configuration.
+                series.start_value = 2
                 writer.commit()
             assert (
                 billing_numbering_activation_proof_report(
@@ -296,7 +298,7 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
                         series_code=PROPOSAL.series_code,
                         period_key="*",
                         allocated_value=1,
-                        formatted_number="CANDIDATE-000001-CHANGED",
+                        formatted_number="CANDIDATE-000001",
                         reference_date=QUERY.reference_date,
                         idempotency_key="synthetic-unlinked-fixture",
                         allocated_by="candidate-test",
