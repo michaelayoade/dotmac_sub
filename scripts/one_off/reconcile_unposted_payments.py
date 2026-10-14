@@ -39,6 +39,7 @@ from datetime import UTC, datetime
 from app.db import SessionLocal
 from app.models.catalog import Subscription
 from app.services.billing.reconcile_unposted import reconcile_cohort
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _parse_since(value: str | None) -> datetime | None:
@@ -109,6 +110,7 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     since = _parse_since(args.since)
     dry_run = not args.apply

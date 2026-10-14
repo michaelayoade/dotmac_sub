@@ -14,6 +14,7 @@ from app.models.subscriber import Subscriber
 from app.services.billing.payments import Refunds
 from app.services.common import round_money
 from app.services.notification_suppression import suppress_notifications
+from scripts.billing._mutation_policy import refuse_apply
 
 OUTPUT = Path("/tmp/duplicate_paystack_recovery_reversals.csv")
 RECOVERY_MEMO_PREFIX = "Paystack cutover recovery ref:"
@@ -137,6 +138,7 @@ def main() -> None:
     parser.add_argument("--output", default=str(OUTPUT))
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     results: dict[str, str] = {}

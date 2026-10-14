@@ -45,6 +45,7 @@ from app.services.billing.legacy_over_allocation_correction import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from scripts.billing._mutation_policy import refuse_apply
 
 _EXIT_BLOCKED = 2
 _EXIT_REFUSED = 3
@@ -241,6 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    refuse_apply(args.command == "confirm")
     try:
         return int(args.func(args))
     except DomainError as exc:

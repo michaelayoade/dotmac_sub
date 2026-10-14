@@ -25,6 +25,7 @@ from app.services.cutover_balance_audit import (
     export_reconstructed_balance_packet,
     write_reconstructed_balance_correction_report,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _export(args: argparse.Namespace) -> int:
@@ -120,6 +121,7 @@ def main() -> int:
     apply_parser.set_defaults(func=_apply_corrections)
 
     args = parser.parse_args()
+    refuse_apply(bool(getattr(args, "apply", False)))
     return args.func(args)
 
 

@@ -63,6 +63,7 @@ from app.services.billing.reconcile_unposted import (
     settle_single_invoice_from_credit,
 )
 from app.services.common import round_money, to_decimal
+from scripts.billing._mutation_policy import refuse_apply
 
 CLEANUP_MARKER = "prepaid_phantom_ar_cleanup"
 # Invoices that carry AR weight and are candidates for reclassification.
@@ -237,6 +238,7 @@ def main() -> int:
         "--csv", type=Path, default=None, help="write the per-invoice plan to this CSV"
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     session = SessionLocal()
     try:

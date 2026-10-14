@@ -29,6 +29,7 @@ from app.services.prepaid_funding_reconstruction import (
     apply_prepaid_funding_reconstruction,
     preview_prepaid_funding_reconstruction,
 )
+from scripts.billing._mutation_policy import refuse_apply
 from scripts.one_off.prepaid_funding_scope import resolve_reviewed_account_scope
 
 FINAL_CUTOVER_CONFIRMATION = "MATERIALIZE_VERIFIED_PREPAID_FUNDING"
@@ -59,6 +60,7 @@ def main() -> int:
     parser.add_argument("--approved-by")
     parser.add_argument("--confirm-final-cutover")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     if args.apply:
         required = {
