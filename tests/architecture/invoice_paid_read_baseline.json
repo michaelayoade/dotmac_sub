@@ -44,8 +44,8 @@
     "classification": "business_debt",
     "owner": "financial.backdated_service_invoicing",
     "reason": "Existing paid-status business predicate; retire with exact settlement/coverage authority at coupled cutover.",
-    "remaining_count": 1,
-    "state": "active"
+    "remaining_count": 0,
+    "state": "retired"
   },
   {
     "path": "app/services/billing/_common.py",
