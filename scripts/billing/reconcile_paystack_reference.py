@@ -26,6 +26,7 @@ from app.services.payment_reconciliation import (
     confirm_paystack_outside_window_recovery,
     preview_paystack_outside_window_recovery,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 _APPLY_CONFIRMATION = "APPLY_REVIEWED_PAYSTACK_RECOVERY"
 
@@ -119,6 +120,7 @@ def _missing_apply_arguments(args: argparse.Namespace) -> list[str]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    refuse_apply(args.apply)
 
     if args.apply:
         missing = _missing_apply_arguments(args)

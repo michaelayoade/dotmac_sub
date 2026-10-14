@@ -17,6 +17,7 @@ from app.services.billing_cleanup_remediation import (  # noqa: E402
     load_cleanup_csv,
     plan_cleanup_remediation,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _csv_sha256(path: str | None) -> str | None:
@@ -65,6 +66,7 @@ def main() -> int:
     parser.add_argument("--expect", help="Prior dry-run manifest required for --apply.")
     parser.add_argument("--out", help="Write result manifest here.")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     provided_csvs = [
         args.stale_locks_csv,

@@ -30,6 +30,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 from app.db import SessionLocal
+from scripts.billing._mutation_policy import refuse_apply
 
 # Phantom = locally-generated (no external invoice id), already voided, still active.
 PHANTOM = "is_active = true AND splynx_invoice_id IS NULL AND status = 'void'"
@@ -61,6 +62,7 @@ def _dump(db, name: str, query: str) -> int:
 
 
 def main(execute: bool) -> None:
+    refuse_apply(execute)
     db = SessionLocal()
     try:
         n_clean = db.execute(

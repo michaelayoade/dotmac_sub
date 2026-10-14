@@ -108,3 +108,64 @@ def test_write_guard_detects_session_add_without_rejecting_local_set_add() -> No
     assert forbidden_calls(ast.parse("execute_owner_command(db)")) == (
         "execute_owner_command",
     )
+
+
+def test_documentary_observer_selects_only_current_persisted_invoice_columns() -> None:
+    tree = ast.parse(OWNER.read_text())
+    observer = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_documentary_observations"
+    )
+    assert not forbidden_calls(observer)
+    selected = {
+        (argument.value.id, argument.attr)
+        for node in ast.walk(observer)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "select"
+        for argument in node.args
+        if isinstance(argument, ast.Attribute) and isinstance(argument.value, ast.Name)
+    }
+    assert selected == {
+        ("Invoice", field)
+        for field in (
+            "id",
+            "subtotal",
+            "discount_amount",
+            "tax_total",
+            "total",
+            "billing_period_start",
+            "billing_period_end",
+        )
+    } | {
+        ("InvoiceLine", field)
+        for field in (
+            "id",
+            "invoice_id",
+            "description",
+            "tax_rate_id",
+            "tax_rate_snapshot_version",
+            "tax_rate_code_snapshot",
+            "tax_rate_percent_snapshot",
+            "tax_rate_is_active_snapshot",
+            "tax_application",
+        )
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert not (node.module or "").startswith(
+                (
+                    "dotmac_billing",
+                    "app.services.billing_invoice_pdf",
+                    "app.services.billing.withholding",
+                    "app.services.billing.non_cash",
+                )
+            )
+    assert "TaxRate" not in {
+        node.id for node in ast.walk(observer) if isinstance(node, ast.Name)
+    }
+    assert "Subscriber" not in {
+        node.id for node in ast.walk(observer) if isinstance(node, ast.Name)
+    }

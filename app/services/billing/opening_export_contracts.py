@@ -16,6 +16,7 @@ from app.models.billing import (
     PaymentReversalOrigin,
     PaymentSettlementOrigin,
     PaymentStatus,
+    TaxApplication,
 )
 from app.models.billing_contract import BillingRecordAuthority
 from app.models.payment_proof import PaymentProofStatus
@@ -449,3 +450,78 @@ class CashEvidencePopulation:
 @dataclass(frozen=True)
 class BillingOpeningExportPreviewV2(BillingOpeningExportPreview):
     cash_evidence: CashEvidencePopulation
+
+
+# V3 observes persisted current columns, never an original issued document.
+@dataclass(frozen=True)
+class CurrentInvoiceDocumentObservation:
+    invoice_id: UUID
+    subtotal: Decimal
+    discount_amount: Decimal
+    tax_total: Decimal
+    total: Decimal
+    billing_period_start: datetime | None
+    billing_period_end: datetime | None
+
+
+@dataclass(frozen=True)
+class CurrentInvoiceLineTaxObservation:
+    line_id: UUID
+    invoice_id: UUID
+    description: str
+    tax_rate_id: UUID | None
+    tax_rate_snapshot_version: int | None
+    tax_rate_code_snapshot: str | None
+    tax_rate_percent_snapshot: Decimal | None
+    tax_rate_is_active_snapshot: bool | None
+    tax_application: TaxApplication
+
+
+class OriginalEvidenceRequirement(StrEnum):
+    document_number = "document_number"
+    issued_at = "issued_at"
+    documentary_reference = "documentary_reference"
+    documentary_digest = "documentary_digest"
+    subtotal = "subtotal"
+    tax_total = "tax_total"
+    grand_total = "grand_total"
+    seller = "seller"
+    customer = "customer"
+    party_tax_identities = "party_tax_identities"
+    tax_snapshots = "tax_snapshots"
+    tax_evidence_ref = "tax_evidence_ref"
+    fx_evidence_ref = "fx_evidence_ref"
+    document_profile_code = "document_profile_code"
+    document_profile_version = "document_profile_version"
+    payment_instructions = "payment_instructions"
+    brand_asset = "brand_asset"
+    locale = "locale"
+    timezone = "timezone"
+    historical_discharge_source_mapping = "historical_discharge_source_mapping"
+    historical_discharge_tax_evidence = "historical_discharge_tax_evidence"
+    withholding_non_cash_replay_bindings = "withholding_non_cash_replay_bindings"
+
+
+class OriginalEvidenceUnavailableReason(StrEnum):
+    no_authenticated_frozen_document = "no_authenticated_frozen_document"
+    no_qualified_discharge_replay = "no_qualified_discharge_replay"
+
+
+@dataclass(frozen=True)
+class UnavailableOriginalInvoiceEvidence:
+    invoice_id: UUID
+    requirements: tuple[OriginalEvidenceRequirement, ...]
+    reasons: tuple[OriginalEvidenceUnavailableReason, ...]
+
+
+@dataclass(frozen=True)
+class DocumentaryObservationPopulation:
+    current_invoices: tuple[CurrentInvoiceDocumentObservation, ...]
+    current_lines: tuple[CurrentInvoiceLineTaxObservation, ...]
+    # Every invoice, including excluded/closed rows, retains its evidence gaps.
+    unavailable_original_evidence: tuple[UnavailableOriginalInvoiceEvidence, ...]
+
+
+@dataclass(frozen=True)
+class BillingOpeningExportPreviewV3(BillingOpeningExportPreviewV2):
+    documentary_observations: DocumentaryObservationPopulation

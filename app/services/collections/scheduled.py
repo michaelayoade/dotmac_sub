@@ -219,31 +219,16 @@ def restore_prepaid_renewal_terms(
     deadline: datetime | None = None,
     now: datetime | None = None,
 ) -> PrepaidRenewalTermsRepairOutcome:
-    """Restore contracted renewal terms from paid evidence, then enforce.
+    """Capture blocked renewal-term evidence before the enforcement sweep.
 
-    Prepaid enforcement fails closed with
-    ``contracted_prepaid_renewal_terms_unavailable`` when an active prepaid
-    subscription carries no frozen contracted amount, because no threshold can
-    be computed without one. The repair owner for that
-    (``financial.prepaid_renewal_terms_backfill``) has existed since ADR 0007
-    stage 3 but had no caller, so the block was permanent: the affected
-    accounts kept consuming service, and — because the owner also owns the
-    evidence work-item sync — they never even surfaced as finance work items.
+    Preview and capture share the fingerprint-bound renewal-terms owner.
+    Every blocked subscription receives an owned finance work item, including
+    exact paid evidence: automatic historical amount restoration is retired
+    under billing mutation policy. Unknown terms remain fail-closed; capture
+    neither infers an amount nor funds or restores service.
 
-    This runner is the missing sequencing, and deliberately mirrors
-    ``repair_prepaid_coverage_evidence``: preview, then confirm through the
-    owner boundary under the reviewed fingerprint.
-
-    It never infers an amount. The owner restores one only from the
-    subscription's own paid base-invoice lines; a subscription whose evidence
-    is absent, ambiguous or self-contradictory stays fail-closed and becomes
-    an owned, SLA-bound finance work item instead. Restoring a term does not
-    fund the account — it lets the sweep in this same run compute the
-    threshold and take the adverse action it was already owed.
-
-    TRANSITIONAL (ADR 0007): retire with the backfill owner at the Phase 1
-    cutover, when ``billing.contracts`` becomes the renewal-charge authority
-    and ``Subscription.unit_price`` stops being it.
+    The typed outcome retains its compatibility counters; restored is zero.
+    Coverage projection repair remains a separate operation.
     """
     from app.services.owner_commands import CommandContext
     from app.services.prepaid_renewal_terms_backfill import (
@@ -287,8 +272,7 @@ def restore_prepaid_renewal_terms(
         actor="task:prepaid-renewal-terms-repair",
         scope="financial.prepaid_renewal_terms_backfill:scheduled",
         reason=(
-            "scheduled restoration of contracted renewal terms blocking "
-            "prepaid enforcement"
+            "scheduled capture of renewal-term evidence blocking prepaid enforcement"
         ),
         idempotency_key=f"scheduled-renewal-terms-repair:{preview.fingerprint}",
     )
@@ -722,9 +706,8 @@ def run_prepaid_balance_sweep() -> dict[str, int | str]:
             session.rollback()
             logger.exception("prepaid_coverage_repair_failed")
             repair = _REPAIR_FAILED
-        # Restore contracted renewal terms on the same terms as the coverage
-        # repair above: before the sweep, so this run evaluates what it
-        # restored, and isolated, so a repair failure never stops enforcement.
+        # Capture renewal-term review evidence before the sweep, isolated so
+        # evidence capture failure never stops enforcement.
         try:
             renewal_repair = restore_prepaid_renewal_terms(session, deadline=deadline)
         except Exception:

@@ -1,16 +1,18 @@
 """Evidence classification tests; migrated PostgreSQL owns database acceptance."""
 
-from dataclasses import replace
+import hashlib
+import json
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.billing import InvoiceStatus
+from app.models.billing import InvoiceStatus, TaxApplication
 from app.models.billing_contract import BillingRecordAuthority
 from app.services.billing import opening_export as owner
 from app.services.billing.customer_subledger import (
@@ -19,16 +21,25 @@ from app.services.billing.customer_subledger import (
 )
 from app.services.billing.opening_export_contracts import (
     BillingOpeningExportPreview,
+    BillingOpeningExportPreviewV2,
+    BillingOpeningExportPreviewV3,
     CaptureEvidence,
+    CashEvidencePopulation,
+    DocumentaryObservationPopulation,
     ExceptionCode,
     ExclusionReason,
     FinancialSourceEvidence,
     InvoiceOpeningEvidence,
+    OriginalEvidenceRequirement,
+    OriginalEvidenceUnavailableReason,
     PreviewBillingOpeningExportQuery,
     SettlementEvidence,
     SettlementKind,
     SourceKind,
+    UnavailableOriginalInvoiceEvidence,
 )
+from scripts.migration import billing_opening_export as cli
+from scripts.migration.billing_opening_export import _json_value
 
 AT = datetime(2026, 10, 13, tzinfo=UTC)
 ACCOUNT = UUID(int=1)
@@ -594,3 +605,232 @@ def test_credit_reversal_without_exact_original_link_blocks(
         e.code == ExceptionCode.settlement_provenance
         for e in result.blocking_exceptions
     )
+
+
+@pytest.mark.parametrize(
+    "version,expected_fingerprint,expected_wire_digest",
+    [
+        (
+            1,
+            "48ebabf8ef6ba4fca8c60ab927c70ab0f460a578f32f405f7628bd6d1ff36a89",
+            "5970d2b58b66b473fc08ce9239385d4af948a0d9d221070b17f1406bb1fc4e58",
+        ),
+        (
+            2,
+            "046071c89ea325e150ef56683e16bbfdc0fa6c3ef4d6a68d92793c3336c77b67",
+            "7d3658774a1c4347b9823967a414396b8993417fcc84134e5aaf87cba21f8a41",
+        ),
+    ],
+)
+def test_v1_v2_exact_fingerprint_and_cli_bytes_are_pinned(
+    version: int, expected_fingerprint: str, expected_wire_digest: str
+) -> None:
+    # Fixed empty-population vectors pin the complete inherited envelope too.
+    capture = replace(
+        CAPTURE,
+        declared_source=replace(
+            QUERY, population_version=f"sub-billing-opening-census-v{version}"
+        ),
+    )
+    report = BillingOpeningExportPreview(
+        capture, (), (), (), (), (), (), (), (), (), (), (), ""
+    )
+    if version == 2:
+        report = BillingOpeningExportPreviewV2(
+            capture,
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            (),
+            "",
+            CashEvidencePopulation((), (), (), (), (), (), (), (), (), (), ()),
+        )
+    assert owner._fingerprint(report) == expected_fingerprint
+    report = replace(report, content_fingerprint=expected_fingerprint)
+    wire = (
+        json.dumps(_json_value(asdict(report)), sort_keys=True, allow_nan=False) + "\n"
+    )
+    assert hashlib.sha256(wire.encode()).hexdigest() == expected_wire_digest
+    assert "documentary_observations" not in wire
+
+
+@pytest.mark.parametrize("percent", [None, Decimal("0"), Decimal("0.0750")])
+def test_v3_current_tax_observations_preserve_null_and_zero_without_qualification(
+    monkeypatch: pytest.MonkeyPatch, percent: Decimal | None
+) -> None:
+    item = replace(invoice(), invoice_id=UUID(int=11))
+    base = classify(monkeypatch, (item,))
+    tax_id = UUID(int=13) if percent is not None else None
+    db = Mock(spec=Session)
+    db.execute.side_effect = [
+        [
+            (
+                item.invoice_id,
+                Decimal("95"),
+                Decimal("5"),
+                Decimal("10"),
+                Decimal("100"),
+                None,
+                None,
+            )
+        ],
+        [
+            (
+                UUID(int=12),
+                item.invoice_id,
+                "Current description",
+                tax_id,
+                1 if percent is not None else None,
+                None,
+                percent,
+                False if percent is not None else None,
+                TaxApplication.exclusive,
+            )
+        ],
+    ]
+    observations = owner._documentary_observations(db, report=base)
+    assert observations.current_invoices[0].subtotal == Decimal("95")
+    assert observations.current_lines[0].tax_rate_percent_snapshot == percent
+    assert observations.current_lines[0].tax_rate_id == tax_id
+    gap = observations.unavailable_original_evidence[0]
+    assert gap.invoice_id == item.invoice_id
+    assert set(gap.requirements) == set(OriginalEvidenceRequirement)
+    assert OriginalEvidenceRequirement.documentary_digest in gap.requirements
+    assert (
+        OriginalEvidenceRequirement.withholding_non_cash_replay_bindings
+        in gap.requirements
+    )
+    report = BillingOpeningExportPreviewV3(
+        replace(
+            CAPTURE,
+            declared_source=replace(
+                QUERY, population_version="sub-billing-opening-census-v3"
+            ),
+        ),
+        base.subscriber_ids,
+        base.invoices,
+        base.lines,
+        base.settlements,
+        base.financial_sources,
+        base.lanes,
+        base.effects,
+        base.eligible_invoice_ids,
+        base.exclusions,
+        base.blocking_exceptions,
+        base.controls,
+        "",
+        CashEvidencePopulation((), (), (), (), (), (), (), (), (), (), ()),
+        observations,
+    )
+    drift = replace(
+        report,
+        documentary_observations=replace(
+            observations,
+            current_lines=(
+                replace(observations.current_lines[0], description="Changed"),
+            ),
+        ),
+    )
+    assert owner._fingerprint(report) != owner._fingerprint(drift)
+    assert report.eligible_invoice_ids == base.eligible_invoice_ids
+    assert report.cash_evidence.qualified_payment_ids == ()
+
+
+def test_v3_nonfinite_current_document_observation_fails_without_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = invoice()
+    base = classify(monkeypatch, (item,))
+    db = Mock(spec=Session)
+    db.execute.side_effect = [
+        [
+            (
+                item.invoice_id,
+                Decimal("NaN"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("100"),
+                None,
+                None,
+            )
+        ],
+        [],
+    ]
+    with pytest.raises(owner.BillingOpeningExportError) as error:
+        owner._documentary_observations(db, report=base)
+    assert error.value.code.endswith("nonfinite_source")
+
+
+def test_v3_cli_reports_unavailable_original_evidence_as_blocking(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    query = replace(QUERY, population_version="sub-billing-opening-census-v3")
+    report = BillingOpeningExportPreviewV3(
+        replace(CAPTURE, declared_source=query),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        "",
+        CashEvidencePopulation((), (), (), (), (), (), (), (), (), (), ()),
+        DocumentaryObservationPopulation(
+            (),
+            (),
+            (
+                UnavailableOriginalInvoiceEvidence(
+                    UUID(int=11),
+                    tuple(OriginalEvidenceRequirement),
+                    tuple(OriginalEvidenceUnavailableReason),
+                ),
+            ),
+        ),
+    )
+    context = MagicMock()
+    monkeypatch.setattr(cli, "read_only_snapshot_session", Mock(return_value=context))
+    census = Mock(return_value=report)
+    monkeypatch.setattr(cli, "preview_billing_opening_export", census)
+    assert (
+        cli.main(
+            [
+                "--source-repository-sha",
+                query.source_repository_sha,
+                "--installation-id",
+                str(query.installation_id),
+                "--economic-cutoff",
+                AT.isoformat(),
+                "--currency-precision",
+                "NGN:2",
+                "--currency-precision",
+                "USD:2",
+                "--population-version",
+                query.population_version,
+            ]
+        )
+        == 1
+    )
+    census.assert_called_once_with(context.__enter__.return_value, query=query)
+    output = json.loads(capsys.readouterr().out)
+    assert (
+        output["capture"]["declared_source"]["population_version"]
+        == query.population_version
+    )
+    gap = output["documentary_observations"]["unavailable_original_evidence"][0]
+    assert gap["invoice_id"] == str(UUID(int=11))
+    assert "documentary_digest" in gap["requirements"]
+    assert gap["reasons"] == [
+        reason.value for reason in OriginalEvidenceUnavailableReason
+    ]

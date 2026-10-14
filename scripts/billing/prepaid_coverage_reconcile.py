@@ -21,6 +21,7 @@ from app.services.prepaid_coverage_reconciliation import (
     preview_prepaid_coverage_reconciliation,
     reconcile_prepaid_service_coverage,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _timestamp(value: str) -> datetime:
@@ -77,6 +78,7 @@ def main() -> int:
     parser.add_argument("--actor")
     parser.add_argument("--reason")
     args = parser.parse_args()
+    refuse_apply(args.apply)
     selected = tuple(args.subscription_id) or None
 
     if args.apply:

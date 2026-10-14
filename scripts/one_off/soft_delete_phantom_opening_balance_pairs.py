@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.billing import LedgerEntry, LedgerEntryType
+from scripts.billing._mutation_policy import refuse_apply
 
 OPENING_MEMO = "Prepaid opening balance @ cutover"
 PHANTOM_REVERSAL_PREFIX = (
@@ -129,6 +130,7 @@ def main() -> int:
         "--csv", type=Path, default=None, help="write affected row ids to this CSV"
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     session = SessionLocal()
     try:

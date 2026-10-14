@@ -40,6 +40,7 @@ from app.models.billing import (  # noqa: E402
 )
 from app.models.catalog import BillingCycle, CatalogOffer, Subscription  # noqa: E402
 from app.models.subscriber import Subscriber  # noqa: E402
+from scripts.billing._mutation_policy import refuse_apply  # noqa: E402
 
 PREPAID_DRAWDOWN_MEMO_PREFIX = "Prepaid charge: 30d"
 REVERSAL_MEMO_PREFIX = "Reversal of erroneous prepaid drawdown charge"
@@ -255,6 +256,7 @@ def main() -> None:
         help="write compensating credits; default is read-only dry-run",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     start_at = _day_start(args.from_date)
     end_at = _day_start(args.to_date + timedelta(days=1))
