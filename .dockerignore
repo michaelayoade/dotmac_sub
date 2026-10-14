@@ -44,3 +44,5 @@ build
 # Test / report artifacts
 playwright-report
 test-results
+# Operational exports must not be copied into publicly served static assets.
+static/reports/
