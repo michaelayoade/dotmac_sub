@@ -590,7 +590,7 @@ def test_t23_block_version_1_against_code_version_2_is_invalid_desired_only_for_
     assert [r.code for r in result.reasons] == ["stale_layer"]
     assert "x" not in result.params and "renamed_in_v2" not in result.params
     # the sibling module on the same router is unaffected
-    assert eff.modules["other"] is not None
+    assert eff.modules["other"].status == "ok"
     assert eff.modules["other"].params["x"] == 3
 
 
@@ -827,3 +827,56 @@ def test_provenance_is_complete_and_points_only_at_applicable_layers():
         for prov in result.provenance.values():
             assert prov.origin.layer_name in names
             assert all(o.layer_name in names for o in prov.contributors)
+
+
+def test_t14_widening_from_a_schema_default_needs_approval():
+    """No layer sets btest.enabled (default False): an override to True widens."""
+    g = rev("global", "g", block("m", x=1))
+    exc = override("X-9", "m", "/btest", {"enabled": True}, until=date(2026, 11, 13))
+    eff = run([g], exceptions=[exc], today=date(2026, 10, 20))
+    (status,) = eff.exceptions
+    assert (status.id, status.state.value, status.widening) == (
+        "X-9",
+        "pending_approval",
+        True,
+    )
+    assert values(eff).get("btest", {}).get("enabled") is not True
+    eff = run([g], exceptions=[replace(exc, approved=True)], today=date(2026, 10, 20))
+    assert values(eff)["btest"]["enabled"] is True
+
+
+def test_t14_snmp_write_access_default_override_needs_approval():
+    from app.services.router_control.plugin import ROUTER_PLUGIN
+    from app.services.router_control.seed_layers import seed_layer_revisions
+    from tests.services.router_control.support import binding, compose_for
+
+    assert ROUTER_PLUGIN  # the real plug-in
+    exc = override(
+        "X-8",
+        "snmp",
+        "",
+        {"write_access": True},
+        until=date(2026, 11, 13),
+    )
+    exc = replace(exc, subject_key="id-r-a")
+    layers = [r for r in seed_layer_revisions()]
+    eff = compose_for(binding(), layers, [exc])
+    (status,) = eff.exceptions
+    assert status.widening and status.state.value == "pending_approval"
+    assert eff.modules["snmp"].params["write_access"] is False
+
+
+def test_m8_union_add_remove_of_one_element_conflicts_in_both_orders():
+    """Deviation recorded in DESIGN rev 2.1: add vs remove of one element."""
+    g = rev("global", "g", block("m", routes=["Z"]))
+    for n1, n2 in (("a", "b"), ("b", "a")):
+        add = rev("group", n1, block("m", routes={"$add": ["Z"]}), weight=100)
+        rem = rev("group", n2, block("m", routes={"$remove": ["Z"]}), weight=100)
+        assert [c.path for c in run([g, add, rem]).modules["m"].conflicts] == [
+            "/routes"
+        ]
+        # disjoint elements still merge, in either order
+        add = rev("group", n1, block("m", routes={"$add": ["Q"]}), weight=100)
+        rem = rev("group", n2, block("m", routes={"$remove": ["Z"]}), weight=100)
+        eff = run([g, add, rem]).modules["m"]
+        assert not eff.conflicts and eff.params["routes"] == ["Q"]

@@ -180,6 +180,10 @@ These are PR2 onwards.
   deferred entirely. PR1 only observes. Resolves when: a render-only operator
   `.rsc` renderer and its tests land, with the first apply phase gated as in
   design section 2.7.
+* **Empty allow lists (for the PR2 renderer).** Restrictive resolution can
+  legitimately produce an empty allow list. A renderer must never emit an empty
+  `addresses` field to RouterOS, which reads it as allow-all. It must refuse the
+  plan or emit an explicit deny.
 * The seed profiles in `seed_layers.py` are PROPOSED and synthetic; real values
   arrive in a private `--layers` file until PR2 adds reviewed storage.
 

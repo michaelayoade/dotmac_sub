@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import ipaddress
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -83,9 +84,11 @@ def params_widening(
     """Widened fields between two effective parameter documents.
 
     Walks objects, maps (by member key) and keyed lists (by element key), so
-    per-element ACLs are covered. A member that is new in ``after`` is compared
-    against "nothing granted"; a member that disappears loses its protections,
-    which is a widening for deny lists and secure booleans.
+    per-element ACLs are covered. An unset field is compared as its schema
+    default (else "nothing granted"). A member new in ``after`` is compared
+    against "nothing granted". A member that disappears is treated as granting
+    nothing: removing an allow-list or secure-boolean member narrows, removing
+    a deny-list member loses its protection and is a widening (§1.9).
     """
     items: list[WideningItem] = []
 
@@ -140,8 +143,14 @@ def params_widening(
                         gone=is_gone or element not in news,
                     )
             else:
-                if fresh and old_v is None:
-                    old_v = _fresh_before(spec)
+                if old_v is None:
+                    # an unset field holds its schema default (merged values are
+                    # compared before defaults are filled), else grants nothing
+                    old_v = (
+                        copy.deepcopy(spec.default)
+                        if spec.has_value_default
+                        else _fresh_before(spec)
+                    )
                 if gone and new_v is None:
                     new_v = _fresh_before(spec)  # a removed member grants nothing
                 if widening(spec, old_v, new_v):
