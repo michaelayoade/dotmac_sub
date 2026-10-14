@@ -1,0 +1,4 @@
+{
+  "comment": "Approved exceptions to the Sub feature freeze (docs/FEATURE_FREEZE.md). Every entry requires approved_by=michaelayoade and is reviewed via CODEOWNERS on this file. kinds: feature-exception (must name starter_contract), schema (corrective migration), transitional-tool (must name deletion_trigger).",
+  "exceptions": []
+}
