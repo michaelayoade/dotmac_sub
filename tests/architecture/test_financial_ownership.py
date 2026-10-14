@@ -38,7 +38,7 @@ PAID_READ_CEILING_SHA256 = (
     "5ae5603a2b6e0b30df1329d674f275244802dfa5d784d2bb134c8ff8ab38f34a"
 )
 PAID_READ_APPROVED_SHA256 = (
-    "ce91038604c9d76a82bdcb065a76deb06ae13d7e9f396ca0918aa0a62d89f124"
+    "a3ca5fe754e950f064ab8fa61d0a163b1369cd53679423ca9e6d73727dcb6d97"
 )
 
 APPROVED_LEDGER_WRITERS = {
@@ -1173,7 +1173,9 @@ def test_invoice_paid_business_read_debt_only_shrinks() -> None:
     current: Counter[PaidInvoiceRead] = Counter()
     for path in _python_files():
         current.update(
-            _paid_invoice_reads(python_ast(path), str(path.relative_to(PROJECT_ROOT)))
+            _paid_invoice_reads(
+                python_ast(path), path.relative_to(PROJECT_ROOT).as_posix()
+            )
         )
     assert not (errors := _paid_read_ratchet_errors(current, baseline)), "\n".join(
         errors

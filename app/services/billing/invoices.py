@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from enum import Enum, StrEnum
+from enum import Enum
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -98,55 +98,11 @@ _CONTROLLED_DRAFT_SCHEMA_VERSION = 1
 _BACKDATED_SERVICE_INVOICE_OWNER = "financial.backdated_service_invoicing"
 _BACKDATED_SERVICE_INVOICE_MARKER = "backdated_service_invoice"
 _BACKDATED_SERVICE_INVOICE_REF_PREFIX = "backdated-service-invoicing:"
-_BACKDATED_SERVICE_CREATE_SCOPE = "backdated-service-invoice-create"
-_BACKDATED_SERVICE_RECONSTRUCT_SCOPE = "backdated-service-invoice-reconstruct"
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,120}$")
 
 
 class InvoiceOwnerError(DomainError):
     """Transport-neutral failure from an invoice-owner participant."""
-
-
-@dataclass(frozen=True, slots=True)
-class ControlledInvoiceDraftSeal:
-    """Typed provenance used to make a reviewed draft immutable until issue."""
-
-    controller_owner: str
-    preview_fingerprint: str
-
-
-class BackdatedServiceInvoiceIdempotencyPurpose(StrEnum):
-    """Bounded invoice-ledger purpose for a reviewed historical document."""
-
-    create = "create"
-    reconstruct = "reconstruct"
-
-
-@dataclass(frozen=True, slots=True)
-class ReserveBackdatedServiceInvoiceIdempotency:
-    """Typed request to reserve one invoice result for safe command replay."""
-
-    purpose: BackdatedServiceInvoiceIdempotencyPurpose
-    key: str
-    account_id: UUID
-
-
-@dataclass(frozen=True, slots=True)
-class BackdatedServiceInvoiceIdempotencyReceipt:
-    """Opaque reservation evidence returned to the composing command owner."""
-
-    reservation_id: UUID
-    invoice_id: UUID | None
-    replayed: bool
-
-
-@dataclass(frozen=True, slots=True)
-class CompleteBackdatedServiceInvoiceIdempotency:
-    """Typed binding of a reserved command to its authoritative invoice."""
-
-    reservation_id: UUID
-    account_id: UUID
-    invoice_id: UUID
 
 
 def _controlled_draft_metadata(invoice: Invoice) -> dict[str, object] | None:
@@ -761,53 +717,6 @@ class InvoiceLineTaxSnapshot:
     is_active: bool
 
 
-class HistoricalChargeProvenance(StrEnum):
-    """Allowed evidence sources for one historical subscription charge."""
-
-    adjacent_issued_invoice = "adjacent_issued_invoice"
-    unchanged_authoritative_terms = "unchanged_authoritative_terms"
-
-
-@dataclass(frozen=True, slots=True)
-class ReviewedBackdatedServiceInvoiceLineDocument:
-    """Exact typed line identity approved by the backdated-service owner."""
-
-    invoice_id: UUID
-    subscription_id: UUID
-    description: str
-    unit_price: Decimal
-    tax_rate_id: UUID | None
-    tax_application: TaxApplication
-    tax_snapshot: InvoiceLineTaxSnapshot | None
-    billing_period_start: datetime
-    billing_period_end: datetime
-    preview_fingerprint: str
-    historical_charge_provenance: HistoricalChargeProvenance
-    terms_source_invoice_ids: tuple[UUID, ...]
-    billing_line_key: str
-
-    def __post_init__(self) -> None:
-        if self.billing_period_end <= self.billing_period_start or round_money(
-            self.unit_price
-        ) <= Decimal("0.00"):
-            raise ValueError("reviewed backdated invoice line terms are invalid")
-        if not self.description.strip() or len(self.description) > 255:
-            raise ValueError("reviewed backdated invoice line description is invalid")
-        if not re.fullmatch(r"[0-9a-f]{64}", self.preview_fingerprint):
-            raise ValueError("reviewed backdated invoice fingerprint is invalid")
-        if not self.billing_line_key.startswith("backdated-service:"):
-            raise ValueError("reviewed backdated invoice billing-line key is invalid")
-        if (self.tax_rate_id is None) != (self.tax_snapshot is None):
-            raise ValueError("reviewed backdated invoice tax evidence is incomplete")
-        if self.tax_snapshot is not None and self.tax_snapshot.id != self.tax_rate_id:
-            raise ValueError("reviewed backdated invoice tax evidence disagrees")
-        if (
-            self.historical_charge_provenance
-            is HistoricalChargeProvenance.adjacent_issued_invoice
-        ) != bool(self.terms_source_invoice_ids):
-            raise ValueError("reviewed backdated invoice source evidence is incomplete")
-
-
 def _has_backdated_service_line_evidence(metadata: object) -> bool:
     if not isinstance(metadata, dict):
         return False
@@ -1341,90 +1250,6 @@ def _stage_invoice_closure_audit(
 
 
 class Invoices(ListResponseMixin):
-    @staticmethod
-    def reserve_backdated_service_idempotency_for_owner(
-        db: Session,
-        command: ReserveBackdatedServiceInvoiceIdempotency,
-    ) -> BackdatedServiceInvoiceIdempotencyReceipt:
-        """Reserve or replay the invoice result inside the caller's transaction."""
-
-        if not command.key:
-            raise InvoiceOwnerError(
-                code="financial.invoice.idempotency_required",
-                message="An idempotency key is required.",
-            )
-        scope = (
-            _BACKDATED_SERVICE_CREATE_SCOPE
-            if command.purpose is BackdatedServiceInvoiceIdempotencyPurpose.create
-            else _BACKDATED_SERVICE_RECONSTRUCT_SCOPE
-        )
-        existing = db.scalar(
-            select(IdempotencyKey)
-            .where(
-                IdempotencyKey.scope == scope,
-                IdempotencyKey.key == command.key,
-            )
-            .with_for_update()
-        )
-        if existing is not None:
-            if existing.account_id != command.account_id or not existing.ref_id:
-                raise InvoiceOwnerError(
-                    code="financial.invoice.idempotency_conflict",
-                    message=(
-                        "The idempotency key was already used for a different request."
-                    ),
-                )
-            try:
-                invoice_id = UUID(existing.ref_id)
-            except ValueError as exc:
-                raise InvoiceOwnerError(
-                    code="financial.invoice.idempotency_evidence_invalid",
-                    message="The prior invoice result could not be verified.",
-                ) from exc
-            return BackdatedServiceInvoiceIdempotencyReceipt(
-                reservation_id=existing.id,
-                invoice_id=invoice_id,
-                replayed=True,
-            )
-
-        reservation = IdempotencyKey(
-            scope=scope,
-            key=command.key,
-            account_id=command.account_id,
-        )
-        db.add(reservation)
-        db.flush()
-        return BackdatedServiceInvoiceIdempotencyReceipt(
-            reservation_id=reservation.id,
-            invoice_id=None,
-            replayed=False,
-        )
-
-    @staticmethod
-    def complete_backdated_service_idempotency_for_owner(
-        db: Session,
-        command: CompleteBackdatedServiceInvoiceIdempotency,
-    ) -> None:
-        """Bind a reservation to its invoice without completing the transaction."""
-
-        reservation = db.scalar(
-            select(IdempotencyKey)
-            .where(IdempotencyKey.id == command.reservation_id)
-            .with_for_update()
-        )
-        if reservation is None or reservation.account_id != command.account_id:
-            raise InvoiceOwnerError(
-                code="financial.invoice.idempotency_evidence_missing",
-                message="The invoice idempotency reservation could not be verified.",
-            )
-        if reservation.ref_id not in {None, str(command.invoice_id)}:
-            raise InvoiceOwnerError(
-                code="financial.invoice.idempotency_conflict",
-                message="The idempotency key is already bound to another invoice.",
-            )
-        reservation.ref_id = str(command.invoice_id)
-        db.flush()
-
     @staticmethod
     def create_with_lines(
         db: Session,
@@ -2505,76 +2330,6 @@ class Invoices(ListResponseMixin):
                 details={"invoice_id": str(invoice_id)},
             )
         _recalculate_invoice_totals(db, invoice)
-        db.flush()
-        return invoice
-
-    @staticmethod
-    def seal_controlled_draft_for_owner(
-        db: Session,
-        invoice_id: UUID,
-        seal: ControlledInvoiceDraftSeal,
-    ) -> Invoice:
-        """Seal one reviewed draft so only its lifecycle owner may issue it."""
-
-        invoice = lock_for_update(db, Invoice, invoice_id)
-        if invoice is None or not invoice.is_active:
-            raise InvoiceOwnerError(
-                code="financial.invoice.invoice_not_found",
-                message="Invoice was not found.",
-                details={"invoice_id": str(invoice_id)},
-            )
-        if invoice.status is not InvoiceStatus.draft or invoice.is_proforma:
-            raise InvoiceOwnerError(
-                code="financial.invoice.controlled_draft_not_sealable",
-                message="Only an active non-proforma draft can be sealed.",
-                details={"invoice_id": str(invoice.id)},
-            )
-        controller_owner = seal.controller_owner.strip()
-        preview_fingerprint = seal.preview_fingerprint.strip().lower()
-        if not owner_command_active(db, owner=controller_owner):
-            raise InvoiceOwnerError(
-                code="financial.invoice.controlled_draft_owner_required",
-                message="Controlled drafts may be sealed only by their active owner.",
-                details={"invoice_id": str(invoice.id), "owner": controller_owner},
-            )
-        if not controller_owner or not re.fullmatch(
-            r"[0-9a-f]{64}", preview_fingerprint
-        ):
-            raise InvoiceOwnerError(
-                code="financial.invoice.controlled_draft_seal_invalid",
-                message="Controlled draft provenance is incomplete.",
-                details={"invoice_id": str(invoice.id)},
-            )
-        lines = _controlled_draft_lines(db, invoice.id)
-        if not lines:
-            raise InvoiceOwnerError(
-                code="financial.invoice.controlled_draft_line_required",
-                message="A controlled draft requires at least one active line.",
-                details={"invoice_id": str(invoice.id)},
-            )
-        document_fingerprint = _controlled_draft_document_fingerprint(
-            invoice,
-            lines,
-            controller_owner=controller_owner,
-            preview_fingerprint=preview_fingerprint,
-        )
-        current = _controlled_draft_metadata(invoice)
-        expected = {
-            "schema_version": _CONTROLLED_DRAFT_SCHEMA_VERSION,
-            "controller_owner": controller_owner,
-            "preview_fingerprint": preview_fingerprint,
-            "document_fingerprint": document_fingerprint,
-            "line_ids": [str(line.id) for line in lines],
-        }
-        if current is not None and current != expected:
-            raise InvoiceOwnerError(
-                code="financial.invoice.controlled_draft_seal_conflict",
-                message="The invoice draft was already sealed from different evidence.",
-                details={"invoice_id": str(invoice.id)},
-            )
-        metadata = dict(invoice.metadata_ or {})
-        metadata[_CONTROLLED_DRAFT_METADATA_KEY] = expected
-        invoice.metadata_ = metadata
         db.flush()
         return invoice
 
@@ -4681,51 +4436,6 @@ class InvoiceLines(ListResponseMixin):
                 message="Invoice owner rejected system line construction.",
                 details={"reason": str(exc.detail)},
             ) from exc
-
-    @staticmethod
-    def stage_reviewed_backdated_service_line_for_owner(
-        db: Session,
-        document: ReviewedBackdatedServiceInvoiceLineDocument,
-        *,
-        reason: str,
-    ) -> InvoiceLine:
-        """Stage one typed historical-service line for its active coordinator."""
-
-        if not owner_command_active(db, owner=_BACKDATED_SERVICE_INVOICE_OWNER):
-            raise InvoiceOwnerError(
-                code="financial.invoice.backdated_service_owner_required",
-                message="Backdated service line construction requires its owner.",
-            )
-        return InvoiceLines.stage_system_line_for_owner(
-            db,
-            SystemInvoiceLineCreate(
-                invoice_id=document.invoice_id,
-                subscription_id=document.subscription_id,
-                description=document.description,
-                quantity=Decimal("1.000"),
-                unit_price=document.unit_price,
-                amount=document.unit_price,
-                tax_rate_id=document.tax_rate_id,
-                tax_application=document.tax_application,
-                metadata_={
-                    "kind": "base_subscription",
-                    "billing_period_start": document.billing_period_start.isoformat(),
-                    "billing_period_end": document.billing_period_end.isoformat(),
-                    _BACKDATED_SERVICE_INVOICE_MARKER: True,
-                    "preview_fingerprint": document.preview_fingerprint,
-                    "historical_charge_provenance": (
-                        document.historical_charge_provenance.value
-                    ),
-                    "terms_source_invoice_ids": [
-                        str(value) for value in document.terms_source_invoice_ids
-                    ],
-                    "payment_consequence": "historical_entitlement_only",
-                },
-                billing_line_key=document.billing_line_key,
-            ),
-            reason=reason,
-            tax_snapshot=document.tax_snapshot,
-        )
 
     @staticmethod
     def create(db: Session, payload: InvoiceLineCreate):

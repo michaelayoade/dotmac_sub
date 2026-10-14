@@ -80,6 +80,13 @@ reader, dual money writer, legacy fallback, or account cohort in this slice.
 
 ## Detector boundary and validation
 
+The scoped #3605 billing revert retires the paid-status predicate in
+`backdated_service_invoicing._adjacent_invoice_charge_resolution` together with
+that creation owner. Its inventory entry remains as a tombstone with zero
+remaining reads; the original identity, classification, count, rationale and
+ceiling digest remain unchanged. The approved inventory digest reflects this
+retirement. Census paths use repository-relative POSIX spelling on all hosts.
+
 The AST guard recognizes explicit `InvoiceStatus.paid` (including enum import
 renames/value forms), paid strings on invoice status receivers, comparisons,
 membership, SQLAlchemy status filters (including `filter_by(status=...)` on

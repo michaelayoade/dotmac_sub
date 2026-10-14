@@ -483,7 +483,11 @@ SERVICES: tuple[SOTService, ...] = (
             "error financial.payments.invoice_application_rejected. Composing "
             "owners can retain captured money while rolling back rejected "
             "invoice consequences in an owner-managed savepoint; infrastructure "
-            "errors propagate for whole-command retry."
+            "errors propagate for whole-command retry. Existing historical "
+            "service invoice markers retain historical-only settlement and "
+            "refund/reversal semantics after the #3605 creation workflows are "
+            "retired; see docs/designs/REVERT_3605_BILLING.md and "
+            "tests/test_retired_manual_service_invoicing.py."
         ),
     ),
     SOTService(
@@ -1128,7 +1132,6 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "per-subscription advance renewal timer",
             "idempotent advance renewal invoice and notification request",
-            "reviewed next-period subscription service invoice",
         ),
         depends_on=(
             "access.subscription_lifecycle",
@@ -1140,9 +1143,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.invoices",
             "financial.prepaid_service_coverage",
             "financial.prepaid_service_renewals",
-            "observability.audit_log",
             "runtime.durable_timers",
-            "ui.form_contracts",
         ),
         notes=(
             "The feature is disabled with no notice-day value until an "
@@ -1150,9 +1151,6 @@ SERVICES: tuple[SOTService, ...] = (
             "time never becomes service-period start; the exact current "
             "coverage boundary owns the future period. Invoice creation "
             "does not advance next_billing_at."
-            " The permission-gated manual surface reuses the same exact-period "
-            "line identity, requires a fingerprinted preview, and retires the "
-            "legacy direct admin subscription invoice writer."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1180,18 +1178,6 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     canonical_writer="financial.advance_renewal_invoicing",
                 ),
-                ConcernContract(
-                    name="reviewed next-period subscription service invoice",
-                    role=OwnerRole.COMMAND_WRITER,
-                    input_names=(
-                        "authenticated manual service-invoice command",
-                        "canonical subscription lifecycle and billing anchor",
-                        "authoritative prepaid coverage evidence",
-                        "canonical recurring charge preview",
-                        "canonical future-period invoice",
-                    ),
-                    canonical_writer="financial.advance_renewal_invoicing",
-                ),
             ),
             authoritative_inputs=(
                 AuthorityInput(
@@ -1201,16 +1187,6 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "GenerateAdvanceRenewalInvoiceCommand with system "
                         "CommandContext and deterministic period identity"
-                    ),
-                ),
-                AuthorityInput(
-                    name="authenticated manual service-invoice command",
-                    owner="auth.permission_gate",
-                    kind=AuthorityKind.CONTROL_INPUT,
-                    source=(
-                        "CreateManualSubscriptionServiceInvoiceCommand with the "
-                        "dedicated permission, named staff actor, explicit "
-                        "confirmation, reason, and owner-produced preview fingerprint"
                     ),
                 ),
                 AuthorityInput(
@@ -1254,52 +1230,36 @@ SERVICES: tuple[SOTService, ...] = (
                     "invoice, lines, audit, and event are staged atomically."
                 ),
                 locking=(
-                    "Locks the subscription, rechecks the notice date or reviewed "
-                    "manual fingerprint, and relies on unique active "
-                    "billing_line_key arbitration."
+                    "Locks the subscription, rechecks the notice date, and relies "
+                    "on unique active billing_line_key arbitration."
                 ),
                 idempotency=(
                     "Subscription, exact period, and component form the durable key; "
                     "matching replay returns the existing invoice."
                 ),
-                retries=(
-                    "The scheduler retries a complete owner command after rollback; "
-                    "the manual adapter returns a fresh owner preview."
-                ),
+                retries="The scheduler retries a complete owner command after rollback.",
             ),
             errors=ErrorContract(
                 domain_codes=(
                     "financial.advance_renewal_invoicing.configuration_unavailable",
-                    "financial.advance_renewal_invoicing.account_mismatch",
-                    "financial.advance_renewal_invoicing.charge_preview_incomplete",
-                    "financial.advance_renewal_invoicing.confirmation_required",
                     "financial.advance_renewal_invoicing.coverage_ambiguous",
                     "financial.advance_renewal_invoicing.coverage_anchor_drift",
                     "financial.advance_renewal_invoicing.currency_conflict",
                     "financial.advance_renewal_invoicing.invoice_drift",
-                    "financial.advance_renewal_invoicing.invoice_period_conflict",
                     "financial.advance_renewal_invoicing.missing_renewal_boundary",
                     "financial.advance_renewal_invoicing.outside_notice_date",
                     "financial.advance_renewal_invoicing.period_drift",
-                    "financial.advance_renewal_invoicing.period_already_invoiced",
-                    "financial.advance_renewal_invoicing.period_not_future",
-                    "financial.advance_renewal_invoicing.permission_denied",
-                    "financial.advance_renewal_invoicing.reason_required",
-                    "financial.advance_renewal_invoicing.stale_preview",
-                    "financial.advance_renewal_invoicing.stale_timer",
-                    "financial.advance_renewal_invoicing.subscription_not_found",
                     "financial.advance_renewal_invoicing.subscription_not_eligible",
                     "financial.advance_renewal_invoicing.terminal_subscription",
                     *owner_command_boundary_error_codes(
                         "financial.advance_renewal_invoicing"
                     ),
                 ),
-                mapping_owner="billing lifecycle and admin web adapters",
+                mapping_owner="billing lifecycle event adapter",
                 fail_closed_on=(
-                    "missing permission, confirmation, or action reason",
                     "missing or invalid configuration",
                     "ambiguous coverage or anchor drift",
-                    "stale preview or future-period invoice conflict",
+                    "future-period invoice conflict",
                 ),
             ),
             events=EventContract(
@@ -1311,36 +1271,22 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             migration=MigrationContract(
                 state=AuthorityMigrationState.COMPLETE,
-                old_owner=(
-                    "legacy admin web adapter invoking "
-                    "Invoices.create_for_subscription for manual requests; "
-                    "automation had no predecessor"
-                ),
+                old_owner="none; additive explicitly disabled capability",
                 new_owner="financial.advance_renewal_invoicing",
-                verification=(
-                    "Date, permission, fingerprint, idempotency, notification, "
-                    "payment-entitlement, UI, PDF, and architecture tests."
-                ),
-                cutover_gate=(
-                    "Automation requires explicit notice configuration; the manual "
-                    "surface requires its dedicated assignable permission."
-                ),
-                fallback_retirement=(
-                    "No implicit day or generic expiry-task fallback exists, and "
-                    "the direct admin generate-from-subscription route is removed."
-                ),
+                verification="Date, idempotency, notification, PDF, and architecture tests.",
+                cutover_gate="Operator supplies notice days and explicitly enables it.",
+                fallback_retirement="No implicit day or generic expiry-task fallback exists.",
             ),
             steward="billing operations",
             design_refs=(
                 "docs/designs/ADVANCE_RENEWAL_INVOICING.md",
-                "docs/runbooks/MANUAL_SUBSCRIPTION_SERVICE_INVOICING.md",
+                "docs/designs/REVERT_3605_BILLING.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
-                "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
             ),
             test_refs=(
                 "tests/test_advance_renewal_invoicing.py",
-                "tests/test_web_subscription_service_invoicing.py",
                 "tests/architecture/test_advance_renewal_invoicing_boundary.py",
+                "tests/architecture/test_retired_service_invoicing_boundary.py",
             ),
         ),
     ),
@@ -1365,7 +1311,6 @@ SERVICES: tuple[SOTService, ...] = (
             "invoice write-off eligibility preview and confirmation",
             "exact invoice closure ledger evidence",
             "invoice closure idempotency and audit evidence",
-            "backdated service invoice idempotency evidence",
             "historical invoice closure evidence reconciliation",
             "invoice settlement access-reconciliation handoff",
         ),
@@ -1382,7 +1327,11 @@ SERVICES: tuple[SOTService, ...] = (
             "historical observation state: it remains reportable but cannot "
             "drive overdue or Collections. Legacy NULL provenance is a bounded "
             "migration state measured by billing health, not a valid new "
-            "issuance outcome."
+            "issuance outcome. Existing #3605 controlled-draft seals retain "
+            "issue-time validation and ordinary-edit refusal; the new creation "
+            "and idempotency participants are retired. Compatibility evidence "
+            "is tests/test_retired_manual_service_invoicing.py and "
+            "docs/designs/REVERT_3605_BILLING.md."
         ),
     ),
     SOTService(
