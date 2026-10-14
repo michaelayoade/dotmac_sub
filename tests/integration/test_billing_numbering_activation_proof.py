@@ -201,6 +201,15 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
     install_settings_cache(None)
     try:
         with sessions() as writer:
+            # Private clone only: module migrations grant module reads, while
+            # the delegated V1 census also reads these legacy product tables.
+            # Grant the exact missing read closure without any write privilege.
+            writer.execute(
+                text(
+                    "GRANT SELECT ON TABLE public.domain_settings, public.invoices, "
+                    "public.credit_notes, public.document_sequences TO app_user"
+                )
+            )
             configure_series(writer, scope=SCOPE, configuration=PROPOSAL)
             writer.add(
                 SeriesCounter(
@@ -223,6 +232,28 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
                 )
                 is True
             )
+            # Assert the complete SELECT closure before the query: canonical
+            # settings, both V1 populations, V2 state, and unchanged catalogue.
+            for table in (
+                "public.domain_settings",
+                "public.invoices",
+                "public.credit_notes",
+                "public.document_sequences",
+                "mod_numbering.number_series",
+                "mod_numbering.series_counters",
+                "mod_numbering.allocation_receipts",
+                "mod_numbering.series_repairs",
+                "public.idempotency_records",
+            ):
+                assert (
+                    db.scalar(
+                        text(
+                            "SELECT has_table_privilege(current_user, :table, 'SELECT')"
+                        ),
+                        {"table": table},
+                    )
+                    is True
+                ), table
             first = billing_numbering_activation_proof_report(db, query=QUERY)
             assert first.actual_preview_verified
             before = catalogue(db)
