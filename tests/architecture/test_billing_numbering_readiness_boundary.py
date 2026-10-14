@@ -129,11 +129,35 @@ def numbering_callers(source: str) -> set[str]:
                 if isinstance(node.func, ast.Name)
                 else ""
             )
+            financial_series = ("invoice_number", "credit_note_number")
             direct = name == "generate_required_number" and any(
                 isinstance(argument, ast.Constant)
-                and argument.value in ("invoice_number", "credit_note_number")
+                and argument.value in financial_series
                 for argument in node.args
             )
+            sequence_argument = {
+                "generate_number": 2,
+                "generate_number_with_config": 1,
+            }.get(name)
+            if sequence_argument is not None:
+                positional = (
+                    node.args[sequence_argument]
+                    if len(node.args) > sequence_argument
+                    else None
+                )
+                keyword = next(
+                    (
+                        item.value
+                        for item in node.keywords
+                        if item.arg == "sequence_key"
+                    ),
+                    None,
+                )
+                direct = direct or any(
+                    isinstance(argument, ast.Constant)
+                    and argument.value in financial_series
+                    for argument in (positional, keyword)
+                )
             if name == "next_invoice_number" or direct:
                 owner = ".".join(self.scope)
                 if owner != "next_invoice_number":
@@ -303,6 +327,37 @@ def test_inventory_detects_planted_parallel_numbering_caller() -> None:
     assert numbering_callers(
         "def rogue(db):\n    return next_invoice_number(db)\n"
     ) == {"rogue"}
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "generate_number(db, domain, {series}, enabled, prefix, padding, start)",
+        "generate_number(db, domain, sequence_key={series}, enabled_key=enabled, prefix_key=prefix, padding_key=padding, start_key=start)",
+        "generate_number_with_config(db, {series}, prefix=None, padding=None, start_value=None)",
+        "generate_number_with_config(db, prefix=None, padding=None, start_value=None, sequence_key={series})",
+    ],
+)
+@pytest.mark.parametrize("series", ["invoice_number", "credit_note_number"])
+def test_inventory_detects_planted_direct_financial_numbering_call(
+    call: str, series: str
+) -> None:
+    source = (
+        "def create_installation_invoice(db):\n    return next_invoice_number(db)\n"
+        f"def rogue(db):\n    return {call.format(series=repr(series))}\n"
+    )
+    errors = inventory_errors([("installation.py", source)], set())
+    assert errors and "unexpected callers=[('installation.py', 'rogue')]" in errors[0]
+
+
+def test_inventory_ignores_nonbilling_direct_numbering_series() -> None:
+    source = (
+        "def create_installation_invoice(db):\n    return next_invoice_number(db)\n"
+        "def rogue(db):\n"
+        "    return generate_number_with_config(db, 'payment_receipt', "
+        "prefix=None, padding=None, start_value=None)\n"
+    )
+    assert numbering_callers(source) == {"create_installation_invoice"}
 
 
 def test_planted_counter_advance_and_write_sql_are_detected() -> None:
