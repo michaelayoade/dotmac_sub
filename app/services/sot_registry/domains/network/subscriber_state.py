@@ -876,6 +876,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             test_refs=(
                 "tests/test_owner_commands.py",
+                "tests/integration/test_owner_commands_optional_savepoint_pg.py",
                 "tests/test_device_projection_reconcile.py",
                 "tests/test_device_projection_task.py",
                 "tests/architecture/test_owner_command_boundary.py",

@@ -324,3 +324,53 @@ def test_owner_savepoint_still_rejects_participant_transaction_completion(
 
     assert not db_session.in_transaction()
     assert _count(db_session) == 0
+
+
+def test_swallowed_optional_commit_attempt_still_aborts_owner(
+    db_session: Session,
+) -> None:
+    def participant() -> None:
+        db_session.add(_projection("swallowed-illegal-commit"))
+        with pytest.raises(OwnerCommandError):
+            db_session.commit()
+
+    def operation() -> None:
+        with pytest.raises(OwnerCommandError):
+            execute_owner_savepoint(db_session, participant)
+        db_session.add(_projection("cannot-hide-boundary-violation"))
+
+    with pytest.raises(OwnerCommandError):
+        execute_owner_command(
+            db_session, definition=_DEFINITION, context=_context(), operation=operation
+        )
+    assert not db_session.in_transaction()
+    assert not any(key.startswith("_dotmac_") for key in db_session.info)
+    assert _count(db_session) == 0
+
+
+def test_optional_failure_preserves_exception_identity_and_cause(
+    db_session: Session,
+) -> None:
+    first = ValueError("optional business failure")
+    cause = LookupError("original failure cause")
+
+    def participant() -> None:
+        db_session.add(_projection("discarded-with-diagnostic"))
+        db_session.flush()
+        raise first from cause
+
+    def operation() -> None:
+        with pytest.raises(ValueError) as captured:
+            execute_owner_savepoint(db_session, participant)
+        assert captured.value is first
+        assert captured.value.__cause__ is cause
+        db_session.add(_projection("retained-diagnostic-evidence"))
+
+    execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=operation
+    )
+    assert not db_session.in_transaction()
+    assert not any(key.startswith("_dotmac_") for key in db_session.info)
+    assert set(db_session.scalars(select(DeviceProjection.source_id))) == {
+        "retained-diagnostic-evidence"
+    }

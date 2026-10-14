@@ -49,6 +49,33 @@ debt; they are not precedent for new or migrated commands.
 
 ## Authority boundary
 
+The executor retains the exact root handle returned by `Session.begin()` and
+checks its identity and activity before any active-command commit permission
+and before final completion. Optional participant BODY code remains flush-only.
+Only the executor may release its exact active optional savepoint, through a
+private single-use claim armed immediately before that handle's `commit()` and
+consumed by the commit guard before returning to other listeners. Rollback
+authorization grants no commit permission. Guard-observed participant completion
+violations make the owner fail closed even when swallowed. SQLAlchemy may deny
+same-handle reentry before dispatching an event; that already-denied attempt
+need not poison the owner, but cannot publish writes before the owner commits
+or prevent a later owner failure from rolling back all writes.
+
+An optional failure is isolated only when rollback of that exact savepoint
+returns successfully, the same root remains active, and no nested transaction
+remains. Listener or cleanup failures that cannot prove this isolation mark the
+owner for rollback even if application code catches the optional exception.
+The optional executor may best-effort close its exact child; it never completes
+the participant's root. Cleanup preserves the first exception object and cause,
+adding static secondary cleanup diagnostics and exception types as notes,
+without copying database-bound values. It closes a child only while that exact
+child is still current. All private command
+and savepoint state is cleared when the owner exits. Acceptance requires
+migrated PostgreSQL canaries with an independent observer for publication
+timing, real unique flush-conflict recovery, reentrant listener refusal,
+diagnostic preservation, and clean session reuse. Hosted CI owns execution of
+those canaries; static checks are not transaction acceptance evidence.
+
 The registered public service owns the business transaction. The database
 session adapter owns only opening, defensive cleanup, and closing. Nested
 domain helpers may query, add, delete, execute domain SQL, and flush within the

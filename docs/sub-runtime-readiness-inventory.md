@@ -334,3 +334,14 @@ production sweep finds 25 sites across 22 files, including the separately
 excluded historical residue of eight sites across seven files. Neither this
 reconciliation nor its aggregate test baseline adds a production construction
 allowance; `session_construction_baseline.txt` is unchanged.
+
+### Optional owner-savepoint hardening fixture accounting — 2026-10-14
+
+The static AST scanner measures **775 test construction sites across 166
+files** on this slice, one more than accepted main's 774 sites. The new site
+is the engine-bound `Session` in
+`tests/integration/test_owner_commands_optional_savepoint_pg.py`. It uses the
+existing migrated PostgreSQL engine and observes visibility through a separate
+connection to distinguish savepoint release from durable owner completion.
+This is fixture authorship, not evidence that the pending hosted canaries pass.
+Production construction allowances and the per-file baseline are unchanged.
