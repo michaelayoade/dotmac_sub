@@ -15,7 +15,10 @@ from app.models.integration_platform import (
     IntegrationInbox,
 )
 from app.services.integrations.delivery import payload_digest
-from app.services.integrations.installations import quarantine_installation
+from app.services.integrations.installations import (
+    lock_installation,
+    quarantine_installation,
+)
 
 # Matches IntegrationDelivery's outbound lease (app/services/integrations/
 # delivery.py) so a claim on either half of this subsystem expires on the
@@ -146,13 +149,24 @@ def receive_verified(
     headers: dict[str, str] | None = None,
     legacy_provider_event_id: str | None = None,
 ) -> tuple[IntegrationInbox, bool]:
-    # The binding is the stable parent aggregate for receipt identity. Locking
-    # it serializes the check/insert sequence so the database uniqueness rule
-    # remains an arbiter instead of becoming a webhook-facing exception.
+    # Aggregate writers, including collision quarantine, take parent first.
+    installation_id = db.scalar(
+        select(IntegrationCapabilityBinding.installation_id).where(
+            IntegrationCapabilityBinding.id == capability_binding_id
+        )
+    )
+    if installation_id is None:
+        raise InboxError("capability binding not found")
+    lock_installation(db, installation_id)
+    # Then serialize receipt identity at the binding and receipt rows.
     binding = db.scalars(
         select(IntegrationCapabilityBinding)
-        .where(IntegrationCapabilityBinding.id == capability_binding_id)
+        .where(
+            IntegrationCapabilityBinding.id == capability_binding_id,
+            IntegrationCapabilityBinding.installation_id == installation_id,
+        )
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).one_or_none()
     if binding is None:
         raise InboxError("capability binding not found")

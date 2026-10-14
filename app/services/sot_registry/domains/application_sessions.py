@@ -78,7 +78,13 @@ DOMAIN = DomainSOT(
                         name="current reseller ownership",
                         owner="auth.reseller_onboarding",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Reseller active standing, active Subscriber identity and current ResellerUser operator membership",
+                        source=(
+                            "Reseller active standing; active ResellerUser membership "
+                            "for first-class principals; active Subscriber plus "
+                            "ResellerUser membership for legacy subscriber principals. "
+                            "A first-class user's deprecated Subscriber link is "
+                            "historical provenance only."
+                        ),
                     ),
                     AuthorityInput(
                         name="bound ordinary cookie identity",
@@ -122,6 +128,7 @@ DOMAIN = DomainSOT(
                 design_refs=("docs/designs/RESELLER_COOKIE_DATABASE_STANDING.md",),
                 test_refs=(
                     "tests/test_reseller_session_standing.py",
+                    "tests/integration/test_reseller_session_standing_pg.py",
                     "tests/architecture/test_reseller_session_standing_boundary.py",
                 ),
             ),

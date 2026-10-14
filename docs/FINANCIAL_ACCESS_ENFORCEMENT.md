@@ -796,7 +796,7 @@ not a network-enforcement decision, and belongs wherever a non-PPPoE
 subscription is first provisioned (the same place that should be setting
 `provisioning_nas_device_id` today and currently is not, for a known cohort
 inherited from the retired Splynx billing system — see
-`517_retire_splynx_staging_schema.py`; `splynx_service_id`/`router_id` are
+`alembic/versions/518_retire_splynx_staging_schema.py`; `splynx_service_id`/`router_id` are
 carried display fields only, not FKs into `nas_devices`/`RouterInventory`,
 and identify no current NAS). Fixing that acquisition gap for the existing
 cohort is a data investigation/backfill task, not a code change to this

@@ -1,3 +1,17 @@
+// Mirrors FieldExpenseRequestItemCreate.description and ERP's expense limit.
+const expenseDescriptionMaxLength = 500;
+
+// Python's API validators count Unicode code points, rather than UTF-16 units.
+int expenseDescriptionLength(String description) => description.runes.length;
+
+String? validateExpenseDescription(String description) {
+  if (description.trim().isEmpty) return 'Describe what the expense was for.';
+  if (expenseDescriptionLength(description) > expenseDescriptionMaxLength) {
+    return 'Description must be $expenseDescriptionMaxLength characters or fewer.';
+  }
+  return null;
+}
+
 class ExpenseCategory {
   const ExpenseCategory({
     required this.categoryCode,
@@ -239,6 +253,8 @@ class ExpenseItemDraft {
   final String? receiptUrl;
   final String? receiptAttachmentId;
   final String? notes;
+
+  String? get descriptionError => validateExpenseDescription(description);
 
   Map<String, dynamic> toJson() => {
     'category_code': categoryCode,

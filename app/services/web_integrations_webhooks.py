@@ -169,7 +169,6 @@ def update_webhook_endpoint(
         secret_refs["signing_secret"] = signing_secret_ref.strip()
     if authorization_ref and authorization_ref.strip():
         secret_refs["authorization"] = authorization_ref.strip()
-    endpoint.name = name.strip()
     installations.create_config_revision(
         db,
         installation_id=endpoint.id,
@@ -205,6 +204,7 @@ def update_webhook_endpoint(
         raise ValueError(
             "Configuration changed; validate the connection before enabling"
         )
+    endpoint.name = name.strip()
     return installations.commit_installation_changes(db, endpoint)
 
 

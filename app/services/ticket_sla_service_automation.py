@@ -86,12 +86,27 @@ class PauseTicketServiceForSlaBreachOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class TicketPauseMergeHop:
+    ticket_id: UUID
+    ticket_number: str | None
+    ticket_status: TicketStatus
+    customer_account_id: UUID | None
+    merged_into_ticket_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
 class TicketServicePauseResumePreview:
     cause_id: UUID
     episode_id: UUID
-    ticket_id: UUID
+    source_ticket_id: UUID
+    source_ticket_number: str | None
+    source_ticket_status: TicketStatus
+    source_ticket_display_status: str
+    effective_ticket_id: UUID
+    effective_ticket_number: str | None
+    effective_ticket_status: TicketStatus
+    merge_chain: tuple[TicketPauseMergeHop, ...]
     subscription_id: UUID
-    ticket_status: TicketStatus
     effective_at: datetime
     proposed_resumed_at: datetime
     paused_seconds: int
@@ -101,6 +116,28 @@ class TicketServicePauseResumePreview:
     eligible: bool
     blocking_reasons: tuple[str, ...]
     fingerprint: str
+
+    @property
+    def ticket_id(self) -> UUID:
+        """Compatibility identity for the pause cause's original Ticket."""
+
+        return self.source_ticket_id
+
+    @property
+    def ticket_number(self) -> str | None:
+        """Compatibility number for the pause cause's original Ticket."""
+
+        return self.source_ticket_number
+
+    @property
+    def ticket_status(self) -> TicketStatus:
+        """Compatibility status projected from the effective Ticket."""
+
+        return self.effective_ticket_status
+
+    @property
+    def is_merged(self) -> bool:
+        return self.source_ticket_id != self.effective_ticket_id
 
     @property
     def duration_label(self) -> str:
@@ -386,6 +423,84 @@ def _resume_preview_fingerprint(parts: dict[str, object]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _ticket_account_id(ticket: Ticket) -> UUID | None:
+    return ticket.customer_account_id or ticket.subscriber_id
+
+
+@dataclass(frozen=True, slots=True)
+class _TicketPauseResolution:
+    source: Ticket
+    effective: Ticket
+    chain: tuple[TicketPauseMergeHop, ...]
+    blocking_reasons: tuple[str, ...]
+
+
+def _resolve_ticket_pause_ticket(
+    db: Session,
+    *,
+    source: Ticket,
+    expected_account_id: UUID,
+) -> _TicketPauseResolution:
+    """Follow the immutable merge relation to the effective lifecycle Ticket."""
+
+    chain: list[TicketPauseMergeHop] = []
+    blocking: list[str] = []
+    seen: set[UUID] = set()
+    current = source
+
+    while True:
+        if current.id in seen:
+            blocking.append("ticket_merge_cycle")
+            break
+        seen.add(current.id)
+        current_account_id = _ticket_account_id(current)
+        chain.append(
+            TicketPauseMergeHop(
+                ticket_id=current.id,
+                ticket_number=current.number,
+                ticket_status=TicketStatus(current.status),
+                customer_account_id=current_account_id,
+                merged_into_ticket_id=current.merged_into_ticket_id,
+            )
+        )
+        if current_account_id != expected_account_id:
+            blocking.append("ticket_merge_customer_mismatch")
+            break
+        target_id = current.merged_into_ticket_id
+        if target_id is None:
+            break
+        if target_id in seen:
+            blocking.append("ticket_merge_cycle")
+            break
+        target = db.get(Ticket, target_id)
+        if target is None:
+            blocking.append("ticket_merge_target_missing")
+            break
+        current = target
+
+    return _TicketPauseResolution(
+        source=source,
+        effective=current,
+        chain=tuple(chain),
+        blocking_reasons=tuple(blocking),
+    )
+
+
+def _lock_ticket_merge_chain(db: Session, source_ticket_id: UUID) -> None:
+    """Lock every existing Ticket in a merge chain before command revalidation."""
+
+    seen: set[UUID] = set()
+    ticket_id: UUID | None = source_ticket_id
+    while ticket_id is not None and ticket_id not in seen:
+        seen.add(ticket_id)
+        ticket = db.scalar(
+            select(Ticket).where(Ticket.id == ticket_id).with_for_update()
+        )
+        if ticket is None:
+            return
+        ticket_id = ticket.merged_into_ticket_id
+
+
 def preview_ticket_service_resume(
     db: Session,
     *,
@@ -411,11 +526,17 @@ def preview_ticket_service_resume(
             "active_service_not_found",
             "The paused subscription no longer exists.",
         )
-    ticket_status = TicketStatus(ticket.status)
-    blocking: list[str] = []
+    ticket_resolution = _resolve_ticket_pause_ticket(
+        db,
+        source=ticket,
+        expected_account_id=episode.account_id,
+    )
+    effective_ticket = ticket_resolution.effective
+    effective_ticket_status = TicketStatus(effective_ticket.status)
+    blocking = list(ticket_resolution.blocking_reasons)
     if cause.status != "active" or episode.status != "active":
         blocking.append("pause_is_not_active")
-    if ticket_status not in {
+    if effective_ticket_status not in {
         TicketStatus.pending_confirmation,
         TicketStatus.closed,
     }:
@@ -465,8 +586,29 @@ def preview_ticket_service_resume(
         "cause_status": cause.status,
         "episode_id": str(episode.id),
         "episode_status": episode.status,
-        "ticket_id": str(ticket.id),
-        "ticket_status": ticket_status.value,
+        "source_ticket_id": str(ticket.id),
+        "source_ticket_number": ticket.number,
+        "source_ticket_status": ticket.status,
+        "source_ticket_display_status": ticket.display_status,
+        "effective_ticket_id": str(effective_ticket.id),
+        "effective_ticket_number": effective_ticket.number,
+        "effective_ticket_status": effective_ticket_status.value,
+        "ticket_merge_chain": [
+            {
+                "ticket_id": str(hop.ticket_id),
+                "ticket_number": hop.ticket_number,
+                "ticket_status": hop.ticket_status.value,
+                "customer_account_id": (
+                    str(hop.customer_account_id) if hop.customer_account_id else None
+                ),
+                "merged_into_ticket_id": (
+                    str(hop.merged_into_ticket_id)
+                    if hop.merged_into_ticket_id
+                    else None
+                ),
+            }
+            for hop in ticket_resolution.chain
+        ],
         "subscription_id": str(subscription.id),
         "subscription_status": subscription.status.value,
         "effective_at": effective_at.isoformat(),
@@ -487,9 +629,15 @@ def preview_ticket_service_resume(
     return TicketServicePauseResumePreview(
         cause_id=cause.id,
         episode_id=episode.id,
-        ticket_id=ticket.id,
+        source_ticket_id=ticket.id,
+        source_ticket_number=ticket.number,
+        source_ticket_status=TicketStatus(ticket.status),
+        source_ticket_display_status=ticket.display_status,
+        effective_ticket_id=effective_ticket.id,
+        effective_ticket_number=effective_ticket.number,
+        effective_ticket_status=effective_ticket_status,
+        merge_chain=ticket_resolution.chain,
         subscription_id=subscription.id,
-        ticket_status=ticket_status,
         effective_at=effective_at,
         proposed_resumed_at=resume_at,
         paused_seconds=paused_seconds,
@@ -664,7 +812,7 @@ def reconcile_ticket_paused_prepaid_service(
         )
         if cause is None or cause.ticket_id is None:
             raise _error("pause_cause_not_found", "Ticket pause cause was not found.")
-        db.scalar(select(Ticket).where(Ticket.id == cause.ticket_id).with_for_update())
+        _lock_ticket_merge_chain(db, cause.ticket_id)
         episode = db.scalar(
             select(SubscriptionPauseEpisode)
             .where(SubscriptionPauseEpisode.id == cause.pause_episode_id)
@@ -786,7 +934,7 @@ def resume_ticket_paused_service(
         )
         if cause is None or cause.ticket_id is None:
             raise _error("pause_cause_not_found", "Ticket pause cause was not found.")
-        db.scalar(select(Ticket).where(Ticket.id == cause.ticket_id).with_for_update())
+        _lock_ticket_merge_chain(db, cause.ticket_id)
         episode = db.scalar(
             select(SubscriptionPauseEpisode)
             .where(SubscriptionPauseEpisode.id == cause.pause_episode_id)
@@ -921,6 +1069,7 @@ __all__ = [
     "ResumeTicketPausedServiceCommand",
     "ResumeTicketPausedServiceOutcome",
     "TicketPausedPrepaidReconciliationPreview",
+    "TicketPauseMergeHop",
     "TicketServicePauseResumePreview",
     "TicketServicePauseResumePreviewQuery",
     "TicketSlaServiceSelectionPolicy",

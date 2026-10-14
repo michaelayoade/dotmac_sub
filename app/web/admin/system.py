@@ -61,6 +61,7 @@ from app.services import staff_provisioning as staff_provisioning_service
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import system_user_assignments as assignment_service
+from app.services import web_admin_dashboard as web_admin_dashboard_service
 from app.services import web_control_plane as web_control_plane_service
 from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
@@ -401,6 +402,19 @@ def system_overview(request: Request, db: Session = Depends(get_db)):
             **dashboard,
         },
     )
+
+
+@router.get(
+    "/infrastructure",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_infrastructure_partial(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Refresh the infrastructure work surface on the System overview."""
+
+    return web_admin_dashboard_service.dashboard_server_health_partial(request, db)
 
 
 @router.get(

@@ -1198,6 +1198,7 @@ DOMAIN = DomainSOT(
                 "ticket SLA clock lifecycle",
                 "ticket SLA breach records",
                 "ticket SLA breach event emission",
+                "ticket dashboard attention projection",
             ),
             depends_on=(
                 "support.ticket_lifecycle",
@@ -1240,6 +1241,15 @@ DOMAIN = DomainSOT(
                             "canonical ticket lifecycle state",
                             "current ticket SLA records",
                             "configured operational escalation policy",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket dashboard attention projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical ticket lifecycle state",
+                            "configured ticket SLA targets",
+                            "current ticket SLA records",
                         ),
                     ),
                 ),
@@ -1325,6 +1335,35 @@ DOMAIN = DomainSOT(
                         "escalation rows reconstruct the breach consequence."
                     ),
                 ),
+                projections=(
+                    ProjectionContract(
+                        name="ticket dashboard attention projection",
+                        input_names=(
+                            "canonical ticket lifecycle state",
+                            "configured ticket SLA targets",
+                            "current ticket SLA records",
+                        ),
+                        writer="support.ticket_sla_clock",
+                        freshness=(
+                            "Computed at query time; the admin dashboard refreshes the "
+                            "snapshot every 60 seconds."
+                        ),
+                        stale_behavior=(
+                            "The dashboard retains the last successfully rendered "
+                            "snapshot and never substitutes zero for an unavailable query."
+                        ),
+                        drift_signal=(
+                            "Focused SLA-assignment tests compare unassigned, warning, "
+                            "and breached cohorts with canonical ticket and clock rows."
+                        ),
+                        rebuild_operation=(
+                            "Re-run ticket_attention_summary for the requested observation "
+                            "time from canonical Ticket, TicketAssignee, SlaTarget, and "
+                            "SlaClock rows."
+                        ),
+                        repair_owner="support.ticket_sla_clock",
+                    ),
+                ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.COMPLETE,
                     old_owner=(
@@ -1398,7 +1437,9 @@ DOMAIN = DomainSOT(
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "current Ticket status, customer link, and resolution state"
+                            "cause-linked Ticket identity and immutable merge relation; "
+                            "the complete same-account merged_into_ticket_id chain and "
+                            "final destination status determine effective resolution state"
                         ),
                     ),
                     AuthorityInput(
@@ -1458,10 +1499,11 @@ DOMAIN = DomainSOT(
                         "flush-only participants."
                     ),
                     locking=(
-                        "The Ticket, exact prior pause cause, and active service "
-                        "candidates are selected with row locks. Prepaid coverage "
-                        "is re-resolved from exact entitlement and applied-extension "
-                        "evidence after the subscription lock is held."
+                        "The cause-linked Ticket, every existing merge-chain Ticket, "
+                        "exact prior pause cause, and active service candidates are "
+                        "selected with row locks. Prepaid coverage is re-resolved from "
+                        "exact entitlement and applied-extension evidence after the "
+                        "subscription lock is held."
                     ),
                     idempotency=(
                         "The event, rule version, and step derive one stable pause-cause "
@@ -1520,6 +1562,7 @@ DOMAIN = DomainSOT(
                     mapping_owner="automation action adapter",
                     fail_closed_on=(
                         "missing Ticket or customer account link",
+                        "missing merge destination, merge cycle, or merge-chain customer mismatch",
                         "zero or multiple active linked services",
                         "conflicting replay evidence",
                         "missing, discontinuous, or anchor-inconsistent prepaid coverage",
@@ -1567,6 +1610,7 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_ticket_sla_service_automation.py",
                     "tests/test_subscription_pause_lifecycle.py",
+                    "tests/test_subscription_lifecycle_ui.py",
                     "tests/test_sla_assignment.py",
                     "tests/test_automation_ticket_assignment_drafts.py",
                     "tests/architecture/test_automation_runtime_boundary.py",

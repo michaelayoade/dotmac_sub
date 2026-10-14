@@ -95,6 +95,8 @@ _WRITE_TIER_VERBS = frozenset(
         "configure",
         "correct",  # Appends a reviewed customer-subledger opening correction.
         "create",
+        "create_backdated_service",  # Creates a reviewed historical service document.
+        "create_subscription_service",  # Issues a reviewed next-period document.
         "db_admin",
         "delete",
         "dispatch",
@@ -112,6 +114,7 @@ _WRITE_TIER_VERBS = frozenset(
         "push_config",
         "redrive",
         "repair",  # Executes reviewed financial recovery.
+        "reconstruct_backdated_service",  # Adds reviewed historical identity.
         "retire",
         "reverse",
         "revoke",  # Withdraws current authority or approval.

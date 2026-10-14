@@ -17,10 +17,14 @@ ownership using fresh scalar-column selects inside `no_autoflush`; query
 execution requests `populate_existing` without refreshing caller-held ORM
 entities. Standing requires an
 active unrevoked unexpired session, exact exclusive principal FKs and no staff
-Party context; active Reseller; active principal and current ResellerUser reseller
-membership; and a matching active ResellerUser link for subscriber principals.
-An ordinary subscriber requires a dedicated active membership; the legacy
-missing-table fallback is not an ordinary authentication decision path.
+Party context; active Reseller; and current active ResellerUser reseller
+membership. A first-class `reseller_user` principal is authoritative from that
+ResellerUser membership. Its optional deprecated `subscriber_id`/`person_id`
+link is historical provenance only and may point to the deliberately retired,
+inactive/canceled Subscriber row without invalidating standing. An ordinary
+legacy `subscriber` principal still requires both an active Subscriber and a
+dedicated active ResellerUser membership; the legacy missing-table fallback is
+not an ordinary authentication decision path.
 Subscriber.reseller_id scopes customer accounts, not portal operator membership;
 only the dedicated ResellerUser link supplies the operator reseller binding.
 Reads neither flush nor complete caller transactions. Already-flushed caller
@@ -43,11 +47,13 @@ success is unnecessary for the next ordinary request to refuse a revoked row.
 
 `tests/test_reseller_session_standing.py` supplies SQLite fast-lane evidence for
 both principal kinds, binding failures, stale ORM reads, revocation, refresh
-deadlines, storage failure and preservation of caller transactions.
+deadlines, storage failure, preservation of caller transactions, and continued
+first-class standing when the retained historical Subscriber has been retired.
+`tests/integration/test_reseller_session_standing_pg.py` proves the historical
+link behavior and fresh revocation visibility on the migrated PostgreSQL schema.
 `tests/architecture/test_reseller_session_standing_boundary.py` guards the narrow
 typed read owner, strict ordinary consumers and explicit legacy exclusion.
-These tests do not establish migrated PostgreSQL, independent-connection
-revocation visibility, deployment or browser acceptance.
+These tests do not establish deployment or browser acceptance.
 
 Residual: explicit administrator reseller impersonation still lacks the
 separate authoritative actor/session binding. This change intentionally neither

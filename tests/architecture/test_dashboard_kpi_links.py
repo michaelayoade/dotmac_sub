@@ -73,14 +73,16 @@ def _attention_hrefs() -> list[str]:
             "alarms_warning": 0,
             "offline_count": 1,
         },
-        overdue_amount=1.0,
         suspended_count=1,
         pending_orders=1,
+        unassigned_support_count=1,
+        support_approaching_target_count=1,
+        support_exceeded_target_count=1,
+        onboarding_waiting_too_long_count=1,
         ont_summary={"low_signal": 1, "offline": 99},
         unconfigured_ont_count=1,
         pending_location_requests=1,
         pon_outage_count=1,
-        infrastructure_alerts={"total": 1, "critical": 1},
     )
     return [item["href"] for item in items]
 

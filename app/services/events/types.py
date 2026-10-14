@@ -140,6 +140,9 @@ class EventType(enum.Enum):
     integration_installation_capability_provisioned = (
         "integration.installation.capability_provisioned"
     )
+    integration_installation_talk_credential_configured = (
+        "integration.installation.talk_credential_configured"
+    )
     integration_installation_meta_social_configured = (
         "integration.installation.meta_social_configured"
     )
@@ -151,6 +154,8 @@ class EventType(enum.Enum):
     oauth_token_refreshed = "oauth_token.refreshed"
     oauth_token_refresh_failed = "oauth_token.refresh_failed"
     account_credit_deposited = "account_credit.deposited"
+    backdated_service_invoice_created = "backdated_service_invoice.created"
+    backdated_service_invoice_reconstructed = "backdated_service_invoice.reconstructed"
     prepaid_service_renewed = "prepaid_service.renewed"
     prepaid_service_renewal_document_corrected = (
         "prepaid_service.renewal_document_corrected"

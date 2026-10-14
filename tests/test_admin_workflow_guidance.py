@@ -117,6 +117,8 @@ def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
         "/admin/projects/templates/template-id/tasks/editor": "project-template-plans",
         "/admin/sales/sales-order/order-id": "sales-orders",
         "/admin/billing": "billing-overview",
+        "/admin/billing/invoices/subscription-service": "subscription-service-invoice",
+        "/admin/billing/invoices/subscription-service/issue": "subscription-service-invoice",
         "/admin/billing/payments/reconciliation": "payment-reconciliation",
         "/admin/support/tickets/ticket-id": "support-tickets",
         "/admin/inbox/manager-ai": "team-inbox",
@@ -341,6 +343,29 @@ def test_payment_guidance_explains_funded_prepaid_renewal() -> None:
     assert "billing date is not moved" in content
 
 
+def test_subscription_service_invoice_guidance_explains_controlled_effects() -> None:
+    guide = guidance_for_path("/admin/billing/invoices/subscription-service")
+
+    assert guide is not None
+    assert guide.id == "subscription-service-invoice"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    for requirement in (
+        "exact next service period",
+        "does not record a payment",
+        "consume account credit",
+        "move the billing date",
+        "grant service access",
+        "exact period once",
+        "backdated service-period workflow",
+    ):
+        assert requirement in content
+    actions = {action.id: action for action in help_actions_for(guide)}
+    assert (
+        actions["issue-service-invoice"].permission
+        == "billing:invoice:create_subscription_service"
+    )
+
+
 def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     layout = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
     control = Path("templates/components/ui/workflow_help.html").read_text(
@@ -409,7 +434,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 66
+    assert len(guides) == 67
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -547,3 +572,13 @@ def test_router_health_guidance_covers_badge_shadow_and_read_only_boundary() -> 
     assert drift is not None
     assert drift.id == "cross-app-drift"
     assert "router posture" in " ".join(drift.steps).lower()
+
+
+def test_installed_talk_guide_explains_save_validation_and_unchanged_delivery():
+    guide = guidance_for_path("/admin/integrations/nextcloud-talk/installation-id")
+    assert guide is not None and guide.id == "integrations"
+    content = " ".join((*guide.steps, *guide.notes))
+    assert "existing notifier username and app password" in content
+    assert "both settings and secrets write access" in content
+    assert "without sending a notification" in content
+    assert "global notification setting unchanged" in content

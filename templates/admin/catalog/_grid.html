@@ -1,31 +1,28 @@
 {% from "components/data/data_grid.html" import data_grid, cell, cell_link, cell_badge, cell_status, cell_bandwidth, cell_custom %}
 
 {% set catalog_filters %}
-<form method="get" action="/admin/catalog" class="flex flex-wrap items-center gap-3">
     {% if plan_category %}
     <input type="hidden" name="plan_category" value="{{ plan_category }}">
     {% endif %}
-    <select name="status" class="rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    <select name="status" aria-label="Status" class="min-h-11 rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
         <option value="">All statuses</option>
         {% for item in offer_statuses %}
         <option value="{{ item }}" {% if status == item %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
         {% endfor %}
     </select>
-    <select name="plan_kind" class="rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    <select name="plan_kind" aria-label="Plan kind" class="min-h-11 rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
         <option value="">All plan kinds</option>
         <option value="standard" {% if plan_kind == "standard" %}selected{% endif %}>Standard</option>
         <option value="ip_address" {% if plan_kind == "ip_address" %}selected{% endif %}>IP Address</option>
         <option value="device_replacement" {% if plan_kind == "device_replacement" %}selected{% endif %}>Device Replacement</option>
     </select>
-    <select name="plan_family" class="rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    <select name="plan_family" aria-label="Plan family" class="min-h-11 rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm shadow-sm transition-all focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
         <option value="">All families</option>
         {% for item in plan_families %}
         <option value="{{ item }}" {% if plan_family == item %}selected{% endif %}>{{ item | replace('_', ' ') | title }}</option>
         {% endfor %}
         <option value="unclassified" {% if plan_family == "unclassified" %}selected{% endif %}>Unclassified</option>
     </select>
-    <button type="submit" class="inline-flex items-center rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-700">Filter</button>
-</form>
 {% endset %}
 
 {% set status_map = {
@@ -53,6 +50,7 @@
     searchable=true,
     search_value=search or "",
     search_placeholder="Search tariffs...",
+    submit_search=true,
     filters=catalog_filters,
     show_count=true,
     compact=true,

@@ -965,6 +965,60 @@ implementation.
 - Responsive: panel facts stack; the history table scrolls horizontally inside
   its card; the editor is a single column at every width.
 
+## Next Service-Period Invoice Review Contract
+
+The admin next service-period invoice page serves billing operators who need to
+issue a subscription-linked receivable before the current covered period ends.
+Its read and command owner is `financial.advance_renewal_invoicing`; templates do
+not derive dates, prices, tax, eligibility, or service consequences.
+
+The first viewport must show customer account identity, subscription/plan,
+billing mode, exact period start/end, issued status, subtotal, tax, total, and
+the settlement consequence. Prepaid copy must distinguish invoice issuance from
+service allocation: issuance creates no access, while full settlement creates
+one invoice-line-keyed entitlement through the payment finalizer. Postpaid copy
+must state that the period is documentary and no prepaid entitlement is created.
+
+The page has one primary action. It requires the assignable
+`billing:invoice:create_subscription_service` permission, an operator reason, an
+owner-produced fingerprint, an idempotency key, and explicit confirmation. The
+owner rechecks all facts under the subscription lock. Operators cannot edit the
+period or amount. Unauthorized actions are absent; elapsed periods, stale
+previews, coverage/anchor drift, duplicates, and conflicting invoices fail
+closed with a recovery-oriented message.
+
+Customer notification is an explicit secondary choice and is never inferred.
+The legacy direct generate-from-subscription action is not rendered. Generic
+invoice authoring remains a separate workflow for non-subscription charges and
+must not accept service-period fields as a workaround.
+
+## Backdated subscription-service invoice workspace
+
+The controlled page at `/admin/billing/invoices/backdated-service` is the only
+admin UI that may create or reconstruct historical prepaid subscription-service
+invoice identity. It must display the selected account, subscription, plan,
+exact service dates, canonical subtotal/tax/total, exact subscription-bound
+usage evidence, historical-terms provenance (including adjacent source invoice
+identifiers when used), invoice and entitlement overlap checks, and the
+receivable impact before confirmation. A changed current price or tax record is
+not silently projected backward when no immutable adjacent invoice proves the
+historical terms.
+
+The page exposes create and reconstruction independently through
+`billing:invoice:create_backdated_service` and
+`billing:invoice:reconstruct_backdated_service`. These are assignable role
+permissions, not Finance approval states. Unauthorized actions are hidden and
+the command owner rechecks the exact permission.
+
+Create produces an owner-sealed draft. Generic header and line editing are
+hidden and refused; issue remains a separate invoice lifecycle action and
+revalidates the sealed document fingerprint before creating the receivable.
+Reconstruction changes documentary identity only and preserves status and
+money. Confirmation requires an operator reason, explicit acknowledgement,
+idempotency key, and an owner-produced fingerprint. A stale price, tax, usage,
+period, invoice, overlap, or entitlement fact must return to preview rather
+than being silently accepted.
+
 ## Reseller Account List Contract
 
 - Audience and job: a reseller scans and searches the customer accounts assigned

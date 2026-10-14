@@ -1132,7 +1132,22 @@ def resolve_payment_allocation_finalization(
             mode=PaymentAllocationFinalizationMode.standard,
             reason="invoice_is_not_a_period_bound_prepaid_renewal",
         )
-    subscription, _lines = resolved
+    subscription, lines = resolved
+    if any(
+        isinstance(line.metadata_, dict)
+        and (
+            line.metadata_.get("backdated_service_invoice") is True
+            or str(
+                line.metadata_.get("reviewed_prepaid_sequence_ref") or ""
+            ).startswith("backdated-service-invoicing:")
+        )
+        for line in lines
+    ):
+        return PaymentAllocationFinalizationDecision(
+            mode=PaymentAllocationFinalizationMode.reviewed_document_correction,
+            reason="reviewed_backdated_service_document",
+            subscription_id=subscription.id,
+        )
     metadata = invoice.metadata_ if isinstance(invoice.metadata_, dict) else {}
     if metadata.get("payment_finalization_mode") == "historical_debt":
         return PaymentAllocationFinalizationDecision(
@@ -1400,13 +1415,11 @@ def _finalize_reviewed_document_payment_effects(
     db: Session,
     invoice: Invoice,
 ) -> None:
-    """Finalize documentary evidence without asserting new funding.
+    """Finalize a reviewed historical document without current-access effects.
 
-    A reviewed historical correction consumes money that was already settled
-    and available. It creates the canonical paid document and entitlement, but
-    does not run financial-access restoration against an account whose opening
-    funding cutover may still be incomplete. The repair owner separately
-    projects its fingerprint-bound billing anchor.
+    The payment/allocation owner has already recorded any economic effect. This
+    step creates or revokes canonical historical entitlement evidence, but does
+    not restore present access or move the subscription billing anchor.
     """
 
     _recalculate_invoice_totals(db, invoice)
@@ -1460,6 +1473,20 @@ def _finalize_invoice_payment_effects(
         lock_for_update(db, Invoice, invoice.id)
     previous_status = invoice.status
     decision = resolve_payment_allocation_finalization(db, invoice)
+    if decision.mode is PaymentAllocationFinalizationMode.reviewed_document_correction:
+        _finalize_reviewed_document_payment_effects(db, invoice)
+        if causing_allocation is not None:
+            from app.services.billing.payment_invoice_paid import (
+                stage_invoice_paid_payment_consequence,
+            )
+
+            stage_invoice_paid_payment_consequence(
+                db,
+                invoice=invoice,
+                allocation=causing_allocation,
+                previous_status=previous_status,
+            )
+        return
     if decision.mode is PaymentAllocationFinalizationMode.historical_debt:
         _finalize_historical_debt_payment_effects(db, invoice)
         return
@@ -1529,6 +1556,9 @@ def _finalize_invoice_application(
     effective_at: datetime,
 ) -> None:
     decision = resolve_payment_allocation_finalization(db, invoice)
+    if decision.mode is PaymentAllocationFinalizationMode.reviewed_document_correction:
+        _finalize_reviewed_document_payment_effects(db, invoice)
+        return
     if decision.mode is PaymentAllocationFinalizationMode.historical_debt:
         _finalize_historical_debt_payment_effects(db, invoice)
         return

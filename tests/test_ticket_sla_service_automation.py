@@ -98,6 +98,26 @@ def _seed_authoritative_breach(db_session, *, ticket_id, command):
     return clock, breach
 
 
+def _pause_service_for_ticket(db_session, ticket_id):
+    command = _pause_command(ticket_id)
+    _seed_authoritative_breach(db_session, ticket_id=ticket_id, command=command)
+    return (
+        ticket_sla_service_automation.pause_unique_active_service_for_ticket_sla_breach(
+            db_session,
+            command,
+        )
+    )
+
+
+def _resume_context(subscription_id, cause_id):
+    return CommandContext.system(
+        actor="support-reviewer",
+        scope=f"subscription:{subscription_id}",
+        reason="linked effective ticket resolved",
+        idempotency_key=f"ticket-merge-pause-resume:{cause_id}",
+    )
+
+
 def test_pauses_the_only_active_service(
     db_session, subscriber, active_subscription, monkeypatch
 ):
@@ -323,3 +343,261 @@ def test_resume_accepts_applied_extension_as_prepaid_coverage(
     )
 
     assert outcome.access_restored
+
+
+def test_resume_follows_full_same_account_merge_chain_to_closed_ticket(
+    db_session, subscriber, active_subscription
+):
+    source = Ticket(
+        number=f"SRC-{uuid4().hex[:8]}",
+        title="Original SLA ticket",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(source)
+    db_session.flush()
+    paused = _pause_service_for_ticket(db_session, source.id)
+
+    middle = Ticket(
+        number=f"MID-{uuid4().hex[:8]}",
+        title="First merge destination",
+        status=TicketStatus.canceled.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    destination = Ticket(
+        number=f"DST-{uuid4().hex[:8]}",
+        title="Effective resolved ticket",
+        status=TicketStatus.closed.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add_all((middle, destination))
+    db_session.flush()
+    source.status = TicketStatus.canceled.value
+    source.merged_into_ticket_id = middle.id
+    middle.merged_into_ticket_id = destination.id
+    db_session.commit()
+
+    resumed_at = datetime.now(UTC) + timedelta(hours=1)
+    preview = ticket_sla_service_automation.preview_ticket_service_resume(
+        db_session,
+        cause_id=paused.pause_cause_id,
+        proposed_resumed_at=resumed_at,
+    )
+
+    assert preview.eligible
+    assert preview.source_ticket_id == source.id
+    assert preview.source_ticket_number == source.number
+    assert preview.source_ticket_display_status == "merged"
+    assert preview.effective_ticket_id == destination.id
+    assert preview.effective_ticket_status is TicketStatus.closed
+    assert tuple(hop.ticket_id for hop in preview.merge_chain) == (
+        source.id,
+        middle.id,
+        destination.id,
+    )
+    subscription_id = active_subscription.id
+    cause_id = paused.pause_cause_id
+    context = _resume_context(subscription_id, cause_id)
+    db_session.rollback()
+
+    outcome = ticket_sla_service_automation.resume_ticket_paused_service(
+        db_session,
+        ticket_sla_service_automation.ResumeTicketPausedServiceCommand(
+            subscription_id=subscription_id,
+            cause_id=cause_id,
+            preview_fingerprint=preview.fingerprint,
+            resumed_at=resumed_at,
+            actor=context.actor,
+            reason=context.reason,
+            context=context,
+        ),
+    )
+
+    assert outcome.ticket_id == source.id
+    assert outcome.access_restored
+
+
+def test_resume_preview_blocks_open_merge_destination(
+    db_session, subscriber, active_subscription
+):
+    source = Ticket(
+        title="Merged SLA ticket",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(source)
+    db_session.flush()
+    paused = _pause_service_for_ticket(db_session, source.id)
+    destination = Ticket(
+        title="Still open destination",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(destination)
+    db_session.flush()
+    source.status = TicketStatus.canceled.value
+    source.merged_into_ticket_id = destination.id
+    db_session.commit()
+
+    preview = ticket_sla_service_automation.preview_ticket_service_resume(
+        db_session,
+        cause_id=paused.pause_cause_id,
+    )
+
+    assert not preview.eligible
+    assert preview.effective_ticket_id == destination.id
+    assert preview.effective_ticket_status is TicketStatus.open
+    assert "ticket_is_not_resolved" in preview.blocking_reasons
+
+
+def test_resume_preview_blocks_merge_cycle(db_session, subscriber, active_subscription):
+    source = Ticket(
+        title="Cyclic merge source",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(source)
+    db_session.flush()
+    paused = _pause_service_for_ticket(db_session, source.id)
+    destination = Ticket(
+        title="Cyclic merge destination",
+        status=TicketStatus.canceled.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(destination)
+    db_session.flush()
+    source.status = TicketStatus.canceled.value
+    source.merged_into_ticket_id = destination.id
+    destination.merged_into_ticket_id = source.id
+    db_session.commit()
+
+    preview = ticket_sla_service_automation.preview_ticket_service_resume(
+        db_session,
+        cause_id=paused.pause_cause_id,
+    )
+
+    assert not preview.eligible
+    assert "ticket_merge_cycle" in preview.blocking_reasons
+
+
+def test_resume_preview_blocks_merge_customer_mismatch(
+    db_session, subscriber, active_subscription
+):
+    source = Ticket(
+        title="Same-account merge source",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(source)
+    db_session.flush()
+    paused = _pause_service_for_ticket(db_session, source.id)
+    destination = Ticket(
+        title="Unlinked merge destination",
+        status=TicketStatus.closed.value,
+        priority="urgent",
+    )
+    db_session.add(destination)
+    db_session.flush()
+    source.status = TicketStatus.canceled.value
+    source.merged_into_ticket_id = destination.id
+    db_session.commit()
+
+    preview = ticket_sla_service_automation.preview_ticket_service_resume(
+        db_session,
+        cause_id=paused.pause_cause_id,
+    )
+
+    assert not preview.eligible
+    assert "ticket_merge_customer_mismatch" in preview.blocking_reasons
+
+
+def test_resume_preview_blocks_missing_merge_target(subscriber):
+    missing_id = uuid4()
+    source = Ticket(
+        id=uuid4(),
+        title="Missing merge destination",
+        status=TicketStatus.canceled.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+        merged_into_ticket_id=missing_id,
+    )
+
+    class MissingTargetSession:
+        @staticmethod
+        def get(model, entity_id):
+            assert model is Ticket
+            assert entity_id == missing_id
+            return None
+
+    resolution = ticket_sla_service_automation._resolve_ticket_pause_ticket(
+        MissingTargetSession(),
+        source=source,
+        expected_account_id=subscriber.id,
+    )
+
+    assert resolution.effective is source
+    assert resolution.blocking_reasons == ("ticket_merge_target_missing",)
+
+
+def test_destination_change_invalidates_merge_aware_resume_preview(
+    db_session, subscriber, active_subscription
+):
+    source = Ticket(
+        title="Stale preview source",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(source)
+    db_session.flush()
+    paused = _pause_service_for_ticket(db_session, source.id)
+    destination = Ticket(
+        title="Destination status changes",
+        status=TicketStatus.closed.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(destination)
+    db_session.flush()
+    source.status = TicketStatus.canceled.value
+    source.merged_into_ticket_id = destination.id
+    db_session.commit()
+    resumed_at = datetime.now(UTC) + timedelta(hours=1)
+    preview = ticket_sla_service_automation.preview_ticket_service_resume(
+        db_session,
+        cause_id=paused.pause_cause_id,
+        proposed_resumed_at=resumed_at,
+    )
+    assert preview.eligible
+    subscription_id = active_subscription.id
+    cause_id = paused.pause_cause_id
+    destination.status = TicketStatus.open.value
+    db_session.commit()
+
+    context = _resume_context(subscription_id, cause_id)
+    db_session.rollback()
+    with pytest.raises(
+        ticket_sla_service_automation.TicketSlaServiceAutomationError
+    ) as exc_info:
+        ticket_sla_service_automation.resume_ticket_paused_service(
+            db_session,
+            ticket_sla_service_automation.ResumeTicketPausedServiceCommand(
+                subscription_id=subscription_id,
+                cause_id=cause_id,
+                preview_fingerprint=preview.fingerprint,
+                resumed_at=resumed_at,
+                actor=context.actor,
+                reason=context.reason,
+                context=context,
+            ),
+        )
+
+    assert exc_info.value.code.endswith(".stale_resume_preview")

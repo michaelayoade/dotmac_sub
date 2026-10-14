@@ -161,8 +161,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: Session sites force exact lock interleavings; two SQLite Session sites prove
 #: caller-flushed-write preservation and independent committed observation.
 #: Test-only additions; production construction allowance is unchanged.
-#: Reseller standing PostgreSQL cases add two isolated Session constructors.
-#: These test fixtures do not expand the production construction allowance.
+#: +2 from reseller standing PostgreSQL cases: isolated Session constructors
+#: prove first-class reseller and historical subscriber-link standing. These
+#: test fixtures do not expand the production construction allowance.
 # Six explicit fixture constructions in test_anonymous_recovery_adapter.py
 # exercise fresh lifecycle rollback and independent file-SQLite connections.
 # The production constructor inventory remains unchanged.
@@ -280,7 +281,12 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: fixtures, two schema classification fixtures, two migrated PostgreSQL
 #: session factories and two isolated empty-bootstrap Engine/Session sites.
 #: Production construction allowances remain unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 769
+# The migrated Nextcloud Talk race/recovery fixture adds one disposable
+# migrated PostgreSQL engine and one independent session factory.
+#: +1 from the opening evidence census: one sessionmaker over the existing
+#: migrated PostgreSQL engine for an independent committed writer and the
+#: canonical read-only snapshot seam. No production construction allowance changes.
+TEST_FIXTURE_BASELINE_TOTAL = 774
 
 
 def _baseline() -> dict[str, int]:

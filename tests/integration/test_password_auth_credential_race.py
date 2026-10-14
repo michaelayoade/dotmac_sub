@@ -52,7 +52,7 @@ from app.models.auth import (
 from app.models.auth import Session as AuthSession
 from app.models.catalog import AccessCredential
 from app.models.event_store import EventStore
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, UserType
 from app.services import auth_flow as auth_flow_service
 from app.services import credential_recovery
 from app.services import password_authentication as pa
@@ -97,6 +97,7 @@ def account(factory):
             last_name=suffix,
             email=email,
             reseller_id=_default_reseller_id(setup),
+            user_type=UserType.customer,
         )
         setup.add(subscriber)
         setup.flush()

@@ -18,6 +18,12 @@ def test_precise_read_owner_is_registered():
     assert all(c.role == OwnerRole.RESOLVER for c in owner.contract.concerns)
     assert len(owner.owns) == 2
     assert "impersonation" not in " ".join(owner.owns)
+    ownership = next(
+        value
+        for value in owner.contract.authoritative_inputs
+        if value.name == "current reseller ownership"
+    )
+    assert "historical provenance only" in ownership.source
 
 
 def test_typed_immutable_queries_and_outcomes():
@@ -58,6 +64,19 @@ def test_read_owner_never_completes_or_mutates_transaction():
     assert "db.get(" not in source
     assert "db.query(" not in source
     assert "fastapi" not in source
+
+
+def test_first_class_standing_does_not_read_historical_subscriber_liveness():
+    source = inspect.getsource(
+        reseller_session_standing.resolve_reseller_session_standing
+    )
+    first_class_branch = source.split('if query.principal_type == "reseller_user":', 1)[
+        1
+    ].split('elif query.principal_type == "subscriber":', 1)[0]
+    assert "ResellerUser.reseller_id" in first_class_branch
+    assert "ResellerUser.is_active" in first_class_branch
+    assert "ResellerUser.subscriber_id" not in first_class_branch
+    assert "Subscriber.is_active" not in first_class_branch
 
 
 def test_ordinary_consumers_have_no_truthy_impersonation_bypass():

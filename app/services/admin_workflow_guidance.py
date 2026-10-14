@@ -163,6 +163,9 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Find the right place to start customer work.",
         (),
         "Choose a work area from the sidebar.",
+        "Review What's New first, then use Needs attention for live support and onboarding work that requires a decision.",
+        "Use Collections this month and Overdue as the financial headline links; open a KPI to review its exact cohort before acting.",
+        "Use System overview for infrastructure and audit activity rather than treating those facts as customer-attention work.",
         "Start from Customers for a person or service, and Billing for an invoice, payment, proof, credit, or reconciliation item.",
         "Open the customer detail page for work affecting one customer.",
         "Confirm the customer and owning record before using an action.",
@@ -691,6 +694,23 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "subscription-service-invoice",
+        "Billing",
+        "Issue the next subscription service invoice",
+        "Billing staff with the subscription-service invoice permission",
+        "Issue one reviewed invoice for the subscription's exact next service period.",
+        ("/admin/billing/invoices/subscription-service",),
+        "Confirm the customer, billing account, subscription, plan, billing mode, and exact next service period shown by the preview.",
+        "Review the recurring charge, tax, total, eligibility, duplicate checks, and any excluded prepaid add-ons or unresolved postpaid components before continuing.",
+        "Enter a clear reason, choose whether to send the existing renewal-ready notification, tick the confirmation, and issue only the current preview.",
+        "Open the issued invoice and verify that its line remains linked to the subscription and exact service period; if the preview became stale, reload and review again.",
+        notes=(
+            "This workflow issues a receivable; it does not record a payment, consume account credit, move the billing date, or grant service access by itself.",
+            "When payment is later allocated through the normal payment workflow, the linked prepaid invoice can grant that exact period once without creating a second service charge.",
+            "Use the separate backdated service-period workflow for already consumed historical periods.",
+        ),
+    ),
+    _guide(
         "invoice",
         "Billing",
         "Create, issue, and correct invoices",
@@ -785,7 +805,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "If the complete prepaid charge is unavailable, no renewal invoice is created and the billing date is not moved.",
         "Acknowledge duplicate risk only when the reviewed bank evidence proves the payment is distinct.",
         "Use allocation for existing unallocated value; it does not create new money.",
-        "Filter the Payments or Unallocated Payments list by customer, status, method, or dates. Leave either date blank to omit that boundary; leave both blank for all dates. Export CSV uses the same filters across the complete result.",
+        "Filter the Payments or Unallocated Payments list by customer, status, method, or dates. Leave either date blank to omit that boundary; leave both blank for all dates. Export CSV uses the same filters across the complete result; large exports stream in bounded batches, so download once and allow the file to finish.",
         notes=(
             "Use Payment Proof review for customer-uploaded transfer receipts; never bypass a duplicate warning by changing the reference.",
             "Do not create a manual invoice or manually change the next billing date to imitate a prepaid renewal.",
@@ -1196,6 +1216,12 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Test or validate the connection before enabling it for normal delivery.",
         "Use sync and failure evidence to investigate problems without repeatedly sending the same operation.",
         "Retired connector jobs remain available for history, but cannot be configured or run again. Create a current connector installation for any approved retained capability.",
+        "For an installed Nextcloud Talk integration, open Manage, confirm its approved server, and enter the existing notifier username and app password. Saving credentials requires both settings and secrets write access.",
+        "Choose Save and validate credentials to check the notifier connection without sending a notification. A failed connection check keeps this Talk integration disabled; correct the credentials and save again.",
+        notes=(
+            "Nextcloud Talk credential setup keeps the approved server, notification policy, and global notification setting unchanged. It does not create a Nextcloud account.",
+            "Configured means a credential reference is stored, not that its current connection is healthy. If storage is unavailable, contact your administrator and retry the same request.",
+        ),
     ),
     _guide(
         "notifications",
@@ -1385,9 +1411,9 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
     ),
     "admin-workspace": (
-        _action("choose-work-area", "Choose the right work area", 0, 1),
-        _action("start-customer-work", "Start customer work", 2, 3),
-        _action("verify-result", "Verify the result", 4),
+        _action("choose-work-area", "Choose the right work area", 0, 1, 2, 3),
+        _action("start-customer-work", "Start customer work", 4, 5, 6),
+        _action("verify-result", "Verify the result", 7),
     ),
     "find-customer": (
         _action("search-customers", "Search and filter customers", 0, 1),
@@ -1731,6 +1757,16 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="billing:mode:write",
         ),
         _action("verify-billing-mode", "Verify the billing-mode change", 3),
+    ),
+    "subscription-service-invoice": (
+        _action("review-service-period", "Review the next service period", 0, 1),
+        _action(
+            "issue-service-invoice",
+            "Issue the reviewed service invoice",
+            2,
+            permission="billing:invoice:create_subscription_service",
+        ),
+        _action("verify-service-invoice", "Verify the issued invoice", 3),
     ),
     "invoice": (
         _action(
@@ -2192,6 +2228,8 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "configure-integration",
             "Configure an integration",
             1,
+            5,
+            6,
             permission="system:settings:write",
         ),
         _action(
@@ -2410,6 +2448,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         (
             "billing-overview",
             "billing-accounts",
+            "subscription-service-invoice",
             "invoice",
             "credit",
             "service-extension",
@@ -2533,6 +2572,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 # Other pages inherit their Admin-sidebar section's visibility.
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "billing-accounts": ("billing:account:read",),
+    "subscription-service-invoice": ("billing:invoice:read",),
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),
     "service-extension": ("billing:extension:read",),

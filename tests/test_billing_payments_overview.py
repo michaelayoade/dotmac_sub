@@ -337,15 +337,29 @@ def test_stream_payments_csv_matches_rendered_and_yields_incrementally(
         event.remove(bind, "before_cursor_execute", _record_statement)
 
     assert "".join(chunks) == expected
-    assert len(chunks) == len(scope) + 1
+    assert len(chunks) == 1
     assert chunks[0].startswith("payment_id,")
-    assert all("stream payment" in chunk for chunk in chunks[1:])
-    assert all("Test User" in chunk for chunk in chunks[1:])
+    assert "stream payment" in chunks[0]
+    assert "Test User" in chunks[0]
     assert str(subscriber.id) not in "".join(chunks)
     assert (
         sum(statement.lstrip().upper().startswith("SELECT") for statement in statements)
         == 1
     )
+
+
+def test_stream_payments_csv_empty_scope_is_header_only(db_session):
+    chunks = list(
+        stream_payments_csv(
+            db_session,
+            list_query=build_payments_list_query(search="no-such-payment"),
+        )
+    )
+
+    assert chunks == [
+        "payment_id,display_number,customer_name,amount,currency,status,method,"
+        "narration,paid_at,created_at\r\n"
+    ]
 
 
 def test_build_payments_list_data_unallocated_only(db_session, subscriber):

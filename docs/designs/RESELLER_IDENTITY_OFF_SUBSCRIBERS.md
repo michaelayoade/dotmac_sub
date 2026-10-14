@@ -1,7 +1,8 @@
 # Layer 3 — Reseller portal users off Subscriber rows
 
-**Status:** Design — not started
+**Status:** First-class principal cut over; final legacy cleanup remains
 **Date:** 2026-06-20
+**Last clarified:** 2026-10-13
 **Depends on / follows:** `docs/designs/IDENTITY_EMAIL_DECOUPLING.md` (Core L1+L2, PR #316)
 
 ---
@@ -53,6 +54,9 @@ NOT a subscriber:
 - `reseller_users` gains its own identity columns: `email`, `full_name`,
   `is_active` (has), `last_login_at`. `person_id` (→subscribers) becomes
   **nullable + deprecated** (kept only for historical linkage during transition).
+  Once a login uses the first-class `reseller_user` principal, that historical
+  link is provenance and rollback evidence, not an authentication-liveness
+  input; the linked Subscriber may be inactive/canceled after retirement.
 - `UserCredential` gains a third principal `reseller_user_id`; the principal
   check becomes **exactly one of** `{subscriber_id, system_user_id,
   reseller_user_id}`.
@@ -114,6 +118,11 @@ soft-retire the reseller subscriber rows.
 
 **Phase 4 — cleanup.** Drop the `_get_reseller_user` subscriber fallback,
 `person_id`, and the `user_type == reseller` concept once no traffic uses them.
+Until that final contraction, migrated rows may retain `person_id` pointing at
+the soft-retired Subscriber. Ordinary first-class session standing must use the
+active ResellerUser membership and must not require that historical Subscriber
+to remain active. The legacy subscriber-principal path continues to require an
+active Subscriber.
 
 ## 6. Risks & mitigations
 

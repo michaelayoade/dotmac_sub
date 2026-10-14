@@ -632,7 +632,7 @@ Each spec documents: URL, template path, context dict shape, and HTMX partials.
     },
 
     # ── Exception / Attention Layer ──
-    "attention_items": list[dict],          # [{label, href, severity}]
+    "attention_items": list[dict],          # [{label, href, severity, domain, tone}]
     "pending_orders": int,
     "total_alarms": int,
 
@@ -651,18 +651,11 @@ Each spec documents: URL, template path, context dict shape, and HTMX partials.
     },
 
     # ── Work Surface Data ──
-    "recent_activity": list,                # raw audit events if needed elsewhere
-    "recent_activities": list[dict],        # [{type, message, detail, time}]
-    "recent_subscribers": list,             # newest signups
-
-    # ── Lower Live Partial(s) ──
-    "server_health": dict,                  # CPU, memory, disk metrics
-    "server_health_status": dict,           # overall status + issues
-
     # ── Permission Gates ──
     "show_financials": bool,
     "show_network": bool,
     "show_subscribers": bool,
+    "show_support": bool,
 
     # ── Standard ──
     "now": datetime,
@@ -672,7 +665,11 @@ Each spec documents: URL, template path, context dict shape, and HTMX partials.
 ```
 
 Dashboard implementation notes:
-- The first viewport should expose one true work surface such as priority activity, pending installs, outage impact, or collections risk.
+- The general-admin first viewport places the dismissible What's New notice below the header and primary Add Customer action, followed by Needs attention and the KPI strip.
+- Needs attention shows owner-computed counts for unassigned support tickets, tickets approaching or past their response target, and customer onboarding cases older than 72 hours. It does not show infrastructure alerts, worker failures, or overdue monetary amounts.
+- The active subscriber KPI includes only visible accounts whose account lifecycle status is active and which have an active subscription. A live RADIUS session is not required.
+- Collections This Month and Overdue remain in the KPI strip.
+- Infrastructure health and recent audit events are system-admin content rendered on `GET /admin/system`, not on the general-admin dashboard.
 - Launchpads are support navigation, not the primary payload.
 - If network and billing metrics both appear, keep them grouped by task instead of mixing them into one undifferentiated KPI wall.
 
@@ -682,16 +679,16 @@ Dashboard implementation notes:
 - Keep the first decision layer to 4-6 KPI tiles.
 - Show only exception-based items in the attention banner.
 - Group quick links by workflow (`Operations`, `Network`, `Control`), not by every available module.
-- The first work surface should be operational content such as activity, queue state, or recent records.
-- Lower HTMX partials like server health belong below or beside the main work surface, not above it.
+- Every attention item states its current cohort count and links to its owning work surface.
+- A zero-count attention projection renders an explicit all-clear state rather than disappearing.
 
 #### HTMX Partials
 
 | Endpoint | Template | Trigger |
 |----------|----------|---------|
 | `GET /admin/dashboard/stats` | `_stats.html` | Auto-refresh polling for KPI strip |
-| `GET /admin/dashboard/activity` | `_activity.html` | Auto-refresh polling for activity work surface |
-| `GET /admin/dashboard/server-health` | `_server_health.html` | Auto-refresh polling for lower live status widget |
+| `GET /admin/dashboard/attention` | `_attention.html` | Every 60 seconds |
+| `GET /admin/system/infrastructure` | `_server_health.html` | Load and every 60 seconds on the System overview |
 
 ---
 
@@ -1174,7 +1171,9 @@ The filtered payment CSV at `GET /admin/billing/payments/export.csv` uses the
 same uncapped filter and stable-sort scope as the payments list. Its customer
 identity column is `customer_name`, populated from the canonical customer
 account display name; internal account UUIDs are not exported. Rows stream
-incrementally so large reconciliation exports are not held entirely in memory.
+in database-sized chunks so large reconciliation exports are not held entirely
+in memory or delivered through one response handoff per row. The export adapter
+owns its database session until the final chunk is sent.
 
 #### `GET /admin/billing/payments`
 **Template:** `admin/billing/payments/index.html`
@@ -1376,8 +1375,15 @@ page. At standard desktop widths the bounded defaults use compact grid density
 and fit the work surface without horizontal scrolling; mobile retains overflow
 as a responsive fallback.
 
-#### `GET /admin/catalog/offers`
-**Template:** `admin/catalog/offers/index.html`
+#### `GET /admin/catalog`
+**Template:** `admin/catalog/index.html`
+
+Catalog search is explicitly submitted: typing does not issue a request. Enter
+or the **Search** button submits the search together with Status, Plan kind,
+Plan family, and Plan category, resets pagination to page 1, and updates the
+browser URL. **Clear** empties the query and makes one request while preserving
+those filters. Concurrent catalog-search requests use replacement semantics so
+an older response cannot overwrite newer results.
 
 ```python
 {
@@ -2037,7 +2043,7 @@ These are the ORM objects your templates receive. Access fields with dot notatio
 | Customers | `GET /admin/customers?search=...` | `keyup changed delay:300ms` | `#data-table` |
 | Subscribers | `GET /admin/subscribers?search=...` | `keyup changed delay:300ms` | `#data-table` |
 | Invoices | `GET /admin/billing?search=...` | `keyup changed delay:300ms` | `#data-table` |
-| Offers | `GET /admin/catalog/offers?search=...` | `keyup changed delay:300ms` | `#data-table` |
+| Offers | `GET /admin/catalog?search=...` | form submit (Enter or **Search**); **Clear** submits once | `#catalog-grid-wrapper` |
 
 ### Dynamic Form Fields
 
