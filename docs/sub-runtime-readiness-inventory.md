@@ -334,3 +334,14 @@ production sweep finds 25 sites across 22 files, including the separately
 excluded historical residue of eight sites across seven files. Neither this
 reconciliation nor its aggregate test baseline adds a production construction
 allowance; `session_construction_baseline.txt` is unchanged.
+
+### Invoice numbering V2 proof fixture accounting — 2026-10-14
+
+The static AST scanner measures **777 test construction sites across 166
+files** on this slice, accepted main's 774 sites plus three in
+`tests/integration/test_billing_numbering_activation_proof.py`. Two session
+factories and a clone-bound observer engine exercise the existing migrated
+PostgreSQL test schema, independently committed configuration/counter/receipt
+changes, and restricted read-only queries. This is fixture authorship;
+runtime acceptance remains pending hosted CI. Production construction
+allowances and the per-file baseline are unchanged.

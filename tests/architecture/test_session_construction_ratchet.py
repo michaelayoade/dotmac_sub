@@ -286,7 +286,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +1 from the opening evidence census: one sessionmaker over the existing
 #: migrated PostgreSQL engine for an independent committed writer and the
 #: canonical read-only snapshot seam. No production construction allowance changes.
-TEST_FIXTURE_BASELINE_TOTAL = 774
+#: +3 from the read-only V2 invoice numbering proof: two session factories
+#: over migrated PostgreSQL fixtures and one clone-bound observer engine.
+#: Production construction allowances are unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 777
 
 
 def _baseline() -> dict[str, int]:
