@@ -22,6 +22,19 @@
 
 - Typed-contract evidence or approved deviation:
 
+## Feature Freeze
+
+Sub accepts corrections only while it migrates to a thin client of Starter
+(see `docs/FEATURE_FREEZE.md`). New capability belongs in Starter.
+
+- [ ] This PR is a correction: bug/security fix, freeze/retirement, tests,
+  docs, a Starter package pin, or composition wiring for an existing
+  Starter contract.
+- [ ] Or it carries Michael's approved entry in
+  `docs/feature_freeze_exceptions.json` covering every feature-shaped path.
+
+- Correction evidence or exception id:
+
 ## Version Impact
 
 Apply exactly one label when this PR changes deployable behavior or shipped artifacts:
