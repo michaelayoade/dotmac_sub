@@ -72,8 +72,8 @@ def violations(source: str) -> tuple[str, ...]:
 
 def test_owner_and_adapter_cannot_allocate_or_complete_transactions() -> None:
     for path in (OWNER, ADAPTER):
-        assert not violations(path.read_text())
-    assert "install_settings_cache" not in OWNER.read_text()
+        assert not violations(path.read_text(encoding="utf-8"))
+    assert "install_settings_cache" not in OWNER.read_text(encoding="utf-8")
 
 
 def test_planted_writer_and_commit_are_detected() -> None:
@@ -84,7 +84,7 @@ def test_planted_writer_and_commit_are_detected() -> None:
 
 
 def test_adapter_delegates_to_one_owner_and_restores_cache() -> None:
-    source = ADAPTER.read_text()
+    source = ADAPTER.read_text(encoding="utf-8")
     assert "billing_numbering_readiness_report" in source
     assert "read_only_snapshot_session" in source
     assert "active_settings_cache" in source and "finally:" in source
@@ -235,12 +235,11 @@ def test_runtime_numbering_inventory_cannot_grow_silently() -> None:
     services = ROOT / "app/services"
     errors = inventory_errors(
         (
-            (str(path.relative_to(services)), path.read_text())
+            (path.relative_to(services).as_posix(), path.read_text(encoding="utf-8"))
             for path in sorted(services.rglob("*.py"))
         ),
         EXPECTED_ORDINARY_CALLERS,
         installation_allocates=False,
-        installation_module="crm_api.py",
     )
     assert not errors, errors
 
@@ -367,8 +366,8 @@ def test_planted_counter_advance_and_write_sql_are_detected() -> None:
     )
 
 
-def test_invoice_routes_bind_identity_date_and_purpose_to_one_participant() -> None:
-    """Retirement evidence must cover every route, including conversion."""
+def test_invoice_routes_delegate_to_the_incumbent_numbering_owner() -> None:
+    """The deferred cutover inventory covers every route, including conversion."""
     expected = EXPECTED_ORDINARY_CALLERS - {
         ("billing/credit_notes.py", "CreditNotes.create"),
         ("billing/credit_notes.py", "CreditNotes.issue_with_evidence"),
@@ -376,24 +375,39 @@ def test_invoice_routes_bind_identity_date_and_purpose_to_one_participant() -> N
     actual: set[tuple[str, str]] = set()
     services = ROOT / "app/services"
     for path in sorted(services.rglob("*.py")):
-        source = path.read_text()
-        relative = str(path.relative_to(services))
+        source = path.read_text(encoding="utf-8")
+        relative = path.relative_to(services).as_posix()
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             name = getattr(node.func, "attr", getattr(node.func, "id", ""))
             if name == "generate_required_number":
-                assert not any(
+                owner = next(
+                    (
+                        parent.name
+                        for parent in ast.walk(tree)
+                        if isinstance(parent, ast.FunctionDef)
+                        and parent.name == "next_invoice_number"
+                        and parent.lineno <= node.lineno <= parent.end_lineno
+                    ),
+                    None,
+                )
+                invoice_number_call = any(
                     isinstance(argument, ast.Constant)
                     and argument.value == "invoice_number"
                     for argument in node.args
-                ), f"Legacy invoice writer remains in {relative}:{node.lineno}"
+                )
+                if invoice_number_call:
+                    assert (relative, owner) == (
+                        "billing/invoices.py",
+                        "next_invoice_number",
+                    ), (
+                        f"Legacy invoice writer escaped its owner: {relative}:{node.lineno}"
+                    )
             if name == "next_invoice_number":
                 assert len(node.args) == 1, (relative, node.lineno)
-                assert {"invoice_id", "reference_date", "purpose"} <= {
-                    keyword.arg for keyword in node.keywords
-                }, (relative, node.lineno)
+                assert not node.keywords, (relative, node.lineno)
         actual.update(
             (relative, owner)
             for owner in numbering_callers(source)
@@ -403,8 +417,10 @@ def test_invoice_routes_bind_identity_date_and_purpose_to_one_participant() -> N
     assert len(actual) == 4
 
 
-def test_invoice_participant_is_flush_only_and_cannot_seed_or_fall_back() -> None:
-    tree = ast.parse((ROOT / "app/services/billing/invoices.py").read_text())
+def test_invoice_number_owner_uses_only_the_legacy_numbering_boundary() -> None:
+    tree = ast.parse(
+        (ROOT / "app/services/billing/invoices.py").read_text(encoding="utf-8")
+    )
     participant = next(
         node
         for node in tree.body
@@ -415,18 +431,10 @@ def test_invoice_participant_is_flush_only_and_cannot_seed_or_fall_back() -> Non
         for node in ast.walk(participant)
         if isinstance(node, ast.Call)
     }
-    assert "allocate" in calls
-    assert (
-        sum(
-            isinstance(node, ast.Call)
-            and getattr(node.func, "attr", getattr(node.func, "id", "")) == "allocate"
-            for node in ast.walk(tree)
-        )
-        == 1
-    )
+    assert "generate_required_number" in calls
+    assert "allocate" not in calls
     assert not calls.intersection(
         {
-            "generate_required_number",
             "generate_number",
             "configure_series",
             "advance_to_at_least",
@@ -444,10 +452,9 @@ def test_upstream_invoice_routes_delegate_without_preallocation() -> None:
         ("billing/invoices.py", "create_for_subscription"): "create_with_lines",
         ("billing_automation.py", "run_invoice_cycle"): "stage_system_invoice",
         ("billing_automation.py", "generate_prorated_invoice"): "stage_system_invoice",
-        ("crm_api.py", "create_installation_invoice"): "create_with_lines",
     }
     for (relative, function), constructor in routes.items():
-        tree = ast.parse((ROOT / "app/services" / relative).read_text())
+        tree = ast.parse((ROOT / "app/services" / relative).read_text(encoding="utf-8"))
         owners = [
             node
             for node in ast.walk(tree)
@@ -462,9 +469,29 @@ def test_upstream_invoice_routes_delegate_without_preallocation() -> None:
         assert constructor in calls, (relative, function)
         assert "next_invoice_number" not in calls
 
+    services = ROOT / "app/services"
+    installation_helpers = []
+    for path in sorted(services.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == (
+                "create_installation_invoice"
+            ):
+                installation_helpers.append(node)
+    assert len(installation_helpers) == 1
+    calls = {
+        getattr(node.func, "attr", getattr(node.func, "id", ""))
+        for node in ast.walk(installation_helpers[0])
+        if isinstance(node, ast.Call)
+    }
+    assert "create_invoice_with_lines" in calls
+    assert "next_invoice_number" not in calls
 
-def test_create_with_lines_preserves_documentary_date_before_draft_stripping() -> None:
-    tree = ast.parse((ROOT / "app/services/billing/invoices.py").read_text())
+
+def test_create_with_lines_delegates_numbering_to_the_draft_owner() -> None:
+    tree = ast.parse(
+        (ROOT / "app/services/billing/invoices.py").read_text(encoding="utf-8")
+    )
     owner = next(
         node
         for node in ast.walk(tree)
@@ -476,11 +503,13 @@ def test_create_with_lines_preserves_documentary_date_before_draft_stripping() -
         if isinstance(node, ast.Call)
         and getattr(node.func, "attr", "") == "stage_admin_draft"
     )
-    assert "numbering_reference_date" in {item.arg for item in constructor.keywords}
+    assert not constructor.keywords
 
 
 def test_reviewed_document_adoption_never_allocates_a_replacement_label() -> None:
-    tree = ast.parse((ROOT / "app/services/billing/invoices.py").read_text())
+    tree = ast.parse(
+        (ROOT / "app/services/billing/invoices.py").read_text(encoding="utf-8")
+    )
     methods = {
         "adopt_prepaid_proforma_document_for_owner",
         "adopt_reviewed_prepaid_draft_document_for_owner",
@@ -504,22 +533,28 @@ def test_retired_installation_allocator_retains_unique_canonical_helper() -> Non
     source = "def create_installation_invoice(db):\n    return create_with_lines(db)\n"
     assert (
         inventory_errors(
-            [("crm_api.py", source)],
+            [("installation.py", source)],
             set(),
             installation_allocates=False,
-            installation_module="crm_api.py",
+            installation_module="installation.py",
         )
         == ()
     )
     for sources, diagnostic in (
-        ([("crm_api.py", source + source)], "Expected one top-level"),
-        ([("moved.py", source)], "Expected create_installation_invoice in crm_api.py"),
-        ([("crm_api.py", source), ("shadow.py", source)], "Expected one top-level"),
+        ([("installation.py", source + source)], "Expected one top-level"),
+        (
+            [("moved.py", source)],
+            "Expected create_installation_invoice in installation.py",
+        ),
+        (
+            [("installation.py", source), ("shadow.py", source)],
+            "Expected one top-level",
+        ),
     ):
         errors = inventory_errors(
             sources,
             set(),
             installation_allocates=False,
-            installation_module="crm_api.py",
+            installation_module="installation.py",
         )
         assert errors and diagnostic in errors[0]

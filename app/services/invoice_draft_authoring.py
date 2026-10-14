@@ -36,11 +36,9 @@ from app.services.billing.invoices import (
     DraftInvoiceLineReplacement,
     DraftInvoiceParticipantError,
     InvoiceLines,
-    InvoiceNumberPurpose,
     InvoiceOwnerError,
     Invoices,
     ProformaConversionInput,
-    invoice_number_reference_date,
     next_invoice_number,
 )
 from app.services.common import round_money
@@ -860,15 +858,7 @@ def _convert_proforma_invoice(
 
     invoice_number = (invoice.invoice_number or "").strip() or None
     if invoice_number and invoice_number.upper().startswith(PROFORMA_PREFIX):
-        invoice_number = next_invoice_number(
-            db,
-            invoice_id=invoice.id,
-            reference_date=invoice_number_reference_date(
-                issued_at=invoice.issued_at, created_at=invoice.created_at
-            ),
-            purpose=InvoiceNumberPurpose.PROFORMA_CONVERSION,
-            conversion_key=key,
-        )
+        invoice_number = next_invoice_number(db)
     _, cleaned_memo = apply_proforma_form_values(
         invoice_number=invoice_number,
         memo=invoice.memo,
