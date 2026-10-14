@@ -47,7 +47,7 @@ from app.services.account_lifecycle import (
 )
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing._common import _calculate_tax_amount
-from app.services.billing.invoices import InvoiceLines, Invoices, next_invoice_number
+from app.services.billing.invoices import InvoiceLines, Invoices
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import (
@@ -1970,7 +1970,7 @@ def run_invoice_cycle(
                 db,
                 InvoiceCreate(
                     account_id=subscription.subscriber_id,
-                    invoice_number=next_invoice_number(db),
+                    invoice_number=None,
                     status=InvoiceStatus.issued,
                     currency=currency or "NGN",
                     billing_period_start=period_start,
@@ -2357,7 +2357,7 @@ def generate_prorated_invoice(
         db,
         InvoiceCreate(
             account_id=subscription.subscriber_id,
-            invoice_number=next_invoice_number(db),
+            invoice_number=None,
             status=InvoiceStatus.issued,
             currency=price.currency or "NGN",
             # Store the day-floored period_start so the dedupe above is stable
