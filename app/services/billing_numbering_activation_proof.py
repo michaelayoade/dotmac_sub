@@ -448,6 +448,10 @@ def billing_numbering_activation_proof_report(
         readonly = db.scalar(text("SHOW transaction_read_only"))
         if isolation not in ("repeatable read", "serializable") or readonly != "on":
             raise NumberingReadinessError("unsafe_snapshot")
+        # A clean reused Session can retain mapped values from an earlier
+        # transaction. Refresh every observation, including the delegated V1
+        # census and released preview, from this verified database snapshot.
+        db.expire_all()
         legacy_report = billing_numbering_readiness_report(
             db, query=NumberingReadinessQuery(query.reference_date)
         )

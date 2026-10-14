@@ -192,6 +192,7 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
     )
     from sqlalchemy import create_engine, select
 
+    from app.models.sequence import DocumentSequence
     from app.services.billing_numbering_readiness import SCOPE
 
     isolated = create_engine(cloned_database("heads"))
@@ -211,6 +212,15 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
                 )
             )
             configure_series(writer, scope=SCOPE, configuration=PROPOSAL)
+            legacy_counter = writer.scalar(
+                select(DocumentSequence).where(
+                    DocumentSequence.key == PROPOSAL.series_code
+                )
+            )
+            if legacy_counter is None:
+                writer.add(DocumentSequence(key=PROPOSAL.series_code, next_value=1))
+            else:
+                legacy_counter.next_value = 1
             writer.add(
                 SeriesCounter(
                     tenant_id=SCOPE.tenant_id,
@@ -223,6 +233,27 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
         with app_db.read_only_snapshot_session() as db:
             # Existing migrated online role is constrained by the read-only snapshot.
             db.execute(text("SET LOCAL ROLE app_user"))
+            # Keep strong references: SQLAlchemy's weak identity map must retain
+            # these loaded values after finish_read_transaction preserves them.
+            retained_series = db.scalar(
+                select(NumberSeries).where(
+                    NumberSeries.tenant_id == SCOPE.tenant_id,
+                    NumberSeries.series_code == PROPOSAL.series_code,
+                )
+            )
+            retained_counter = db.scalar(
+                select(SeriesCounter).where(
+                    SeriesCounter.tenant_id == SCOPE.tenant_id,
+                    SeriesCounter.series_code == PROPOSAL.series_code,
+                )
+            )
+            retained_legacy_counter = db.scalar(
+                select(DocumentSequence).where(
+                    DocumentSequence.key == PROPOSAL.series_code
+                )
+            )
+            assert retained_series is not None and retained_counter is not None
+            assert retained_legacy_counter is not None
             assert db.scalar(text("SELECT current_user")) == "app_user"
             assert (
                 db.scalar(
@@ -255,6 +286,8 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
                     is True
                 ), table
             first = billing_numbering_activation_proof_report(db, query=QUERY)
+            snapshot = db.get_transaction()
+            assert snapshot is not None
             assert first.actual_preview_verified
             before = catalogue(db)
             with sessions() as writer:
@@ -284,6 +317,13 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
                 )
                 assert counter is not None
                 counter.next_value = 2
+                legacy_counter = writer.scalar(
+                    select(DocumentSequence).where(
+                        DocumentSequence.key == PROPOSAL.series_code
+                    )
+                )
+                assert legacy_counter is not None
+                legacy_counter.next_value = 2
                 writer.commit()
             assert (
                 billing_numbering_activation_proof_report(
@@ -312,13 +352,37 @@ def test_actual_module_fields_remain_bound_to_one_snapshot(
                 == first.evidence_digest
             )
             assert catalogue(db) == before
-        with app_db.read_only_snapshot_session() as db:
+            assert db.get_transaction() is snapshot
+            app_db.finish_read_transaction(db)
+            assert not db.in_transaction()
+            assert retained_series.start_value == retained_counter.next_value == 1
+            assert retained_legacy_counter.next_value == 1
+            assert not db.in_transaction()
+            # The same clean Session now owns a new database snapshot, but its
+            # identity map still has the preceding snapshot's mapped state.
+            app_db.begin_read_only_snapshot(db)
+            fresh_snapshot = db.get_transaction()
+            assert fresh_snapshot is not None and fresh_snapshot is not snapshot
             db.execute(text("SET LOCAL ROLE app_user"))
             fresh = billing_numbering_activation_proof_report(db, query=QUERY)
             assert fresh.evidence_digest != first.evidence_digest
+            assert fresh.legacy_readiness_digest != first.legacy_readiness_digest
             assert not fresh.actual_preview_verified and not fresh.candidate_proven
             assert "target_configuration_mismatch" in fresh.blockers
             assert "existing_target_history_requires_reconciliation" in fresh.blockers
+            assert retained_series.start_value == retained_counter.next_value == 2
+            assert retained_legacy_counter.next_value == 2
+            matched = billing_numbering_activation_proof_report(
+                db, query=replace(QUERY, proposal=replace(PROPOSAL, start_value=2))
+            )
+            assert matched.actual_preview_verified
+            assert matched.actual_preview == "CANDIDATE-000002"
+            assert db.get_transaction() is fresh_snapshot
+            retained_series.start_value = 3
+            with pytest.raises(NumberingReadinessError, match="unsafe_snapshot"):
+                billing_numbering_activation_proof_report(db, query=QUERY)
+            assert retained_series.start_value == 3 and retained_series in db.dirty
+            assert db.get_transaction() is fresh_snapshot
     finally:
         install_settings_cache(previous)
         isolated.dispose()

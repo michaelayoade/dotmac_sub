@@ -25,7 +25,7 @@
     {
       "path": "app/services/billing_numbering_activation_proof.py",
       "purpose": "Read-only disjoint invoice-numbering candidate proof; never authorizes activation.",
-      "baseline_lines": 587,
+      "baseline_lines": 591,
       "deletion_trigger": "Delete when Starter numbering is activated for Sub and the disjointness proof is archived.",
       "owner": "michaelayoade"
     },
