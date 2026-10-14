@@ -322,16 +322,6 @@ def test_remaining_duration_does_not_restart_on_reauthentication():
     assert not access.valid_at(access.expires_at)
 
 
-def test_test_connection_button_follows_invoice_outside_its_active_condition():
-    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
-    invoice = template.index(
-        'href="/admin/billing/invoices/subscription-service?account_id='
-    )
-    test = template.index("Test Connection</a>", invoice)
-    assert "{% endif %}" in template[invoice:test]
-    assert "{% if can_test_connection %}" in template[invoice:test]
-
-
 def test_test_connection_editor_uses_the_system_duration_only():
     template = Path("templates/admin/customers/test_connection.html").read_text(
         encoding="utf-8"

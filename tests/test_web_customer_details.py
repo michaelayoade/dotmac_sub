@@ -719,6 +719,71 @@ def test_customer_360_view_more_is_available_for_paused_subscriptions(
     )
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        SubscriptionStatus.active,
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.disabled,
+    ],
+)
+@pytest.mark.parametrize("permitted", [False, True])
+def test_customer_test_connection_action_is_independent_of_invoice_and_status(
+    db_session,
+    subscriber,
+    subscription,
+    monkeypatch,
+    status: SubscriptionStatus,
+    permitted: bool,
+) -> None:
+    import app.web.admin as admin_module
+
+    subscriber.user_type = UserType.customer
+    subscription.status = status
+    db_session.commit()
+    monkeypatch.setattr(
+        customer_routes.web_notifications_service,
+        "customer_notification_picker_context",
+        lambda _db: {},
+    )
+    monkeypatch.setattr(
+        customer_routes.subscriber_party_binding_repair,
+        "resolve_repair_context",
+        lambda _db, *, subscriber_id: None,
+    )
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+    monkeypatch.setattr(
+        customer_routes,
+        "has_permission",
+        lambda auth, db, permission: (
+            permitted and permission == "subscription:test_connection"
+        ),
+    )
+    request = _bare_request(f"/admin/customers/person/{subscriber.id}#subscriptions")
+    request.state.auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "system_user",
+    }
+    response = customer_routes.person_detail(
+        request=request,
+        customer_id=str(subscriber.id),
+        panel=None,
+        usage_period="current",
+        usage_page=1,
+        usage_per_page=25,
+        usage_view="chart",
+        db=db_session,
+    )
+    rendered = response.body.decode("utf-8")
+    action = (
+        f'href="/admin/customers/person/{subscriber.id}/subscriptions/'
+        f'{subscription.id}/test-connection"'
+    )
+    assert (action in rendered) is permitted
+    assert "/admin/billing/invoices/subscription-service" not in rendered
+
+
 def test_customer_360_unsuspend_action_is_permission_gated_and_reviewed() -> None:
     template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
 
