@@ -21,6 +21,7 @@ from app.models.billing import (
     PaymentSettlementOrigin,
     PaymentStatus,
     ServiceEntitlement,
+    TaxApplication,
 )
 from app.models.catalog import (
     AccessType,
@@ -256,6 +257,8 @@ def test_periodless_unlinked_prepaid_settlement_records_review_without_repair(
     line.subscription_id = None
     line.metadata_ = {}
     line.description = subscription.offer.name
+    # Canonical renewal terms are exempt when no tax rate is configured.
+    line.tax_application = TaxApplication.exempt
     suspend_subscription(
         db_session,
         str(subscription.id),
