@@ -8,7 +8,8 @@ from datetime import date, timedelta
 from enum import StrEnum
 from typing import Any
 
-# T14: lapsed from the day after `until`, reported through that day + 7 days.
+# T14 / X4: lapsed from the day after `until`, reported through `until` + 7 days
+# (the same window as router_health.posture.EXPIRED_NOTE_DAYS).
 LAPSE_REPORT_DAYS = 7
 MAX_EXCEPTION_DAYS = 180
 MIN_REASON_CHARS = 10
@@ -45,7 +46,6 @@ class ExceptionSpec:
     patch: Mapping[str, Any] | None = None
     scope: str | None = None
     mode: str | None = None
-    widening: bool = False
     approved: bool = False
     revoked: bool = False
     permanent: bool = False
@@ -55,15 +55,21 @@ class ExceptionSpec:
         return (self.created_on.isoformat(), self.id)
 
 
-def exception_state(exc: ExceptionSpec, today: date) -> ExceptionState:
-    """X1: active iff not revoked, today <= until, and (not widening or approved)."""
+def exception_state(
+    exc: ExceptionSpec, today: date, *, widening: bool
+) -> ExceptionState:
+    """X1: active iff not revoked, today <= until, and (not widening or approved).
+
+    ``widening`` is COMPUTED by ``compose()`` (the module before and after the
+    exception); it is never read from an input document.
+    """
     if exc.revoked:
         return ExceptionState.revoked
     if exc.until is not None and today > exc.until:
-        if today <= exc.until + timedelta(days=1 + LAPSE_REPORT_DAYS):
+        if today <= exc.until + timedelta(days=LAPSE_REPORT_DAYS):
             return ExceptionState.lapsed
         return ExceptionState.expired
-    if exc.widening and not exc.approved:
+    if widening and not exc.approved:
         return ExceptionState.pending_approval
     return ExceptionState.active
 

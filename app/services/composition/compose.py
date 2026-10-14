@@ -48,6 +48,7 @@ from .layers import (
 )
 from .merge import Conflict, Merger, Origin, Provenance, Tombstone, leaf_pointers
 from .plugin import MODES, DomainPlugin, Invalid
+from .widening import mode_widening, params_widening
 
 SCHEMA_VERSION = 1
 _BLOCK_KEYS = frozenset({"module_version", "mode", "params"})
@@ -81,6 +82,28 @@ class LapsedException:
             "reason": self.reason,
             "state": self.state.value,
             "finding": "exception_lapsed",
+        }
+
+
+@dataclass(frozen=True)
+class ExceptionStatus:
+    """What compose() decided about one applicable exception (widening is computed)."""
+
+    id: str
+    module: str
+    kind: str
+    state: ExceptionState
+    widening: bool
+    approved: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "module": self.module,
+            "kind": self.kind,
+            "state": self.state.value,
+            "widening": self.widening,
+            "approved": self.approved,
         }
 
 
@@ -129,6 +152,7 @@ class Effective:
     lapsed: tuple[LapsedException, ...]
     annotations: tuple[tuple[str, str, str], ...]
     router_hash: str
+    exceptions: tuple[ExceptionStatus, ...] = ()
 
     def conflicts(self) -> list[Conflict]:
         return [c for r in self.modules.values() for c in r.conflicts]
@@ -217,6 +241,11 @@ def validate_layer_document(
         mode = block.get("mode")
         if mode is not None and mode not in MODES:
             issues.append(f"{where}: module {key}: mode must be one of {list(MODES)}")
+        if block.get("module_version") != module.version:
+            # T23: a stale block is reported as invalid_desired(stale_layer) for
+            # this module by compose(); its parameters belong to another schema
+            # version, so they are not validated against this one.
+            continue
         params = block.get("params", {})
         if not isinstance(params, Mapping):
             issues.append(f"{where}: module {key}: params must be an object")
@@ -504,16 +533,22 @@ def compose(
     lapsed: list[LapsedException] = []
     annotations: list[tuple[str, str, str]] = []
     suppressions: dict[str, list[Suppression]] = {}
+    statuses: list[ExceptionStatus] = []
     for exc in ordered_exceptions:
         if not exception_applies(exc, subject.key, subject.dims):
             continue
-        state = exception_state(exc, today)
+        state = exception_state(exc, today, widening=False)  # time / revoked only
         if state is ExceptionState.lapsed:
             lapsed.append(
                 LapsedException(exc.id, exc.module_key, exc.until, exc.reason, state)
             )
             continue
         if state is not ExceptionState.active:
+            statuses.append(
+                ExceptionStatus(
+                    exc.id, exc.module_key, exc.kind.value, state, False, exc.approved
+                )
+            )
             continue
         exc_merger = mergers.get(exc.module_key)
         if exc_merger is None:
@@ -532,14 +567,23 @@ def compose(
                 "until": exc.until.isoformat() if exc.until else None,
             },
         )
-        if exc.kind is ExceptionKind.override:
-            assert exc.patch is not None
-            exc_merger.merge_patch(
-                _nest(tuple(parse_spec_pointer(exc.path)), exc.patch), origin
+        widened = False
+        if exc.kind in {ExceptionKind.override, ExceptionKind.mode_override}:
+            # widening is computed from the module before and after the
+            # exception, never taken from the input (§1.7, X1)
+            trial = copy.deepcopy(exc_merger)
+            _apply_exception(trial, exc, origin)
+            widened = _exception_widens(plugin, exc.module_key, exc_merger, trial)
+        state = exception_state(exc, today, widening=widened)
+        statuses.append(
+            ExceptionStatus(
+                exc.id, exc.module_key, exc.kind.value, state, widened, exc.approved
             )
-        elif exc.kind is ExceptionKind.mode_override:
-            assert exc.mode is not None
-            exc_merger.set_mode(exc.mode, origin)
+        )
+        if state is not ExceptionState.active:
+            continue
+        if exc.kind in {ExceptionKind.override, ExceptionKind.mode_override}:
+            _apply_exception(exc_merger, exc, origin)
         elif exc.kind is ExceptionKind.suppress:
             suppressions.setdefault(exc.module_key, []).append(
                 Suppression(
@@ -689,6 +733,29 @@ def compose(
         lapsed=tuple(lapsed),
         annotations=tuple(annotations),
         router_hash=hash_of({k: r.effective_hash for k, r in sorted(results.items())}),
+        exceptions=tuple(statuses),
+    )
+
+
+def _apply_exception(merger: Merger, exc: ExceptionSpec, origin: Origin) -> None:
+    if exc.kind is ExceptionKind.override:
+        assert exc.patch is not None
+        merger.merge_patch(
+            _nest(tuple(parse_spec_pointer(exc.path)), exc.patch), origin
+        )
+    elif exc.kind is ExceptionKind.mode_override:
+        assert exc.mode is not None
+        merger.set_mode(exc.mode, origin)
+
+
+def _exception_widens(
+    plugin: DomainPlugin, module_key: str, before: Merger, after: Merger
+) -> bool:
+    """True when applying the exception loosens the module's security posture."""
+    if params_widening(plugin.specs(module_key), before.values, after.values):
+        return True
+    return plugin.modules[module_key].mode_ordered and mode_widening(
+        before.mode, after.mode
     )
 
 

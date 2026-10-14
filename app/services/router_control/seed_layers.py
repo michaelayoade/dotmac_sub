@@ -96,7 +96,9 @@ def seed_layer_revisions() -> list[LayerRevision]:
                 True,
                 "role",
             ),
-            _doc(ntp=_block(mode=None, servers=["time.example.net"])),
+            _doc(
+                ntp=_block(mode=None, servers=["time.example.net"], server_enabled=True)
+            ),
         ),
         (
             Layer(
@@ -108,7 +110,9 @@ def seed_layer_revisions() -> list[LayerRevision]:
                 True,
                 "role",
             ),
-            _doc(ntp=_block(mode=None, servers=["time.example.net"])),
+            _doc(
+                ntp=_block(mode=None, servers=["time.example.net"], server_enabled=True)
+            ),
         ),
     ]
     return [LayerRevision(layer, 1, document) for layer, document in layers]

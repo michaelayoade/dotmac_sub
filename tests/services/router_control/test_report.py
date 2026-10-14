@@ -127,7 +127,7 @@ def test_invalid_layers_refuse_with_issues_and_no_evaluation():
     assert fleet([binding()], {}, layers).exit_code == EXIT_REFUSED
 
 
-def test_unmanaged_and_retired_are_skipped_and_observe_only_never_drifts():
+def test_unmanaged_and_retired_are_skipped_and_observe_only_drift_is_labelled():
     for lifecycle in ("unmanaged", "retired"):
         assert (
             report_for(binding(lifecycle=lifecycle), export()).outcome
@@ -136,12 +136,14 @@ def test_unmanaged_and_retired_are_skipped_and_observe_only_never_drifts():
     drifting = export(services=SERVICES_OK.split("/tool")[0])
     rep = report_for(binding(lifecycle="observe_only"), drifting)
     assert rep.evaluations["services-hardening"].status is ModuleStatus.observe_only
-    assert (
-        fleet(
-            [binding(lifecycle="observe_only")], {"id-r-a": snapshot(drifting)}
-        ).exit_code
-        == EXIT_CONFORM
+    # not enforced, but still drift: exit 1 and labelled in both outputs
+    observed = fleet(
+        [binding(lifecycle="observe_only")], {"id-r-a": snapshot(drifting)}
     )
+    assert observed.exit_code == EXIT_DRIFT
+    assert "[observe-only: not enforced, still drift]" in render_text(observed)
+    assert "observe-only drift:" in render_text(observed)
+    assert to_json(observed)["routers"][0]["observe_only_drift"]
     assert (
         report_for(binding(lifecycle="bogus"), export()).outcome
         is RouterOutcome.refused
@@ -179,7 +181,6 @@ def test_dated_exception_turns_drift_into_conform_then_lapses():
         subject_key="id-r-a",
         path="/btest",
         patch={"enabled": True, "authenticate": True},
-        widening=True,
         approved=True,
     )
     rep = report_for(binding(), drifting, exceptions=[exc])
@@ -277,3 +278,36 @@ def test_inert_params_are_listed():
         rep.outcome is RouterOutcome.refused
     )  # unknown modules are not silently ignored
     assert any("unknown module" in i for i in rep.issues)
+
+
+def test_observe_mode_module_drift_is_reported_and_exits_1():
+    layers = seed_layer_revisions() + [
+        extra_layer(
+            "router",
+            "id-r-a",
+            {"services-hardening": {"module_version": 1, "mode": "observe"}},
+        )
+    ]
+    drifting = export(services=SERVICES_OK.split("/tool")[0])
+    observed = fleet([binding()], {"id-r-a": snapshot(drifting)}, layers)
+    rep = observed.routers[0]
+    assert rep.evaluations["services-hardening"].status is ModuleStatus.observe_only
+    assert observed.exit_code == EXIT_DRIFT
+    assert [m for m, _ in rep.observe_only_drift] == ["services-hardening"] * len(
+        rep.observe_only_drift
+    )
+    text = render_text(observed)
+    assert "observe-only drift:" in text and "exit 1" in text
+    # an observe-mode module with nothing drifting stays conform (exit 0)
+    clean = fleet([binding()], {"id-r-a": snapshot(export())}, layers)
+    assert clean.exit_code == EXIT_CONFORM
+    assert "observe-only drift:" not in render_text(clean)
+
+
+def test_a_binding_without_a_loopback_says_the_self_reference_check_did_not_run():
+    rep = report_for(binding(loopback_v4=None), export())
+    assert rep.not_checked and "self-reference" in rep.not_checked[0]
+    fl = fleet([binding(loopback_v4=None)], {"id-r-a": snapshot(export())})
+    assert "NOT CHECKED" in render_text(fl)
+    assert to_json(fl)["routers"][0]["not_checked"]
+    assert not report_for(binding(), export()).not_checked

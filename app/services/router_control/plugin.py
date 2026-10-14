@@ -7,8 +7,7 @@ from dataclasses import dataclass
 
 from app.services.composition.layers import Subject, TierSpec
 from app.services.composition.plugin import DomainPlugin
-
-from .modules import ntp, services_hardening, snmp
+from app.services.router_control.modules import ntp, services_hardening, snmp
 
 LIFECYCLES = ("managed", "observe_only", "unmanaged", "retired")
 

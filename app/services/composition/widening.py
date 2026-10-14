@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .document import pointer
 from .fields import AccessKind, FieldSpec, Kind, Path, SpecIndex, Strategy
 
 MODE_RANKING = ("enforce", "observe", "off")  # most secure first
@@ -65,13 +66,13 @@ class WideningItem:
     after: Any
 
 
-def _get(values: Mapping[str, Any], path: Path) -> Any:
-    cursor: Any = values
-    for segment in path:
-        if not isinstance(cursor, Mapping) or segment not in cursor:
-            return None
-        cursor = cursor[segment]
-    return cursor
+def _fresh_before(spec: FieldSpec) -> Any:
+    """What a field granted before its (new) container existed: nothing."""
+    if spec.access is AccessKind.secure_bool:
+        return spec.secure
+    if spec.access is AccessKind.ordered and spec.ranking:
+        return spec.ranking[0]
+    return None
 
 
 def params_widening(
@@ -79,16 +80,72 @@ def params_widening(
     before: Mapping[str, Any],
     after: Mapping[str, Any],
 ) -> list[WideningItem]:
-    """Widened fields between two effective parameter documents."""
+    """Widened fields between two effective parameter documents.
+
+    Walks objects, maps (by member key) and keyed lists (by element key), so
+    per-element ACLs are covered. A member that is new in ``after`` is compared
+    against "nothing granted"; a member that disappears loses its protections,
+    which is a widening for deny lists and secure booleans.
+    """
     items: list[WideningItem] = []
-    for path, spec in specs.items():
-        if "*" in path or spec.kind not in {Kind.scalar, Kind.list}:
-            continue
-        if spec.kind is Kind.list and spec.strategy is Strategy.keyed:
-            continue
-        old, new = _get(before, path), _get(after, path)
-        if old is None and new is None:
-            continue
-        if widening(spec, old, new):
-            items.append(WideningItem("/" + "/".join(path), old, new))
+
+    def walk(
+        old: Any, new: Any, path: Path, *, fresh: bool, gone: bool = False
+    ) -> None:
+        old_map = old if isinstance(old, Mapping) else {}
+        new_map = new if isinstance(new, Mapping) else {}
+        for name in sorted(set(old_map) | set(new_map)):
+            child = path + (name,)
+            spec = specs.lookup(child)
+            if spec is None:
+                continue
+            old_v, new_v = old_map.get(name), new_map.get(name)
+            if old_v is None and new_v is None:
+                continue
+            is_fresh = fresh
+            is_gone = gone
+            if spec.kind in {Kind.object, Kind.map}:
+                if spec.kind is Kind.map:
+                    for member in sorted(
+                        set(old_v if isinstance(old_v, Mapping) else {})
+                        | set(new_v if isinstance(new_v, Mapping) else {})
+                    ):
+                        member_old = (old_v or {}).get(member)
+                        member_new = (new_v or {}).get(member)
+                        walk(
+                            member_old,
+                            member_new,
+                            child + (str(member),),
+                            fresh=is_fresh or member_old is None,
+                            gone=is_gone or member_new is None,
+                        )
+                else:
+                    walk(
+                        old_v,
+                        new_v,
+                        child,
+                        fresh=is_fresh or old_v is None,
+                        gone=is_gone,  # an absent plain object is unmanaged, not secure
+                    )
+            elif spec.kind is Kind.list and spec.strategy is Strategy.keyed:
+                assert spec.key is not None
+                olds = {str(e[spec.key]): e for e in old_v or []}
+                news = {str(e[spec.key]): e for e in new_v or []}
+                for element in sorted(set(olds) | set(news)):
+                    walk(
+                        olds.get(element),
+                        news.get(element),
+                        child + (element,),
+                        fresh=is_fresh or element not in olds,
+                        gone=is_gone or element not in news,
+                    )
+            else:
+                if fresh and old_v is None:
+                    old_v = _fresh_before(spec)
+                if gone and new_v is None:
+                    new_v = _fresh_before(spec)  # a removed member grants nothing
+                if widening(spec, old_v, new_v):
+                    items.append(WideningItem(pointer(child), old_v, new_v))
+
+    walk(before, after, (), fresh=False)
     return items

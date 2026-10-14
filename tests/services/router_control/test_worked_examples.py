@@ -67,7 +67,6 @@ def test_btest_exception_x1_resolves_the_drift_with_provenance():
         subject_key="id-access-eoip",
         path="/btest",
         patch={"enabled": True, "authenticate": True},
-        widening=True,
         approved=True,
     )
     rep = report_for(

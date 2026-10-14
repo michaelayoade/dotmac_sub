@@ -52,15 +52,27 @@ prints export text, community names or secrets.
 * `--layers` takes `{"layers": [{id, tier, name, weight, criteria, kind, active,
   revision, document}]}`; `--exceptions` takes `{"exceptions": [{id, module, kind,
   reason, created_on, until, router | criteria, path, patch, scope, mode,
-  widening, approved, revoked}]}`.
+  approved, revoked}]}`. A `widening` key in the file is ignored: widening is
+  computed (see Exceptions).
 * Output per router: assigned profiles and the applicable layers in order; the
   effective state of each module with its origin (tier, layer, revision, op) and
   shadowed values; drift items; proposals (widening flagged); conflicts; inert
   paths; lapsed exceptions; per-module and router effective hashes.
 
 Exit codes: **0** every evaluated module conforms; **1** drift; **2** refused
-(invalid input, composition conflict, invalid desired state or an unparseable
-export); **3** nothing could be evaluated (for example no snapshots).
+(invalid input, composition conflict, invalid desired state, an unparseable
+export, or any unexpected error: a failure is never reported as drift);
+**3** nothing could be evaluated (for example no snapshots).
+
+* "Today" is the date in the application timezone (Africa/Lagos), not UTC, so an
+  exception lapses at Lagos midnight.
+* Drift in a module in `observe` mode, or on an `observe_only` router, is not
+  enforced but it is still drift: it is labelled "observe-only" in the text and
+  JSON (`observe_only_drift`) and it exits **1**. The design does not exempt
+  observe mode from "drift", so this is the documented choice.
+* The `ntp` self-reference check needs the router's loopback. Without
+  `loopback_v4`/`loopback_v6` (always the case for a default assignment) the report
+  says `NOT CHECKED` for that router and prints one note on stderr.
 
 A production run is read-only and only on a host Michael names.
 
@@ -94,11 +106,19 @@ validated. A `module_version` that differs from the code gives
 * M5 `keyed(key)` lists merge element by key; `{"key": k, "$delete": true}`
   removes one element; `$replace` replaces all; an optional `order` field sorts.
 * M6 directives are validated on write; M7 a module cannot be deleted.
-* M8 two layers with the same `(rank, weight)` that write the same path to
-  different values are a **conflict**: the NetBox result (later name) is shown, and
-  planning is refused. `tie: restrictive` fields never conflict: the more secure
-  value wins (`$remove` beats `$add` for allow lists, `$add` beats `$remove` for
-  deny lists). Layers of different rank or weight never conflict.
+* M8 every write is tracked per `(path, rank, weight)`. Two layers at the same
+  rank that disagree are a **conflict** listing every layer involved (three-way
+  ties name all three): the NetBox result (later name) is shown for display only,
+  and planning is refused. Conflicts are: different scalar or `$replace` values;
+  `$replace` against `$add`/`$remove` (non-restrictive lists); `$add` against
+  `$remove` of one element (non-restrictive); keyed `$replace` against another
+  keyed write; and **delete against set** for any container (scalar, replace
+  list, union list, keyed element or list, or a new child of a deleted object).
+  `tie: restrictive` fields never conflict and resolve **independently of layer
+  names**: scalars take the more secure value; allow lists resolve to the
+  intersection of every `$replace` list and of the `$add`/`$remove` result
+  (`$remove` beats `$add`); deny lists resolve to the union (`$add` beats
+  `$remove`). Layers of different rank or weight never conflict.
 * M9 each enrolled module's result is validated against its strict schema and
   invariants. M10 the result is identical for any input order; hashes are over
   canonical JSON. M11 merging a layer twice equals once.
@@ -111,14 +131,19 @@ never of observations; they cannot be set by a layer or exception.
 
 **Exceptions** are dated (at most 180 days), reasoned (10 characters or more)
 overrides, mode overrides, suppressions or annotations. Active while `today <=
-until`; a widening exception also needs approval. After `until` the value returns
-and `exception_lapsed` is reported for a further 7 days. Overrides cannot target
-derived fields.
+until`; a widening exception also needs approval. `widening` is **computed** by
+`compose()` by comparing the module before and after the exception, never read
+from the input; an unapproved widening exception is not active
+(`pending_approval`). After `until` the value returns and `exception_lapsed` is
+reported through `until` + 7 days (the same window as the router-health policy).
+Overrides cannot target derived fields.
 
 **Widening** (what needs the approver once PR2 adds activation): a larger allow
 list, a smaller deny list, a secure boolean flipped to insecure, or a security
 module mode relaxed (`enforce > observe > off`). NTP server changes are not
-widening.
+widening. Detection walks objects, maps (by member key) and keyed lists (by
+element key), so per-element ACLs are covered: a new element is compared with
+"nothing granted" and a removed element loses its protections.
 
 ## Drift
 
@@ -135,14 +160,28 @@ the router's version is `not_applicable` (for example `reverse-proxy` before Rou
 |---|---|---|
 | `snmp@1` | `/snmp`, `/snmp community` | enabled, trap target, allowed sources (union allow list), write access, derived source address. Community names are never read or printed. Exposure items agree with the `snmp-exposed` health check |
 | `ntp@1` | `/system ntp client`, `servers`, `/system ntp server` | client enabled, ordered server list (replace), optional server enablement. Invariant: the server list must not contain the router's own loopback. Observed extras become non-widening proposals |
-| `services-hardening@1` | `/ip service` (telnet, ftp, www, api-ssl, reverse-proxy), `/ip dns`, `/ip proxy`, `/ip socks`, `/ip upnp`, `/tool bandwidth-server`, optional RoMON and MAC-Winbox | defaults for keys a compact export omits are marked [I] in code until real exports prove them. Agrees with `reverse-proxy-enabled` |
+| `services-hardening@1` | `/ip service` (telnet, ftp, www, api-ssl, reverse-proxy), `/ip dns`, `/ip proxy`, `/ip socks`, `/ip upnp`, `/tool bandwidth-server`, optional RoMON and MAC-Winbox | defaults for keys a compact export omits are marked [I] in code until real exports prove them. Agrees with `reverse-proxy-enabled`. `disabled_services` accepts only the known services; unknown names are refused, `winbox` is refused as owned by the later mgmt-access module, and `ssh`, `api` and `www-ssl` are refused as the management transport (lockout guard; PR1 has no per-router transport fact, so they are always treated as the transport) |
 
 ## Not in PR1
 
 Storage, owner commands, approvals, activation, the compiled health policy, UI,
 conformance projection, change sets, rendering and apply, the remaining modules
 (management ACLs, input firewall, routing, tunnels, users, version), and ADR-0019.
-`ntp.self_srcnat` is deferred with rendering. These are PR2 onwards.
+These are PR2 onwards.
+
+## Recorded debt
+
+* **`ntp.self_srcnat`** (design section 1.2, an M-risk optional element of `ntp@1`) is
+  not implemented. It is the router-side source-NAT element that lets a router
+  reach its own NTP server and only matters once Sub renders and applies. Resolves
+  when: the rendering phase lands the element model for `ntp`; until then drift
+  never mentions it.
+* **Rendering** (design section 2.1 element model, plans, approvals, apply) is
+  deferred entirely. PR1 only observes. Resolves when: a render-only operator
+  `.rsc` renderer and its tests land, with the first apply phase gated as in
+  design section 2.7.
+* The seed profiles in `seed_layers.py` are PROPOSED and synthetic; real values
+  arrive in a private `--layers` file until PR2 adds reviewed storage.
 
 ## Guards
 

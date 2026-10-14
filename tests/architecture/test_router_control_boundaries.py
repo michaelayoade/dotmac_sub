@@ -100,19 +100,45 @@ def test_router_control_is_a_read_only_resolver():
     assert not offenders, offenders
 
 
+def _tag_reads(source: str, name: str, *, strict_strings: bool = False) -> list[str]:
+    """Reads of an inventory ``tags`` attribute (and, for the CLI, any "tags" key)."""
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "tags"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in {"Router", "router", "row", "snap", "rows"}
+        ):
+            offenders.append(f"{name}:{node.lineno}")
+        if strict_strings and isinstance(node, ast.Constant) and node.value == "tags":
+            offenders.append(f"{name}:{node.lineno}")
+    return offenders
+
+
 def test_router_control_never_reads_inventory_tags():
-    """Guard 11: policy tags come from bindings; `routers.tags` never drives policy."""
+    """Guard 11: policy tags come from bindings; `routers.tags` never drives
+    policy. The CLI script is scanned too, not only the library."""
     offenders: list[str] = []
     for path in _modules(ROUTER_CONTROL) + _modules(COMPOSITION):
-        for node in ast.walk(ast.parse(path.read_text())):
-            if (
-                isinstance(node, ast.Attribute)
-                and node.attr == "tags"
-                and isinstance(node.value, ast.Name)
-                and node.value.id in {"Router", "router", "row"}
-            ):
-                offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+        offenders.extend(_tag_reads(path.read_text(), str(path.relative_to(ROOT))))
+    offenders.extend(
+        _tag_reads(
+            SCRIPT.read_text(), str(SCRIPT.relative_to(ROOT)), strict_strings=True
+        )
+    )
     assert not offenders, offenders
+
+
+def test_guard_11_catches_planted_reads_in_the_library_and_the_script():
+    assert _tag_reads("def f(router):\n    return router.tags\n", "lib.py") == [
+        "lib.py:2"
+    ]
+    assert _tag_reads("x = row.tags\n", "lib.py") == ["lib.py:1"]
+    assert _tag_reads('x = d["tags"]\n', "script.py", strict_strings=True) == [
+        "script.py:1"
+    ]
+    assert _tag_reads("x = binding.tags\n", "lib.py") == []
 
 
 def test_single_routeros_export_parser():

@@ -20,6 +20,23 @@ KNOWN_UNCLAIMED: frozenset[str] = frozenset(
 )
 
 
+def _service_names(entry_prefix: str) -> frozenset[str]:
+    names: set[str] = set()
+    for entry in KNOWN_UNCLAIMED:
+        if entry.startswith(entry_prefix):
+            names.update(entry.split(":", 1)[1].split("|"))
+    return frozenset(names)
+
+
+# `/ip service` entries that belong to the later mgmt-access module (no PR1
+# module may require them disabled).
+UNCLAIMED_SERVICES: frozenset[str] = _service_names("/ip service:")
+# Services that carry router management (REST over www-ssl, SSH, the RouterOS
+# API). PR1 has no per-router transport fact, so the lockout guard treats all
+# of them as the management transport.
+MANAGEMENT_TRANSPORT_SERVICES: frozenset[str] = frozenset({"ssh", "api", "www-ssl"})
+
+
 def claim_problems(plugin: DomainPlugin) -> list[str]:
     """No two modules claim the same (path, predicate)."""
     owners: dict[tuple[str, str], str] = {}

@@ -118,7 +118,6 @@ def parse_exceptions(data: Any, router_ids: Mapping[str, str]) -> list[Exception
                 patch=raw.get("patch"),
                 scope=raw.get("scope"),
                 mode=raw.get("mode"),
-                widening=bool(raw.get("widening", False)),
                 approved=bool(raw.get("approved", False)),
                 revoked=bool(raw.get("revoked", False)),
                 permanent=bool(raw.get("permanent", False)),

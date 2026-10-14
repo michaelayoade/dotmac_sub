@@ -12,9 +12,16 @@ state is a PROPOSED synthetic seed unless ``--layers`` supplies a private seed.
 Without ``--assignments`` a router's profile is its current health role from
 ``network.router_health_policy`` and its site comes from ``--sites``.
 
-Exit codes: 0 every evaluated module conforms; 1 drift; 2 refused (invalid
-input, composition conflict, invalid desired state or unparseable export);
-3 nothing could be evaluated.
+Exit codes: 0 every evaluated module conforms; 1 drift (including drift in a
+module in observe mode or on an ``observe_only`` router, which is labelled
+"observe-only" and not enforced but is still drift); 2 refused (invalid input,
+composition conflict, invalid desired state, unparseable export, or any
+unexpected error: the CLI never exits 1 for a failure); 3 nothing could be
+evaluated.
+
+"Today" is the date in the application timezone (Africa/Lagos), not UTC.
+Without a loopback in ``--assignments`` the ntp self-reference check cannot run
+and the report says so for that router.
 """
 
 from __future__ import annotations
@@ -38,6 +45,7 @@ from app.services.router_control.seed_layers import SEED_STATUS, seed_layer_revi
 from app.services.router_health.policy import (
     effective_policy,
     load_policy,
+    today_in_app_timezone,
 )
 from app.services.router_health.routeros_export import parse_export
 
@@ -134,28 +142,45 @@ def load_fleet(
     )
 
 
+def default_today() -> date:
+    """The application-timezone date (exceptions lapse at Lagos midnight, X1)."""
+    return today_in_app_timezone()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the report. Every failure that is not drift exits 2 (refused)."""
+    try:
+        return _run(argv)
+    except SystemExit:
+        raise  # argparse usage errors already exit 2
+    except inputs.InputError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+    except Exception as exc:
+        # fail closed: never leak the message (it may carry secrets) and never
+        # report an internal failure as drift (exit 1)
+        print(f"refused: unexpected {type(exc).__name__}", file=sys.stderr)
+    return report.EXIT_REFUSED
+
+
+def _run(argv: Sequence[str] | None) -> int:
     args = _parser().parse_args(argv)
     try:
-        today = (
-            date.fromisoformat(args.today) if args.today else datetime.now(UTC).date()
-        )
-        revisions = (
-            inputs.parse_layers(_load_json(args.layers))
-            if args.layers
-            else seed_layer_revisions()
-        )
-        seed = f"private layers {args.layers}" if args.layers else SEED_STATUS
-        assignments = (
-            inputs.parse_assignments(_load_json(args.assignments))
-            if args.assignments
-            else {}
-        )
-        sites = inputs.parse_sites(_load_json(args.sites)) if args.sites else {}
-        exceptions_raw = _load_json(args.exceptions) if args.exceptions else None
-    except (inputs.InputError, ValueError) as exc:
-        print(f"refused: {exc}", file=sys.stderr)
-        return report.EXIT_REFUSED
+        today = date.fromisoformat(args.today) if args.today else default_today()
+    except ValueError as exc:
+        raise inputs.InputError("--today: not an ISO date") from exc
+    revisions = (
+        inputs.parse_layers(_load_json(args.layers))
+        if args.layers
+        else seed_layer_revisions()
+    )
+    seed = f"private layers {args.layers}" if args.layers else SEED_STATUS
+    assignments = (
+        inputs.parse_assignments(_load_json(args.assignments))
+        if args.assignments
+        else {}
+    )
+    sites = inputs.parse_sites(_load_json(args.sites)) if args.sites else {}
+    exceptions_raw = _load_json(args.exceptions) if args.exceptions else None
     with read_only_snapshot_session() as db:
         bindings, snapshots, notes = load_fleet(
             db, args.router, assignments, sites, today
@@ -165,21 +190,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"note: {note}", file=sys.stderr)
     if unknown:
         return report.EXIT_REFUSED
-    try:
-        exceptions = (
-            inputs.parse_exceptions(
-                exceptions_raw,
-                {
-                    **{b.name: b.router_id for b in bindings},
-                    **{b.router_id: b.router_id for b in bindings},
-                },
-            )
-            if exceptions_raw is not None
-            else []
+    unchecked = [b.name for b in bindings if not (b.loopback_v4 or b.loopback_v6)]
+    if unchecked:
+        print(
+            "note: no loopback declared for "
+            f"{len(unchecked)} router(s) (default assignment or none in "
+            "--assignments): the ntp self-reference check cannot run for them",
+            file=sys.stderr,
         )
-    except inputs.InputError as exc:
-        print(f"refused: {exc}", file=sys.stderr)
-        return report.EXIT_REFUSED
+    exceptions = (
+        inputs.parse_exceptions(
+            exceptions_raw,
+            {
+                **{b.name: b.router_id for b in bindings},
+                **{b.router_id: b.router_id for b in bindings},
+            },
+        )
+        if exceptions_raw is not None
+        else []
+    )
     fleet = report.build_fleet_report(
         bindings,
         snapshots,

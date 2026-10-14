@@ -9,6 +9,7 @@ import pytest
 from app.services.composition.drift import DriftStatus, ModuleStatus, NotEvaluated
 from app.services.router_control.modules import ntp, services_hardening, snmp
 from app.services.router_control.plugin import ROUTER_PLUGIN
+from app.services.router_control.seed_layers import seed_layer_revisions
 from app.services.router_health.contracts import CheckId
 from app.services.router_health.posture_checks import evaluate_posture
 from tests.services.router_control.support import (
@@ -16,8 +17,10 @@ from tests.services.router_control.support import (
     POLLER_SNMP,
     SERVICES_OK,
     binding,
+    compose_for,
     doc_of,
     export,
+    extra_layer,
     fixture_text,
     report_for,
 )
@@ -429,3 +432,75 @@ def test_module_registry_is_complete_and_claims_are_disjoint():
     assert set(ROUTER_PLUGIN.modules) == {"snmp", "ntp", "services-hardening"}
     assert plugin_problems(ROUTER_PLUGIN) == []
     assert claim_problems(ROUTER_PLUGIN) == []
+
+
+@pytest.mark.parametrize("name", ["ssh", "api", "www-ssl"])
+def test_disabled_services_refuses_the_management_transport(name):
+    layers = seed_layer_revisions() + [
+        extra_layer(
+            "router",
+            "id-r-a",
+            {
+                "services-hardening": {
+                    "module_version": 1,
+                    "params": {"disabled_services": {"$add": [name]}},
+                }
+            },
+        )
+    ]
+    result = compose_for(binding(), layers).modules["services-hardening"]
+    assert result.status == "invalid_desired"
+    assert [r.code for r in result.reasons] == ["management_transport"]
+    assert name in result.reasons[0].detail
+
+
+@pytest.mark.parametrize(
+    ("name", "code"),
+    [
+        ("winbox", "unclaimed_service"),
+        ("gopher", "unknown_service"),
+        ("Telnet2", "unknown_service"),
+    ],
+)
+def test_disabled_services_refuses_unclaimed_and_unknown_names(name, code):
+    layers = seed_layer_revisions() + [
+        extra_layer(
+            "router",
+            "id-r-a",
+            {
+                "services-hardening": {
+                    "module_version": 1,
+                    "params": {"disabled_services": {"$add": [name]}},
+                }
+            },
+        )
+    ]
+    result = compose_for(binding(), layers).modules["services-hardening"]
+    assert [r.code for r in result.reasons] == [code]
+    rep = report_for(binding(), export(), revisions=layers)
+    assert rep.evaluations["services-hardening"].reason is NotEvaluated.invalid_desired
+
+
+def test_every_known_service_is_accepted_and_the_seed_is_valid():
+    from app.services.router_control.modules.services_hardening import KNOWN_SERVICES
+
+    layers = seed_layer_revisions()
+    result = compose_for(binding(), layers).modules["services-hardening"]
+    assert result.status == "ok"
+    assert set(result.params["disabled_services"]) <= set(KNOWN_SERVICES)
+
+
+def test_known_service_sets_are_derived_from_the_unclaimed_surface_registry():
+    from app.services.router_control import surfaces
+
+    assert surfaces.UNCLAIMED_SERVICES == {"ssh", "winbox", "api", "www-ssl"}
+    assert surfaces.MANAGEMENT_TRANSPORT_SERVICES <= surfaces.UNCLAIMED_SERVICES
+
+
+def test_seed_core_and_border_profiles_enable_the_ntp_server():
+    layers = seed_layer_revisions()
+    for profile in ("core", "border"):
+        eff = compose_for(binding(profiles=(profile,), site="site-b"), layers)
+        assert eff.modules["ntp"].params["server_enabled"] is True, profile
+    eff = compose_for(binding(profiles=("access",)), layers)
+    assert "server_enabled" not in eff.modules["ntp"].params

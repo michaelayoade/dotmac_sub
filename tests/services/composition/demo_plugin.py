@@ -358,7 +358,6 @@ def override(
     *,
     until: date,
     created: date = date(2026, 10, 14),
-    widening: bool = False,
     approved: bool = False,
     reason: str = "field engineers need this for testing",
 ) -> ExceptionSpec:
@@ -372,6 +371,12 @@ def override(
         subject_key="r1",
         path=path,
         patch=patch,
-        widening=widening,
         approved=approved,
     )
+
+
+def make_ordered_mode_plugin() -> DomainPlugin:
+    """A plug-in whose module `m` has an ordered mode (enforce > observe > off)."""
+    module = DemoModule("m", MParams, M_SPECS)
+    module.mode_ordered = True
+    return DomainPlugin("demo-ordered", TIERS, {"m": module})

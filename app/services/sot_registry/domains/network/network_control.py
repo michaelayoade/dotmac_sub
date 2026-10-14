@@ -1697,6 +1697,10 @@ SERVICES: tuple[SOTService, ...] = (
             "app.services.router_control.plugin",
             "app.services.router_control.inputs",
             "app.services.router_control.seed_layers",
+            "app.services.router_control.surfaces",
+            "app.services.router_control.modules.ntp",
+            "app.services.router_control.modules.snmp",
+            "app.services.router_control.modules.services_hardening",
         ),
         owns=(
             "composed router desired state",
@@ -1789,7 +1793,7 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 mapping_owner="scripts.network.router_control_report",
                 fail_closed_on=(
-                    "invalid layer, exception or assignment input (exit 2)",
+                    "invalid layer, exception or assignment input, or any unexpected error (exit 2)",
                     "equal-weight composition conflict (exit 2)",
                     "invalid desired state for an enrolled module (exit 2)",
                     "missing, stale or unparseable snapshot (module not evaluated, never missing)",
@@ -1806,6 +1810,8 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             test_refs=(
                 "tests/services/composition/test_spec_vectors.py",
+                "tests/services/composition/test_equal_rank.py",
+                "tests/services/composition/test_widening.py",
                 "tests/services/router_control/test_modules.py",
                 "tests/services/router_control/test_report.py",
                 "tests/services/router_control/test_cli.py",

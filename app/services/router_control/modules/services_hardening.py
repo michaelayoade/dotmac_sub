@@ -27,7 +27,11 @@ from app.services.composition.fields import (
     Strategy,
     Tie,
 )
-from app.services.composition.plugin import ModuleBase, SurfaceClaim
+from app.services.composition.plugin import Invalid, ModuleBase, SurfaceClaim
+from app.services.router_control.surfaces import (
+    MANAGEMENT_TRANSPORT_SERVICES,
+    UNCLAIMED_SERVICES,
+)
 
 from ._support import ExportDocument, is_true, parse_version, set_props
 
@@ -118,6 +122,30 @@ class ServicesHardeningModule(ModuleBase):
         SurfaceClaim("/tool mac-server mac-winbox"),
     )
     health_checks = ("reverse-proxy-enabled",)
+
+    def invariants(
+        self, params: Mapping[str, Any], facts: Mapping[str, Any]
+    ) -> tuple[Invalid, ...]:
+        """Only known unused services may be required disabled; never the
+        management transport (lockout guard)."""
+        problems: list[Invalid] = []
+        for name in params.get("disabled_services", []):
+            if name in MANAGEMENT_TRANSPORT_SERVICES:
+                code, why = (
+                    "management_transport",
+                    f"{name} carries router management; disabling it would lock Sub and operators out",
+                )
+            elif name in UNCLAIMED_SERVICES:
+                code, why = (
+                    "unclaimed_service",
+                    f"{name} belongs to the later mgmt-access module, not services-hardening",
+                )
+            elif name not in KNOWN_SERVICES:
+                code, why = "unknown_service", f"{name} is not a known service"
+            else:
+                continue
+            problems.append(Invalid(code, "/disabled_services", why))
+        return tuple(problems)
 
     def extract_observed(self, observation: Any) -> HardeningObserved | Unknown:
         if not isinstance(observation, ExportDocument):

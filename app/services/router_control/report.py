@@ -19,6 +19,7 @@ from app.services.composition.compose import (
     provenance_gaps,
 )
 from app.services.composition.drift import (
+    NON_DRIFT,
     DriftItem,
     ModuleEvaluation,
     ModuleStatus,
@@ -71,6 +72,7 @@ class RouterReport:
     router_hash: str | None = None
     snapshot: dict[str, Any] | None = None
     note: str | None = None
+    not_checked: tuple[str, ...] = ()
 
     @property
     def proposals(self) -> list[Proposal]:
@@ -79,6 +81,17 @@ class RouterReport:
     @property
     def items(self) -> list[DriftItem]:
         return [i for e in self.evaluations.values() for i in e.items]
+
+    @property
+    def observe_only_drift(self) -> list[tuple[str, DriftItem]]:
+        """Drift that is not enforced (module in observe mode or router
+        ``observe_only``). It is still drift and still sets exit code 1."""
+        return [
+            (key, item)
+            for key, e in sorted(self.evaluations.items())
+            if e.status is ModuleStatus.observe_only
+            for item in unexcepted_drift(e)
+        ]
 
 
 @dataclass
@@ -90,6 +103,10 @@ class FleetReport:
     @property
     def exit_code(self) -> int:
         return exit_code(self)
+
+
+def unexcepted_drift(evaluation: ModuleEvaluation) -> list[DriftItem]:
+    return [i for i in evaluation.items if i.status not in NON_DRIFT and not i.excepted]
 
 
 def _origin_text(prov: Any) -> dict[str, Any]:
@@ -151,6 +168,19 @@ def _observation(
 
 def _aware(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+SELF_REFERENCE_UNCHECKED = (
+    "self-reference (T20): NOT CHECKED, no loopback is declared for this router "
+    "(a default assignment carries none); a server list naming the router's own "
+    "address would pass. Declare loopback_v4/loopback_v6 in --assignments."
+)
+
+
+def _not_checked(binding: RouterBinding) -> tuple[str, ...]:
+    if binding.loopback_v4 or binding.loopback_v6:
+        return ()
+    return (SELF_REFERENCE_UNCHECKED,)
 
 
 def build_router_report(
@@ -220,6 +250,7 @@ def build_router_report(
         lapsed=effective.lapsed,
         router_hash=effective.router_hash,
         snapshot=info,
+        not_checked=_not_checked(binding),
     )
 
 
@@ -250,7 +281,13 @@ def build_fleet_report(
 
 
 def exit_code(report: FleetReport) -> int:
-    """0 conform, 1 drift, 2 refused (invalid input, conflict, unparseable), 3 nothing evaluated."""
+    """0 conform, 1 drift, 2 refused (invalid input, conflict, unparseable), 3 nothing evaluated.
+
+    The design (§6.6) does not exempt observe mode from "drift", so drift found
+    in a module in ``observe`` mode, or on an ``observe_only`` router, exits 1
+    like any other drift. The text and JSON output label it "observe-only"
+    (not enforced) so it is never mistaken for enforced drift.
+    """
     evaluated = 0
     drift = False
     for router in report.routers:
@@ -268,6 +305,8 @@ def exit_code(report: FleetReport) -> int:
                 continue
             evaluated += 1
             drift = drift or evaluation.status is ModuleStatus.drift
+            if evaluation.status is ModuleStatus.observe_only:
+                drift = drift or bool(unexcepted_drift(evaluation))
     if drift:
         return EXIT_DRIFT
     return EXIT_CONFORM if evaluated else EXIT_NOTHING_EVALUATED
@@ -296,6 +335,10 @@ def to_json(report: FleetReport) -> dict[str, Any]:
                 "router_hash": r.router_hash,
                 "effective": r.effective,
                 "modules": {k: e.as_dict() for k, e in sorted(r.evaluations.items())},
+                "not_checked": list(r.not_checked),
+                "observe_only_drift": [
+                    item.as_dict() for _key, item in r.observe_only_drift
+                ],
                 "proposals": [p.as_dict() for p in r.proposals],
                 "conflicts": list(r.conflicts),
                 "inert": list(r.inert),
@@ -327,6 +370,8 @@ def render_text(report: FleetReport) -> str:
             lines.append(f"   REFUSED: {issue}")
         if r.outcome is not RouterOutcome.evaluated:
             continue
+        for gap in r.not_checked:
+            lines.append(f"   NOT CHECKED: {gap}")
         if r.snapshot:
             lines.append(
                 f"   snapshot {r.snapshot.get('id')} at {r.snapshot.get('captured_at')}"
@@ -375,6 +420,11 @@ def render_text(report: FleetReport) -> str:
                     if item.status.value in {"ok"}:
                         continue
                     tag = " [excepted]" if item.excepted else ""
+                    if (
+                        evaluation.status is ModuleStatus.observe_only
+                        and not item.excepted
+                    ):
+                        tag = " [observe-only: not enforced, still drift]"
                     lines.append(
                         f"       DRIFT {item.status.value} {item.path}"
                         f"{'/' + item.element if item.element else ''}"
@@ -394,6 +444,17 @@ def render_text(report: FleetReport) -> str:
             lines.append(f"   inert {path}")
         for x in r.lapsed:
             lines.append(f"   exception_lapsed {x.id} ({x.module}) until {x.until}")
+    observe = [
+        (r.binding.name, k) for r in report.routers for k, _ in r.observe_only_drift
+    ]
+    if observe:
+        lines.append("")
+        lines.append(
+            f"observe-only drift: {len(observe)} item(s) on "
+            f"{len({name for name, _ in observe})} router(s) in observe mode or "
+            "observe_only routers. It is not enforced but it is drift: "
+            "it counts toward exit 1."
+        )
     lines.append("")
     lines.append(f"exit {report.exit_code}")
     return "\n".join(lines)

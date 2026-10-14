@@ -109,8 +109,40 @@ def _canon_value(spec: FieldSpec, value: Any) -> Any:
         raise MergeError("", f"invalid value {value!r}: {exc}") from exc
 
 
+@dataclass(frozen=True)
+class Write:
+    """One layer's write to one path, kept per (path, rank, weight) group."""
+
+    origin: Origin
+    kind: str  # set | delete | replace | relative | merge
+    value: Any = None
+    add: tuple[Any, ...] = ()
+    remove: tuple[Any, ...] = ()
+
+
+def _ancestors(ptr: str) -> list[str]:
+    """``ptr`` and its ancestors, nearest first, excluding the document root."""
+    out: list[str] = []
+    while ptr:
+        out.append(ptr)
+        ptr = ptr.rsplit("/", 1)[0]
+    return out
+
+
+def _stable(items: Sequence[Any], before: Sequence[Any]) -> list[Any]:
+    """Name-independent order: elements of ``before`` first, then the rest sorted."""
+    kept = [item for item in before if item in items]
+    rest = sorted((item for item in items if item not in before), key=str)
+    return kept + rest
+
+
 class Merger:
-    """Merges layer patches for one module into values plus provenance."""
+    """Merges layer patches for one module into values plus provenance.
+
+    Every write is logged per (path, rank, weight) so equal-rank outcomes never
+    depend on layer names (M8, M10): restrictive fields resolve symmetrically,
+    every other disagreement is a conflict that blocks planning.
+    """
 
     def __init__(self, module_key: str, specs: SpecIndex) -> None:
         self.module_key = module_key
@@ -121,9 +153,8 @@ class Merger:
         self.tombs: dict[str, Tombstone] = {}
         self.conflicts: dict[str, Conflict] = {}
         self.lints: list[str] = []
-        self._list_writes: dict[str, tuple[Origin, Any]] = {}
-        self._removed: dict[tuple[str, str], Origin] = {}
-        self._added: dict[tuple[str, str], Origin] = {}
+        self._log: dict[tuple[str, tuple[int, int]], list[Write]] = {}
+        self._before: dict[tuple[str, tuple[int, int]], list[Any]] = {}
 
     # ------------------------------------------------------------- public API
 
@@ -158,6 +189,54 @@ class Merger:
             if not parts:
                 return None
             parts = parts.rsplit("/", 1)[0]
+
+    # -------------------------------------------------------------- write log
+
+    def _others(self, ptr: str, origin: Origin) -> list[Write]:
+        return [
+            w
+            for w in self._log.get((ptr, origin.group), [])
+            if w.origin.layer_id != origin.layer_id
+        ]
+
+    def _record(self, ptr: str, write: Write) -> None:
+        self._log.setdefault((ptr, write.origin.group), []).append(write)
+
+    def _flag(self, ptr: str, writes: Sequence[Write]) -> None:
+        """Record a conflict listing every layer that wrote ``ptr`` at this rank."""
+        existing = self.conflicts.get(ptr)
+        layers = list(existing.layers) if existing else []
+        values = list(existing.values) if existing else []
+        for write in writes:
+            label = f"{write.origin.tier}:{write.origin.layer_name}"
+            if label not in layers:
+                layers.append(label)
+                values.append(DELETED_VALUE if write.kind == "delete" else write.value)
+        self.conflicts[ptr] = Conflict(ptr, tuple(layers), tuple(values))
+
+    def _all_group_writes(self, ptr: str, origin: Origin) -> list[Write]:
+        return list(self._log.get((ptr, origin.group), []))
+
+    def _delete_clash(self, ptr: str, origin: Origin, own: Write) -> None:
+        """A write at ``ptr`` meets an equal-rank delete of ``ptr`` or an ancestor."""
+        for scope in _ancestors(ptr):
+            deletes = [w for w in self._others(scope, origin) if w.kind == "delete"]
+            if deletes:
+                self._flag(scope, [*deletes, own])
+
+    def _write_clash(self, ptr: str, origin: Origin, own: Write) -> None:
+        """A delete at ``ptr`` meets equal-rank writes at or below ``ptr``."""
+        prefix = ptr + "/"
+        for (path, group), writes in sorted(self._log.items()):
+            if group != origin.group or not (path == ptr or path.startswith(prefix)):
+                continue
+            hits = [
+                w
+                for w in writes
+                if w.origin.layer_id != origin.layer_id and w.kind != "delete"
+            ]
+            if hits:
+                self._flag(ptr, [*hits, own])
 
     # -------------------------------------------------------------- provenance
 
@@ -194,21 +273,6 @@ class Merger:
                 shadowed=current.shadowed + (Shadow(current.origin, current.value),),
             )
         self.tombs.setdefault(ptr, Tombstone(deleted_by=origin.with_op("delete")))
-        for key in [k for k in self._list_writes if k == ptr or k.startswith(prefix)]:
-            del self._list_writes[key]
-
-    def _conflict(
-        self, ptr: str, first: Origin, second: Origin, old: Any, new: Any
-    ) -> None:
-        existing = self.conflicts.get(ptr)
-        layers = list(existing.layers) if existing else []
-        values = list(existing.values) if existing else []
-        for origin, value in ((first, old), (second, new)):
-            label = f"{origin.tier}:{origin.layer_name}"
-            if label not in layers:
-                layers.append(label)
-                values.append(value)
-        self.conflicts[ptr] = Conflict(ptr, tuple(layers), tuple(values))
 
     # ------------------------------------------------------------------ objects
 
@@ -268,13 +332,9 @@ class Merger:
         origin: Origin,
     ) -> None:
         ptr = pointer(path)
-        existing = self.prov.get(ptr)
-        if (
-            existing
-            and existing.origin.group == origin.group
-            and (existing.origin.layer_id != origin.layer_id)
-        ):
-            self._conflict(ptr, existing.origin, origin, existing.value, DELETED_VALUE)
+        own = Write(origin, "delete", DELETED_VALUE)
+        self._write_clash(ptr, origin, own)
+        self._record(ptr, own)
         if key in base:
             del base[key]
             self._tombstone(path, origin)
@@ -300,39 +360,33 @@ class Merger:
             new: Any = None
         else:
             new = _canon_value(spec, value)
+        own = Write(origin, "set", new)
+        self._delete_clash(ptr, origin, own)
+        others = [w for w in self._others(ptr, origin) if w.kind == "set"]
+        self._record(ptr, own)
         current = self.prov.get(ptr)
-        tomb = self.tombs.get(ptr)
-        if (
-            current
-            and current.origin.group == origin.group
-            and (current.origin.layer_id != origin.layer_id)
-        ):
+        if others and current is not None and current.origin.group == origin.group:
             old = base.get(key)
-            if canonical_json(old) != canonical_json(new):
-                if spec.tie is Tie.restrictive and spec.access in {
-                    AccessKind.secure_bool,
-                    AccessKind.ordered,
-                }:
-                    if spec.security_rank(old) <= spec.security_rank(new):
-                        # the incumbent is at least as secure: it stays
-                        self.prov[ptr] = replace(
-                            current,
-                            contributors=current.contributors + (origin,),
-                            shadowed=current.shadowed + (Shadow(origin, new),),
-                        )
-                        return
-                else:
-                    self._conflict(ptr, current.origin, origin, old, new)
-        elif (
-            tomb
-            and tomb.deleted_by.group == origin.group
-            and (tomb.deleted_by.layer_id != origin.layer_id)
-        ):
-            self._conflict(ptr, tomb.deleted_by, origin, DELETED_VALUE, new)
+            if spec.tie is Tie.restrictive and spec.access in {
+                AccessKind.secure_bool,
+                AccessKind.ordered,
+            }:
+                if canonical_json(old) != canonical_json(new) and (
+                    spec.security_rank(old) <= spec.security_rank(new)
+                ):
+                    # the incumbent is at least as secure: it stays
+                    self.prov[ptr] = replace(
+                        current,
+                        contributors=current.contributors + (origin,),
+                        shadowed=current.shadowed + (Shadow(origin, new),),
+                    )
+                    return
+            elif any(canonical_json(w.value) != canonical_json(new) for w in others):
+                self._flag(ptr, [*others, own])
         base[key] = new
         self._note(ptr, origin, new)
 
-    # ------------------------------------------------------------ replace lists
+    # ------------------------------------------------------------- list writes
 
     def _replace_list(
         self,
@@ -349,45 +403,7 @@ class Merger:
         if not isinstance(value, (list, tuple)):
             raise MergeError(ptr, "a list is required")
         new = [_canon_value(spec, item) for item in value]
-        self._write_whole_list(base, key, ptr, spec, new, origin)
-
-    def _write_whole_list(
-        self,
-        base: dict[str, Any],
-        key: str,
-        ptr: str,
-        spec: FieldSpec,
-        new: list[Any],
-        origin: Origin,
-    ) -> None:
-        previous = self._list_writes.get(ptr)
-        if (
-            previous
-            and previous[0].group == origin.group
-            and (previous[0].layer_id != origin.layer_id)
-        ):
-            old = previous[1]
-            if canonical_json(old) != canonical_json(new):
-                if spec.tie is Tie.restrictive:
-                    if spec.access is AccessKind.allow_list:
-                        new = [item for item in new if item in old]
-                    else:
-                        new = list(old) + [item for item in new if item not in old]
-                else:
-                    self._conflict(ptr, previous[0], origin, old, new)
-        base[key] = new
-        self._list_writes[ptr] = (origin, copy.deepcopy(new))
-        prefix = ptr + "/"
-        for stale in [k for k in self.prov if k.startswith(prefix)]:
-            del self.prov[stale]
-        self._note(ptr, origin.with_op("set"), new)
-        if spec.strategy is Strategy.union:
-            for item in new:
-                self.prov[ptr + "/" + element_segment(str(item))] = Provenance(
-                    origin=origin.with_op("add"), value=item, contributors=(origin,)
-                )
-
-    # -------------------------------------------------------------- union lists
+        self._list_op(base, key, ptr, spec, origin, replacement=new)
 
     def _union_list(
         self,
@@ -409,36 +425,108 @@ class Merger:
                 canon = _canon_value(spec, item)
                 if canon not in replacement:
                     replacement.append(canon)
-            self._write_whole_list(base, key, ptr, spec, replacement, origin)
+            self._list_op(base, key, ptr, spec, origin, replacement=replacement)
             return
+        self._list_op(base, key, ptr, spec, origin, add=add, remove=remove)
+
+    def _list_op(
+        self,
+        base: dict[str, Any],
+        key: str,
+        ptr: str,
+        spec: FieldSpec,
+        origin: Origin,
+        *,
+        replacement: list[Any] | None = None,
+        add: Sequence[Any] = (),
+        remove: Sequence[Any] = (),
+    ) -> None:
+        """One layer's whole-list write ($replace / plain list) or $add/$remove."""
+        group_key = (ptr, origin.group)
+        kind = "replace" if replacement is not None else "relative"
+        own = Write(
+            origin,
+            kind,
+            copy.deepcopy(replacement)
+            if replacement is not None
+            else {"$add": list(add), "$remove": list(remove)},
+            tuple(add),
+            tuple(remove),
+        )
+        self._delete_clash(ptr, origin, own)
+        others = [w for w in self._others(ptr, origin) if w.kind != "delete"]
+        if group_key not in self._before:
+            self._before[group_key] = copy.deepcopy(list(base.get(key, [])))
+        self._record(ptr, own)
+        restrictive = spec.tie is Tie.restrictive and spec.access in {
+            AccessKind.allow_list,
+            AccessKind.deny_list,
+        }
+        if others and restrictive:
+            self._resolve_restrictive(base, key, ptr, spec, origin, own)
+            return
+        if others:
+            self._flag_list_mix(ptr, spec, others, own)
+        if replacement is not None:
+            self._apply_replace(base, key, ptr, spec, replacement, origin)
+        else:
+            self._apply_relative(base, key, ptr, origin, add, remove)
+
+    def _flag_list_mix(
+        self, ptr: str, spec: FieldSpec, others: list[Write], own: Write
+    ) -> None:
+        """Non-restrictive equal-rank mixes: only add+add / remove+remove agree."""
+        clashing: list[Write] = []
+        for other in others:
+            if own.kind == "replace" and other.kind == "replace":
+                if canonical_json(own.value) != canonical_json(other.value):
+                    clashing.append(other)
+            elif own.kind != other.kind:
+                clashing.append(other)  # replace against $add/$remove
+            elif set(map(str, own.add)) & set(map(str, other.remove)) or set(
+                map(str, own.remove)
+            ) & set(map(str, other.add)):
+                clashing.append(other)  # $add against $remove of one element
+        if clashing:
+            self._flag(ptr, [*others, own])
+
+    def _apply_replace(
+        self,
+        base: dict[str, Any],
+        key: str,
+        ptr: str,
+        spec: FieldSpec,
+        new: list[Any],
+        origin: Origin,
+    ) -> None:
+        base[key] = list(new)
+        prefix = ptr + "/"
+        for stale in [k for k in self.prov if k.startswith(prefix)]:
+            del self.prov[stale]
+        self._note(ptr, origin.with_op("set"), new)
+        if spec.strategy is Strategy.union:
+            for item in new:
+                self.prov[ptr + "/" + element_segment(str(item))] = Provenance(
+                    origin=origin.with_op("add"), value=item, contributors=(origin,)
+                )
+
+    def _apply_relative(
+        self,
+        base: dict[str, Any],
+        key: str,
+        ptr: str,
+        origin: Origin,
+        add: Sequence[Any],
+        remove: Sequence[Any],
+    ) -> None:
         current: list[Any] = list(base.get(key, []))
         for item in remove:
-            gate = self._added.get((ptr, str(item)))
-            if (
-                spec.tie is Tie.restrictive
-                and spec.access is AccessKind.deny_list
-                and gate is not None
-                and gate.group == origin.group
-                and gate.layer_id != origin.layer_id
-            ):
-                continue  # deny_list: $add beats $remove at the same rank
             if item in current:
                 current.remove(item)
                 self._tombstone_element(ptr, item, origin)
-                self._removed[(ptr, str(item))] = origin
             else:
                 self.lints.append(f"noop_remove {ptr}/{element_segment(str(item))}")
-                self._removed.setdefault((ptr, str(item)), origin)
         for item in add:
-            gate = self._removed.get((ptr, str(item)))
-            if (
-                spec.tie is Tie.restrictive
-                and spec.access is AccessKind.allow_list
-                and gate is not None
-                and gate.group == origin.group
-                and gate.layer_id != origin.layer_id
-            ):
-                continue  # allow_list: $remove beats $add at the same rank
             element_ptr = ptr + "/" + element_segment(str(item))
             if item not in current:
                 current.append(item)
@@ -452,9 +540,75 @@ class Merger:
                     self.prov[element_ptr] = replace(
                         seen, contributors=seen.contributors + (origin,)
                     )
-            self._added[(ptr, str(item))] = origin
         base[key] = current
         self._note(ptr, origin.with_op("merge"), current, keep_contributors=True)
+
+    def _resolve_restrictive(
+        self,
+        base: dict[str, Any],
+        key: str,
+        ptr: str,
+        spec: FieldSpec,
+        origin: Origin,
+        own: Write,
+    ) -> None:
+        """Equal-rank writes to a restrictive list, independent of layer names.
+
+        allow_list: the intersection of every $replace list and of the
+        relative result (before + all $add - all $remove); $remove beats $add.
+        deny_list: the union of every $replace list and of the relative result
+        (before - $remove not re-added + all $add); $add beats $remove.
+        """
+        writes = [
+            w for w in self._log.get((ptr, origin.group), []) if w.kind != "delete"
+        ]
+        before = self._before[(ptr, origin.group)]
+        replaces = [list(w.value) for w in writes if w.kind == "replace"]
+        relative = [w for w in writes if w.kind == "relative"]
+        adds = [item for w in relative for item in w.add]
+        removes = [item for w in relative for item in w.remove]
+        views: list[list[Any]] = []
+        if relative:
+            if spec.access is AccessKind.allow_list:
+                view = [e for e in before if e not in removes]
+                view += [e for e in adds if e not in view and e not in removes]
+            else:
+                view = [e for e in before if e not in removes or e in adds]
+                view += [e for e in adds if e not in view]
+            views.append(view)
+        views.extend(replaces)
+        if spec.access is AccessKind.allow_list:
+            result = [e for e in views[0] if all(e in v for v in views[1:])]
+        else:
+            result = [e for v in views for e in v]
+        unique: list[Any] = []
+        for item in result:
+            if item not in unique:
+                unique.append(item)
+        final = _stable(unique, before)
+        previous = list(base.get(key, []))
+        base[key] = final
+        for item in previous:
+            if item not in final:
+                self._tombstone_element(ptr, item, origin)
+        contributed = (
+            list(own.add) + list(own.value or [])
+            if own.kind == "replace"
+            else list(own.add)
+        )
+        for item in final:
+            element_ptr = ptr + "/" + element_segment(str(item))
+            if item not in previous:
+                self.tombs.pop(element_ptr, None)
+                self.prov[element_ptr] = Provenance(
+                    origin=origin.with_op("add"), value=item, contributors=(origin,)
+                )
+            elif item in contributed and element_ptr in self.prov:
+                seen = self.prov[element_ptr]
+                self.prov[element_ptr] = replace(
+                    seen, contributors=seen.contributors + (origin,)
+                )
+        self._note(ptr, origin.with_op("merge"), final, keep_contributors=True)
 
     def _tombstone_element(self, ptr: str, item: Any, origin: Origin) -> None:
         element_ptr = ptr + "/" + element_segment(str(item))
@@ -504,24 +658,33 @@ class Merger:
                 raise MergeError(ptr, f"duplicate key {canon_key!r} in one patch")
             patch_keys.add(canon_key)
             parsed.append((canon_key, item))
+        keys_now = [canon for canon, _ in parsed]
+        own = Write(origin, "replace" if replace_all else "merge", keys_now)
+        self._delete_clash(ptr, origin, own)
+        others = [w for w in self._others(ptr, origin) if w.kind != "delete"]
+        self._record(ptr, own)
         if replace_all:
             for old_key in list(elements):
                 self._tombstone(path + (old_key,), origin)
             elements = {}
-            previous = self._list_writes.get(ptr)
-            keys_now = [canon for canon, _ in parsed]
-            if (
-                previous
-                and previous[0].group == origin.group
-                and previous[0].layer_id != origin.layer_id
-                and canonical_json(previous[1]) != canonical_json(keys_now)
-            ):
-                self._conflict(ptr, previous[0], origin, previous[1], keys_now)
-            self._list_writes[ptr] = (origin, keys_now)
+        clashing = [
+            w
+            for w in others
+            if (own.kind == "replace" or w.kind == "replace")
+            and (
+                own.kind != w.kind
+                or canonical_json(sorted(w.value)) != canonical_json(sorted(keys_now))
+            )
+        ]
+        if clashing:
+            self._flag(ptr, [*others, own])
         for canon_key, item in parsed:
             element_path = path + (canon_key,)
             body = {k: v for k, v in item.items() if k != spec.key}
             if item.get(DELETE) is True and len(item) == 2:
+                element_own = Write(origin, "delete", DELETED_VALUE)
+                self._write_clash(pointer(element_path), origin, element_own)
+                self._record(pointer(element_path), element_own)
                 if canon_key in elements:
                     del elements[canon_key]
                     self._tombstone(element_path, origin)
@@ -537,13 +700,16 @@ class Merger:
             if element is None:
                 element = {spec.key: canon_key}
                 elements[canon_key] = element
-                self._note(pointer(element_path), origin.with_op("add"), canon_key)
+                element_ptr = pointer(element_path)
+                self._delete_clash(element_ptr, origin, Write(origin, "set", canon_key))
+                self._record(element_ptr, Write(origin, "set", canon_key))
+                self._note(element_ptr, origin.with_op("add"), canon_key)
                 self._note(
                     pointer(element_path + (spec.key,)),
                     origin.with_op("add"),
                     canon_key,
                 )
-                self.tombs.pop(pointer(element_path), None)
+                self.tombs.pop(element_ptr, None)
             self._merge_object(element, body, element_path, origin)
         ordered = list(elements.values())
         if spec.order:

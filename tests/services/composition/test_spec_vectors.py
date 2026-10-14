@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
 
 from app.services.composition.compose import (
+    compose,
     validate_exception,
     validate_layer_document,
 )
@@ -30,6 +32,7 @@ from .demo_plugin import (
     PLUGIN,
     block,
     doc,
+    make_ordered_mode_plugin,
     override,
     rev,
     run,
@@ -252,11 +255,20 @@ def test_t13_module_delete_is_rejected_on_write():
 
 
 def test_t14_exception_activity_and_lapse_window():
-    exc = override("X-1", "m", "/btest", {"enabled": True}, until=date(2026, 11, 13))
-    assert exception_state(exc, date(2026, 11, 13)) is ExceptionState.active
-    assert exception_state(exc, date(2026, 11, 14)) is ExceptionState.lapsed
-    assert exception_state(exc, date(2026, 11, 21)) is ExceptionState.lapsed
-    assert exception_state(exc, date(2026, 11, 22)) is ExceptionState.expired
+    exc = override(
+        "X-1",
+        "m",
+        "/btest",
+        {"enabled": True},
+        until=date(2026, 11, 13),
+        approved=True,
+    )
+    plain = dict(widening=False)
+    assert exception_state(exc, date(2026, 11, 13), **plain) is ExceptionState.active
+    assert exception_state(exc, date(2026, 11, 14), **plain) is ExceptionState.lapsed
+    # reported through until + 7 days (router_health posture EXPIRED_NOTE_DAYS)
+    assert exception_state(exc, date(2026, 11, 20), **plain) is ExceptionState.lapsed
+    assert exception_state(exc, date(2026, 11, 21), **plain) is ExceptionState.expired
     g = rev("global", "g", block("m", btest={"enabled": False}))
     active = run([g], exceptions=[exc], today=date(2026, 11, 13))
     assert values(active)["btest"]["enabled"] is True
@@ -266,16 +278,86 @@ def test_t14_exception_activity_and_lapse_window():
     lapsed = run([g], exceptions=[exc], today=date(2026, 11, 14))
     assert values(lapsed)["btest"]["enabled"] is False
     assert [x.id for x in lapsed.lapsed] == ["X-1"]
-    assert not run([g], exceptions=[exc], today=date(2026, 11, 22)).lapsed
+    assert [
+        x.id for x in run([g], exceptions=[exc], today=date(2026, 11, 20)).lapsed
+    ] == ["X-1"]
+    assert not run([g], exceptions=[exc], today=date(2026, 11, 21)).lapsed
 
 
-def test_t14_widening_exception_needs_approval():
-    exc = override(
-        "X-2", "m", "/btest", {"enabled": True}, until=date(2026, 11, 13), widening=True
-    )
+def test_t14_widening_is_computed_not_trusted_from_input():
     g = rev("global", "g", block("m", btest={"enabled": False}))
-    assert exception_state(exc, date(2026, 10, 15)) is ExceptionState.pending_approval
-    assert values(run([g], exceptions=[exc]))["btest"]["enabled"] is False
+    widening_exc = override(
+        "X-2", "m", "/btest", {"enabled": True}, until=date(2026, 11, 13)
+    )
+    eff = run([g], exceptions=[widening_exc], today=date(2026, 10, 15))
+    status = {s.id: s for s in eff.exceptions}["X-2"]
+    assert status.widening and status.state is ExceptionState.pending_approval
+    assert values(eff)["btest"]["enabled"] is False  # unapproved widening is inactive
+    approved = replace(widening_exc, approved=True)
+    eff = run([g], exceptions=[approved], today=date(2026, 10, 15))
+    assert {s.id: s for s in eff.exceptions}["X-2"].state is ExceptionState.active
+    assert values(eff)["btest"]["enabled"] is True
+
+
+def test_t14_narrowing_exception_is_not_widening_whatever_the_input_says():
+    g = rev("global", "g", block("m", btest={"enabled": True}))
+    narrowing = override(
+        "X-3", "m", "/btest", {"enabled": False}, until=date(2026, 11, 13)
+    )
+    eff = run([g], exceptions=[narrowing], today=date(2026, 10, 15))
+    status = {s.id: s for s in eff.exceptions}["X-3"]
+    assert not status.widening and status.state is ExceptionState.active
+    assert values(eff)["btest"]["enabled"] is False
+
+
+def test_input_widening_key_is_ignored_by_the_parser():
+    from app.services.router_control.inputs import parse_exceptions
+
+    raw = {
+        "exceptions": [
+            {
+                "id": "X-9",
+                "module": "services-hardening",
+                "kind": "override",
+                "router": "r1",
+                "reason": "field engineers need this for testing",
+                "created_on": "2026-10-14",
+                "until": "2026-11-13",
+                "path": "/btest",
+                "patch": {"enabled": True},
+                "widening": False,
+            }
+        ]
+    }
+    (exc,) = parse_exceptions(raw, {"r1": "id-r1"})
+    assert not hasattr(exc, "widening")
+
+
+def test_widening_exception_on_a_mode_ordered_module_needs_approval():
+    plugin = make_ordered_mode_plugin()
+    g = rev("global", "g", block("m", mode="enforce", x=1))
+    exc = ExceptionSpec(
+        "X-4",
+        "m",
+        ExceptionKind.mode_override,
+        "temporarily relax while testing",
+        date(2026, 10, 14),
+        date(2026, 11, 13),
+        subject_key="r1",
+        mode="observe",
+    )
+    eff = compose(plugin, subject(profiles=("access",)), [g], [exc], date(2026, 10, 15))
+    status = eff.exceptions[0]
+    assert status.widening and status.state is ExceptionState.pending_approval
+    assert eff.modules["m"].mode == "enforce"
+    eff = compose(
+        plugin,
+        subject(profiles=("access",)),
+        [g],
+        [replace(exc, approved=True)],
+        date(2026, 10, 15),
+    )
+    assert eff.modules["m"].mode == "observe"
 
 
 def test_t15_exception_on_a_derived_field_is_rejected():
@@ -348,7 +430,14 @@ def test_t17_permutation_invariance_of_hash_provenance_and_conflicts():
 
     baseline = run(_stack())
     exc = [
-        override("X-1", "m", "/btest", {"enabled": True}, until=date(2026, 12, 1)),
+        override(
+            "X-1",
+            "m",
+            "/btest",
+            {"enabled": True},
+            until=date(2026, 12, 1),
+            approved=True,
+        ),
         override("X-2", "m", "/btest", {"enabled": False}, until=date(2026, 12, 1)),
     ]
     reference = run(_stack(), exceptions=exc)
@@ -471,6 +560,51 @@ def test_t23_stale_layer_block_is_invalid_desired():
     assert result.status == "invalid_desired"
     assert [r.code for r in result.reasons] == ["stale_layer"]
     assert "x" not in result.params
+
+
+def _v2_plugin():
+    from app.services.composition.plugin import DomainPlugin
+
+    from .demo_plugin import M_SPECS, TIERS, DemoModule, MParams
+
+    module = DemoModule("m", MParams, M_SPECS)
+    module.version = 2
+    other = DemoModule("other", MParams, M_SPECS)
+    return DomainPlugin("demo-v2", TIERS, {"m": module, "other": other})
+
+
+def test_t23_block_version_1_against_code_version_2_is_invalid_desired_only_for_that_module():
+    """The spec case: module_version 1, code version 2; the router is not refused."""
+    plugin = _v2_plugin()
+    stale = block("m", version=1, renamed_in_v2="old shape", x=1)
+    fresh = block("other", x=3)
+    eff = compose(
+        plugin,
+        subject(),
+        [rev("global", "g", doc(stale, fresh))],
+        [],
+        date(2026, 10, 14),
+    )  # no LayerError for the unknown field of the old schema
+    result = eff.modules["m"]
+    assert result.status == "invalid_desired"
+    assert [r.code for r in result.reasons] == ["stale_layer"]
+    assert "x" not in result.params and "renamed_in_v2" not in result.params
+    # the sibling module on the same router is unaffected
+    assert eff.modules["other"] is not None
+    assert eff.modules["other"].params["x"] == 3
+
+
+def test_t23_stale_block_does_not_validate_parameters_on_write():
+    plugin = _v2_plugin()
+    layer = rev("global", "g", block("m", version=1, no_such_field=1)).layer
+    assert (
+        validate_layer_document(plugin, layer, block("m", version=1, no_such_field=1))
+        == []
+    )
+    # the current version is still validated
+    assert validate_layer_document(
+        plugin, layer, block("m", version=2, no_such_field=1)
+    )
 
 
 # ---------------------------------------------------------------- T24, T25
@@ -660,8 +794,6 @@ def test_mode_override_exception_and_suppress_and_annotation():
 
 def test_exception_validation_rules():
     base = override("X", "m", "/btest", {"enabled": True}, until=date(2026, 11, 13))
-    from dataclasses import replace
-
     assert not validate_exception(PLUGIN, base)
     assert validate_exception(PLUGIN, replace(base, reason="short"))
     assert validate_exception(PLUGIN, replace(base, until=date(2027, 12, 1)))
@@ -673,7 +805,14 @@ def test_exception_validation_rules():
 
 def test_two_exceptions_on_one_path_conflict():
     g = rev("global", "g", block("m", btest={"enabled": False}))
-    a = override("X-a", "m", "/btest", {"enabled": True}, until=date(2026, 12, 1))
+    a = override(
+        "X-a",
+        "m",
+        "/btest",
+        {"enabled": True},
+        until=date(2026, 12, 1),
+        approved=True,
+    )
     b = override("X-b", "m", "/btest", {"enabled": False}, until=date(2026, 12, 1))
     assert run([g], exceptions=[a, b]).modules["m"].conflicts
 
