@@ -551,6 +551,34 @@ unmatched_ignore_imports_alerting = "none"
 allow_indirect_imports = "true"
 
 [[tool.importlinter.contracts]]
+name = "Composition core must not import Sub"
+type = "forbidden"
+# The generic composition engine is a pure library (stdlib + pydantic) so it can
+# be lifted into Starter unchanged (router control design, guard 8). `app` is
+# forbidden as a whole; imports among the package's own modules are ignored.
+source_modules = [
+    "app.services.composition",
+]
+forbidden_modules = [
+    "app.models",
+    "app.db",
+    "app.api",
+    "app.schemas",
+    "app.tasks",
+    "app.web",
+    "app.services.router_control",
+    "app.services.router_health",
+    "app.services.router_management",
+    "app.services.sot_registry",
+    "app.services.settings_spec",
+    "app.services.owner_commands",
+]
+ignore_imports = [
+    "app.services.composition.** -> app.services.composition.**",
+]
+unmatched_ignore_imports_alerting = "none"
+
+[[tool.importlinter.contracts]]
 name = "Application code must not import retired Splynx migration runtime"
 type = "forbidden"
 source_modules = [
