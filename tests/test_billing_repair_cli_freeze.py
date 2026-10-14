@@ -63,6 +63,13 @@ SUBCOMMAND_WRITE_CLIS = (
     ("return_legacy_over_allocation.py", "confirm"),
     ("correct_prepaid_renewal_origin.py", "confirm"),
 )
+SHADOW_FROZEN_COMMANDS = (
+    "capture-renewal-terms",
+    "correct-renewal-terms",
+    "execute-reviewed-prepaid-service-renewal",
+    "correct-legacy-renewal-tax-invoice",
+    "correct-unused-prepaid-renewal",
+)
 
 
 def _main_body(source: str) -> list[ast.stmt]:
@@ -139,12 +146,37 @@ def _guard_precedes_database_work(source: str, mode: str) -> bool:
                     and argument.comparators[0].value == expected_command
                 ):
                     return False
+            elif mode == "shadow_commands":
+                if not (
+                    isinstance(argument, ast.Compare)
+                    and isinstance(argument.left, ast.Attribute)
+                    and isinstance(argument.left.value, ast.Name)
+                    and argument.left.value.id == "args"
+                    and argument.left.attr == "command"
+                    and len(argument.ops) == 1
+                    and isinstance(argument.ops[0], ast.In)
+                    and len(argument.comparators) == 1
+                    and isinstance(argument.comparators[0], ast.Set)
+                    and len(argument.comparators[0].elts) == len(SHADOW_FROZEN_COMMANDS)
+                    and all(
+                        isinstance(item, ast.Constant) and isinstance(item.value, str)
+                        for item in argument.comparators[0].elts
+                    )
+                    and tuple(
+                        item.value
+                        for item in argument.comparators[0].elts
+                        if isinstance(item, ast.Constant)
+                    )
+                    == SHADOW_FROZEN_COMMANDS
+                ):
+                    return False
             elif not (isinstance(argument, ast.Name) and argument.id == "execute"):
                 return False
             if mode in {
                 "apply",
                 "apply_or_rollback",
                 "optional_apply",
+                "shadow_commands",
             } or mode.startswith("command:"):
                 if index == 0:
                     return False
@@ -235,6 +267,138 @@ def test_billing_subcommand_write_modes_are_guarded_immediately(
 ) -> None:
     source = (ROOT / "scripts" / "billing" / filename).read_text()
     assert _guard_precedes_database_work(source, f"command:{mutating_command}")
+
+
+def test_billing_target_shadow_freezes_exact_historical_repair_modes() -> None:
+    source = (ROOT / "scripts" / "billing" / "billing_target_shadow.py").read_text()
+    assert _guard_precedes_database_work(source, "shadow_commands")
+
+
+def _compile_shadow_main(
+    command: str,
+    *,
+    database_calls: list[None],
+    handler_calls: list[str],
+    evidence_calls: list[str],
+) -> object:
+    class ParserStub:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def add_argument(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def add_subparsers(self, **_kwargs: object) -> SubparsersStub:
+            return SubparsersStub()
+
+        def set_defaults(self, **_kwargs: object) -> None:
+            pass
+
+        def parse_args(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                command=command,
+                fact_file="captured.json",
+                func=dispatch,
+            )
+
+    class SubparsersStub:
+        def add_parser(self, *_args: object, **_kwargs: object) -> ParserStub:
+            return ParserStub()
+
+    def dispatch(_db: object, args: SimpleNamespace) -> int:
+        handler_calls.append(args.command)
+        return 17
+
+    def database_trap() -> None:
+        database_calls.append(None)
+        raise _DatabaseReached
+
+    def evidence_route(args: SimpleNamespace) -> int:
+        evidence_calls.append(args.command)
+        return 23
+
+    source_path = ROOT / "scripts" / "billing" / "billing_target_shadow.py"
+    tree = ast.parse(source_path.read_text(), filename=str(source_path))
+    main_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    globals_for_main: dict[str, object] = {
+        "__doc__": "hosted AST canary",
+        "argparse": SimpleNamespace(
+            ArgumentParser=ParserStub,
+            RawDescriptionHelpFormatter=argparse.RawDescriptionHelpFormatter,
+        ),
+        "refuse_apply": refuse_apply,
+        "SessionLocal": database_trap,
+        "_cmd_preview_module_accounting_export": evidence_route,
+    }
+    for node in ast.walk(main_node):
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id not in globals_for_main
+        ):
+            globals_for_main[node.id] = dispatch
+    module = ast.fix_missing_locations(ast.Module(body=[main_node], type_ignores=[]))
+    exec(compile(module, str(source_path), "exec"), globals_for_main)  # noqa: S102
+    return globals_for_main["main"]
+
+
+@pytest.mark.parametrize("command", SHADOW_FROZEN_COMMANDS)
+def test_billing_target_shadow_frozen_modes_stop_before_session_and_handler(
+    command: str,
+) -> None:
+    database_calls: list[None] = []
+    handler_calls: list[str] = []
+    main = _compile_shadow_main(
+        command,
+        database_calls=database_calls,
+        handler_calls=handler_calls,
+        evidence_calls=[],
+    )
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    assert database_calls == []
+    assert handler_calls == []
+
+
+@pytest.mark.parametrize(
+    ("command", "uses_database"),
+    (
+        ("preview-renewal-terms", True),
+        ("fire-due-timers", True),
+        ("request-renewal-term-record", True),
+        ("approve-renewal-term-record", True),
+        ("activate-subledger-authority", True),
+        ("preview-module-accounting-export", False),
+    ),
+)
+def test_billing_target_shadow_nonfrozen_routes_remain_reachable(
+    command: str, uses_database: bool
+) -> None:
+    database_calls: list[None] = []
+    handler_calls: list[str] = []
+    evidence_calls: list[str] = []
+    main = _compile_shadow_main(
+        command,
+        database_calls=database_calls,
+        handler_calls=handler_calls,
+        evidence_calls=evidence_calls,
+    )
+    if uses_database:
+        with pytest.raises(_DatabaseReached):
+            main()
+        assert database_calls == [None]
+        assert handler_calls == []
+        assert evidence_calls == []
+    else:
+        assert main() == 23
+        assert database_calls == []
+        assert handler_calls == []
+        assert evidence_calls == [command]
 
 
 def test_guard_detector_rejects_removed_or_late_guard() -> None:
