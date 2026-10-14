@@ -1,0 +1,28 @@
+{
+  "comment": "Approved exceptions to the Sub feature freeze (docs/FEATURE_FREEZE.md). Every entry requires approved_by=michaelayoade and is reviewed via CODEOWNERS on this file. kinds: feature-exception (must name starter_contract), schema (corrective migration), transitional-tool (must name deletion_trigger), approved-growth (owner-approved pinned-surface growth, no new capability).",
+  "exceptions": [
+    {
+      "id": "THIN-3624",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/billing/opening_export.py",
+        "app/services/billing/opening_export_contracts.py",
+        "scripts/migration/billing_opening_export.py",
+        "scripts/billing/*.py"
+      ],
+      "reason": "Michael explicitly approved Sub #3624 and its scoped thin-client exception on 2026-10-14 (merged 2fd54e6d; recorded in Knowledge dotmac-billing-cutover-orchestration-2026-10-14 v9): net +232 billing lines on the same 137-file inventory (92265 -> 92497), of which +175 in three existing transitional opening-evidence tools and +57 of repair-CLI freeze guards in existing scripts. No new capability, no new files. This entry reconciles the ratchet baseline deliberately to the accepted source; it does not authorize further growth.",
+      "deletion_trigger": "Transitional opening-evidence tools delete at the opening seal (see billing_transitional_tools.json); this exception entry is removed when the baseline next shrinks past 92265.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-3628",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/billing_numbering_activation_proof.py"
+      ],
+      "reason": "Michael explicitly approved PR #3628 (abb1a8e2) on 2026-10-14: +4 lines for the stale ORM snapshot correction on the same 137-file inventory (92497 -> 92501). No new capability; no further growth is authorized. Provenance: canonical global Knowledge record dotmac-billing-cutover-orchestration-2026-10-14 v22.",
+      "deletion_trigger": "Remove this exception with the proof when Starter numbering is activated for Sub and the disjointness proof is archived.",
+      "approved_by": "michaelayoade"
+    }
+  ]
+}

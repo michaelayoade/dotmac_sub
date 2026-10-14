@@ -1,0 +1,31 @@
+name: Feature Freeze Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feature-freeze-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Feature Freeze Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        # Full history (no --depth): the three-dot diff in
+        # check_feature_freeze.py needs the merge-base of base and HEAD.
+        run: git fetch --no-tags origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+
+      - name: Validate feature freeze
+        run: python3 scripts/ci/check_feature_freeze.py --base origin/${{ github.base_ref }} --head HEAD
