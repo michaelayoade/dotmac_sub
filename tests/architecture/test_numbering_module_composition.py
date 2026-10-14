@@ -34,6 +34,26 @@ READ_ONLY_IMPORTS = {
         }
     ),
 }
+READ_ONLY_PATH_IMPORTS = {
+    READINESS_OWNER: READ_ONLY_IMPORTS,
+    "app/services/billing_numbering_activation_proof.py": {
+        "dotmac_numbering": frozenset(
+            {
+                "MAX_DIGITS",
+                "MAX_VALUE",
+                "AllocationReceipt",
+                "NumberSeries",
+                "SeriesConfiguration",
+                "SeriesCounter",
+                "format_number",
+                "preview",
+            }
+        ),
+    },
+    "scripts/migration/billing_numbering_activation_proof.py": {
+        "dotmac_numbering": frozenset({"SeriesConfiguration"}),
+    },
+}
 ARTIFACT_HASHES = {
     "dotmac_numbering-0.1.0a2-py3-none-any.whl": (
         "sha256:ed7711ec3df50ccba066e920d7696ee4b9569fb7356108078719c3b139b184ec"
@@ -67,13 +87,11 @@ def _activation_errors(root: Path) -> tuple[str, ...]:
             if isinstance(node, ast.Import):
                 names = tuple(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
-                if (
-                    path.relative_to(root).as_posix() == READINESS_OWNER
-                    and node.module in READ_ONLY_IMPORTS
-                    and all(
-                        alias.name in READ_ONLY_IMPORTS[node.module]
-                        for alias in node.names
-                    )
+                allowed_imports = READ_ONLY_PATH_IMPORTS.get(
+                    path.relative_to(root).as_posix(), {}
+                )
+                if node.module in allowed_imports and all(
+                    alias.name in allowed_imports[node.module] for alias in node.names
                 ):
                     continue
                 names = (node.module or "",)
@@ -203,4 +221,55 @@ def test_readiness_owner_cannot_activate_a_dynamically_imported_writer(
         f"from importlib import import_module as {alias}\n"
         f'{alias}("dotmac_numbering.service").allocate()\n'
     )
+    assert _activation_errors(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "app/services/billing_numbering_activation_proof.py",
+        "scripts/migration/billing_numbering_activation_proof.py",
+    ),
+)
+def test_v2_exact_paths_may_import_only_declared_public_reads(
+    tmp_path: Path, path: str
+) -> None:
+    owner = tmp_path / path
+    owner.parent.mkdir(parents=True)
+    exports = READ_ONLY_PATH_IMPORTS[path]["dotmac_numbering"]
+    owner.write_text(f"from dotmac_numbering import {', '.join(sorted(exports))}\n")
+    assert _activation_errors(tmp_path) == ()
+    # A neighboring path does not inherit the delegated read allowance.
+    neighbor = owner.with_name("unregistered_numbering_reader.py")
+    neighbor.write_text(owner.read_text())
+    assert _activation_errors(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "app/services/billing_numbering_activation_proof.py",
+        "scripts/migration/billing_numbering_activation_proof.py",
+    ),
+)
+@pytest.mark.parametrize(
+    "defect",
+    (
+        "from dotmac_numbering import allocate\n",
+        "from dotmac_numbering import configure_series\n",
+        "from dotmac_numbering import advance_to_at_least\n",
+        "from dotmac_numbering.service import allocate\n",
+        "import dotmac_numbering as numbering\n",
+        'import importlib\nimportlib.import_module("dotmac_numbering")\n',
+        "from importlib import import_module as load\n"
+        'load("dotmac_numbering.service").allocate()\n',
+        'sql = "UPDATE mod_numbering.series_counters SET next_value=1"\n',
+    ),
+)
+def test_v2_read_delegation_cannot_activate_or_seed(
+    tmp_path: Path, path: str, defect: str
+) -> None:
+    owner = tmp_path / path
+    owner.parent.mkdir(parents=True)
+    owner.write_text(defect)
     assert _activation_errors(tmp_path)

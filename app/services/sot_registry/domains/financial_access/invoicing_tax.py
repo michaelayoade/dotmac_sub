@@ -113,13 +113,20 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.billing_numbering_readiness",
         module="app.services.billing_numbering_readiness",
-        owns=("billing numbering complete-population seed readiness",),
+        owns=(
+            "billing numbering complete-population seed readiness",
+            "invoice numbering disjoint-format candidate proof",
+        ),
         depends_on=(
             "control.settings_spec",
             "financial.invoices",
             "financial.credit_notes",
         ),
-        notes="Read-only census and digest-bound seed proposal; incumbent writers remain authoritative.",
+        notes=(
+            "Read-only census and digest-bound seed proposal; incumbent writers remain authoritative. "
+            "V2 companion module app.services.billing_numbering_activation_proof is the same "
+            "read-only owner; candidate proof never grants activation."
+        ),
         contract=ServiceContract(
             concerns=(
                 ConcernContract(
@@ -130,6 +137,17 @@ SERVICES: tuple[SOTService, ...] = (
                         "complete invoice number population",
                         "complete credit-note number population",
                         "legacy and module sequence state",
+                    ),
+                ),
+                ConcernContract(
+                    name="invoice numbering disjoint-format candidate proof",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "effective billing numbering settings",
+                        "complete invoice number population",
+                        "legacy and module sequence state",
+                        "explicit invoice numbering format proposal",
+                        "observed released invoice numbering preview",
                     ),
                 ),
             ),
@@ -158,39 +176,82 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.OBSERVATION,
                     source="snapshot observation only: incumbent app.services.numbering owns DocumentSequence writes; released dotmac_numbering owns NumberSeries, SeriesCounter and AllocationReceipt storage; census owns no allocation authority",
                 ),
+                AuthorityInput(
+                    name="explicit invoice numbering format proposal",
+                    owner="financial.billing_numbering_readiness",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "Explicit typed caller proposal inspected by app.services.billing_numbering_activation_proof; "
+                        "no approved target policy, installed configuration, seed permission or activation authority "
+                        "is inferred from its values."
+                    ),
+                ),
+                AuthorityInput(
+                    name="observed released invoice numbering preview",
+                    owner="financial.billing_numbering_readiness",
+                    kind=AuthorityKind.OBSERVATION,
+                    source=(
+                        "Snapshot read through released dotmac_numbering.preview for exact operator scope, invoice "
+                        "series and reference date; actual NumberSeries/SeriesCounter configuration is observed "
+                        "separately and must match proposal, with an explicit seeded counter; fallback preview "
+                        "without a counter is not readiness."
+                    ),
+                ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.READ_ONLY,
                 boundary="Caller owns a read-only repeatable snapshot and session lifecycle; owner never completes a transaction.",
-                locking="No locks or writes. Future seed command must revalidate the complete digest under incumbent-writer exclusion.",
-                idempotency="No idempotency record. Same ordered population, configuration and counters yield the same versioned digest.",
+                locking=(
+                    "No locks or writes. Future seed command must revalidate the complete digest under incumbent-writer exclusion. "
+                    "V2 preview takes no locks and cannot attest writer drain or exclusion."
+                ),
+                idempotency=(
+                    "No idempotency record. Same ordered population, configuration and counters yield the same versioned digest. "
+                    "V2 additionally binds the explicit proposal, complete receipt-key stream and actual public preview; "
+                    "it writes no replay ledger."
+                ),
                 retries="Retry the entire snapshot after transient read failure; incomplete or incompatible evidence cannot admit a seed.",
             ),
             errors=ErrorContract(
                 domain_codes=(
                     "financial.billing_numbering_readiness.unsupported_configuration",
                     "financial.billing_numbering_readiness.incomplete_population",
+                    "financial.billing_numbering_readiness.unsafe_snapshot",
                 ),
                 mapping_owner="standalone billing numbering readiness CLI",
                 fail_closed_on=(
                     "incomplete census",
                     "unsupported configuration or exhausted counter",
                     "incompatible module state",
+                    "unproved grammar disjointness or historical target collision, including legacy OTHER values",
+                    "nonempty target receipt history awaiting separate reconciliation",
+                    "missing or mismatched target configuration, seeded counter or preview",
                 ),
             ),
             migration=MigrationContract(
                 state=AuthorityMigrationState.NATIVE,
                 new_owner="financial.billing_numbering_readiness",
                 verification="Full-population census, formatter round-trip, immutable digest, PostgreSQL snapshot and architecture canaries.",
-                cutover_gate="Native read-only resolver only. Future writer adoption has a separate contract and requires fresh digest and stable document UUID/date inputs.",
+                cutover_gate=(
+                    "Native read-only resolver only. Future writer adoption has a separate contract and requires fresh digest "
+                    "and stable document UUID/date inputs. V2 candidate validity is not activation readiness: approved target "
+                    "grammar, retired incumbent setting writes, writer drain, accepted inverse and released Kernel bridge "
+                    "remain separate mandatory gates."
+                ),
                 fallback_retirement="Incumbent runtime paths remain unchanged until the separate authorized numbering cutover.",
             ),
             steward="billing operations",
-            design_refs=("docs/designs/BILLING_NUMBERING_READINESS.md",),
+            design_refs=(
+                "docs/designs/BILLING_NUMBERING_READINESS.md",
+                "docs/designs/BILLING_NUMBERING_ACTIVATION_PROOF.md",
+            ),
             test_refs=(
                 "tests/test_billing_numbering_readiness.py",
                 "tests/integration/test_billing_numbering_readiness.py",
                 "tests/architecture/test_billing_numbering_readiness_boundary.py",
+                "tests/test_billing_numbering_activation_proof.py",
+                "tests/integration/test_billing_numbering_activation_proof.py",
+                "tests/architecture/test_billing_numbering_activation_proof_boundary.py",
             ),
         ),
     ),
