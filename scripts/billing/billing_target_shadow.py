@@ -71,6 +71,7 @@ from app.services.dotmac_erp.billing_adapter import pending_exports
 from app.services.owner_commands import CommandContext
 from app.services.runtime_durable_timers import fire_due_timers
 from app.services.sales_order_funding import SalesOrderFunding
+from scripts.billing._mutation_policy import refuse_apply
 
 if TYPE_CHECKING:
     from app.services.prepaid_service_renewals import (
@@ -1726,6 +1727,16 @@ def main() -> int:
     p.add_argument("--fact-file", required=True)
 
     args = parser.parse_args()
+    refuse_apply(
+        args.command
+        in {
+            "capture-renewal-terms",
+            "correct-renewal-terms",
+            "execute-reviewed-prepaid-service-renewal",
+            "correct-legacy-renewal-tax-invoice",
+            "correct-unused-prepaid-renewal",
+        }
+    )
     if args.command == "preview-module-accounting-export":
         return _cmd_preview_module_accounting_export(args)
     db = SessionLocal()

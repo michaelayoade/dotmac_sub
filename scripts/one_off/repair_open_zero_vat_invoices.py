@@ -22,6 +22,7 @@ from app.services.billing._common import (
     _recalculate_invoice_totals,
 )
 from app.services.common import round_money
+from scripts.billing._mutation_policy import refuse_apply
 
 OPEN_STATUSES = (
     InvoiceStatus.issued,
@@ -43,6 +44,7 @@ def main() -> int:
         help="Inclusive issue date lower bound, default 2026-06-16.",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     since = _parse_since(args.since)
     db = SessionLocal()

@@ -37,6 +37,7 @@ from app.models.billing import (
 )
 from app.services.billing._common import get_account_credit_balance
 from app.services.common import coerce_uuid, round_money, to_decimal
+from scripts.billing._mutation_policy import refuse_apply
 
 # Memos written by settle_open_invoices_from_credit.
 SETTLE_DEBIT_MEMO = "Available balance applied to open invoices (cutover reconcile)"
@@ -55,6 +56,7 @@ def main() -> None:
         help="Write compensating credits. Without this flag the script is read-only.",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
     dry_run = not args.apply
 
     db = SessionLocal()

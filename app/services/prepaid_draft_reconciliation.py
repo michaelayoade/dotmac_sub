@@ -11420,8 +11420,8 @@ def _stage_paid_invoice_repair_review_alert(
         title="Paid prepaid invoice needs service-link review",
         body=(
             f"Invoice {invoice.invoice_number or invoice.id} is paid, but "
-            "automatic prepaid coverage repair could not prove exactly one "
-            f"service contract: {reason}."
+            "historical prepaid repair is held for manual exceptions review: "
+            f"{reason}."
         ),
         target_url=f"/admin/billing/invoices/{invoice.id}#prepaid-reconciliation",
         category="billing",
@@ -11550,7 +11550,7 @@ def repair_exact_paid_prepaid_invoice_after_settlement_for_owner(
     db: Session,
     command: AutoRepairPaidPrepaidInvoiceAfterSettlementCommand,
 ) -> PaidPrepaidInvoiceAutoRepairResult:
-    """Flush-only exact repair participant for payment finalization."""
+    """Flush-only historical repair review participant for payment finalization."""
 
     invoice = lock_for_update(db, Invoice, str(command.invoice_id))
     if invoice is None:
@@ -11580,40 +11580,23 @@ def repair_exact_paid_prepaid_invoice_after_settlement_for_owner(
             preview_fingerprint=already_repaired[0].fingerprint,
         )
     actionable = [item for item in previews if item.automatically_actionable]
-    if len(actionable) == 1:
-        evidence_hash = hashlib.sha256(
-            command.evidence_ref.encode("utf-8")
-        ).hexdigest()[:32]
-        key = f"auto-paid-prepaid-repair:{evidence_hash}"
-        result = _stage_paid_prepaid_invoice_repair_from_preview(
-            db,
-            current=actionable[0],
-            actor=command.actor,
-            idempotency_key=key,
-            command_context=None,
-        )
-        _resolve_paid_invoice_repair_review_alert(db, invoice.id)
-        return PaidPrepaidInvoiceAutoRepairResult(
-            invoice_id=result.invoice_id,
-            disposition=PaidPrepaidInvoiceAutoRepairDisposition.exact_repaired,
-            reason="one exact settlement-backed prepaid service was repaired",
-            subscription_id=result.subscription_id,
-            preview_fingerprint=result.preview_fingerprint,
-            entitlement_id=result.entitlement_id,
-            access_consequence_id=result.access_consequence_id,
-            subscriptions_restored=result.subscriptions_restored,
-        )
+    reason = (
+        "exact settlement-backed evidence retained; automatic historical repair "
+        "is disabled by billing mutation policy"
+        if len(actionable) == 1
+        else "ambiguous or non-actionable prepaid service evidence"
+    )
 
     fingerprint = _stage_paid_invoice_repair_review_alert(
         db,
         invoice=invoice,
-        reason="ambiguous or non-actionable prepaid service evidence",
+        reason=reason,
         previews=previews,
     )
     return PaidPrepaidInvoiceAutoRepairResult(
         invoice_id=invoice.id,
         disposition=PaidPrepaidInvoiceAutoRepairDisposition.manual_review_required,
-        reason="ambiguous or non-actionable prepaid service evidence",
+        reason=reason,
         review_alert_fingerprint=fingerprint,
     )
 

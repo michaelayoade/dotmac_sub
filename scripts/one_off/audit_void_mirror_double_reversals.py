@@ -54,6 +54,7 @@ from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Subscriber
 from app.services.collections import get_available_balance
 from app.services.common import round_money
+from scripts.billing._mutation_policy import refuse_apply
 
 DEAD_PAYMENT_STATUSES = (PaymentStatus.failed, PaymentStatus.canceled)
 OPENING_MEMO = "Prepaid opening balance @ cutover"
@@ -892,6 +893,7 @@ def main() -> int:
         help="expected available balance after a targeted correction",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     session = SessionLocal()
     try:

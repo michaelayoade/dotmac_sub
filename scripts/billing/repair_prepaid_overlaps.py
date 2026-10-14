@@ -16,6 +16,7 @@ from app.services.billing_prepaid_overlap_repair import (
     write_prepaid_overlap_report,
 )
 from app.services.db_session_adapter import db_session_adapter
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def main() -> int:
@@ -36,6 +37,7 @@ def main() -> int:
         help="Path for the before/after CSV report.",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     session = db_session_adapter.create_session()
     try:

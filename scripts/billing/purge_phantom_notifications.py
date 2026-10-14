@@ -25,6 +25,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 from app.db import SessionLocal
+from scripts.billing._mutation_policy import refuse_apply
 
 EVENT_TYPES = ("invoice_overdue", "invoice_created", "invoice_sent")
 # Definitively phantom: a local billing notice for a subscriber who has NO real
@@ -55,6 +56,7 @@ def _dump(db, name: str, query: str) -> int:
 
 
 def main(execute: bool) -> None:
+    refuse_apply(execute)
     db = SessionLocal()
     try:
         total = db.execute(

@@ -14,6 +14,7 @@ raising the count.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from scripts.architecture.billing_target_guards import (
@@ -415,3 +416,92 @@ def test_live_addon_purchase_drives_the_receipted_timed_shadow_chain() -> None:
     assert "_PENDING_TERMS_EFFECTIVE_TRIGGER" in handler
     assert "contract_change_kind=change_kind" in handler
     assert "source_kind=envelope_source_kind" in obligations
+
+
+def _automatic_historical_repair_violations(
+    source: str, *, entrypoint: str
+) -> tuple[str, ...]:
+    """Inspect the local call closure, including helpers introduced later."""
+    tree = ast.parse(source)
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    pending = [entrypoint]
+    visited: set[str] = set()
+    violations: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        for node in ast.walk(functions[name]):
+            if isinstance(node, ast.Call):
+                target = (
+                    node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else None
+                )
+                if target in functions:
+                    pending.append(target)
+                if target == "_stage_paid_prepaid_invoice_repair_from_preview":
+                    violations.add("historical_invoice_stage")
+            if entrypoint == "_capture":
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr == "unit_price"
+                    and isinstance(node.ctx, ast.Store)
+                ):
+                    violations.add("historical_unit_price_write")
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr == "prepaid_renewal_terms_backfilled"
+                ) or (
+                    isinstance(node, ast.Constant)
+                    and node.value == "prepaid_renewal_terms.backfilled"
+                ):
+                    violations.add("historical_backfilled_event")
+    return tuple(sorted(violations))
+
+
+def test_automatic_historical_repair_participants_only_capture_evidence() -> None:
+    root = Path(__file__).resolve().parents[2]
+    for module, entrypoint in (
+        (
+            "prepaid_draft_reconciliation",
+            "repair_exact_paid_prepaid_invoice_after_settlement_for_owner",
+        ),
+        ("prepaid_renewal_terms_backfill", "_capture"),
+    ):
+        source = (root / f"app/services/{module}.py").read_text(encoding="utf-8")
+        assert not _automatic_historical_repair_violations(
+            source, entrypoint=entrypoint
+        ), "Automatic billing participants must retain review evidence only"
+
+
+def test_automatic_historical_repair_guard_detects_helper_reintroduced_writes() -> None:
+    invoice_source = """
+def repair_exact_paid_prepaid_invoice_after_settlement_for_owner(db, command):
+    _helper(db)
+def _helper(db):
+    _stage_paid_prepaid_invoice_repair_from_preview(db)
+"""
+    assert _automatic_historical_repair_violations(
+        invoice_source,
+        entrypoint="repair_exact_paid_prepaid_invoice_after_settlement_for_owner",
+    ) == ("historical_invoice_stage",)
+    terms_source = """
+def _capture(db, command, context):
+    _helper(db)
+def _helper(db):
+    subscription.unit_price = amount
+    emit_event(db, EventType.prepaid_renewal_terms_backfilled, {})
+"""
+    assert _automatic_historical_repair_violations(
+        terms_source, entrypoint="_capture"
+    ) == ("historical_backfilled_event", "historical_unit_price_write")
+    assert not _automatic_historical_repair_violations(
+        "def _capture(db):\n    _sync_evidence_work_items(db, preview.items)",
+        entrypoint="_capture",
+    )

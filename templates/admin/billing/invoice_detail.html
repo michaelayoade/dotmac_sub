@@ -56,13 +56,6 @@
                     Edit
                 </a>
                 {% endif %}
-                {% if status_val in ['draft', 'issued', 'overdue', 'partially_paid'] and not invoice.billing_period_start and can(request, 'billing:invoice:reconstruct_backdated_service') %}
-                <a href="/admin/billing/invoices/backdated-service?account_id={{ invoice.account_id }}&action=reconstruct&invoice_id={{ invoice.id }}"
-                   class="flex items-center gap-3 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
-                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1-1m4-4l3-3a4 4 0 015.656 5.656l-1 1"/></svg>
-                    Link service period
-                </a>
-                {% endif %}
                 {% if status_val == 'draft' and not is_proforma and can(request, 'billing:invoice:update') %}
                 <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/issue" onsubmit="this.querySelector('button[type=submit]').disabled = true;">
                     {% include "components/forms/csrf_input.html" %}
@@ -169,8 +162,8 @@
     {% if controlled_draft %}
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-200">
         This reviewed historical-service draft is sealed against ordinary edits.
-        Issue it as reviewed, or void it and create a new preview if any document
-        detail needs to change.
+        Issue it as reviewed, or void it if any document detail needs to change.
+        Creating replacement historical-service drafts is no longer available.
     </div>
     {% endif %}
 

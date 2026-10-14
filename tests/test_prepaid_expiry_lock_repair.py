@@ -6,6 +6,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -32,6 +33,7 @@ from app.services.prepaid_expiry_lock_repair import (
 )
 from app.services.prepaid_service_renewals import _funding_recovery_status_clause
 from scripts.billing import billing_target_shadow
+from scripts.billing._mutation_policy import REFUSAL_MESSAGE
 
 
 def _candidate(db_session, subscriber_account, subscription):
@@ -245,14 +247,15 @@ def test_repair_refuses_stale_as_of(db_session, subscriber_account, subscription
         ),
     ),
 )
-def test_reviewed_renewal_cli_admits_explicit_funding_recovery_context(
-    monkeypatch, subcommand, extra
+def test_reviewed_renewal_cli_funding_recovery_respects_repair_freeze(
+    monkeypatch, capsys, subcommand, extra
 ):
     seen = []
+    session = Mock(return_value=SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(
         billing_target_shadow,
         "SessionLocal",
-        lambda: SimpleNamespace(close=lambda: None),
+        session,
     )
     handler_name = (
         "_cmd_preview_prepaid_service_renewal"
@@ -284,5 +287,17 @@ def test_reviewed_renewal_cli_admits_explicit_funding_recovery_context(
         ],
     )
 
-    assert billing_target_shadow.main() == 0
-    assert seen == ["funding_recovery"]
+    if subcommand == "execute-reviewed-prepaid-service-renewal":
+        with pytest.raises(SystemExit) as refused:
+            billing_target_shadow.main()
+        assert refused.value.code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == REFUSAL_MESSAGE + "\n"
+        session.assert_not_called()
+        assert seen == []
+    else:
+        assert billing_target_shadow.main() == 0
+        assert seen == ["funding_recovery"]
+        session.assert_called_once_with()
+        assert capsys.readouterr().err == ""

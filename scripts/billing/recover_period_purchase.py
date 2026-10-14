@@ -33,6 +33,7 @@ from app.services.prepaid_period_purchases import (
     retry_purchase_settlement,
 )
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _permission(db: Session, principal_id: UUID) -> bool:
@@ -66,6 +67,7 @@ def main() -> None:
     parser.add_argument("--actor-system-user-id", type=UUID)
     parser.add_argument("--reason")
     args = parser.parse_args()
+    refuse_apply(args.apply)
     if args.subscription_id and not args.review_decision_id:
         parser.error("Outage recovery requires --review-decision-id")
     if args.apply and not all(

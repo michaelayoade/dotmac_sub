@@ -1,0 +1,23 @@
+# Thin-client / feature-freeze guard surface. Billing code is owned by
+# Michael (decided 2026-10-13); the guard itself must not be weakened
+# without his review. Takes effect once branch protection requires
+# code-owner reviews (docs/FEATURE_FREEZE.md).
+
+# Guard machinery
+/CODEOWNERS @michaelayoade
+/.github/workflows/feature-freeze.yml @michaelayoade
+/scripts/ci/check_feature_freeze.py @michaelayoade
+/docs/FEATURE_FREEZE.md @michaelayoade
+/docs/feature_freeze_exceptions.json @michaelayoade
+/tests/architecture/billing_thin_client_baseline.txt @michaelayoade
+/tests/architecture/billing_thin_client_inventory.py @michaelayoade
+/tests/architecture/billing_transitional_tools.json @michaelayoade
+/tests/architecture/test_billing_thin_client_ratchet.py @michaelayoade
+/tests/architecture/openapi_contract_surface.json @michaelayoade
+
+# Billing surface (destination: Starter dotmac-billing, ADR 0020)
+/app/services/billing/ @michaelayoade
+/app/services/billing_*.py @michaelayoade
+/app/services/web_billing_*.py @michaelayoade
+/scripts/migration/billing_*.py @michaelayoade
+/scripts/billing/ @michaelayoade
