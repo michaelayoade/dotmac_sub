@@ -26,6 +26,9 @@ def _env_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    # Bootstrap-only local IPC override, shared by listener and probe processes.
+    # None leaves the private per-UID default and path admission to syslog.health.
+    syslog_health_socket: str | None = os.getenv("SYSLOG_HEALTH_SOCKET")
     # Explicit peer attribution gate for the standalone machine issuance CLI.
     # Empty means no peer is accepted; there is no inferred identity.
     accepted_source_applications: str = os.getenv("ACCEPTED_SOURCE_APPLICATIONS", "")
