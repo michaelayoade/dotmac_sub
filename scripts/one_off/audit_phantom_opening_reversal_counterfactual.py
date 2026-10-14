@@ -47,6 +47,7 @@ from app.models.billing import (
 from app.models.collections import DunningActionLog, DunningCase
 from app.models.subscriber import Subscriber
 from app.services.common import round_money
+from scripts.billing._mutation_policy import refuse_apply
 
 OPENING_MEMO = "Prepaid opening balance @ cutover"
 PHANTOM_REVERSAL_PREFIX = (
@@ -971,6 +972,7 @@ def main() -> int:
         help="maximum eligible account transitions to print",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     session = SessionLocal()
     try:

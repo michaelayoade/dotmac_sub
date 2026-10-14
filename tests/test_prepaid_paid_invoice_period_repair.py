@@ -854,13 +854,15 @@ def test_invalid_period_input_is_refused(db_session, subscriber_account, subscri
     assert naive.value.code.endswith("invalid_period")
 
 
-def test_cli_preview_request_approve_and_refusal(
+def test_cli_preview_request_remain_record_only_and_approve_is_frozen(
     db_session, subscriber_account, subscription, monkeypatch, capsys
 ):
     import json
     from contextlib import contextmanager
+    from unittest.mock import Mock
 
     from scripts.billing import repair_prepaid_paid_invoice_period as cli
+    from scripts.billing._mutation_policy import REFUSAL_MESSAGE
 
     _prepare(db_session, subscriber_account, subscription)
     invoice, line = _paid_invoice(
@@ -917,6 +919,8 @@ def test_cli_preview_request_approve_and_refusal(
     assert cli.main(request_args) == 0
     requested = json.loads(capsys.readouterr().out)
     assert requested["status"] == "requested"
+    assert requested["financial_state_changed"] is False
+    assert requested["entitlement_id"] is None
 
     approve_args = [
         "approve",
@@ -928,21 +932,28 @@ def test_cli_preview_request_approve_and_refusal(
         "cli-approve",
     ]
     db_session.commit()
-    assert cli.main([*approve_args, "--approver", str(requester_id)]) == 3
-    refused = json.loads(capsys.readouterr().out)
-    assert refused["error"].endswith("self_approval_forbidden")
-    assert refused["financial_state_changed"] is False
+    with monkeypatch.context() as frozen:
+        session = Mock(side_effect=AssertionError("database session reached"))
+        handler = Mock(side_effect=AssertionError("approve handler reached"))
+        frozen.setattr(cli.db_session_adapter, "read_session", session)
+        frozen.setattr(cli.db_session_adapter, "owner_command_session", session)
+        frozen.setattr(cli, "_cmd_approve", handler)
+        for actor_id in (requester_id, approver_id):
+            with pytest.raises(SystemExit) as refused:
+                cli.main([*approve_args, "--approver", str(actor_id)])
+            assert refused.value.code == 1
+            captured = capsys.readouterr()
+            assert captured.out == ""
+            assert captured.err == REFUSAL_MESSAGE + "\n"
+        session.assert_not_called()
+        handler.assert_not_called()
 
-    db_session.commit()
-    assert cli.main([*approve_args, "--approver", str(approver_id)]) == 0
-    applied = json.loads(capsys.readouterr().out)
-    assert applied["status"] == "applied"
-    assert applied["entitlement_id"]
-
-    db_session.commit()
-    assert cli.main(["preview", *proposal]) == 2
-    blocked = json.loads(capsys.readouterr().out)
-    assert "invoice_period_not_malformed" in blocked["blockers"]
+    assert cli.main(["preview", *proposal]) == 0
+    unchanged = json.loads(capsys.readouterr().out)
+    assert unchanged["financial_state_changed"] is False
+    assert unchanged["actionable"] is True
+    assert unchanged["fingerprint"] == preview["fingerprint"]
+    assert unchanged["planned_entitlement"]["disposition"] == "create_from_paid_line"
 
 
 # --- governed sole-approver exception ---------------------------------------

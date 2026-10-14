@@ -1,15 +1,16 @@
-"""Tests for the erroneous prepaid drawdown reversal one-off.
-
-Covers the current behavior of the dry-run/apply script that writes append-only
-compensating CREDIT ledger entries to reverse erroneous "Prepaid charge: 30d"
-DEBIT rows for monthly-cycle prepaid plans.
-"""
+"""Read-only classification and frozen apply policy for the reversal one-off."""
 
 from __future__ import annotations
 
+import csv
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+from sqlalchemy.orm import Session
 
 from app.models.billing import (
     Invoice,
@@ -245,18 +246,22 @@ def test_base_query_excludes_non_null_invoice_id(db_session):
 
 
 # ---------------------------------------------------------------------------
-# main(): dry-run vs apply, sign/amount, idempotency
+# main(): read-only preview and frozen apply policy
 # ---------------------------------------------------------------------------
 
 
-def _run_main(db_session, monkeypatch, tmp_path, *, apply: bool):
+def _run_dry_run(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import scripts.one_off.reverse_erroneous_prepaid_drawdown as mod
 
     # main() opens its own session via SessionLocal() and closes it; bind it to
     # the test session and keep that session alive for post-run assertions.
     monkeypatch.setattr(mod, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "close", lambda: None)
-    monkeypatch.setattr(db_session, "commit", db_session.flush)
+    monkeypatch.setattr(
+        db_session, "commit", Mock(side_effect=AssertionError("dry-run committed"))
+    )
 
     argv = [
         "prog",
@@ -267,8 +272,6 @@ def _run_main(db_session, monkeypatch, tmp_path, *, apply: bool):
         "--output",
         str(tmp_path / "out.csv"),
     ]
-    if apply:
-        argv.append("--apply")
     monkeypatch.setattr("sys.argv", argv)
     main()
 
@@ -283,50 +286,70 @@ def _credits_for(db_session, account_id):
     )
 
 
-def test_dry_run_writes_nothing(db_session, monkeypatch, tmp_path):
+def test_dry_run_writes_nothing(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     sub_acct = _subscriber(db_session)
     offer = _offer(db_session)
     sub = _subscription(db_session, sub_acct, offer)
-    _debit(db_session, account_id=sub_acct.id, subscription_id=sub.id)
+    debit = _debit(db_session, account_id=sub_acct.id, subscription_id=sub.id)
     db_session.flush()
 
-    _run_main(db_session, monkeypatch, tmp_path, apply=False)
+    _run_dry_run(db_session, monkeypatch, tmp_path)
 
     assert _credits_for(db_session, sub_acct.id) == []
+    with (tmp_path / "out.csv").open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1
+    assert rows[0]["classification"] == "eligible"
+    assert rows[0]["ledger_entry_id"] == str(debit.id)
+    assert rows[0]["reversal_entry_id"] == ""
+    assert rows[0]["amount"] == "9500.00"
+    assert rows[0]["reversal_memo"] == _reversal_memo(debit.id)
 
 
-def test_apply_writes_compensating_credit(db_session, monkeypatch, tmp_path):
-    sub_acct = _subscriber(db_session)
-    offer = _offer(db_session)
-    sub = _subscription(db_session, sub_acct, offer)
-    amount = Decimal("9500.00")
-    debit = _debit(
-        db_session, account_id=sub_acct.id, subscription_id=sub.id, amount=amount
+def test_apply_repeatedly_refuses_before_session_handlers_or_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import scripts.one_off.reverse_erroneous_prepaid_drawdown as mod
+
+    forbidden = Mock(side_effect=AssertionError("apply reached a side effect"))
+    for name in (
+        "SessionLocal",
+        "_base_query",
+        "_classify_entry",
+        "LedgerEntry",
+        "_write_csv",
+        "_print_summary",
+    ):
+        monkeypatch.setattr(mod, name, forbidden)
+    output = tmp_path / "not-created" / "out.csv"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prog",
+            "--from-date",
+            FROM_DATE,
+            "--to-date",
+            TO_DATE,
+            "--output",
+            str(output),
+            "--apply",
+        ],
     )
-    db_session.flush()
 
-    _run_main(db_session, monkeypatch, tmp_path, apply=True)
+    for _ in range(2):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
 
-    credits = _credits_for(db_session, sub_acct.id)
-    assert len(credits) == 1
-    credit = credits[0]
-    assert credit.entry_type == LedgerEntryType.credit
-    assert credit.amount == amount
-    assert credit.invoice_id is None
-    assert credit.memo == _reversal_memo(debit.id)
-
-
-def test_apply_is_idempotent(db_session, monkeypatch, tmp_path):
-    sub_acct = _subscriber(db_session)
-    offer = _offer(db_session)
-    sub = _subscription(db_session, sub_acct, offer)
-    _debit(db_session, account_id=sub_acct.id, subscription_id=sub.id)
-    db_session.flush()
-
-    _run_main(db_session, monkeypatch, tmp_path, apply=True)
-    assert len(_credits_for(db_session, sub_acct.id)) == 1
-
-    # A second apply must not double-credit: the prior credit makes the debit
-    # classify as already_reversed.
-    _run_main(db_session, monkeypatch, tmp_path, apply=True)
-    assert len(_credits_for(db_session, sub_acct.id)) == 1
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == (
+            "billing repair writes are disabled by policy (2026-10-12); "
+            "record the case for the billing exceptions review instead.\n"
+        )
+        forbidden.assert_not_called()
+        assert not output.parent.exists()

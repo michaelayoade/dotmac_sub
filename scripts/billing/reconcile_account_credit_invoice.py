@@ -24,6 +24,7 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _money(value: str) -> Decimal:
@@ -94,6 +95,7 @@ def _payload(value: AccountCreditInvoiceReconciliationPreview) -> dict[str, obje
 
 def main() -> int:
     args = _parser().parse_args()
+    refuse_apply(args.apply)
     query = AccountCreditInvoiceReconciliationQuery(
         account_id=args.account_id,
         invoice_id=args.invoice_id,

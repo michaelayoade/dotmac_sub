@@ -438,3 +438,126 @@ def test_v2_raw_receipts_preserve_gross_net_orphans_and_same_snapshot(
             e.source_id == event_ids[0] and e.code == ExceptionCode.source_after_cutoff
             for e in fresh.cash_evidence.blocking_exceptions
         )
+
+
+def test_v3_observes_persisted_tax_without_live_defaults_or_original_qualification(
+    census_factory: sessionmaker[Session], census_rows: SeededCensus
+) -> None:
+    import json
+    from dataclasses import asdict, replace
+
+    from sqlalchemy import select
+
+    from app.models.billing import TaxRate
+    from app.services.billing.opening_export_contracts import (
+        BillingOpeningExportPreviewV3,
+        OriginalEvidenceRequirement,
+    )
+    from scripts.migration.billing_opening_export import _json_value
+
+    with census_factory() as writer:
+        tax = TaxRate(name=f"Observed {uuid4().hex}", rate=Decimal("0.2000"))
+        writer.add(tax)
+        writer.flush()
+        lines = tuple(
+            writer.scalars(
+                select(InvoiceLine)
+                .where(InvoiceLine.invoice_id == census_rows.invoices[0])
+                .order_by(InvoiceLine.id)
+            )
+        )
+        snapshotted, absent = lines
+        snapshotted.tax_rate_id = tax.id
+        snapshotted.tax_rate_snapshot_version = 1
+        snapshotted.tax_rate_code_snapshot = "HISTORICAL"
+        snapshotted.tax_rate_percent_snapshot = Decimal("0.0750")
+        snapshotted.tax_rate_is_active_snapshot = False
+        snapshotted_id, absent_id, tax_id = snapshotted.id, absent.id, tax.id
+        writer.commit()
+        cutoff = writer.execute(text("SELECT clock_timestamp()")).scalar_one()
+    requested = replace(
+        query(cutoff), population_version="sub-billing-opening-census-v3"
+    )
+    with app_db.read_only_snapshot_session() as db:
+        # A V3 call neither mutates nor adds fields to V1/V2 wire formats.
+        older_queries = tuple(
+            replace(requested, population_version=f"sub-billing-opening-census-v{v}")
+            for v in (1, 2)
+        )
+        before = tuple(
+            json.dumps(
+                _json_value(asdict(preview_billing_opening_export(db, query=q))),
+                sort_keys=True,
+            )
+            for q in older_queries
+        )
+        first = preview_billing_opening_export(db, query=requested)
+        assert isinstance(first, BillingOpeningExportPreviewV3)
+        observations = first.documentary_observations
+        assert len(observations.current_invoices) == len(first.invoices)
+        assert len(observations.current_lines) == len(first.lines)
+        assert {g.invoice_id for g in observations.unavailable_original_evidence} == {
+            i.invoice_id for i in first.invoices
+        }
+        assert census_rows.draft_id in {
+            g.invoice_id for g in observations.unavailable_original_evidence
+        }
+        retained = {line.line_id: line for line in observations.current_lines}
+        assert retained[snapshotted_id].tax_rate_percent_snapshot == Decimal("0.0750")
+        assert retained[snapshotted_id].tax_rate_is_active_snapshot is False
+        assert retained[absent_id].tax_rate_percent_snapshot is None
+        assert retained[absent_id].tax_rate_snapshot_version is None
+        assert all(
+            OriginalEvidenceRequirement.documentary_digest in g.requirements
+            for g in observations.unavailable_original_evidence
+        )
+        assert all(
+            OriginalEvidenceRequirement.withholding_non_cash_replay_bindings
+            in g.requirements
+            for g in observations.unavailable_original_evidence
+        )
+        assert first.cash_evidence.qualified_payment_ids == ()
+        after = tuple(
+            json.dumps(
+                _json_value(asdict(preview_billing_opening_export(db, query=q))),
+                sort_keys=True,
+            )
+            for q in older_queries
+        )
+        # Capture clock is expected to advance; content bytes exclude it.
+        for old, new in zip(before, after, strict=True):
+            old_payload, new_payload = json.loads(old), json.loads(new)
+            del old_payload["capture"]["captured_at"]
+            del new_payload["capture"]["captured_at"]
+            assert old_payload == new_payload
+        with census_factory() as writer:
+            changed_tax = writer.get(TaxRate, tax_id)
+            assert changed_tax is not None
+            changed_tax.rate = Decimal("0.9900")
+            changed_line = writer.get(InvoiceLine, snapshotted_id)
+            assert changed_line is not None
+            changed_line.description = "Current documentary drift"
+            writer.commit()
+        second = preview_billing_opening_export(db, query=requested)
+        assert first.content_fingerprint == second.content_fingerprint
+        assert not db.new and not db.dirty and not db.deleted
+    with app_db.read_only_snapshot_session() as db:
+        fresh = preview_billing_opening_export(db, query=requested)
+        assert isinstance(fresh, BillingOpeningExportPreviewV3)
+        assert fresh.content_fingerprint != first.content_fingerprint
+        line = next(
+            line
+            for line in fresh.documentary_observations.current_lines
+            if line.line_id == snapshotted_id
+        )
+        assert line.description == "Current documentary drift"
+        assert line.tax_rate_percent_snapshot == Decimal("0.0750")
+        assert (
+            fresh.documentary_observations.unavailable_original_evidence
+            == observations.unavailable_original_evidence
+        )
+        assert any(
+            e.source_id == snapshotted_id
+            and e.code == ExceptionCode.source_after_cutoff
+            for e in fresh.blocking_exceptions
+        )

@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.models.admin_alert import AdminAlert
 from app.models.audit import AuditEvent
 from app.models.billing import (
     AccountAdjustment,
@@ -1419,12 +1420,12 @@ def test_reviewed_prior_coverage_overlap_rejects_amount_drift(
     )
 
 
-def test_paid_invoice_auto_repair_restores_stale_locked_prepaid_service(
+def test_paid_invoice_auto_repair_holds_exact_evidence_without_historical_writes(
     db_session,
     subscriber,
     subscription,
 ):
-    invoice, _payment, _allocation = _historical_paid_unlinked_invoice(
+    invoice, payment, allocation = _historical_paid_unlinked_invoice(
         db_session,
         subscriber,
         subscription,
@@ -1435,6 +1436,26 @@ def test_paid_invoice_auto_repair_restores_stale_locked_prepaid_service(
         subscriber.id,
         Decimal("0.00"),
     )
+
+    financial_before = (
+        invoice.total,
+        invoice.balance_due,
+        allocation.amount,
+        payment.amount,
+        payment.status,
+        payment.settlement.amount,
+        payment.settlement.unallocated_amount,
+    )
+    line_before = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    metadata_before = dict(line_before.metadata_ or {})
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+        ),
+    )
+    assert preview.automatically_actionable is True
 
     result = repair_exact_paid_prepaid_invoice_after_settlement_for_owner(
         db_session,
@@ -1459,16 +1480,64 @@ def test_paid_invoice_auto_repair_restores_stale_locked_prepaid_service(
         .filter_by(subscription_id=subscription.id)
         .all()
     )
-    assert result.disposition is PaidPrepaidInvoiceAutoRepairDisposition.exact_repaired
-    assert result.subscriptions_restored == 1
-    assert invoice.billing_period_start == datetime(2026, 8, 2, 23)
-    assert invoice.billing_period_end == datetime(2026, 9, 2, 23)
-    assert line.subscription_id == subscription.id
-    assert len(entitlements) == 1
-    assert subscription.next_billing_at == datetime(2026, 9, 2, 23)
-    assert subscription.status is SubscriptionStatus.active
-    assert subscriber.status is SubscriberStatus.active
-    assert all(not lock.is_active for lock in locks)
+    assert result.disposition is (
+        PaidPrepaidInvoiceAutoRepairDisposition.manual_review_required
+    )
+    assert result.subscriptions_restored == 0
+    assert "exact settlement-backed evidence retained" in result.reason
+    assert invoice.billing_period_start is None
+    assert invoice.billing_period_end is None
+    assert line.subscription_id is None
+    assert dict(line.metadata_ or {}) == metadata_before
+    assert (
+        invoice.total,
+        invoice.balance_due,
+        allocation.amount,
+        payment.amount,
+        payment.status,
+        payment.settlement.amount,
+        payment.settlement.unallocated_amount,
+    ) == financial_before
+    assert entitlements == []
+    assert subscription.next_billing_at == datetime(2026, 8, 2)
+    assert subscription.status is SubscriptionStatus.suspended
+    assert subscriber.status is SubscriberStatus.suspended
+    assert locks and all(lock.is_active for lock in locks)
+    alert = (
+        db_session.query(AdminAlert)
+        .filter_by(fingerprint=result.review_alert_fingerprint)
+        .one()
+    )
+    assert alert.status.value == "open"
+    assert "historical prepaid repair is held" in alert.summary
+    assert "could not prove" not in alert.summary
+    replay = repair_exact_paid_prepaid_invoice_after_settlement_for_owner(
+        db_session,
+        AutoRepairPaidPrepaidInvoiceAfterSettlementCommand(
+            invoice_id=invoice.id,
+            actor="pytest:financial.payments",
+            evidence_ref=f"pytest-paid-finalization:{invoice.id}",
+        ),
+    )
+    assert replay.disposition is result.disposition
+    assert replay.review_alert_fingerprint == result.review_alert_fingerprint
+    assert (
+        db_session.query(AdminAlert)
+        .filter_by(fingerprint=result.review_alert_fingerprint)
+        .count()
+        == 1
+    )
+    # Participant evidence and any pending caller changes roll back together.
+    invoice.memo = "caller-owned pending change"
+    db_session.rollback()
+    db_session.refresh(invoice)
+    assert invoice.memo != "caller-owned pending change"
+    assert (
+        db_session.query(AdminAlert)
+        .filter_by(fingerprint=result.review_alert_fingerprint)
+        .count()
+        == 0
+    )
 
 
 def test_paid_invoice_repair_cohort_lists_exact_stale_anchor_candidate(

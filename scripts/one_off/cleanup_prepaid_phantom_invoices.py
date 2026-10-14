@@ -54,6 +54,7 @@ from app.models.billing import Invoice, InvoiceStatus, LedgerEntry  # noqa: E402
 from app.models.catalog import BillingMode  # noqa: E402
 from app.models.subscriber import Subscriber  # noqa: E402
 from app.services.billing.invoices import Invoices  # noqa: E402
+from scripts.billing._mutation_policy import refuse_apply  # noqa: E402
 
 VOID_REASON = "prepaid_phantom_invoice_cleanup"
 PREPAID_CHARGE_MEMO_PREFIX = "Prepaid charge"
@@ -178,6 +179,7 @@ def main() -> None:
     )
     ap.add_argument("--out", default=".", help="directory for CSV artifacts")
     args = ap.parse_args()
+    refuse_apply(args.apply)
     out = Path(args.out)
     now = datetime.now(UTC)
 
