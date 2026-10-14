@@ -115,3 +115,58 @@ and 2 means invalid arguments or failed capture/serialization. A zero exit statu
 is evidence capture only; it never authorizes import, cutover or operational use.
 Database errors emit only `snapshot_unavailable`, with no connection details.
 This entry point has not been executed against any operator target by this change.
+
+## V2 raw cash receipt evidence
+
+The same operator entry point accepts explicit
+`--population-version sub-billing-opening-census-v2`. V1 keeps its existing DTO,
+selected population and content-fingerprint algorithm. V2 returns the inherited
+AR evidence plus a separate `cash_evidence` object; its fingerprint covers that
+object and the V2 capture coordinates. V1 AR eligibility is not cash qualification.
+The CLI returns 1 when either the AR census or the separate cash evidence has
+blockers. No raw cash row becomes qualified: `qualified_payment_ids` stays empty.
+
+V2 observes complete, ID-ordered populations in the same clean read-only PostgreSQL
+snapshot, without inner joins, lifecycle/date filters or event selection:
+
+| Source | Retained evidence | Qualification boundary |
+| --- | --- | --- |
+| Payment | Structural subscriber/billing account/provider/external IDs, gross amount, fee, refunded amount, status/active state, paid/created/updated times, reserved purchase and import-run IDs | Status, external reference and fee do not attest external cash; purchase/import mappings remain unsupported |
+| PaymentSettlement | Payment ID, origin, stored amount, unallocated/prepaid amounts, all three ledger IDs, fingerprint, idempotency key and creation time | Ordinary creation stores gross; verified-provider staging stores net. Neither value is normalized into the other |
+| PaymentProviderEvent | All 0..N observations, exact provider/payment/invoice/external IDs, event type, source, status/observed status, gross/fee/net, currency/reference, effect, digest, error code and receipt/processing times | No raw signature or original body is persisted; verified status/normalized digest alone does not qualify cash |
+| IntegrationInbox | Receipt/installation/binding/external event IDs, event type, payload digest, state, safe consequence provider-event/payment/provider IDs, error code and receipt/processing/created/updated times | Only the three known consequence-ID JSON scalars are selected; invalid IDs are blockers. No namespace mapping is inferred |
+| Refund/reversal | Payment/provider-event IDs, ledger/billing-account-ledger/credit-consumption IDs, stored amount/currency/origin/fingerprint and creation time | Structural affinity is checked; downstream consumption, source trust and complete reversal meaning remain unqualified |
+| PaymentProof/correction | Structural proof/payment/account IDs, claimed/gross/WHT/verified amounts, state/time, duplicate/original proof IDs, reversal/ledger IDs and correction fingerprints/keys | Staff verification and uploaded proof are observations, not independent bank confirmation |
+| TopupIntent | Structural account/invoice/completed payment/provider/binding IDs, requested/actual amount, currency/external ID, status and completion/created/updated times | Reservations and consumption need a separately reviewed mapping |
+
+Each table has an explicit source count, including orphan and unsupported rows.
+Every retained row has a `cash_unqualified` blocker. Missing/crossed structural
+payment, account, currency, provider, ledger and consequence links add blockers;
+zero or multiple payment events are retained and marked ambiguous without choosing
+one as proof. Rows whose timestamps cross cutoff remain captured and blocked.
+Non-finite money or naive receipt timestamps fail the entire capture without a
+substitute. Exact decimal strings, UUIDs, enum values and aware timestamps pass
+through the existing strict CLI encoder.
+
+Provider payloads, inbox payloads/headers, signatures, file locations, review notes
+and free-form provider/inbox errors are neither selected nor exported. The safe
+fields do not authenticate installation declarations or establish a trusted mapping
+to Starter namespaces. No new bank-payout prerequisite is introduced.
+
+Source extraction evidence at base `89360003fad9c261823b9d41fa24bd3340d3584f`:
+`app/models/billing.py` owns receipt/payment/event/refund/reversal/topup columns;
+`app/models/payment_proof.py` owns proof/correction columns;
+`app/models/integration_platform.py::IntegrationInbox` owns receipt metadata.
+`app/services/payment_webhook_commands.py::ProcessedPaymentWebhook.consequence`
+and `ProcessedIntegratorSettlement.consequence` define the three exported
+consequence-ID keys. `app/services/billing/payments.py` ordinary creation and
+`stage_verified_provider_settlement` demonstrate the distinct gross/net paths.
+
+Remaining evidence gaps are explicit: trusted external-cash/source attestation,
+original signed bytes, live installation/namespace mapping, source-specific
+external-event affinity, fee/net semantics, billing-account ledger meaning,
+prepaid reservation/consumption, import-batch reversals and special recovery-run
+qualification. The raw populations and identifiers support future review; this
+slice performs no capture on an operator target, money mutation, import, repair,
+namespace assignment or writer switch. Hosted PostgreSQL canaries own execution
+acceptance; local static checks are not database or cash-qualification evidence.

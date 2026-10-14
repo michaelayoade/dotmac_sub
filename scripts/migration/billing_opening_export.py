@@ -22,6 +22,7 @@ from app.services.billing.opening_export import (
     preview_billing_opening_export,
 )
 from app.services.billing.opening_export_contracts import (
+    BillingOpeningExportPreviewV2,
     PreviewBillingOpeningExportQuery,
 )
 
@@ -87,7 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--population-version",
-        choices=("sub-billing-opening-census-v1",),
+        choices=("sub-billing-opening-census-v1", "sub-billing-opening-census-v2"),
         required=True,
     )
     args = parser.parse_args(argv)
@@ -124,7 +125,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     print(json.dumps(output, sort_keys=True, allow_nan=False))
-    return 1 if report.blocking_exceptions else 0
+    return (
+        1
+        if report.blocking_exceptions
+        or (
+            isinstance(report, BillingOpeningExportPreviewV2)
+            and report.cash_evidence.blocking_exceptions
+        )
+        else 0
+    )
 
 
 if __name__ == "__main__":
