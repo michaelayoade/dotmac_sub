@@ -23,6 +23,38 @@
       "reason": "Michael explicitly approved PR #3628 (abb1a8e2) on 2026-10-14: +4 lines for the stale ORM snapshot correction on the same 137-file inventory (92497 -> 92501). No new capability; no further growth is authorized. Provenance: canonical global Knowledge record dotmac-billing-cutover-orchestration-2026-10-14 v22.",
       "deletion_trigger": "Remove this exception with the proof when Starter numbering is activated for Sub and the disjointness proof is archived.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "ROUTER-CONTROL-3630",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/composition/__init__.py",
+        "app/services/composition/compose.py",
+        "app/services/composition/derive.py",
+        "app/services/composition/document.py",
+        "app/services/composition/drift.py",
+        "app/services/composition/evaluate.py",
+        "app/services/composition/exceptions.py",
+        "app/services/composition/fields.py",
+        "app/services/composition/layers.py",
+        "app/services/composition/merge.py",
+        "app/services/composition/plugin.py",
+        "app/services/composition/widening.py",
+        "app/services/router_control/__init__.py",
+        "app/services/router_control/inputs.py",
+        "app/services/router_control/modules/__init__.py",
+        "app/services/router_control/modules/_support.py",
+        "app/services/router_control/modules/ntp.py",
+        "app/services/router_control/modules/services_hardening.py",
+        "app/services/router_control/modules/snmp.py",
+        "app/services/router_control/plugin.py",
+        "app/services/router_control/report.py",
+        "app/services/router_control/seed_layers.py",
+        "app/services/router_control/surfaces.py"
+      ],
+      "reason": "Michael explicitly approved this scoped exception for PR #3630 on 2026-10-14. It covers only the listed network control-plane composition and router-control modules; CODEOWNERS review of this file remains required before merge.",
+      "starter_contract": "Starter network control-plane composition API v1: typed layers, deterministic composition with provenance, and read-only drift reporting.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
