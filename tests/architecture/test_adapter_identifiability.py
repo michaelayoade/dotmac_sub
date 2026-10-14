@@ -43,7 +43,7 @@ __all__ = ["declared_service_modules"]
 
 
 def _module_path(path: Path) -> str:
-    return str(path.relative_to(PROJECT_ROOT))[:-3].replace("/", ".")
+    return path.relative_to(PROJECT_ROOT).as_posix()[:-3].replace("/", ".")
 
 
 def adapter_db_access() -> dict[str, int]:
@@ -56,7 +56,7 @@ def adapter_db_access() -> dict[str, int]:
             continue
         hits = len(DISALLOWED.findall(path.read_text(encoding="utf-8")))
         if hits:
-            counts[str(path.relative_to(PROJECT_ROOT))] = hits
+            counts[path.relative_to(PROJECT_ROOT).as_posix()] = hits
     return counts
 
 

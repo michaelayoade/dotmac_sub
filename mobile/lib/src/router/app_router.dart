@@ -55,16 +55,12 @@ import '../features/service/service_tab_screen.dart';
 import '../models/subscription.dart';
 import '../models/service_request_option.dart';
 import '../providers/auth_controller.dart';
-import '../providers/impersonation.dart';
 
 /// Bridges a Riverpod provider to a [Listenable] so GoRouter re-runs its
 /// redirect whenever auth state changes.
 class _AuthRefresh extends ChangeNotifier {
   _AuthRefresh(Ref ref) {
     ref.listen(authControllerProvider, (_, __) => notifyListeners());
-    // Re-run the redirect when impersonation starts/stops so a reseller is
-    // returned to their portal the moment "view as customer" ends.
-    ref.listen(impersonationProvider, (_, __) => notifyListeners());
   }
 }
 
@@ -102,8 +98,10 @@ final routerProvider = Provider<GoRouter>((ref) {
         return '/lock';
       }
 
-      final isReseller = auth.me?.isReseller ?? false;
-      final home = isReseller ? '/reseller' : '/dashboard';
+      if (auth.me != null && !auth.me!.isCustomer) {
+        return loc == '/login' ? null : '/login';
+      }
+      const home = '/dashboard';
       // Unlocked: go back to wherever the lock interrupted (the redirect
       // re-runs on that location, so the portal checks below still apply),
       // falling back to the portal home when there is nothing stashed.
@@ -115,16 +113,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
       // Authenticated and unlocked: leave the splash/login behind.
       if (loc == '/splash' || loc == '/login') return home;
-      // Keep each principal in its own portal even when /auth/me resolves
-      // *after* the first route decision. On relaunch the controller shows a
-      // cached/empty profile first, so a reseller can briefly land on
-      // /dashboard before the real profile loads; once it does, send them to
-      // /reseller. Skip while a reseller is impersonating ("view as customer"),
-      // which intentionally lives in the customer shell.
-      final onReseller = loc.startsWith('/reseller');
-      final impersonating = ref.read(impersonationProvider) != null;
-      if (isReseller && !onReseller && !impersonating) return '/reseller';
-      if (!isReseller && onReseller) return '/dashboard';
+      // Old reseller deep links cannot enter another portal in this app.
+      if (loc.startsWith('/reseller')) return home;
       return null;
     },
     routes: [

@@ -1141,10 +1141,10 @@ def _portal_login(factory, account):
 
 
 def test_t16_portal_reset_between_verify_and_gate(monkeypatch, factory, account):
-    from app.services import web_customer_auth
+    from app.services import customer_authentication
 
     pause = _Pause()
-    real = web_customer_auth.verify_user_password
+    real = customer_authentication.verify_user_password
 
     def verifier(password, password_hash):
         valid = real(password, password_hash)
@@ -1152,7 +1152,7 @@ def test_t16_portal_reset_between_verify_and_gate(monkeypatch, factory, account)
             pause.hit()
         return valid
 
-    monkeypatch.setattr(web_customer_auth, "verify_user_password", verifier)
+    monkeypatch.setattr(customer_authentication, "verify_user_password", verifier)
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(_portal_login, factory, account)
         try:
@@ -1185,6 +1185,47 @@ def test_t16_portal_mfa_reset_rejects_challenge(factory, account):
         assert denied.status_code == 401
         assert session.get(MFAMethod, method_id).last_used_at == before
     assert _session_count(factory, account) == 0
+
+
+def test_customer_native_reset_after_preparation_mints_no_session(factory, account):
+    from app.services import customer_authentication as customer_auth
+
+    with factory() as session:
+        subscriber = session.get(Subscriber, account.subscriber_id)
+        assert subscriber is not None
+        subscriber.user_type = UserType.customer
+        session.commit()
+        prepared = customer_auth.prepare_customer_login(
+            db=session,
+            query=customer_auth.PrepareCustomerLogin(
+                identifier=account.username,
+                password=CORRECT,
+                evidence=customer_auth.CustomerLoginEvidence(
+                    correlation_id=uuid.uuid4(),
+                    trusted_ip=None,
+                    surface=pa.DenialSurface.CUSTOMER_API,
+                ),
+                audience=customer_auth.CustomerLoginAudience.NATIVE_CUSTOMER,
+            ),
+        )
+    _reset(factory, account)
+    reset_row = _credential_row(factory, account)
+    assert reset_row.credential_version > prepared.verified.credential_version
+    with factory() as session:
+        with pytest.raises(pa.PasswordAuthenticationError) as denied:
+            pa.complete_password_step(
+                db=session, verified=prepared.verified, request=_make_request()
+            )
+    # Login gate misses deliberately return the same generic credential refusal
+    # as the customer portal; credential_changed belongs to password-change CAS.
+    assert denied.value.kind == pa.DenialReason.INVALID_CREDENTIALS
+    assert _session_count(factory, account) == 0
+    after = _credential_row(factory, account)
+    assert after.credential_version == reset_row.credential_version
+    assert after.password_hash == reset_row.password_hash
+    assert after.failed_login_attempts == reset_row.failed_login_attempts
+    assert after.last_login_at is None
+    assert _audit_count(factory, account, "auth.login_succeeded") == 0
 
 
 def test_t16_portal_reset_synchronously_revokes_before_epoch(
