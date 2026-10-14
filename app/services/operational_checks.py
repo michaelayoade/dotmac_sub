@@ -35,6 +35,7 @@ from app.services.integrations.connectors.dotmac_crm import (
     CRM_OPERATIONAL_OBSERVATION_CAPABILITY,
 )
 from app.services.payment_reconciliation import topup_reconciliation_backlog
+from app.services.poller_health import PollerDeviceFailure, PollerSnapshot
 
 TR069_SYNC_TASK = "app.tasks.tr069.sync_all_acs_devices"
 CRM_OPERATION_OBSERVATION = "integration.crm.capability.crm.operational_observation.v1"
@@ -116,23 +117,20 @@ def _age_label(value: datetime | None, *, now: datetime) -> str:
     return f"{int(seconds // 60)} minutes"
 
 
-def bandwidth_poller_snapshot() -> dict[str, Any] | None:
+def bandwidth_poller_snapshot() -> PollerSnapshot | None:
     from app.services.poller_health import load_poller_health
 
     return load_poller_health()
 
 
-def bandwidth_device_failures(snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(snapshot, dict):
-        return []
-    rows = snapshot.get("device_failures")
-    if not isinstance(rows, list):
-        return []
-    return [dict(row) for row in rows if isinstance(row, dict)]
+def bandwidth_device_failures(
+    snapshot: PollerSnapshot | None,
+) -> tuple[PollerDeviceFailure, ...]:
+    return snapshot.device_failures if snapshot is not None else ()
 
 
 def _bandwidth_check(
-    snapshot: dict[str, Any] | None, *, now: datetime
+    snapshot: PollerSnapshot | None, *, now: datetime
 ) -> OperationalCheck:
     if not snapshot:
         return OperationalCheck(
@@ -148,10 +146,10 @@ def _bandwidth_check(
             action_url="/admin/network/monitoring",
             needs_attention=True,
         )
-    observed_at = _parse_datetime(snapshot.get("ts"))
+    observed_at = snapshot.observed_at
     age = (now - observed_at).total_seconds() if observed_at else None
-    failures = int(snapshot.get("devices_failing") or 0)
-    total = int(snapshot.get("devices_total") or 0)
+    failures = snapshot.devices_failing
+    total = snapshot.devices_total
     too_old = age is None or age > 60
     if too_old:
         last_result = "The last collector cycle is older than one minute."
@@ -170,7 +168,7 @@ def _bandwidth_check(
         expected="A cycle should arrive every few seconds while the collector is enabled.",
         last_result=last_result,
         observed_at=observed_at,
-        evidence=f"Cycle #{int(snapshot.get('poll_count') or 0)}; duration {float(snapshot.get('cycle_seconds') or 0):.3f}s.",
+        evidence=f"Cycle #{snapshot.poll_count}; duration {snapshot.cycle_seconds:.3f}s.",
         impact=(
             "Live bandwidth samples are unavailable for the listed routers; "
             "reachability of customer service must be checked separately."
@@ -634,7 +632,7 @@ def operational_checks(
     db: Session,
     *,
     now: datetime | None = None,
-    poller_snapshot: dict[str, Any] | None = None,
+    poller_snapshot: PollerSnapshot | None = None,
 ) -> list[dict[str, object]]:
     now = now or datetime.now(UTC)
     poller = (

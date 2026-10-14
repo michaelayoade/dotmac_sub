@@ -1,0 +1,67 @@
+"""Prevent a parallel heartbeat owner or heavy runtime-dependent probe CLI."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+from app.services.sot_registry.registry import all_services
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_component_probe_owners_are_typed_and_unique() -> None:
+    services = {service.name: service for service in all_services()}
+    for owner, module in (
+        ("runtime.bandwidth_poller_health", "app.services.poller_health"),
+        ("runtime.syslog_receiver_health", "app.syslog.listener"),
+    ):
+        service = services[owner]
+        assert service.module == module
+        assert service.contract is not None
+        assert service.contract.transaction.mode.value == "not_applicable"
+
+
+def test_poller_probe_reuses_reader_without_redis_writes() -> None:
+    tree = ast.parse((ROOT / "app/services/poller_health.py").read_text())
+    query = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "query_poller_liveness"
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "load_poller_health"
+        for node in ast.walk(query)
+    )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"set", "setex", "publish", "hset", "commit"}
+        for node in ast.walk(tree)
+    )
+    assert not any(
+        isinstance(node, ast.ImportFrom) and node.module == "app.poller.mikrotik_poller"
+        for node in ast.walk(tree)
+    )
+
+
+def test_syslog_probe_imports_no_parser_or_domain_handlers() -> None:
+    for path in ("app/syslog/health.py", "app/syslog/__init__.py"):
+        tree = ast.parse((ROOT / path).read_text())
+        # Package compatibility exports are lazy inside __getattr__/TYPE_CHECKING.
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                assert node.module not in {
+                    "app.syslog.listener",
+                    "app.syslog.handlers",
+                    "app.syslog.parsers",
+                }
+    tree = ast.parse((ROOT / "app/syslog/health.py").read_text())
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"sendto", "datagram_received", "commit"}
+        for node in ast.walk(tree)
+    )

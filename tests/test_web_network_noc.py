@@ -26,3 +26,47 @@ def test_noc_operational_evidence_template_compiles() -> None:
     env = Jinja2Templates(directory="templates").env
 
     env.get_template("admin/network/noc/index.html")
+
+
+def test_typed_poller_failure_retains_noc_serialization(
+    db_session, monkeypatch
+) -> None:
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from app.services import operational_checks
+    from app.services.poller_health import (
+        PollerDeviceFailure,
+        PollerFailureCategory,
+        PollerSnapshot,
+    )
+
+    now = datetime.now(UTC)
+    device_id = uuid4()
+    failure = PollerDeviceFailure(
+        device_id,
+        "NAS",
+        "192.0.2.1",
+        PollerFailureCategory.TIMEOUT,
+        2,
+        now,
+        None,
+        now + timedelta(seconds=30),
+        4,
+    )
+    snapshot = PollerSnapshot(now, 0.125, 12, 1, 0, 1, (failure,))
+    monkeypatch.setattr(
+        operational_checks, "bandwidth_poller_snapshot", lambda: snapshot
+    )
+
+    data = noc_queue_data(db_session)
+
+    (row,) = (row for row in data["items"] if row["kind"] == "collector")
+    assert row["id"] == str(device_id)
+    assert row["title"] == "NAS"
+    assert row["result"] == "Connection timed out"
+    assert row["count"] == 4
+    assert row["next_attempt_at"] == failure.next_attempt_at
+    assert row["when"] == now
+    assert row["url"] == f"/admin/network/nas/{device_id}"
+    assert data["counts"]["collectors"] == 1
