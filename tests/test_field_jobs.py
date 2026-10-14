@@ -25,7 +25,7 @@ from app.services.field.execution_contracts import (
     FieldJobsQuery,
     UpdateFieldJobLocation,
 )
-from app.services.field.jobs import field_jobs
+from app.services.field.jobs import field_jobs, project_job_location
 from app.services.field.transitions import field_transitions
 from app.services.field.work_order_access import FieldAccessError, ResolveFieldActor
 from app.services.owner_commands import CommandContext
@@ -423,6 +423,51 @@ def test_field_job_detail_returns_customer_and_location(db_session):
     assert detail.completion_requirements.customer_signoff_required is True
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        (
+            {
+                "latitude": 1.0,
+                "longitude": 2.0,
+                "location": {"lat": 9.07, "lng": 7.49, "source": "manual"},
+            },
+            (9.07, 7.49, "manual"),
+        ),
+        (
+            {
+                "latitude": 1.0,
+                "location": {"lat": 9.07, "lng": 7.49, "source": "manual"},
+            },
+            (9.07, 7.49, "manual"),
+        ),
+        (
+            {
+                "latitude": 1.0,
+                "longitude": 2.0,
+                "location": {"lat": 9.07, "source": "manual"},
+            },
+            (9.07, None, "address_only"),
+        ),
+        ({"lat": 1.0, "lng": 2.0}, (1.0, 2.0, "cached")),
+        ({"latitude": 1.0, "longitude": 2.0}, (1.0, 2.0, "cached")),
+        ({"latitude": 1.0}, (1.0, None, "address_only")),
+        (
+            {"latitude": 1.0, "longitude": 2.0, "location": {}},
+            (None, None, "address_only"),
+        ),
+    ],
+)
+def test_field_job_location_uses_one_coordinate_source(
+    metadata: dict[str, object], expected: tuple[float | None, float | None, str]
+) -> None:
+    row = WorkOrder(title="Location source", metadata_=metadata)
+
+    location = project_job_location(row)
+
+    assert (location.latitude, location.longitude, location.source) == expected
+
+
 def test_field_job_update_location_is_sub_authoritative(db_session):
     user = _user(db_session)
     _profile(db_session, user, crm_person_id="crm-tech-1")
@@ -432,7 +477,14 @@ def test_field_job_update_location_is_sub_authoritative(db_session):
         subscriber,
         crm_work_order_id="wo-location",
         assigned_to_crm_person_id="crm-tech-1",
-        metadata_={"location": {"lat": 9.07, "lng": 7.49}},
+        metadata_={
+            "lat": 1.0,
+            "latitude": 1.1,
+            "lng": 2.0,
+            "longitude": 2.1,
+            "location": {"lat": 9.07, "lng": 7.49},
+            "unrelated": "preserved",
+        },
     )
     db_session.commit()
 
@@ -459,6 +511,49 @@ def test_field_job_update_location_is_sub_authoritative(db_session):
     assert row.metadata_["location"]["source"] == "manual"
     assert row.metadata_["native_field_source"] == "sub"
     assert row.metadata_["native_field_activity"]["location"]["source"] == "sub"
+    assert not {"lat", "latitude", "lng", "longitude"}.intersection(row.metadata_)
+    assert row.metadata_["unrelated"] == "preserved"
+    assert project_job_location(row) == location
+    query = FieldJobQuery(requester_system_user_id=user.id, public_id=row.public_id)
+    assert field_jobs.get_detail(db=db_session, query=query).location == location
+    destination = field_jobs.list_destinations(db=db_session, query=query)[0]
+    assert (destination.latitude, destination.longitude) == (9.081, 7.462)
+
+
+def test_field_job_geofence_uses_nested_corrected_pair(db_session: Session) -> None:
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.services.field.geofence import GeofenceQuery, evaluate
+
+    user = _user(db_session)
+    _profile(db_session, user, crm_person_id="crm-geofence")
+    row = _work_order(
+        db_session,
+        _subscriber(db_session),
+        assigned_to_crm_person_id="crm-geofence",
+        metadata_={
+            "latitude": 1.0,
+            "longitude": 2.0,
+            "location": {"lat": 9.081, "lng": 7.462, "source": "manual"},
+        },
+    )
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.field,
+            key="geofence_auto_status_enabled",
+            value_text="true",
+            is_active=True,
+        )
+    )
+    user_id, public_id = user.id, row.public_id
+    db_session.commit()
+
+    assert evaluate(db_session, GeofenceQuery(user_id, 1.0, 2.0)) == ()
+    fired = evaluate(db_session, GeofenceQuery(user_id, 9.081, 7.462))
+
+    assert len(fired) == 1
+    assert fired[0].public_id == public_id
+    assert fired[0].event == FieldEvent.start
+    assert fired[0].distance_m == 0.0
 
 
 def test_field_job_update_location_404_does_not_leak_unassigned_jobs(db_session):
@@ -505,7 +600,11 @@ def test_field_job_destinations_include_customer_nearby_assets_and_other(db_sess
         subscriber,
         crm_work_order_id="wo-destinations",
         assigned_to_crm_person_id="crm-tech-1",
-        metadata_={"location": {"lat": 9.071, "lng": 7.451}},
+        metadata_={
+            "latitude": 1.0,
+            "longitude": 2.0,
+            "location": {"lat": 9.071, "lng": 7.451, "source": "manual"},
+        },
     )
     db_session.add_all(
         [

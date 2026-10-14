@@ -51,6 +51,23 @@ from role names, and does not mount unsupported background work or issue
 unsupported ancillary requests. This slice does not enroll vendor users into
 ERP payroll or claim vendor reimbursement or plant authoring support.
 
+### Job location correction
+
+`operations.field_jobs` owns explicit job-location correction. Its typed
+projection selects both coordinate axes and provenance from nested
+`WorkOrder.metadata_.location` whenever that record exists. An incomplete
+nested record remains incomplete; it never borrows an axis from legacy header
+metadata. Top-level `lat`/`latitude` and `lng`/`longitude` remain readable as
+cached legacy evidence only when there is no nested location record.
+
+A correction writes the nested pair with manual provenance and removes all
+four top-level coordinate aliases, preserving unrelated metadata and native
+field activity evidence. Detail, directions, nearby-destination selection and
+the existing staff geofence read the same projection. This changes no customer
+service Address, attendance decision or location-sharing policy. Existing drift
+is resolved by the authoritative nested read and an explicit correction; no
+bulk rewrite or schema migration is required.
+
 ## Page contracts
 
 ### Dispatch assignment
