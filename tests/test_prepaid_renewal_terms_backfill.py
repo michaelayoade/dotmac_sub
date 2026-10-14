@@ -1,21 +1,21 @@
-"""Renewal-terms backfill: exact paid evidence only, fail-closed otherwise.
+"""Renewal-term capture retains evidence without restoring historical prices.
 
-The contracted amount is restored solely from the subscription's own PAID
-base-subscription invoice lines. The mutable catalog is never consulted for
-the amount; absent or contradictory evidence becomes an owned finance work
-item and the account stays fail-closed (ADR 0007 stage 3).
+Exact, missing and conflicting paid evidence all remain blocked finance work
+items. Correction/audit cases explicitly seed pre-freeze history.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
 from app.models.admin_alert import AdminAlert
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
+from app.models.event_store import EventStatus, EventStore
 from app.services.owner_commands import CommandContext
 from app.services.prepaid_renewal_terms_backfill import (
     _FINDING_PREFIX,
@@ -134,7 +134,7 @@ def _capture(db, fingerprint: str, key: str = "renewal-terms-test"):
     )
 
 
-def test_consistent_paid_evidence_restores_the_contracted_amount(
+def test_consistent_paid_evidence_is_policy_held_with_idempotent_work_item(
     db_session, subscriber, subscription
 ):
     _block(db_session, subscription)
@@ -148,14 +148,40 @@ def test_consistent_paid_evidence_restores_the_contracted_amount(
 
     result = _capture(db_session, preview.fingerprint)
 
-    assert result.repaired_count >= 1
+    assert result.repaired_count == 0
+    assert result.work_item_count == len(preview.items)
     db_session.refresh(subscription)
-    assert subscription.unit_price == Decimal("15000.00")
-    # Replay with unchanged evidence rewrites nothing.
+    assert subscription.unit_price is None
+    alert = (
+        db_session.query(AdminAlert)
+        .filter_by(fingerprint=f"{_FINDING_PREFIX}{subscription.id}")
+        .one()
+    )
+    alert_id = alert.id
+    assert alert.status.value == "open"
+    assert alert.details["decision"] == "repairable"
+    assert alert.details["next_action"] == "manual_exceptions_review"
+    assert "Exact paid" in alert.summary
+    assert "missing or conflicting" not in alert.summary
+    # Same preview remains valid and the work item is updated, not duplicated.
     replay_preview = preview_prepaid_renewal_terms_backfill(db_session, now=_NOON)
     replay = _capture(db_session, replay_preview.fingerprint, "renewal-terms-2")
-    assert all(i.subscription_id != subscription.id for i in replay_preview.items)
-    assert replay.fingerprint == replay_preview.fingerprint
+    assert replay_preview.fingerprint == preview.fingerprint
+    assert replay.repaired_count == 0
+    assert replay.work_item_count == len(replay_preview.items)
+    assert (
+        db_session.query(AdminAlert)
+        .filter_by(fingerprint=f"{_FINDING_PREFIX}{subscription.id}")
+        .one()
+        .id
+        == alert_id
+    )
+    assert (
+        db_session.query(EventStore)
+        .filter_by(event_type="prepaid_renewal_terms.backfilled")
+        .count()
+        == 0
+    )
 
 
 def test_conflicting_amounts_become_a_finance_work_item_not_a_write(
@@ -209,6 +235,42 @@ def test_stale_fingerprint_is_rejected(db_session, subscriber, subscription):
     with pytest.raises(PrepaidRenewalTermsBackfillError) as captured:
         _capture(db_session, preview.fingerprint)
     assert captured.value.code.endswith("stale_preview")
+    db_session.refresh(subscription)
+    assert subscription.unit_price is None
+    assert (
+        db_session.query(AdminAlert)
+        .filter_by(fingerprint=f"{_FINDING_PREFIX}{subscription.id}")
+        .count()
+        == 0
+    )
+
+
+def test_capture_rolls_back_evidence_when_owner_operation_fails(
+    db_session, subscriber, subscription, monkeypatch
+):
+    from app.services import prepaid_renewal_terms_backfill as module
+
+    _block(db_session, subscription)
+    _paid_line(db_session, subscriber, subscription, "15000.00")
+    preview = preview_prepaid_renewal_terms_backfill(db_session, now=_NOON)
+    sync = module._sync_evidence_work_items
+
+    def fail_after_sync(db, unresolved, *, now):
+        sync(db, unresolved, now=now)
+        db.flush()
+        raise RuntimeError("injected evidence sync failure")
+
+    monkeypatch.setattr(module, "_sync_evidence_work_items", fail_after_sync)
+    with pytest.raises(RuntimeError, match="injected evidence sync failure"):
+        _capture(db_session, preview.fingerprint, "capture-rollback")
+    db_session.refresh(subscription)
+    assert subscription.unit_price is None
+    assert (
+        db_session.query(AdminAlert)
+        .filter_by(fingerprint=f"{_FINDING_PREFIX}{subscription.id}")
+        .count()
+        == 0
+    )
 
 
 def test_catalog_price_is_never_used_for_the_amount(
@@ -239,7 +301,7 @@ def test_work_item_summary_fits_admin_alert_schema():
         assert len(summary) <= 255
 
 
-def test_suspended_subscription_is_repaired_from_paid_evidence(
+def test_suspended_subscription_exact_evidence_stays_policy_held(
     db_session, subscriber, subscription
 ):
     # Slice-1 gap found in production: 20 suspended prepaid subscriptions
@@ -260,7 +322,7 @@ def test_suspended_subscription_is_repaired_from_paid_evidence(
     _capture(db_session, preview.fingerprint, "renewal-terms-suspended")
 
     db_session.refresh(subscription)
-    assert subscription.unit_price == Decimal("35000.00")
+    assert subscription.unit_price is None
 
 
 def test_lone_unproven_line_is_insufficient_cycle_evidence(
@@ -458,13 +520,29 @@ def test_quantity_amount_mismatch_is_not_proof(db_session, subscriber, subscript
     assert "amount_mismatch" in items[0].insufficiency_reasons
 
 
-def _backfill_one(db, subscriber, subscription, amount: str, key: str) -> None:
+def _seed_pre_freeze_backfill(
+    db, subscriber, subscription, amount: str, key: str
+) -> None:
     _block(db, subscription)
     _paid_line(db, subscriber, subscription, amount)
-    preview = preview_prepaid_renewal_terms_backfill(db, now=_NOON)
-    _capture(db, preview.fingerprint, key)
-    db.refresh(subscription)
-    assert subscription.unit_price == Decimal(amount)
+    # Existing pre-freeze history, not a call to the retired capture writer.
+    subscription.unit_price = Decimal(amount)
+    db.add(
+        EventStore(
+            event_id=uuid4(),
+            event_type="prepaid_renewal_terms.backfilled",
+            payload={
+                "schema_version": 1,
+                "account_id": str(subscriber.id),
+                "subscription_id": str(subscription.id),
+                "contracted_amount": amount,
+                "paid_line_count": 1,
+                "preview_fingerprint": key,
+            },
+            status=EventStatus.completed,
+        )
+    )
+    db.commit()
 
 
 def test_correction_requires_backfill_cohort_membership(
@@ -507,7 +585,9 @@ def test_correction_supersedes_with_optimistic_lock(
         correct_prepaid_renewal_terms,
     )
 
-    _backfill_one(db_session, subscriber, subscription, "35000.00", "corr-seed")
+    _seed_pre_freeze_backfill(
+        db_session, subscriber, subscription, "35000.00", "corr-seed"
+    )
     sub_id = subscription.id
     db_session.commit()
 
@@ -570,7 +650,9 @@ def test_audit_bound_fail_closed_restoration(db_session, subscriber, subscriptio
         correct_prepaid_renewal_terms,
     )
 
-    _backfill_one(db_session, subscriber, subscription, "2687.50", "audit-seed")
+    _seed_pre_freeze_backfill(
+        db_session, subscriber, subscription, "2687.50", "audit-seed"
+    )
     sub_id = subscription.id
     # The proving evidence disappears after the restore (invoice voided):
     # the v2 audit can no longer confirm the amount.
@@ -654,7 +736,9 @@ def test_audit_reclassifies_restored_subscriptions(
         audit_restored_renewal_terms,
     )
 
-    _backfill_one(db_session, subscriber, subscription, "35000.00", "audit-ok")
+    _seed_pre_freeze_backfill(
+        db_session, subscriber, subscription, "35000.00", "audit-ok"
+    )
     db_session.commit()
 
     run = audit_restored_renewal_terms(
@@ -666,20 +750,14 @@ def test_audit_reclassifies_restored_subscriptions(
 
 
 # ---------------------------------------------------------------------------
-# Scheduled sequencing: the repair owner must actually be reachable
+# Scheduled sequencing: the evidence owner remains reachable
 # ---------------------------------------------------------------------------
 
 
-def test_scheduled_runner_restores_terms_from_paid_evidence(
+def test_scheduled_runner_captures_exact_terms_without_restoring(
     db_session, subscriber, subscription
 ):
-    """The owner is only useful if something calls it.
-
-    It shipped with ADR 0007 stage 3 and had no task, route or admin surface,
-    so `contracted_prepaid_renewal_terms_unavailable` was a permanent block:
-    32 production accounts kept consuming service, and because this owner also
-    owns the work-item sync they never surfaced as finance work items either.
-    """
+    """Scheduled capture retains exact evidence under the mutation hold."""
     from app.services.collections.scheduled import restore_prepaid_renewal_terms
 
     _block(db_session, subscription)
@@ -688,10 +766,11 @@ def test_scheduled_runner_restores_terms_from_paid_evidence(
 
     outcome = restore_prepaid_renewal_terms(db_session, now=_NOON)
 
-    assert outcome.restored >= 1
+    assert outcome.restored == 0
+    assert outcome.work_items == outcome.blocked
     assert outcome.status.value == "ok"
     db_session.refresh(subscription)
-    assert subscription.unit_price == Decimal("15000.00")
+    assert subscription.unit_price is None
 
 
 def test_scheduled_runner_opens_a_work_item_instead_of_inventing_an_amount(
