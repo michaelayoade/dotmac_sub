@@ -337,11 +337,31 @@ allowance; `session_construction_baseline.txt` is unchanged.
 
 ### Optional owner-savepoint hardening fixture accounting — 2026-10-14
 
-The static AST scanner measures **775 test construction sites across 166
-files** on this slice, one more than accepted main's 774 sites. The new site
+The standalone hardening slice's static AST census measured **775 test
+construction sites across 166 files**, one more than accepted main's 774 sites. The new site
 is the engine-bound `Session` in
 `tests/integration/test_owner_commands_optional_savepoint_pg.py`. It uses the
 existing migrated PostgreSQL engine and observes visibility through a separate
 connection to distinguish savepoint release from durable owner completion.
 This is fixture authorship, not evidence that the pending hosted canaries pass.
 Production construction allowances and the per-file baseline are unchanged.
+
+### Invoice numbering V2 proof fixture accounting — 2026-10-14
+
+The standalone V2 slice's static AST census measured **777 test construction
+sites across 166 files**, accepted main's 774 sites plus three in
+`tests/integration/test_billing_numbering_activation_proof.py`. Two session
+factories and a clone-bound observer engine exercise the existing migrated
+PostgreSQL test schema, independently committed configuration/counter/receipt
+changes, and restricted read-only queries. This is fixture authorship;
+runtime acceptance remains pending hosted CI. Production construction
+allowances and the per-file baseline are unchanged.
+
+### Integrated owner and numbering proof fixture accounting — 2026-10-14
+
+The combined static AST census measures **778 sites across 167 files**:
+accepted main's 774 plus one owner-boundary Session and three Numbering-proof
+fixture sites. Both standalone histories above remain evidence of fixture
+authorship. The integrated ratchet records the complete measured population;
+production construction allowances and the per-file baseline are unchanged.
+Hosted acceptance must exercise this combined head and base.

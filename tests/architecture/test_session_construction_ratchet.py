@@ -289,7 +289,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +1 from optional owner-savepoint hardening: an engine-bound Session over
 #: the existing migrated PostgreSQL fixture proves real root completion and
 #: independent visibility. Production construction allowances are unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 775
+#: +3 from the read-only V2 invoice numbering proof: two session factories
+#: over migrated PostgreSQL fixtures and one clone-bound observer engine.
+#: Production construction allowances are unchanged.
+#: The integrated total is accepted main's 774 plus these independent 1 + 3 sites.
+TEST_FIXTURE_BASELINE_TOTAL = 778
 
 
 def _baseline() -> dict[str, int]:
