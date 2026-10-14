@@ -993,16 +993,24 @@ class _PollerHealthCollector(Collector):
         if not data:
             return
 
-        for key, help_text in (
-            ("devices_total", "MikroTik devices in the poller pool"),
-            ("devices_ok", "Devices polled without recent failures"),
-            ("devices_failing", "Devices in failure backoff (silently broken)"),
+        for key, value, help_text in (
+            (
+                "devices_total",
+                data.devices_total,
+                "MikroTik devices in the poller pool",
+            ),
+            ("devices_ok", data.devices_ok, "Devices polled without recent failures"),
+            (
+                "devices_failing",
+                data.devices_failing,
+                "Devices in failure backoff (silently broken)",
+            ),
         ):
             gauge = GaugeMetricFamily(f"bandwidth_poller_{key}", help_text)
-            gauge.add_metric([], float(data.get(key) or 0))
+            gauge.add_metric([], float(value))
             yield gauge
 
-        cycle = data.get("cycle_seconds")
+        cycle = data.cycle_seconds
         if cycle is not None:
             gauge = GaugeMetricFamily(
                 "bandwidth_poller_cycle_seconds",
@@ -1011,12 +1019,12 @@ class _PollerHealthCollector(Collector):
             gauge.add_metric([], float(cycle))
             yield gauge
 
-        ts = data.get("ts")
+        ts = data.observed_at
         if ts:
             from datetime import UTC, datetime
 
             try:
-                age = (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds()
+                age = (datetime.now(UTC) - ts).total_seconds()
             except ValueError:
                 return
             gauge = GaugeMetricFamily(

@@ -27,6 +27,124 @@ DOMAIN = DomainSOT(
     domain="runtime_infrastructure",
     services=(
         SOTService(
+            name="runtime.bandwidth_poller_health",
+            module="app.services.poller_health",
+            implementation_modules=("app.poller.mikrotik_poller",),
+            owns=("bounded bandwidth poller loop liveness query",),
+            notes="Local component observation only; no deployment authorization or domain writes.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="bounded bandwidth poller loop liveness query",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "component runtime observation",
+                            "bounded probe freshness policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="component runtime observation",
+                        owner="runtime.bandwidth_poller_health",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Incumbent POLLER_HEALTH_KEY JSON published by the polling loop after successful or caught-failed cycles; Redis is transport, not collection-success authority.",
+                    ),
+                    AuthorityInput(
+                        name="bounded probe freshness policy",
+                        owner="runtime.bandwidth_poller_health",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed query budgets and fail-closed malformed/missing/future/stale/unavailable handling described in PROCESS_HEALTH_PROBES.md.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="No database transaction or business side effect; local observation and bounded transport only.",
+                    locking="Syslog health endpoint uses a private same-UID directory and exclusive lifetime lock; poller reads incumbent Redis projection.",
+                    idempotency="Read queries are side-effect-free for business state; each syslog request has a fresh challenge.",
+                    retries="No hidden retries; operators retry unavailable observations within declared budgets.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="Component health CLI maps typed unavailable/nonhealthy outcomes to exit 1 and invalid arguments to exit 2.",
+                    fail_closed_on=(
+                        "missing or malformed evidence",
+                        "stale or future evidence",
+                        "transport unavailable",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.bandwidth_poller_health",
+                ),
+                steward="runtime operations",
+                design_refs=("docs/runbooks/PROCESS_HEALTH_PROBES.md",),
+                test_refs=(
+                    "tests/test_process_health_probes.py",
+                    "tests/architecture/test_process_health_probe_ownership.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="runtime.syslog_receiver_health",
+            module="app.syslog.listener",
+            implementation_modules=("app.syslog.health",),
+            owns=("listener-owned UDP receiver readiness query",),
+            notes="Local component observation only; no deployment authorization or domain writes.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="listener-owned UDP receiver readiness query",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "component runtime observation",
+                            "bounded probe freshness policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="component runtime observation",
+                        owner="runtime.syslog_receiver_health",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Actual UDP bind/nonclosing transport and monotonic progress of the same listener event loop; random generation and request challenge prevent cached prior-process responses.",
+                    ),
+                    AuthorityInput(
+                        name="bounded probe freshness policy",
+                        owner="runtime.syslog_receiver_health",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed query budgets and fail-closed malformed/missing/future/stale/unavailable handling described in PROCESS_HEALTH_PROBES.md.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="No database transaction or business side effect; local observation and bounded transport only.",
+                    locking="Syslog health endpoint uses a private same-UID directory and exclusive lifetime lock; poller reads incumbent Redis projection.",
+                    idempotency="Read queries are side-effect-free for business state; each syslog request has a fresh challenge.",
+                    retries="No hidden retries; operators retry unavailable observations within declared budgets.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="Component health CLI maps typed unavailable/nonhealthy outcomes to exit 1 and invalid arguments to exit 2.",
+                    fail_closed_on=(
+                        "missing or malformed evidence",
+                        "stale or future evidence",
+                        "transport unavailable",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.syslog_receiver_health",
+                ),
+                steward="runtime operations",
+                design_refs=("docs/runbooks/PROCESS_HEALTH_PROBES.md",),
+                test_refs=(
+                    "tests/test_process_health_probes.py",
+                    "tests/architecture/test_process_health_probe_ownership.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="runtime.realtime_projection",
             module="app.services.realtime_platform",
             owns=(
