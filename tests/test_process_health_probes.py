@@ -9,6 +9,7 @@ import socket
 import time
 from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
@@ -17,6 +18,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.config import settings
 from app.services import poller_health
 from app.services.poller_health import (
     PollerHealthReason,
@@ -24,6 +26,7 @@ from app.services.poller_health import (
     PollerSnapshot,
     decode_poller_health,
 )
+from app.syslog import health as syslog_health
 from app.syslog.health import (
     ListenerHealthReason,
     ListenerProbeQuery,
@@ -199,6 +202,52 @@ def _listener(path: Path) -> SyslogListener:
     listener._transport = MagicMock(spec=asyncio.DatagramTransport)
     listener._transport.is_closing.return_value = False
     return listener
+
+
+def test_syslog_socket_consumes_bootstrap_owner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "private" / "health.sock"
+    monkeypatch.setattr(
+        syslog_health, "settings", replace(settings, syslog_health_socket=str(path))
+    )
+    # A later raw environment edit cannot override the bootstrap owner's value.
+    monkeypatch.setenv("SYSLOG_HEALTH_SOCKET", str(tmp_path / "other.sock"))
+    assert syslog_health.default_socket_path() == path
+    assert SyslogListener()._health_socket_path == path
+    binding = bind_health_socket(path=syslog_health.default_socket_path())
+    try:
+        assert path.is_socket()
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        assert path.stat().st_mode & 0o777 == 0o600
+    finally:
+        binding.close()
+
+
+def test_syslog_unset_bootstrap_override_keeps_private_uid_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        syslog_health, "settings", replace(settings, syslog_health_socket=None)
+    )
+    monkeypatch.setattr(syslog_health.tempfile, "gettempdir", lambda: str(tmp_path))
+    assert syslog_health.default_socket_path() == (
+        tmp_path.resolve() / f"dotmac-syslog-{os.getuid()}" / "health.sock"
+    )
+
+
+@pytest.mark.parametrize("override", ["", "relative/health.sock"])
+def test_syslog_bootstrap_override_never_falls_back_on_invalid_path(
+    monkeypatch: pytest.MonkeyPatch, override: str
+) -> None:
+    monkeypatch.setattr(
+        syslog_health, "settings", replace(settings, syslog_health_socket=override)
+    )
+    path = syslog_health.default_socket_path()
+    with pytest.raises(OSError, match="health path must be absolute"):
+        bind_health_socket(path=path)
+    result = _run(query_listener_readiness(query=ListenerProbeQuery(path)))
+    assert result.reason is ListenerHealthReason.UNAVAILABLE
 
 
 def test_listener_startup_closed_stale_stop_and_generation(tmp_path: Path) -> None:
@@ -416,8 +465,9 @@ def test_real_poller_module_cli_is_unavailable_without_redis() -> None:
     assert "Traceback" not in result.stderr
 
 
+@pytest.mark.parametrize("use_environment_override", [False, True])
 def test_real_syslog_module_cli_queries_idle_receiver(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, use_environment_override: bool
 ) -> None:
     import sys
 
@@ -443,12 +493,17 @@ def test_real_syslog_module_cli_queries_idle_receiver(
                     await asyncio.sleep(0.01)
 
             await asyncio.wait_for(wait_ready(), timeout=2)
+            env = os.environ.copy()
+            env["SYSLOG_HEALTH_SOCKET"] = str(
+                path if use_environment_override else tmp_path / "wrong.sock"
+            )
+            socket_args = [] if use_environment_override else ["--socket", str(path)]
             child = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-m",
                 "app.syslog.health",
-                "--socket",
-                str(path),
+                *socket_args,
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

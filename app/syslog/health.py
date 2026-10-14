@@ -17,6 +17,8 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from app.config import settings
+
 
 class ListenerHealthReason(StrEnum):
     READY = "ready"
@@ -55,15 +57,12 @@ class ListenerProbeQuery:
 
 def default_socket_path() -> Path:
     """A private per-UID directory; override for separate listener instances."""
-    return Path(
-        os.getenv(
-            "SYSLOG_HEALTH_SOCKET",
-            str(
-                Path(tempfile.gettempdir()).resolve()
-                / f"dotmac-syslog-{os.getuid()}"
-                / "health.sock"
-            ),
-        )
+    if settings.syslog_health_socket is not None:
+        return Path(settings.syslog_health_socket)
+    return (
+        Path(tempfile.gettempdir()).resolve()
+        / f"dotmac-syslog-{os.getuid()}"
+        / "health.sock"
     )
 
 

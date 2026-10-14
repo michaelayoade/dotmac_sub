@@ -65,3 +65,34 @@ def test_syslog_probe_imports_no_parser_or_domain_handlers() -> None:
         and node.func.attr in {"sendto", "datagram_received", "commit"}
         for node in ast.walk(tree)
     )
+
+
+def test_syslog_socket_override_has_one_bootstrap_owner() -> None:
+    config = ast.parse((ROOT / "app/config.py").read_text())
+    settings = next(
+        node
+        for node in config.body
+        if isinstance(node, ast.ClassDef) and node.name == "Settings"
+    )
+    assert any(
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "syslog_health_socket"
+        for node in settings.body
+    )
+    health = ast.parse((ROOT / "app/syslog/health.py").read_text())
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "app.config"
+        and any(alias.name == "settings" for alias in node.names)
+        for node in health.body
+    )
+    # Decision-input guard covers direct and aliased environment access globally;
+    # the probe also must not import a heavier runtime owner to resolve the path.
+    for tree in (config, health):
+        assert not any(
+            isinstance(node, ast.ImportFrom)
+            and node.module is not None
+            and node.module.startswith(("app.db", "app.models", "app.syslog.listener"))
+            for node in ast.walk(tree)
+        )

@@ -52,7 +52,13 @@ system temporary directory selected by Python's `tempfile.gettempdir()` (commonl
 `/tmp`). The listener and query must share the temporary-directory environment,
 or use an explicit socket path. Set `SYSLOG_HEALTH_SOCKET` in the listener and
 query, or pass `--socket` to the query, for another absolute path or
-multiple instances. Its immediate parent must be owned by the service UID,
+multiple instances. `app.config.Settings.syslog_health_socket` owns the optional
+environment override, captured at process bootstrap (including the existing
+dotenv loader); changing it requires restarting the listener and probe process.
+The health owner consumes that typed setting and supplies the private per-UID
+default when it is unset. Empty or relative overrides fail path admission rather
+than falling back. `--socket` takes precedence for that query only.
+Its immediate parent must be owned by the service UID,
 mode 0700 and free of symlink traversal. The socket and lifetime lock are mode
 0600. Run probes as that same UID and within the same local mount/network/clock
 namespace. Same-UID processes are trusted; this is not an authenticated remote
