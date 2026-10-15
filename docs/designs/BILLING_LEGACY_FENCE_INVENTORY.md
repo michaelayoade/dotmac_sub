@@ -1,7 +1,7 @@
 # Legacy financial fence inventory
 
-Status: source-derived starting inventory, not an executable allowlist or proof
-of complete deployed writer closure. Runtime catalog inspection and reviewed
+Status: source-derived starting inventory, with a bounded private 44-table
+policy described below; not proof of complete deployed writer closure. Runtime catalog inspection and reviewed
 retained-column contracts are still required by `BILLING_LEDGER_HANDOFF.md`.
 This inventory does not authorize mutation, deployment, import or authority change.
 
@@ -91,3 +91,43 @@ cannot prove dynamic SQL or reflection absent. No live catalog, database or
 runtime was inspected to produce this inventory. The final executable policy
 must enumerate exact objects and retained columns from reviewed source plus
 actual catalog evidence, and must fail closed on an unknown object or role path.
+
+## Private archive component v1
+
+`ArchiveRelation` in `legacy_archive_fence_contracts.py` enumerates exactly the
+44 tables in the first section above. `_install_legacy_archive_fence` stages
+only that closed archive component inside a future registered handoff coordinator.
+It has no production caller, adapter, CLI, migration or startup wiring. All
+retained/shared/module/outbox/provider/proof/WHT/configuration/ERP and derived
+populations remain outside this component; their contracts remain unresolved.
+
+The actual non-superuser current role must own every archive table and public
+namespace. `app_user` must be nonowner and have no effective MEMBER/USAGE/SET
+path to that actual owner. All tables must be ordinary, unpartitioned,
+noninherited and unshadowed. Deterministically acquire all 44 ACCESS EXCLUSIVE
+locks before any change, using positive owner-supplied lock timeout <=60 seconds
+and statement timeout <=120 seconds. The same untranslated Engine/connection
+must own the clean explicit READ WRITE READ COMMITTED root; Session/Connection
+savepoints and external roots refuse. The whole future owner MUST prohibit
+manual SQL SAVEPOINTs, which this participant cannot reliably introspect.
+
+One fixed owner-controlled SECURITY INVOKER function with pg_catalog search path
+unconditionally denies mutation. ALWAYS row INSERT/UPDATE/DELETE and ALWAYS
+statement INSERT/UPDATE/DELETE/TRUNCATE guards preserve all existing guards.
+Revoke table DML and column INSERT/UPDATE, including invoice UPDATE(id), and
+grant options from PUBLIC and every observed nonowner grantee, preserving SELECT.
+RESTRICT revocation refuses dependent grant chains; it never uses CASCADE.
+Reinspect actual catalogs. Exact replay verifies fixed function/trigger identities,
+body, arguments, owner, events and enabled state and absence of mutation ACLs;
+collisions, partial installation and drift refuse without repair or unfreeze.
+
+A typed `billing.legacy_archive_fence.staged` audit output is staged through the
+existing owner-output protocol only for a new installation. It binds policy
+revision, 44-table count, catalog digest and the existing owner command identity.
+It commits or rolls back with the caller's root; exact replay emits no duplicate.
+This is neither a global installation receipt nor activation evidence. The
+returned observation is transaction-local staged catalog evidence. Complete
+helper/view/FK/privileged-function closure, other runtime role paths and every
+retained-column population remain global handoff blockers. Authored hosted
+canaries have not been executed locally and test-only clone role provisioning
+does not prove production posture.

@@ -181,4 +181,31 @@ permanent rollback floor; post-handoff recovery never reopens legacy money write
 Execute end-to-end on a production-shaped copy, with timings, economic
 reconciliation, manual blocked-account queue and the pre-handoff abort boundary.
 Only that evidence plus exact package and production approvals can admit the
-single ledger switch. No runtime implementation or acceptance is claimed here.
+single ledger switch. No global handoff implementation or activation acceptance is claimed here.
+
+## Private archive participant status
+
+`runtime.billing_legacy_archive_fence` now declares a private flush-only
+participant for the inventory's exact 44 archived tables. Its only entry point
+is `_install_legacy_archive_fence`; no runtime, command, migration or startup
+caller exists. It refuses invocation unless the future
+`runtime.billing_ledger_handoff` is actually registered with a valid coordinator
+contract and is the active root owner. That global owner remains unimplemented
+and unregistered by this slice. See the inventory's private component contract
+for role, locks, trigger/ACL and exact replay conditions.
+
+A new installation stages one typed component audit event in the same owner
+transaction; it does not write the global receipt, seal a window, grant module
+DML or admit runtime writers. Every failure must escape and roll back the entire
+owner transaction. The whole owner must forbid manual SQL savepoints throughout
+its transaction. Returned transaction/OID/digest observations are facts about
+uncommitted staging, never reusable authorization. Helper/view/FK/privileged
+closure, retained columns, drain, preflip denial and the installation-wide
+handoff remain unresolved. Real migrated hosted component canaries are authored;
+no database/runtime execution or production acceptance is claimed.
+
+The participant uses public `current_owner_root_transaction` introspection to
+match the executor's exact active root. This follows the executor's trusted
+in-process metadata contract; it is not a security boundary against arbitrary
+Python code rewriting executor internals. Connection and audit-model bind checks
+additionally refuse external roots, nesting and split transactional delivery.

@@ -13,6 +13,7 @@ from app.services.sot_manifest import (
     AuthorityMigrationState,
     ConcernContract,
     ErrorContract,
+    EventContract,
     MigrationContract,
     OwnerRole,
     ProjectionContract,
@@ -26,6 +27,76 @@ from app.services.sot_registry.model import DomainSOT
 DOMAIN = DomainSOT(
     domain="runtime_infrastructure",
     services=(
+        SOTService(
+            name="runtime.billing_legacy_archive_fence",
+            module="app.services.billing.legacy_archive_fence",
+            implementation_modules=(
+                "app.services.billing.legacy_archive_fence_contracts",
+            ),
+            owns=("private legacy monetary archive fencing",),
+            depends_on=("events.owner_outputs",),
+            notes="Private participant only. Future runtime.billing_ledger_handoff remains unregistered; no production caller, command, migration, startup or activation. Does not prove helper/view/FK/privileged closure or global handoff.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="private legacy monetary archive fencing",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("locked archive catalog", "closed archive policy"),
+                        canonical_writer="runtime.billing_legacy_archive_fence",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="locked archive catalog",
+                        owner="external:postgresql_catalog",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Actual owner, namespace, role reachability, exact ordinary relations, grants and fixed function/trigger catalog under all 44 ACCESS EXCLUSIVE locks.",
+                    ),
+                    AuthorityInput(
+                        name="closed archive policy",
+                        owner="runtime.billing_legacy_archive_fence",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="ArchiveFenceRevision.V1 and closed 44-table ArchiveRelation inventory; no caller role names or exemptions.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Only within the valid registered future handoff coordinator's clean same-connection root READ WRITE READ COMMITTED transaction. Whole owner forbids manual SQL savepoints. Flush only; caller alone commits or rolls back.",
+                    locking="Acquire ACCESS EXCLUSIVE on all 44 exact public tables in sorted order before DDL/ACL changes; owner supplies positive bounded lock and statement timeouts.",
+                    idempotency="Exact installed function/trigger identities, body, arguments, events, ALWAYS status and no nonowner DML ACLs permit read-only replay without a second staged event. Collisions/partial installs/drift refuse; no repair or unfreeze.",
+                    retries="Caller retries the entire fresh owner transaction after rollback; this participant neither catches catalog failures nor completes transactions.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("billing_archive_fence.refused",),
+                    mapping_owner="Future maintenance adapter; raw database failures also abort its whole owner transaction.",
+                    fail_closed_on=(
+                        "unregistered owner or ambiguous transaction",
+                        "role/object/catalog/ACL drift",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("billing.legacy_archive_fence.staged",),
+                    schema_version=1,
+                    delivery_owner="events.owner_outputs",
+                    compatibility="Typed revision, 44-table count, catalog digest and existing operation identity. Component audit only; contingent on same-root commit, never a seal/receipt/activation event.",
+                    replay="Stage via existing transactional owner-output protocol only for a new installation. Exact catalog replay stages no duplicate event; aborted installation and event roll back together.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.billing_legacy_archive_fence",
+                    verification="Authored real Alembic PostgreSQL component canaries use isolated ephemeral actual owner and app_user logins. Hosted execution pending; no production role proof.",
+                ),
+                steward="runtime operations",
+                design_refs=(
+                    "docs/designs/BILLING_LEDGER_HANDOFF.md",
+                    "docs/designs/BILLING_LEGACY_FENCE_INVENTORY.md",
+                ),
+                test_refs=(
+                    "tests/integration/test_billing_legacy_archive_fence_postgres.py",
+                    "tests/architecture/test_billing_legacy_archive_fence_boundary.py",
+                ),
+            ),
+        ),
         SOTService(
             name="runtime.billing_runtime_login",
             module="app.commercial_module_prereqs",

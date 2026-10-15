@@ -5,13 +5,14 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, SessionTransaction
 
 from app.models.network_monitoring import DeviceProjection
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     OwnerCommandError,
+    current_owner_root_transaction,
     execute_owner_command,
     execute_owner_savepoint,
 )
@@ -60,6 +61,45 @@ def test_success_commits_before_return(db_session) -> None:
     assert result == "complete"
     assert not db_session.in_transaction()
     assert _count(db_session) == 1
+
+
+def test_public_root_observation_tracks_executor_lifetime(db_session: Session) -> None:
+    with pytest.raises(OwnerCommandError, match="No active owner command definition"):
+        current_owner_root_transaction(db_session)
+
+    def observe() -> SessionTransaction:
+        root = current_owner_root_transaction(db_session)
+        assert root is db_session.get_transaction()
+        assert root.is_active and root.parent is None and not root.nested
+        db_session.add(_projection("root-observation"))
+        db_session.flush()
+        assert current_owner_root_transaction(db_session) is root
+        return root
+
+    root = execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=observe
+    )
+    assert not root.is_active
+    with pytest.raises(OwnerCommandError, match="No active owner command definition"):
+        current_owner_root_transaction(db_session)
+
+
+def test_public_root_observation_refuses_owner_savepoint(db_session: Session) -> None:
+    def operation() -> None:
+        def participant() -> None:
+            current_owner_root_transaction(db_session)
+
+        with pytest.raises(OwnerCommandError) as captured:
+            execute_owner_savepoint(db_session, operation=participant)
+        assert captured.value.code.endswith(".nested_transaction_completion")
+        assert (
+            current_owner_root_transaction(db_session) is db_session.get_transaction()
+        )
+
+    execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=operation
+    )
+    assert not db_session.in_transaction()
 
 
 def test_failure_rolls_back_before_raising(db_session) -> None:
