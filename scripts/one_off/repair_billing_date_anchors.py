@@ -5,7 +5,7 @@ to the latest active invoice period end for the same subscription. It does not
 create invoices, delete documents, change balances, or infer missing service
 periods.
 
-Dry-run by default; pass --apply to write guarded changes.
+Preview-only; --apply is disabled by policy.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.services.billing_cleanup_remediation import (
     discover_invoice_anchor_rows,
     plan_cleanup_remediation,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 DEFAULT_OUTPUT = "scratchpad/billing_date_anchor_repair.csv"
 
@@ -44,7 +45,7 @@ def _write_csv(path: str, rows: list[dict[str, Any]]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="Write anchor repairs.")
+    parser.add_argument("--apply", action="store_true", help="Disabled by policy.")
     parser.add_argument(
         "--output",
         default=DEFAULT_OUTPUT,
@@ -56,6 +57,7 @@ def main() -> int:
         help="Optional JSON plan/result output path.",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     try:

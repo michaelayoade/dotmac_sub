@@ -5,7 +5,7 @@ voided in Splynx) were corrected with refund-source ledger debits, but both
 the erroneous payment credit and the correcting debit were left active, so
 customers see a charge-and-reversal pair on their portal ledger.
 
-Two actions, both idempotent and dry-run by default:
+Historical actions, now preview-only; --apply is disabled by policy:
 
 1. PAIRS — for each active refund-source debit whose payment is failed or
    canceled and which has a matching active payment-source credit (same
@@ -20,7 +20,6 @@ Two actions, both idempotent and dry-run by default:
 Examples
 --------
   python -m scripts.one_off.soft_delete_failed_payment_reversal_pairs
-  python -m scripts.one_off.soft_delete_failed_payment_reversal_pairs --apply
 """
 
 from __future__ import annotations
@@ -42,6 +41,7 @@ from app.models.billing import (
     Payment,
     PaymentStatus,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 DEAD_PAYMENT_STATUSES = (PaymentStatus.failed, PaymentStatus.canceled)
 REWORDED_MEMO = "Reversal of duplicate payment (original payment voided at source)"
@@ -87,11 +87,12 @@ def _matching_credit(session: Session, debit: LedgerEntry) -> LedgerEntry | None
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="write changes")
+    parser.add_argument("--apply", action="store_true", help="disabled by policy")
     parser.add_argument(
         "--csv", type=Path, default=None, help="write affected rows to this CSV"
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     session = SessionLocal()
     try:
