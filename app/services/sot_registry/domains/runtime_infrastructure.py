@@ -32,6 +32,8 @@ DOMAIN = DomainSOT(
             module="app.services.billing.legacy_archive_fence",
             implementation_modules=(
                 "app.services.billing.legacy_archive_fence_contracts",
+                "app.services.billing.legacy_retained_columns_contracts",
+                "app.services.billing.legacy_retained_columns_fence",
             ),
             owns=("private legacy monetary archive fencing",),
             depends_on=("events.owner_outputs",),
@@ -50,24 +52,27 @@ DOMAIN = DomainSOT(
                         name="locked archive catalog",
                         owner="external:postgresql_catalog",
                         kind=AuthorityKind.EXTERNAL_OBSERVATION,
-                        source="Actual owner, namespace, role reachability, exact ordinary relations, grants and fixed function/trigger catalog under all 44 ACCESS EXCLUSIVE locks.",
+                        source="Actual owner, namespace, role reachability, exact ordinary relations, grants and fixed function/trigger catalog under the component's complete ACCESS EXCLUSIVE lock set.",
                     ),
                     AuthorityInput(
                         name="closed archive policy",
                         owner="runtime.billing_legacy_archive_fence",
                         kind=AuthorityKind.CONTROL_INPUT,
-                        source="ArchiveFenceRevision.V1 and closed 44-table ArchiveRelation inventory; no caller role names or exemptions.",
+                        source="ArchiveFenceRevision.V1 (44 archives) and RetainedColumnsRevision.V1 (billing_accounts.balance, subscribers.deposit); no caller role names or exemptions.",
                     ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.PARTICIPANT,
                     boundary="Only within the valid registered future handoff coordinator's clean same-connection root READ WRITE READ COMMITTED transaction. Whole owner forbids manual SQL savepoints. Flush only; caller alone commits or rolls back.",
-                    locking="Acquire ACCESS EXCLUSIVE on all 44 exact public tables in sorted order before DDL/ACL changes; owner supplies positive bounded lock and statement timeouts.",
-                    idempotency="Exact installed function/trigger identities, body, arguments, events, ALWAYS status and no nonowner DML ACLs permit read-only replay without a second staged event. Collisions/partial installs/drift refuse; no repair or unfreeze.",
+                    locking="Each component locks its exact closed population before mutation (44 archive tables or both retained tables). Final owner MUST prelock the global sorted union before final observation. Positive bounded lock and statement timeouts.",
+                    idempotency="Exact installed function/trigger identities, body, arguments, events, ALWAYS status and the component-specific ACL policy (no archive DML or retained TRUNCATE for nonowners) permit read-only replay without a second staged event. Collisions/partial installs/drift refuse; no repair or unfreeze.",
                     retries="Caller retries the entire fresh owner transaction after rollback; this participant neither catches catalog failures nor completes transactions.",
                 ),
                 errors=ErrorContract(
-                    domain_codes=("billing_archive_fence.refused",),
+                    domain_codes=(
+                        "billing_archive_fence.refused",
+                        "billing_retained_columns.refused",
+                    ),
                     mapping_owner="Future maintenance adapter; raw database failures also abort its whole owner transaction.",
                     fail_closed_on=(
                         "unregistered owner or ambiguous transaction",
@@ -75,10 +80,13 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 events=EventContract(
-                    event_types=("billing.legacy_archive_fence.staged",),
+                    event_types=(
+                        "billing.legacy_archive_fence.staged",
+                        "billing.legacy_retained_columns.staged",
+                    ),
                     schema_version=1,
                     delivery_owner="events.owner_outputs",
-                    compatibility="Typed revision, 44-table count, catalog digest and existing operation identity. Component audit only; contingent on same-root commit, never a seal/receipt/activation event.",
+                    compatibility="Typed revision, closed component table count, catalog digest and existing operation identity. Component audit only; contingent on same-root commit, never a seal/receipt/activation event.",
                     replay="Stage via existing transactional owner-output protocol only for a new installation. Exact catalog replay stages no duplicate event; aborted installation and event roll back together.",
                 ),
                 migration=MigrationContract(
@@ -94,6 +102,8 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/integration/test_billing_legacy_archive_fence_postgres.py",
                     "tests/architecture/test_billing_legacy_archive_fence_boundary.py",
+                    "tests/architecture/test_billing_legacy_retained_columns_boundary.py",
+                    "tests/integration/test_billing_legacy_retained_columns_postgres.py",
                 ),
             ),
         ),

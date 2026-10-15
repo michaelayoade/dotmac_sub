@@ -63,6 +63,7 @@ def test_private_participant_has_no_transaction_or_activation_authority() -> Non
     assert service.contract.events is not None
     assert service.contract.events.event_types == (
         "billing.legacy_archive_fence.staged",
+        "billing.legacy_retained_columns.staged",
     )
 
 

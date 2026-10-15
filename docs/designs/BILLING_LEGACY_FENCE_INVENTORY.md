@@ -131,3 +131,40 @@ helper/view/FK/privileged-function closure, other runtime role paths and every
 retained-column population remain global handoff blockers. Authored hosted
 canaries have not been executed locally and test-only clone role provisioning
 does not prove production posture.
+
+## Private retained-column component v1
+
+The existing `runtime.billing_legacy_archive_fence` owner also contains the
+private `_install_legacy_retained_columns_fence` participant. Its closed policy
+is exactly `billing_accounts.balance` and `subscribers.deposit` (numeric(12,2),
+existing UUID primary keys). It reuses that owner's root, role and bounded-wait
+proof, requires the same physical audit/owner connection and locks both ordinary,
+unpartitioned, noninherited tables before mutation and reobservation. The final
+handoff coordinator must prelock the sorted global union before final observation;
+component-local locks alone do not establish final population capture.
+
+Account insertion requires exactly zero balance; subscriber insertion requires
+NULL deposit. UPDATE preserves the exact NULL-sensitive value and primary key.
+DELETE permits only zero account balance or NULL subscriber deposit: a historic
+subscriber deposit of zero is recorded history and cannot disappear. Existing
+FK/lifecycle checks remain. This deliberately narrows the existing hard-delete
+owner's deposit-row behavior; soft lifecycle transitions remain available.
+AFTER INSERT/UPDATE row guards check the final tuple even when another BEFORE
+trigger changes it. ALWAYS DELETE guards and statement TRUNCATE guards also apply
+in replica mode. Functions are fixed SECURITY INVOKER with pg_catalog search path,
+direct OLD/NEW comparisons and no joins or RLS-dependent lookups. The component
+revokes only nonowner/PUBLIC TRUNCATE, including grant options, using RESTRICT;
+shared-table DML and column grants remain usable and row guards enforce policy.
+Exact catalog replay emits no duplicate transactional
+`billing.legacy_retained_columns.staged` audit; partial installation, body, timing,
+arguments, ownership, enabled-state or TRUNCATE ACL drift refuses without repair.
+
+`min_balance` remains commercial policy, `prepaid_low_balance_at` notification
+state and `mrr_total` a writable cache. Its current unregistered MRR writer is
+RETIRE_AFTER_CUTOVER; a registered Billing-fed balance display owner and explicit
+MRR disposition remain final handoff gates. This component does not bless these
+legacy writers permanently, classify privileged helper closure, seal, write the
+installation receipt, activate, commit, grant module DML or unfreeze writers.
+There is no production caller, migration, CLI or startup wiring. Hosted migrated
+PostgreSQL canaries are authored; no local database/runtime execution or production
+acceptance is claimed.

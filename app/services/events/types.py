@@ -20,6 +20,7 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
+    billing_legacy_retained_columns_staged = "billing.legacy_retained_columns.staged"
     billing_legacy_archive_fence_staged = "billing.legacy_archive_fence.staged"
 
     field_identity_changed = "field_identity.changed"
