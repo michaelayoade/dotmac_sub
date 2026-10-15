@@ -75,7 +75,7 @@
         "app/services/deployment_writer_drain.py",
         "app/services/deployment_writer_drain_transport.py"
       ],
-      "reason": "Michael explicitly approved the scoped exceptions for Sub PR #3642 at ff7678eb3b5d414392134249831f424aee6cde65 on 2026-10-15. This covers only the read-only drain observer: 675 net app lines across the queue contract, observer, transport, existing Celery wiring and SOT declaration. The existing crm queue name is preserved exactly; its single new contract path is separately recorded in the CRM vocabulary baseline (239 -> 240 app paths). No financial writer, CRM capability, queue rename, baseline cap relaxation or ledger activation is authorized. Source merge requires green current CI and separate billing-owner approval.",
+      "reason": "Michael explicitly approved the scoped exceptions for Sub PR #3642 at ff7678eb3b5d414392134249831f424aee6cde65 on 2026-10-15. This covers only the read-only drain observer: 675 net app lines across the queue contract, observer, transport, existing Celery wiring and SOT declaration. The existing queue identifier is preserved exactly; its single new contract path is separately recorded in the vocabulary baseline (239 -> 240 app paths). No financial writer, new product capability, queue rename, baseline cap relaxation or ledger activation is authorized. Source merge requires green current CI and separate billing-owner approval.",
       "starter_contract": "Starter Billing single-writer ledger cutover prerequisite (M1, M8, ADR 0020): Sub-owned count-only drain evidence before migration admission; no Starter API or financial command is copied or activated.",
       "approved_by": "michaelayoade"
     }
