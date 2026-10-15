@@ -65,6 +65,14 @@ distribution metadata. The adapter verifies these exact versions at runtime.
   No destination filter is applied, and `Inspect._prepare` flattening is never
   used. `_collect` timeout is per event,
   and `_publish` retries; neither independently bounds a whole request.
+- Kombu `virtual/base.py:944-946,989-1002` and `redis.py:588-612,745,1349-1353`
+  show that public `polling_interval` controls Redis BRPOP and unsuccessful-poll
+  sleep, while retries reuse the original event timeout. Default one-second
+  BRPOP can overrun a two-second request guard. Only the control connection uses
+  `min(0.05, inspection_timeout * 0.05)` polling; financial transport settings
+  remain unchanged. `redis.py:1103-1109` also waits for pending BRPOP on close.
+  The real Redis sensitivity canary reinstates the default polling and requires
+  timeout refusal, without increasing the declared request budget.
 - Kombu `transport/virtual/base.py:Channel.queue_declare(passive=True)` first
   checks existence and returns `_size`. Redis `transport/redis.py:_size`
   pipelines `LLEN` for all priority steps; `_has_queue` checks those steps.
@@ -100,7 +108,10 @@ POSIX main-thread adapter uses `ITIMER_REAL` with a private `BaseException`
 alarm that bypasses library retry handlers; repeating expiry also interrupts
 blocking cleanup. Each inspector request has its own nested hard guard. The
 pidbox inactivity timeout is 75% of that request budget to leave guard
-headroom. Unsupported runtime, a pre-existing alarm, and any timeout refuse.
+headroom; short control-only Redis polling keeps empty polls and pending-BRPOP
+cleanup within that headroom. The five-second maximum applies to each raw
+inspection request; the complete observation uses the remaining overall drain
+budget. Unsupported runtime, a pre-existing alarm, and any timeout refuse.
 Expiry cleanup has at most the 50ms repeating-alarm scheduling interval plus
 normal interpreter scheduling; it never intentionally waits without a bound.
 
@@ -172,3 +183,9 @@ No local runtime/test/DB/Docker/SSH execution was performed. Source is not
 deployable until hosted Redis/Celery acceptance, SOT integration, independent
 review, shell/rollback components, migration691, complete rehearsal and
 Michael's exact release approval are complete.
+
+
+Hosted Celery testing uses distinct controller hostnames for the extra-worker
+canary. Celery 5.4 `contrib/testing/worker.py:155-168` always supplies an
+anonymous PID/host name, so two workers in the same process otherwise collide.
+The explicit controllers replace that value while exercising real broadcasts.

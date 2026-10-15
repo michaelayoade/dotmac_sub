@@ -229,7 +229,19 @@ class RedisCeleryDrainSource:
                 # financial deliveries. Disable ack emulation ONLY on this
                 # separate inspect transport; incumbent workers and the broker
                 # count channel retain their actual acknowledgement settings.
-                control_options = {**options, "ack_emulation": False}
+                control_options = {
+                    **options,
+                    "ack_emulation": False,
+                    # Kombu 5.6.2 retries an empty Redis poll with the original
+                    # drain_events timeout, not its remaining time. Its default
+                    # one-second BRPOP can therefore overrun a two-second
+                    # inspection. This public option shortens both BRPOP and
+                    # the sleep between empty polls, including pending BRPOP
+                    # cleanup. Keep it separate from financial transports.
+                    "polling_interval": min(
+                        0.05, request.budgets.inspection_timeout * 0.05
+                    ),
+                }
                 with (
                     Celery(
                         "deployment_drain_observer",

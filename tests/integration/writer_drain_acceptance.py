@@ -18,8 +18,10 @@ from urllib.parse import urlsplit
 
 import pytest
 from celery import Celery
+from celery.contrib.testing.worker import TestWorkController as CeleryTestWorkController
 from celery.contrib.testing.worker import start_worker
 from kombu import Connection, Producer, Queue
+from kombu.transport.redis import Transport as RedisTransport
 from redis import Redis
 from redis.client import Pipeline
 
@@ -333,10 +335,26 @@ def test_actual_extra_worker_is_not_hidden_by_destination_filter(
     disposable_broker: tuple[str, Redis],
 ) -> None:
     url, _client = disposable_broker
+
+    # Celery 5.4's start_worker always passes anon_nodename() (PID + host),
+    # giving both threads the same identity. Supplying hostname directly also
+    # collides with that keyword. Explicit controllers replace that value.
+    class IncumbentWorker(CeleryTestWorkController):
+        def __init__(self, *, hostname: str, **kwargs: object) -> None:
+            super().__init__(hostname="incumbent@hosted-drain", **kwargs)
+
+    class ExtraWorker(CeleryTestWorkController):
+        def __init__(self, *, hostname: str, **kwargs: object) -> None:
+            super().__init__(hostname="extra@hosted-drain", **kwargs)
+
     with Celery("hosted_extra_worker", broker=url, set_as_current=False) as app:
         app.conf.task_queues = (Queue("billing"),)
-        with start_worker(app, perform_ping_check=False) as incumbent:
-            with start_worker(app, perform_ping_check=False) as extra:
+        with start_worker(
+            app, perform_ping_check=False, WorkController=IncumbentWorker
+        ) as incumbent:
+            with start_worker(
+                app, perform_ping_check=False, WorkController=ExtraWorker
+            ) as extra:
                 assert incumbent.hostname != extra.hostname
                 full = DrainRequest(
                     DrainMode.WORKERS_AND_BROKER,
@@ -345,6 +363,36 @@ def test_actual_extra_worker_is_not_hidden_by_destination_filter(
                 )
                 result = observe_writer_drain(request=full, source=source(url))
                 assert result.refusal is DrainRefusal.UNEXPECTED_NODE
+
+
+def test_actual_control_polling_budget_sensitivity(
+    disposable_broker: tuple[str, Redis], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, _client = disposable_broker
+    full = DrainRequest(
+        DrainMode.WORKERS_AND_BROKER,
+        (WorkerNodeId("celery@absent"),),
+        DrainBudgets(2, 30, 5),
+    )
+    started = time.monotonic()
+    result = observe_writer_drain(request=full, source=source(url))
+    assert result.refusal is DrainRefusal.MISSING_NODE
+    assert time.monotonic() - started < full.budgets.inspection_timeout
+
+    original_init = RedisTransport.__init__
+
+    def default_polling(self: RedisTransport, *args: object, **kwargs: object) -> None:
+        original_init(self, *args, **kwargs)
+        # Reintroduce the pinned transport's one-second BRPOP and no sleep.
+        # The actual Redis canary must distinguish this broken mechanism from
+        # a completed census, without enlarging the hard request deadline.
+        self.polling_interval = None
+        self.brpop_timeout = 1
+
+    with monkeypatch.context() as patch:
+        patch.setattr(RedisTransport, "__init__", default_polling)
+        broken = observe_writer_drain(request=full, source=source(url))
+    assert broken.refusal is DrainRefusal.INSPECTION_TIMEOUT
 
 
 def test_control_event_flood_and_blocked_cleanup_are_deadline_bounded(
