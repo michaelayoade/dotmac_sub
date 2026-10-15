@@ -3,7 +3,7 @@
 {% block title %}Audit Log - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div id="audit-workspace" class="space-y-6">
     <div>
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Audit Log</h1>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Track system changes and administrative activity</p>
@@ -22,6 +22,7 @@
               hx-target="#audit-table"
               hx-trigger="submit, change from:#audit-per-page"
               hx-push-url="true"
+              hx-indicator="#audit-loading"
               class="space-y-4">
             <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <div>
@@ -125,7 +126,18 @@
         </form>
     </div>
 
-    <div id="audit-table" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <div id="audit-request-feedback" aria-live="polite">
+        <div id="audit-loading" class="htmx-indicator inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300" role="status">
+            <span class="h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" aria-hidden="true"></span>
+            Loading…
+        </div>
+        <div id="audit-request-error" hidden role="alert" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+            Audit logs could not be loaded. Your current results are still shown.
+            <button type="button" hx-get="/admin/system/audit" hx-target="#audit-table" hx-include="#audit-filters [name]" hx-push-url="true" hx-indicator="#audit-loading" class="ml-2 font-semibold underline">Retry</button>
+        </div>
+    </div>
+
+    <div id="audit-table" hx-indicator="#audit-loading" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         {% include "admin/system/_audit_table.html" %}
     </div>
 </div>

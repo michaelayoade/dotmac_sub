@@ -50,9 +50,39 @@
         });
     }
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", initActionPicker);
-    } else {
+    function initRequestFeedback() {
+        const workspace = document.getElementById("audit-workspace");
+        const failure = document.getElementById("audit-request-error");
+        if (!workspace || !failure) return;
+
+        function belongsToAuditPage(event) {
+            const source = event.detail && event.detail.elt;
+            return source instanceof Element && workspace.contains(source);
+        }
+
+        workspace.addEventListener("htmx:beforeRequest", function (event) {
+            if (belongsToAuditPage(event)) failure.hidden = true;
+        });
+        workspace.addEventListener("htmx:afterRequest", function (event) {
+            if (!belongsToAuditPage(event)) return;
+            failure.hidden = event.detail.successful;
+        });
+        workspace.addEventListener("htmx:sendError", function (event) {
+            if (belongsToAuditPage(event)) failure.hidden = false;
+        });
+        workspace.addEventListener("htmx:responseError", function (event) {
+            if (belongsToAuditPage(event)) failure.hidden = false;
+        });
+    }
+
+    function initAuditPage() {
         initActionPicker();
+        initRequestFeedback();
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initAuditPage);
+    } else {
+        initAuditPage();
     }
 })();

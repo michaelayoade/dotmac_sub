@@ -1185,6 +1185,9 @@ never represented by a blank space or a hidden field.
 The Action control searches friendly labels from recorded values, resolves a
 unique choice, and submits the exact stored action. Unmatched free text is not
 sent as a misleading exact-match filter.
+Filtering and pagination show a `Loading…` indicator. Network or server
+failures keep the current rows visible and show a Retry action using the same
+filter controls.
 
 ### 8g. Health (`/admin/system/health`)
 

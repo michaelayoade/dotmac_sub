@@ -507,6 +507,20 @@ def test_audit_filter_ui_uses_recorded_options_and_pushes_filter_urls():
     assert "Choose a recorded action from the list." in picker_source
 
 
+def test_audit_filtering_shows_loading_and_recoverable_failure_feedback():
+    page_source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+    script_source = Path("static/js/admin-audit.js").read_text(encoding="utf-8")
+
+    assert 'id="audit-loading"' in page_source
+    assert "Loading…" in page_source
+    assert 'id="audit-request-error"' in page_source
+    assert "Your current results are still shown." in page_source
+    assert ">Retry</button>" in page_source
+    assert 'hx-indicator="#audit-loading"' in page_source
+    assert 'workspace.addEventListener("htmx:sendError"' in script_source
+    assert 'workspace.addEventListener("htmx:responseError"' in script_source
+
+
 def test_audit_page_data_returns_canonical_numbered_pagination(db_session):
     for index in range(11):
         db_session.add(
