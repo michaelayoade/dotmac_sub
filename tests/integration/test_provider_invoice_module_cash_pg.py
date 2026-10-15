@@ -253,7 +253,7 @@ def test_late_receipt_reads_original_capture_and_never_posts(
     "mutation",
     [
         "id = '00000000-0000-0000-0000-000000000001'",
-        "provider_id = '00000000-0000-0000-0000-000000000002'",
+        "provider_id = :replacement_provider_id",
         "event_type = 'gateway.reconciliation.succeeded'",
         "external_id = 'other-transaction'",
         "idempotency_key = 'other-key'",
@@ -276,13 +276,28 @@ def test_verified_source_facts_refuse_direct_mutation(
     source_case: SourceCase, mutation: str, runtime: bool
 ) -> None:
     engine = source_case.runtime if runtime else source_case.admin
+    replacement_provider_id = source_case.provider_id
+    if mutation == "provider_id = :replacement_provider_id":
+        # Keep the replacement FK valid: AFTER constraint triggers may execute
+        # before the integrity guard, and a missing provider proves only FK refusal.
+        with Session(source_case.admin) as db, db.begin():
+            replacement = PaymentProvider(
+                name=f"source-mutation-{uuid4()}",
+                provider_type=PaymentProviderType.paystack,
+            )
+            db.add(replacement)
+            db.flush()
+            replacement_provider_id = replacement.id
     with (
         pytest.raises(DBAPIError, match="verified provider source facts are immutable"),
         engine.begin() as connection,
     ):
         connection.execute(
             text(f"UPDATE public.payment_provider_events SET {mutation} WHERE id=:id"),  # noqa: S608 - closed parametrized SQL
-            {"id": source_case.query.observation_id},
+            {
+                "id": source_case.query.observation_id,
+                "replacement_provider_id": replacement_provider_id,
+            },
         )
     with Session(source_case.runtime) as db, db.begin():
         source = get_module_invoice_cash_source(db, source_case.query)
@@ -984,7 +999,7 @@ def test_693_real_predecessor_upgrade_preserves_rows_and_existing_guards(
                 (
                     "verified_provider_source_facts_immutable",
                     "A",
-                    27,
+                    25,
                     False,
                     ["search_path=pg_catalog"],
                 ),
@@ -1021,3 +1036,115 @@ def test_693_real_predecessor_upgrade_preserves_rows_and_existing_guards(
             )
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("mutates_source", [False, True], ids=("amount", "source"))
+def test_final_tuple_guard_refuses_later_before_trigger_fact_mutation(
+    source_case: SourceCase, mutates_source: bool
+) -> None:
+    """Source integrity under actual login, not global helper/privilege closure."""
+    event_id = source_case.query.observation_id
+    with source_case.runtime.begin() as connection:
+        assert connection.execute(text("SELECT session_user, current_user")).one() == (
+            "app_user",
+            "app_user",
+        )
+        # Positive control: the exact lifecycle update is allowed before the
+        # canary mutator is installed. Neither integrity guard is disabled.
+        connection.execute(
+            text(
+                "UPDATE public.payment_provider_events SET error_code='late_before_canary' WHERE id=:id"
+            ),
+            {"id": event_id},
+        )
+        connection.execute(
+            text(
+                "UPDATE public.payment_provider_events SET error_code=NULL WHERE id=:id"
+            ),
+            {"id": event_id},
+        )
+        before = connection.execute(
+            text(
+                "SELECT amount, source, status, error_code, error FROM public.payment_provider_events WHERE id=:id"
+            ),
+            {"id": event_id},
+        ).one()
+    with source_case.admin.begin() as connection:
+        # The name sorts after the incumbent guard name: a BEFORE integrity
+        # guard would accept the original tuple before this mutator changed it.
+        function_sql = (
+            """
+            CREATE FUNCTION public.z_after_guard_canary_mutator() RETURNS trigger
+            LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog AS $$
+            BEGIN
+                IF NEW.error_code = 'late_before_canary' THEN
+                    NEW.source := 'administrative_ingest';
+                END IF;
+                RETURN NEW;
+            END $$
+            """
+            if mutates_source
+            else """
+            CREATE FUNCTION public.z_after_guard_canary_mutator() RETURNS trigger
+            LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog AS $$
+            BEGIN
+                IF NEW.error_code = 'late_before_canary' THEN
+                    NEW.amount := OLD.amount + 1;
+                END IF;
+                RETURN NEW;
+            END $$
+            """
+        )
+        connection.execute(text(function_sql))
+        connection.execute(
+            text("""
+            CREATE TRIGGER z_after_guard_canary_mutator
+            BEFORE UPDATE ON public.payment_provider_events FOR EACH ROW
+            EXECUTE FUNCTION public.z_after_guard_canary_mutator()
+        """)
+        )
+        assert connection.execute(
+            text("""
+            SELECT tgname, tgtype, tgenabled FROM pg_catalog.pg_trigger
+            WHERE tgrelid='public.payment_provider_events'::regclass
+              AND tgname IN ('verified_provider_source_facts_immutable', 'z_after_guard_canary_mutator')
+            ORDER BY tgname
+        """)
+        ).all() == [
+            ("verified_provider_source_facts_immutable", 25, "A"),
+            ("z_after_guard_canary_mutator", 19, "O"),
+        ]
+    with (
+        pytest.raises(DBAPIError) as refusal,
+        source_case.runtime.begin() as connection,
+    ):
+        connection.execute(
+            text(
+                "UPDATE public.payment_provider_events SET error='must_rollback' WHERE id=:id"
+            ),
+            {"id": event_id},
+        )
+        # The caller changes only an allowed lifecycle field. The exact guard
+        # error proves the mutator ran and its final protected tuple was refused.
+        connection.execute(
+            text(
+                "UPDATE public.payment_provider_events SET error_code='late_before_canary' WHERE id=:id"
+            ),
+            {"id": event_id},
+        )
+    assert isinstance(refusal.value.orig, psycopg.errors.RestrictViolation)
+    assert refusal.value.orig.sqlstate == "23001"
+    assert (
+        refusal.value.orig.diag.message_primary
+        == "verified provider source facts are immutable"
+    )
+    with source_case.runtime.connect() as connection:
+        assert (
+            connection.execute(
+                text(
+                    "SELECT amount, source, status, error_code, error FROM public.payment_provider_events WHERE id=:id"
+                ),
+                {"id": event_id},
+            ).one()
+            == before
+        )

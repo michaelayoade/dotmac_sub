@@ -19,6 +19,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # AFTER observes the final tuple produced by every BEFORE row trigger.
     op.execute("SET LOCAL lock_timeout = '5s'")
     op.execute("SET LOCAL statement_timeout = '60s'")
     op.execute("LOCK TABLE public.payment_provider_events IN ACCESS EXCLUSIVE MODE")
@@ -51,7 +52,7 @@ def upgrade() -> None:
     """)
     op.execute("""
         CREATE TRIGGER verified_provider_source_facts_immutable
-        BEFORE UPDATE OR DELETE ON public.payment_provider_events
+        AFTER UPDATE OR DELETE ON public.payment_provider_events
         FOR EACH ROW EXECUTE FUNCTION public.guard_verified_provider_source_facts()
     """)
     op.execute("""

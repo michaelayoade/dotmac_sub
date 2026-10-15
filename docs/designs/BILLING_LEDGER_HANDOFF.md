@@ -253,6 +253,12 @@ handoff authority. Correlation rows remain append-only. Successor revision
 `693_provider_source_facts` supplies the RLS-independent provider source-facts
 integrity prerequisite. Its SECURITY INVOKER trigger, with pg_catalog search_path,
 compares only OLD and NEW; it performs no reads or correlation/tenant joins.
+The row guard runs AFTER UPDATE OR DELETE so it validates the final stored tuple
+following every BEFORE row trigger, including a later alphabetically ordered
+trigger that rewrites protected facts during an otherwise allowed lifecycle
+update. TRUNCATE retains its BEFORE STATEMENT guard. Rejection rolls back the
+statement and enclosing transaction; this is a source-integrity guarantee, not
+proof of installation-wide helper or privilege closure.
 Once the old source is `verified_webhook` or `gateway_reconciliation`, it freezes
 id, provider_id, event_type, external_id, idempotency_key, source,
 observation_digest, observed_payment_status, amount, provider_fee, net_amount,
@@ -315,7 +321,7 @@ run the full real migration baseline and the real 692-to-693 predecessor rehears
 then the actual unprivileged app_user-login canaries in
 `tests/integration/test_provider_invoice_module_cash_pg.py`. They cover unchanged
 historical rows and preexisting triggers, ALWAYS/invoker/search_path catalog
-shape, all frozen fields, hidden tenant binding context, equal values/equivalent
+shape, all frozen fields, later BEFORE-trigger fact mutation, hidden tenant binding context, equal values/equivalent
 instants, processing/payload updates, both verified replay directions, strict
 legacy enrichment, deletion, empty/cascaded truncation, atomic rollback and
 independent requested/gross/fee/net reads with zero cash postings. Truncation is

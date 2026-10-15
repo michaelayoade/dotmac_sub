@@ -164,7 +164,8 @@ def test_verified_source_guard_uses_only_old_new_and_cannot_bypass_rls() -> None
     assert "OLD.source IN ('verified_webhook', 'gateway_reconciliation')" in sql
     assert "IS DISTINCT FROM" in sql
     assert "ENABLE ALWAYS TRIGGER" in source
-    assert "BEFORE UPDATE OR DELETE" in source
+    assert "AFTER UPDATE OR DELETE" in source
+    assert "BEFORE UPDATE OR DELETE" not in source
     assert "BEFORE TRUNCATE" in source
     assert "BEFORE INSERT" not in source
     downgrade = ast.unparse(_function(path, "downgrade"))
