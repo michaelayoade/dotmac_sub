@@ -107,24 +107,30 @@ def retry_failed_events():
         failed = 0
 
         for event_record in failed_events:
+            event_id = str(event_record.event_id)
+            event_type = event_record.event_type
+            retry_count = event_record.retry_count
             try:
                 success = dispatcher.retry_event(session, event_record)
                 if success:
                     succeeded += 1
                     logger.info(
-                        f"Successfully retried event {event_record.event_id} "
-                        f"({event_record.event_type})"
+                        "Successfully retried event %s (%s)",
+                        event_id,
+                        event_type,
                     )
                 else:
                     failed += 1
                     logger.warning(
-                        f"Event {event_record.event_id} failed retry "
-                        f"(attempt {event_record.retry_count}/{MAX_RETRIES})"
+                        "Event %s failed retry (attempt %s/%s)",
+                        event_id,
+                        retry_count,
+                        MAX_RETRIES,
                     )
             except Exception as exc:
                 failed += 1
-                logger.exception(f"Error retrying event {event_record.event_id}: {exc}")
                 session.rollback()
+                logger.exception("Error retrying event %s: %s", event_id, exc)
 
         result = {
             "retried": len(failed_events),
