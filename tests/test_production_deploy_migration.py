@@ -223,13 +223,26 @@ def test_reconciliation_classifies_retained_terminal_without_touching_migration_
             record.heads_before if current else record.candidate_heads
         ),
     )
-    monkeypatch.setattr(
-        probe,
-        "_probe",
-        lambda _binding, *, image, module, arguments, operation: (
-            probe_operations.append(operation) or ""
-        ),
-    )
+
+    def supported_floor(
+        _binding: probe.CapturedNetworkBinding,
+        *,
+        image: str,
+        module: str,
+        arguments: tuple[str, ...],
+        operation: str,
+    ) -> str:
+        probe_operations.append(operation)
+        assert image == "candidate"
+        assert arguments == ("inspect",)
+        if operation == "payment-email-supported":
+            assert module == "scripts.verify_payment_email_rollback"
+            return _email_floor_json("predecessor")
+        assert operation == "payments-supported"
+        assert module == "scripts.verify_payments_intent_rollback"
+        return _payments_floor_json("predecessor")
+
+    monkeypatch.setattr(probe, "_probe", supported_floor)
     monkeypatch.setattr(
         probe,
         "_run",
@@ -247,8 +260,8 @@ def test_reconciliation_classifies_retained_terminal_without_touching_migration_
     assert outcome.disposition is migration.MigrationDisposition.SAFE_PREDDL
     assert outcome.phase is migration.MigrationPhase.SAFE_PREDDL
     assert probe_operations == [
-        "payment-email-predecessor",
-        "payments-predecessor",
+        "payment-email-supported",
+        "payments-supported",
     ]
     assert command_calls == []
 
@@ -1312,16 +1325,27 @@ def test_nonzero_terminal_refuses_preddl_without_both_candidate_owned_floor_read
 
 
 @pytest.mark.parametrize(
-    ("installed_floor", "candidate_heads_output", "error"),
+    ("installed_floor", "candidate_heads_output", "error", "expected_phase"),
     [
-        ("unknown", "b2 (head)\n", "migration_database_state_unproved"),
-        ("installed", "c3 (head)\n", "candidate_heads_changed"),
+        (
+            "unknown",
+            "b2 (head)\n",
+            "migration_database_state_unproved",
+            migration.MigrationPhase.INDETERMINATE,
+        ),
+        (
+            "installed",
+            "c3 (head)\n",
+            "migration_forward_repair_required",
+            migration.MigrationPhase.FORWARD_REPAIR_REQUIRED,
+        ),
     ],
 )
 def test_candidate_floor_or_declared_head_mismatch_never_completes(
     installed_floor: str,
     candidate_heads_output: str,
     error: str,
+    expected_phase: migration.MigrationPhase,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1336,6 +1360,8 @@ def test_candidate_floor_or_declared_head_mismatch_never_completes(
 
     with pytest.raises(migration.MigrationRefused, match=error):
         _run_migration(deploy)
+    record, _digest = migration._load_journal(migration._journal_path(deploy))
+    assert record is not None and record.phase is expected_phase
     with pytest.raises(migration.MigrationRefused):
         migration.guard_interlock(deploy)
 
