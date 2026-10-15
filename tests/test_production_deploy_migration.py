@@ -18,6 +18,42 @@ from scripts import production_deploy_probe as probe
 from scripts import production_trusted_rollback_preflight as preflight
 
 
+def _email_floor_json(floor: str) -> str:
+    installed = floor == "installed"
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "floor": floor,
+            "observation": {
+                "legacy_shape_complete": True,
+                "installed_shape_complete": installed,
+                "installation_relations": 3 if installed else 0,
+                "seal_columns": 1 if installed else 0,
+                "guard_triggers": 1 if installed else 0,
+                "guard_functions": 1 if installed else 0,
+            },
+        }
+    )
+
+
+def _payments_floor_json(floor: str) -> str:
+    installed = floor == "installed"
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "floor": floor,
+            "observation": {
+                "legacy_shape_complete": True,
+                "installed_shape_complete": installed,
+                "correlation_columns": 2 if installed else 0,
+                "correlation_constraints": 2 if installed else 0,
+                "correlation_triggers": 1 if installed else 0,
+                "correlation_functions": 1 if installed else 0,
+            },
+        }
+    )
+
+
 def _binding() -> probe.CapturedNetworkBinding:
     database = probe.EndpointBinding(
         "a" * 64,
@@ -411,10 +447,18 @@ def _maintenance_admission_fixture(
     monkeypatch: pytest.MonkeyPatch,
     *,
     failure: str | None = None,
+    known_predecessor: bool = False,
 ) -> tuple[migration.MaintenanceExecutionContext, probe.CapturedNetworkBinding]:
     deploy = tmp_path / "deploy"
     deploy.mkdir()
     record = _record(migration.MigrationPhase.COMPLETE)
+    if known_predecessor:
+        assert record.terminal is not None
+        record = replace(
+            record,
+            phase=migration.MigrationPhase.FORWARD_REPAIR_REQUIRED,
+            terminal=replace(record.terminal, exit_code=1),
+        )
     migration._write(migration._journal_path(deploy), record)
     _stored_record, journal_digest = migration._load_journal(
         migration._journal_path(deploy)
@@ -482,7 +526,9 @@ def _maintenance_admission_fixture(
         migration,
         "_observe_heads",
         lambda _binding, *, image, current: (
-            ("a1",) if failure == "heads" else record.candidate_heads
+            ("wrong",)
+            if failure == "heads"
+            else (record.heads_before if known_predecessor else record.candidate_heads)
         ),
     )
 
@@ -495,21 +541,15 @@ def _maintenance_admission_fixture(
         operation: str,
     ) -> str:
         assert image == "candidate"
-        if operation == "payments-installed":
-            complete = failure != "floor"
-            return json.dumps(
-                {
-                    "schema_version": 1,
-                    "floor": "installed",
-                    "observation": {
-                        "legacy_shape_complete": True,
-                        "installed_shape_complete": complete,
-                        "correlation_columns": 2 if complete else 0,
-                        "correlation_constraints": 2 if complete else 0,
-                        "correlation_triggers": 1 if complete else 0,
-                        "correlation_functions": 1 if complete else 0,
-                    },
-                }
+        if operation == "payment-email-supported":
+            return _email_floor_json(
+                "unknown" if failure == "email-floor" else "installed"
+            )
+        if operation == "payments-supported":
+            return _payments_floor_json(
+                "unknown"
+                if failure == "floor"
+                else ("predecessor" if known_predecessor else "installed")
             )
         if operation == "drain":
             empty = failure != "broker"
@@ -587,6 +627,7 @@ def test_superseded_maintenance_context_cannot_start_new_migration(
     [
         ("heads", "maintenance_heads_unproved"),
         ("floor", "maintenance_admission_unproved"),
+        ("email-floor", "maintenance_admission_unproved"),
         ("writers", "maintenance_writers_not_stopped"),
         ("inventory", "maintenance_admission_unproved"),
         ("broker", "maintenance_broker_empty_unproved"),
@@ -801,12 +842,27 @@ def test_candidate_heads_command_resolves_depends_on_lineages(
     assert "pm_0003_confirmation_immutable" not in effective_heads
 
 
-def test_silent_successful_predecessor_probes_prove_safe_preddl(
+@pytest.mark.parametrize(
+    ("email_floor", "payments_floor", "expected"),
+    [
+        ("predecessor", "predecessor", migration.MigrationDisposition.SAFE_PREDDL),
+        (
+            "installed",
+            "predecessor",
+            migration.MigrationDisposition.FORWARD_REPAIR_REQUIRED,
+        ),
+        ("unknown", "predecessor", migration.MigrationDisposition.UNRESOLVED),
+        ("installed", "unknown", migration.MigrationDisposition.UNRESOLVED),
+    ],
+)
+def test_unchanged_failed_terminal_requires_known_owner_floors(
     monkeypatch: pytest.MonkeyPatch,
+    email_floor: str,
+    payments_floor: str,
+    expected: migration.MigrationDisposition,
 ) -> None:
     binding = _binding()
     record = _record(migration.MigrationPhase.EXITED)
-    calls: list[str] = []
     monkeypatch.setattr(
         migration,
         "_observe_heads",
@@ -815,30 +871,25 @@ def test_silent_successful_predecessor_probes_prove_safe_preddl(
         ),
     )
 
-    def silent_success(
-        _binding: probe.CapturedNetworkBinding,
+    def observe(
+        _binding: object,
         *,
         image: str,
         module: str,
         arguments: tuple[str, ...],
         operation: str,
     ) -> str:
-        assert image == "candidate"
-        assert arguments == ()
-        calls.append(operation)
-        return ""
+        assert image == "candidate" and arguments == ("inspect",)
+        if operation == "payment-email-supported":
+            return _email_floor_json(email_floor)
+        assert operation == "payments-supported"
+        return _payments_floor_json(payments_floor)
 
-    monkeypatch.setattr(probe, "_probe", silent_success)
-
+    monkeypatch.setattr(probe, "_probe", observe)
+    assert record.terminal is not None
     assert (
-        migration._classify_terminal_state(
-            binding,
-            record,
-            record.terminal,  # type: ignore[arg-type]
-        )
-        is migration.MigrationDisposition.SAFE_PREDDL
+        migration._classify_terminal_state(binding, record, record.terminal) is expected
     )
-    assert calls == ["payment-email-predecessor", "payments-predecessor"]
 
 
 def test_shell_candidate_heads_uses_the_canonical_graph_owner() -> None:
@@ -1152,21 +1203,20 @@ def _install_success_fakes(
             return current_heads
         if module == "alembic":
             return candidate_heads_output
-        if operation == "payments-installed":
-            return json.dumps(
-                {
-                    "schema_version": 1,
-                    "floor": installed_floor,
-                    "observation": {
-                        "legacy_shape_complete": True,
-                        "installed_shape_complete": True,
-                    },
-                }
+        if operation in {"payment-email-supported", "payments-supported"}:
+            legacy_operation = (
+                "payment-email-predecessor"
+                if operation.startswith("payment-email-")
+                else "payments-predecessor"
             )
-        if image == "candidate" and operation.endswith("-predecessor"):
-            if operation == predecessor_failure:
+            if legacy_operation == predecessor_failure:
                 raise probe.ProbeRefused("floor_unproved")
-            return "predecessor-proven"
+            floor = "predecessor" if container_exit != 0 else installed_floor
+            return (
+                _email_floor_json(floor)
+                if operation.startswith("payment-email-")
+                else _payments_floor_json(floor)
+            )
         raise AssertionError("unexpected fixed probe operation")
 
     monkeypatch.setattr(probe, "_probe", output)
@@ -1508,3 +1558,74 @@ def test_legacy_omitted_host_maps_preserve_real_journal_digest_phase_and_archive
     migration._archive_terminal(journal, terminal_record)
     assert archive.read_bytes() == terminal_bytes
     assert journal.read_bytes() == terminal_bytes
+
+
+@pytest.mark.parametrize("known_predecessor", [False, True])
+def test_maintenance_basis_and_start_heads_are_fresh_server_observations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    known_predecessor: bool,
+) -> None:
+    context, binding = _maintenance_admission_fixture(
+        tmp_path, monkeypatch, known_predecessor=known_predecessor
+    )
+    record, _ = migration._load_journal(
+        migration._journal_path(context.deploy_directory)
+    )
+    assert record is not None
+    admission = migration.validate_maintenance_admission(context, binding)
+    assert admission.basis is (
+        migration.MaintenanceForwardRepairBasis.UNCHANGED_KNOWN_PREDECESSOR
+        if known_predecessor
+        else migration.MaintenanceForwardRepairBasis.INSTALLED_AT_FAILED_CANDIDATE
+    )
+    assert admission.start_heads == (
+        record.heads_before if known_predecessor else record.candidate_heads
+    )
+    _, before, _ = migration.prepare_maintenance_context(context)
+    assert before == admission.start_heads
+
+
+def test_maintenance_refuses_head_change_during_broker_drain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, binding = _maintenance_admission_fixture(
+        tmp_path, monkeypatch, known_predecessor=True
+    )
+    record, _ = migration._load_journal(
+        migration._journal_path(context.deploy_directory)
+    )
+    assert record is not None
+    observations = iter((record.heads_before, record.candidate_heads))
+    monkeypatch.setattr(
+        migration, "_observe_heads", lambda *_args, **_kwargs: next(observations)
+    )
+    with pytest.raises(migration.MigrationRefused, match="maintenance_heads_changed"):
+        migration.validate_maintenance_admission(context, binding)
+
+
+def test_caller_cannot_supply_maintenance_basis_or_start_heads_in_fd_context() -> None:
+    assert "basis" not in migration.MaintenanceExecutionContext.__dataclass_fields__
+    assert (
+        "start_heads" not in migration.MaintenanceExecutionContext.__dataclass_fields__
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"schema_version": True},
+        {"floor": "unknown"},
+        {"observation": None},
+    ],
+)
+def test_email_probe_rejects_unproved_or_malformed_evidence(
+    change: dict[str, object],
+) -> None:
+    evidence = json.loads(_email_floor_json("installed"))
+    evidence.update(change)
+    with pytest.raises(probe.ProbeRefused, match="payment_email_floor_unproved"):
+        probe._validate_payment_email_floor_output(
+            "payment-email-supported", json.dumps(evidence)
+        )

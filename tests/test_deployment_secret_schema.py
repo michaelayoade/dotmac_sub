@@ -284,6 +284,26 @@ def test_candidate_graph_uses_actual_composed_lineage() -> None:
     } <= applied
 
 
+def test_consumed_dependency_head_ancestry_is_complete(
+    graph: ScriptDirectory,
+) -> None:
+    (Path(graph.dir) / "versions" / "dependent.py").write_text(
+        "revision = 'dependent_head'\n"
+        "down_revision = '999_predecessor'\n"
+        "depends_on = '001_latest'\n"
+        "branch_labels = None\n"
+    )
+    composed = ScriptDirectory(graph.dir)
+    applied = owner._ancestors(composed, frozenset(composed.get_heads()))
+    assert {
+        "dependent_head",
+        "001_latest",
+        owner._INTEGRATION_ANCHOR,
+        owner._MACHINE_ANCHOR,
+        owner._ATTRIBUTION_ANCHOR,
+    } <= applied
+
+
 def test_composed_dependency_ancestry_is_feature_evidence(
     graph: ScriptDirectory,
 ) -> None:

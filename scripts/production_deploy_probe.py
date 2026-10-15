@@ -33,6 +33,8 @@ _PROBE_CODE: Final = (
 )
 _FLOOR_OPERATIONS: Final = {
     "payment-email-predecessor": ("scripts.verify_payment_email_rollback", ()),
+    "payment-email-supported": ("scripts.verify_payment_email_rollback", ("inspect",)),
+    "payment-email-installed": ("scripts.verify_payment_email_rollback", ("inspect",)),
     "payments-predecessor": ("scripts.verify_payments_intent_rollback", ()),
     "payments-supported": (
         "scripts.verify_payments_intent_rollback",
@@ -143,6 +145,69 @@ def _validate_payments_floor_output(operation: str, output: str) -> dict[str, ob
             raise ValueError
     except (KeyError, TypeError, ValueError):
         raise ProbeRefused("payments_floor_unproved") from None
+    return evidence
+
+
+def _validate_payment_email_floor_output(
+    operation: str, output: str
+) -> dict[str, object]:
+    """Accept only the exact safe JSON projection of the Email catalog owner."""
+    try:
+        evidence = json.loads(output)
+        if type(evidence) is not dict or set(evidence) != {
+            "schema_version",
+            "floor",
+            "observation",
+        }:
+            raise ValueError
+        observation = evidence["observation"]
+        if (
+            type(evidence["schema_version"]) is not int
+            or evidence["schema_version"] != 1
+            or type(observation) is not dict
+            or set(observation)
+            != {
+                "legacy_shape_complete",
+                "installed_shape_complete",
+                "installation_relations",
+                "seal_columns",
+                "guard_triggers",
+                "guard_functions",
+            }
+            or observation["legacy_shape_complete"] is not True
+        ):
+            raise ValueError
+        counts = tuple(
+            observation[key]
+            for key in (
+                "installation_relations",
+                "seal_columns",
+                "guard_triggers",
+                "guard_functions",
+            )
+        )
+        if any(type(value) is not int for value in counts):
+            raise ValueError
+        floor = evidence["floor"]
+        if floor == "predecessor" and operation == "payment-email-supported":
+            if (
+                counts != (0, 0, 0, 0)
+                or observation["installed_shape_complete"] is not False
+            ):
+                raise ValueError
+        elif floor == "installed" and operation in {
+            "payment-email-supported",
+            "payment-email-installed",
+        }:
+            if (
+                counts != (3, 1, 1, 1)
+                or observation["installed_shape_complete"] is not True
+            ):
+                raise ValueError
+        else:
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise ProbeRefused("payment_email_floor_unproved") from None
     return evidence
 
 
@@ -1758,8 +1823,18 @@ def _run_cli(args: argparse.Namespace) -> int:
         arguments=arguments,
         operation=args.operation,
     )
-    if args.operation in {"payments-supported", "payments-installed"}:
-        evidence = _validate_payments_floor_output(args.operation, output)
+    if args.operation in {
+        "payments-supported",
+        "payments-installed",
+        "payment-email-supported",
+        "payment-email-installed",
+    }:
+        validator = (
+            _validate_payment_email_floor_output
+            if args.operation.startswith("payment-email-")
+            else _validate_payments_floor_output
+        )
+        evidence = validator(args.operation, output)
         print(json.dumps(evidence, separators=(",", ":"), allow_nan=False))
     return 0
 

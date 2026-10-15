@@ -502,8 +502,15 @@ An installed floor with stopped incumbent writers uses the distinct maintenance
 forward-repair admission. It requires the existing staging-backed production
 authorization for the exact candidate digest, and that candidate must be the
 same revision and digest, or a forward descendant of the failed candidate. Fresh database
-heads must match the failed candidate's recorded heads; the complete installed
-Payments floor must be recognized. Every captured writer stays stopped, the
+heads must match one of two server-derived bases: `INSTALLED_AT_FAILED_CANDIDATE`
+requires the failed candidate's recorded heads and both complete installed Email
+and Payments floors; `UNCHANGED_KNOWN_PREDECESSOR` requires the failed invocation
+in `FORWARD_REPAIR_REQUIRED`, a nonzero/non-OOM/never-restarted terminal, unchanged
+recorded start heads, exact installed Email 638 and complete Payments predecessor.
+The admission records sorted unique `start_heads`; descriptor 7 accepts neither
+caller-selected heads nor a caller-selected basis. The helper reobserves heads
+and floors after drain, and execution revalidates the admission and compares its
+input heads with the fresh start heads. Every captured writer stays stopped, the
 broker must have stable empty observations, and the complete container inventory
 must match, including previously inactive services. A raw image ID or another
 alias of an application image does not escape inventory checks. Unknown schema

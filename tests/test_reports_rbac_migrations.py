@@ -8,8 +8,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import sqlalchemy as sa
-from alembic.config import Config
-from alembic.script import ScriptDirectory
+
+from tests.migration_graph_helpers import composed_sub_graph
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,13 +63,9 @@ def test_reports_permission_migrations_form_the_single_head_chain():
     assert as_built_review.down_revision == vendor_review.revision
     assert current.down_revision == as_built_review.revision
 
-    config = Config(str(REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
-    script = ScriptDirectory.from_config(config)
-    # Single-headed with the reports chain in the head's ancestry; asserting
+    script, heads = composed_sub_graph(REPO_ROOT)
+    # Sub is single-headed within the composed graph, with reports in its ancestry; asserting
     # the exact head breaks on every migration added after it.
-    heads = script.get_heads()
     assert len(heads) == 1
     assert retire.revision in {
         item.revision
