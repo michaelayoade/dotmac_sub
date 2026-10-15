@@ -114,8 +114,9 @@ def require_billing_runtime_login(
 
     Requires an already active READ COMMITTED transaction on PostgreSQL 16+,
     where effective SET reachability and membership options are available.
-    Conservatively refuses *every* other reachable role, including dormant
-    MEMBER paths: no opening/admin/owner role-name allowlist is guessed here.
+    Conservatively refuses every direct membership, including all-false dormant
+    grants, and every other effective MEMBER/USAGE/SET path. No opening/admin/owner
+    role-name allowlist is guessed here.
     Refuses relation/schema/function ownership anywhere in the current database,
     including catalog and temporary namespaces; no owner exemption is trusted.
     The final owner must re-observe; this is not a ledger activation gate.
@@ -194,7 +195,6 @@ def require_billing_runtime_login(
                 ) OR EXISTS (
                     SELECT 1 FROM pg_catalog.pg_auth_members AS m
                      WHERE m.member OPERATOR(pg_catalog.=) %s
-                       AND (m.admin_option OR m.inherit_option OR m.set_option)
                 )
                 """,
                 (observation.session_role_oid,) * 5,
