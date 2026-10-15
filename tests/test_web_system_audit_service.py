@@ -288,6 +288,28 @@ def test_invalid_audit_filters_return_clear_messages():
             web_system_audit.build_audit_list_query(**filters)
 
 
+def test_preset_audit_period_discards_stale_custom_dates():
+    query = web_system_audit.build_audit_list_query(
+        period="last_7_days",
+        date_from="not-a-date",
+        date_to="2020-01-01",
+    )
+
+    assert query.filter_value("period") == "last_7_days"
+    assert query.filter_value("date_from") is None
+    assert query.filter_value("date_to") is None
+
+
+def test_custom_audit_dates_only_show_for_custom_period():
+    source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+
+    assert "x-show=\"period === 'custom'\"" in source
+    assert 'x-ref="dateFrom"' in source
+    assert 'x-ref="dateTo"' in source
+    assert "$refs.dateFrom.value = ''" in source
+    assert "$refs.dateTo.value = ''" in source
+
+
 def test_audit_filter_errors_are_visible_without_replacing_current_results():
     page_source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
     table_source = Path("templates/admin/system/_audit_table.html").read_text(

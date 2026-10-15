@@ -105,8 +105,16 @@ def build_audit_list_query(
         "custom",
     }:
         raise AuditFilterValidationError("Choose a valid date range.")
-    parsed_from = _parse_iso_date(date_from)
-    parsed_to = _parse_iso_date(date_to)
+    if normalized_period in {"today", "last_7_days", "last_30_days"}:
+        # Presets own their date bounds; stale custom values must not remain in
+        # the URL or suggest that they also affect the result.
+        date_from = None
+        date_to = None
+        parsed_from = None
+        parsed_to = None
+    else:
+        parsed_from = _parse_iso_date(date_from)
+        parsed_to = _parse_iso_date(date_to)
     if not normalized_period and (parsed_from or parsed_to):
         normalized_period = "custom"
     if normalized_period == "custom" and not (parsed_from or parsed_to):
