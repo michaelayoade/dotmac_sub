@@ -139,7 +139,7 @@ def test_numbering_release_and_kernel_are_exact_pins() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     dependencies = project["project"]["dependencies"]
     assert "dotmac-numbering==0.1.0a2" in dependencies
-    assert "dotmac-kernel==0.1.0a98" in dependencies
+    assert "dotmac-kernel==0.1.0a105" in dependencies
     enriched = project["tool"]["poetry"]["dependencies"]
     assert enriched["dotmac-numbering"] == {"version": "0.1.0a2", "source": "forgejo"}
     assert module.version == "0.1.0a2"
