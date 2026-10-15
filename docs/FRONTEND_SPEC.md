@@ -1899,7 +1899,9 @@ application-local date period, exact record/request identifiers, and
 `entity_type`, which the UI labels **Module**. Module and action choices are
 bounded distinct values from existing active audit rows, not hardcoded template
 options. Pagination preserves the complete filter form and pushes the resulting
-URL into browser history. “Failed” means an audit row explicitly recorded with
+URL into browser history. The table shows its exact visible range and total,
+compact numbered pages with Previous/Next controls, and 10/25/50/100-row page
+sizes. “Failed” means an audit row explicitly recorded with
 `is_success = false`; it does not claim to be a complete application-error log.
 
 The role editor submits role attributes and the complete visible permission

@@ -1163,7 +1163,9 @@ URL | Events | Status | Success Rate | Last Delivery | Actions
 
 Filter state remains in pagination requests and the browser URL. Module and
 action options come from bounded distinct values owned by
-`observability.audit_log`; the template does not hardcode them.
+`observability.audit_log`; the template does not hardcode them. Pagination
+shows the exact visible range and total, compact numbered pages, Previous/Next,
+and 10/25/50/100-row page-size choices.
 
 #### Table
 Timestamp | Actor | Action | Entity Type | Entity ID | Details (expandable)

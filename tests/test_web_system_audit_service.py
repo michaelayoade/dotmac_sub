@@ -355,3 +355,38 @@ def test_audit_filter_ui_uses_recorded_options_and_pushes_filter_urls():
     assert 'hx-push-url="true"' in page_source
     assert 'hx-include="#audit-filters [name]"' in table_source
     assert 'hx-push-url="true"' in table_source
+    assert "page_meta.navigation" in table_source
+    assert "page_meta.start_item" in table_source
+    assert "page_meta.end_item" in table_source
+    assert 'name="per_page"' in page_source
+
+
+def test_audit_page_data_returns_canonical_numbered_pagination(db_session):
+    for index in range(11):
+        db_session.add(
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="pagination.test",
+                entity_type="audit_pagination_test",
+                entity_id=str(index),
+                is_success=True,
+            )
+        )
+    db_session.commit()
+
+    page = web_system_audit.get_audit_page_data(
+        db_session,
+        web_system_audit.build_audit_list_query(
+            entity_type="audit_pagination_test",
+            page=2,
+            per_page=10,
+        ),
+    )
+
+    page_meta = page["page_meta"]
+    assert page_meta.page == 2
+    assert page_meta.start_item == 11
+    assert page_meta.end_item == 11
+    assert page_meta.total_items == 11
+    assert page_meta.navigation == (1, 2)
+    assert len(page["events"]) == 1

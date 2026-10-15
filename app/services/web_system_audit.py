@@ -23,6 +23,7 @@ from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
     ListQuery,
+    PageMeta,
 )
 from app.timezone import APP_TIMEZONE
 
@@ -212,13 +213,9 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
     request_id = query.filter_value("request_id")
     result_value = query.filter_value("result")
     occurred_from, occurred_before = _date_bounds(query)
-    page = query.page
-    per_page = query.per_page
-    offset = query.offset
 
-    result = audit_service.audit_events.query_page(
-        db,
-        audit_service.AuditEventPageQuery(
+    def owner_query(list_query: ListQuery) -> audit_service.AuditEventPageQuery:
+        return audit_service.AuditEventPageQuery(
             actor_search=actor_term,
             actor_type=AuditActorType(actor_type_value) if actor_type_value else None,
             action=action if action else None,
@@ -238,12 +235,18 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
             is_active=None,
             occurred_from=occurred_from,
             occurred_before=occurred_before,
-            order_by=cast(audit_service.AuditEventOrderField, query.sort_by),
-            order_dir=cast(audit_service.AuditEventOrderDirection, query.sort_dir),
-            limit=per_page,
-            offset=offset,
-        ),
-    )
+            order_by=cast(audit_service.AuditEventOrderField, list_query.sort_by),
+            order_dir=cast(audit_service.AuditEventOrderDirection, list_query.sort_dir),
+            limit=list_query.per_page,
+            offset=list_query.offset,
+        )
+
+    result = audit_service.audit_events.query_page(db, owner_query(query))
+    page_meta = PageMeta.from_query(query, result.total)
+    if page_meta.page != query.page:
+        query = query.with_page(page_meta.page)
+        result = audit_service.audit_events.query_page(db, owner_query(query))
+        page_meta = PageMeta.from_query(query, result.total)
     events = result.events
 
     try:
@@ -278,15 +281,14 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
             }
         )
 
-    total = result.total
-    total_pages = (total + per_page - 1) // per_page
-
     return {
         "events": event_views,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
+        "list_query": query,
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": page_meta.total_items,
+        "total_pages": page_meta.total_pages,
         "filter_state": dict(query.filters),
         "has_active_filters": bool(query.filters),
     }
