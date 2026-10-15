@@ -473,7 +473,7 @@ class PaymentGatewayRunner:
             provider_paid_at=_capture_timestamp(data.get("paid_at")),
             retrieved_at=datetime.now(UTC),
         )
-        wire = {
+        wire: dict[str, object] = {
             "provider": record.provider.value,
             "envelope_status": record.envelope_status,
             "transaction_id": record.transaction_id,

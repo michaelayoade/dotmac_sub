@@ -14,7 +14,7 @@ from typing import Any
 
 from sqlalchemy import inspect, select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import InstanceState, Session
 
 from app.config import settings
 from app.models.integration_platform import (
@@ -452,7 +452,7 @@ def _capture_binding_snapshot(
         .mappings()
         .one_or_none()
     )
-    relevant = {
+    relevant: dict[type[object], tuple[str, ...]] = {
         IntegrationInstallation: (
             "id",
             "connector_key",
@@ -479,9 +479,12 @@ def _capture_binding_snapshot(
         ),
     }
     for instance in db.identity_map.values():
-        state = inspect(instance)
+        inspected = inspect(instance)
         if type(instance) not in relevant:
             continue
+        if not isinstance(inspected, InstanceState):
+            raise TypeError("payment capture requires mapped instance state")
+        state: InstanceState[object] = inspected
         # Inspect loaded values only: detecting caller changes must not cause IO.
         loaded = state.dict
         in_scope = (
