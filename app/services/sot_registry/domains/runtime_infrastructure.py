@@ -94,6 +94,93 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="runtime.payments_intent_schema_floor",
+            module="app.services.payments_intent_schema_floor",
+            owns=(
+                "Payments invoice intent installed schema observation",
+                "normal Payments deployment support classification",
+                "legacy image recovery admission after Payments intent schema installation",
+            ),
+            notes="Operational catalog proof only; complete predecessor and complete installed shapes admit normal forward deployment, while legacy recovery requires predecessor only. No intent, settlement or ledger authority.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="Payments invoice intent installed schema observation",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("actual runtime catalog",),
+                    ),
+                    ConcernContract(
+                        name="normal Payments deployment support classification",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "actual runtime catalog",
+                            "Payments schema floor observation",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="legacy image recovery admission after Payments intent schema installation",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "installed schema observation",
+                            "legacy recovery policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="actual runtime catalog",
+                        owner="external:postgresql",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Caller connection session/current login, non-superuser/non-bypass role flags, and exact pg_catalog column, constraint, trigger and function shape; no tenant-filtered business rows.",
+                    ),
+                    AuthorityInput(
+                        name="installed schema observation",
+                        owner="runtime.payments_intent_schema_floor",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Frozen PaymentsIntentSchemaObservation returned by read_payments_intent_schema_floor on the caller Session; never cached or inferred from intent counts.",
+                    ),
+                    AuthorityInput(
+                        name="Payments schema support classification",
+                        owner="runtime.payments_intent_schema_floor",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Closed classification of catalog facts: predecessor requires complete base and zero installation objects; installed requires complete base and exact installed object counts; all other shapes are unknown.",
+                    ),
+                    AuthorityInput(
+                        name="legacy recovery policy",
+                        owner="runtime.payments_intent_schema_floor",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Only a complete predecessor with zero correlation-installation evidence admits a legacy image; installed, partial, malformed or unknown evidence refuses recovery.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Caller Session; SELECT catalog/identity facts only, with no session creation, writes or transaction completion.",
+                    locking="No business locks; migration and deployment owners must establish quiescence before installing the permanent floor.",
+                    idempotency="The same catalog and runtime identity produce the same frozen observation and admission decision; no activation flag is stored.",
+                    retries="No hidden retries or repair; unknown evidence fails closed and a caller may retry a complete read.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("payments_intent_schema_floor.unknown",),
+                    mapping_owner="Calling deployment adapter; production integration remains held until its guard wiring is reviewed.",
+                    fail_closed_on=(
+                        "unproved runtime login or catalog",
+                        "installed or partial correlation schema",
+                        "malformed observation",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.payments_intent_schema_floor",
+                ),
+                steward="runtime operations",
+                design_refs=("docs/designs/PAYMENTS_INVOICE_INTENT_SCHEMA_FLOOR.md",),
+                test_refs=(
+                    "tests/test_payments_intent_schema_floor.py",
+                    "tests/integration/test_payments_intent_correlation_pg.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="runtime.bandwidth_poller_health",
             module="app.services.poller_health",
             implementation_modules=("app.poller.mikrotik_poller",),

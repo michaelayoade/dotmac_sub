@@ -62,6 +62,7 @@ def _run_deploy(
     github_checks_ready: bool = True,
     background_runtime_ready: bool = True,
     rollback_gate_exit_code: int = 0,
+    payments_intent_rollback_gate_exit_code: int | None = None,
     declared_services: tuple[str, ...] = FULL_SERVICES,
     write_override: bool = False,
     image_selector: str = "sha-32eebc1",
@@ -193,7 +194,13 @@ if [[ "$*" == *"scripts.integrations.verify_manifest_pins"* ]]; then
 fi
 if [[ "$*" == *"scripts.verify_payment_email_rollback"* ]]; then
   printf 'rollback-gate image=%s sha=%s\\n' "$APP_IMAGE" "$GIT_SHA" >> "$DOCKER_LOG"
+  printf 'rollback-gate-command=%s\\n' "$*" >> "$DOCKER_LOG"
   exit {rollback_gate_exit_code}
+fi
+if [[ "$*" == *"scripts.verify_payments_intent_rollback"* ]]; then
+  printf 'rollback-gate image=%s sha=%s\\n' "$APP_IMAGE" "$GIT_SHA" >> "$DOCKER_LOG"
+  printf 'rollback-gate-command=%s\\n' "$*" >> "$DOCKER_LOG"
+  exit {rollback_gate_exit_code if payments_intent_rollback_gate_exit_code is None else payments_intent_rollback_gate_exit_code}
 fi
 if [[ "$*" == *" up -d "* ]]; then
   attempts="$(cat "$UP_ATTEMPTS")"
@@ -582,9 +589,15 @@ def test_deploy_reports_candidate_before_health_failure_rollback(
         for i, command in enumerate(commands)
         if "scripts.verify_payment_email_rollback" in command
     )
+    intent_rollback_gate = next(
+        i
+        for i, command in enumerate(commands)
+        if "scripts.verify_payments_intent_rollback" in command
+    )
     assert "run --no-deps -d" in candidate_command
     assert "run --rm --no-deps -d" not in candidate_command
     assert diagnostic_logs < rollback_gate < rollback_cleanup
+    assert rollback_gate < intent_rollback_gate < rollback_cleanup
 
 
 def test_activated_or_unknown_floor_never_starts_old_image_after_health_failure(
@@ -605,12 +618,45 @@ def test_activated_or_unknown_floor_never_starts_old_image_after_health_failure(
         for i, item in enumerate(commands)
         if "scripts.verify_payment_email_rollback" in item
     )
+    assert not any(
+        "scripts.verify_payments_intent_rollback" in item for item in commands
+    )
     assert (
         f"rollback-gate image=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1 sha={REVISION}"
         in commands
     )
     assert not any(" up -d " in item for item in commands[gate:])
     assert "rm -f dotmac_sub_app_candidate" not in commands[gate:]
+
+
+def test_payments_intent_floor_refusal_keeps_candidate_after_email_floor_passes(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        health_success=False,
+        payments_intent_rollback_gate_exit_code=2,
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY ROLLBACK REFUSED" in result.stderr
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" in (
+        env_file.read_text()
+    )
+    commands = docker_log.read_text().splitlines()
+    email_gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payment_email_rollback" in item
+    )
+    intent_gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payments_intent_rollback" in item
+    )
+    assert email_gate < intent_gate
+    assert not any(" up -d " in item for item in commands[intent_gate:])
+    assert "rm -f dotmac_sub_app_candidate" not in commands[intent_gate:]
 
 
 def test_paused_floor_keeps_healthy_candidate_on_worker_failure(tmp_path: Path) -> None:

@@ -1699,3 +1699,37 @@ were executed. This is one genuine observation consumer, not fleet parity,
 backfill, a financial authority switch, or permission to merge/deploy during the
 active production freeze. See
 `docs/designs/PAYMENT_INTENT_MODULE_OBSERVATION.md`.
+
+
+**2026-10-15 — prospective gateway invoice intent binding owner, source only.**
+The existing customer gateway command now calls released Payments a2 on its
+same operator-scoped Session and projects the frozen binding into Sub's local
+provider-routing/lifecycle compatibility row. One-sided references and binding
+or routing drift refuse reconstruction; exact replay retains original money,
+opening/expiry and later lifecycle metadata. The former local invoice staging
+entry point refuses new invoice creation. Saved-card transport consumes the
+root's returned binding and never charges a replayed module reference again.
+Explicit returned currency crosses the existing charge capability/connector.
+
+This owner slice is NOT DEPLOYABLE until the separately owned structural
+correlation/legacy INSERT fence, persistent installed-schema rollback floor,
+actual drain and deployment recovery guard are integrated and proven. Full
+app_user root-command acceptance is an explicit remaining hosted gate; the
+canaries use reviewed migration grants rather than test-only grants or an
+elevated command principal.
+No persistent rollback barrier is claimed from Kernel Session state. PR3640's
+read-only exception does not authorize this writer transfer; new concrete
+source/growth/feature-freeze review and explicit activation approval are needed.
+See `docs/designs/PAYMENT_INVOICE_INTENT_MODULE_OWNER.md`. Historical local-only
+reads/settlement, direct transfer, confirmations and receivable authority remain
+with their current owners.
+
+
+The prospective owner slice additionally migrates saved-authorization intake to
+immutable typed commands/results and closed financial metadata values. Raw
+provider JSON is confined to connector serialization/parsing. Strict provider
+acceptance, known status and exact reference are independent facts; missing
+money remains optional evidence and no expected-money defaults are invented.
+Autopay's existing decision owner is retained; full verified-money settlement
+acceptance remains a later confirmation/ledger-transfer gate. The shared value
+file is new source requiring its own scoped feature-freeze/growth review.

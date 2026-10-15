@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -14,7 +15,8 @@ from app.services.payment_email_cutover import (
     legacy_image_rollback_allowed,
     read_legacy_image_rollback_floor,
 )
-from scripts import verify_payment_email_rollback
+from app.services.payments_intent_schema_floor import PaymentsIntentSchemaObservation
+from scripts import verify_payment_email_rollback, verify_payments_intent_rollback
 
 LEGACY = RollbackCatalogObservation(
     legacy_table=True,
@@ -158,3 +160,119 @@ def test_cli_refuses_query_failure_without_exposing_driver_detail(
     )
     assert verify_payment_email_rollback.main([]) == 2
     assert "private connection detail" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("observation", "expected"),
+    [
+        (PaymentsIntentSchemaObservation(True, 0, 0, 0, 0, False), 0),
+        (PaymentsIntentSchemaObservation(True, 0, 0, 0, 0, True), 2),
+        (PaymentsIntentSchemaObservation(False, 1, 1, 1, 1, True), 2),
+    ],
+)
+def test_payments_intent_rollback_cli_requires_proved_predecessor(
+    observation: PaymentsIntentSchemaObservation,
+    expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    statements: list[str] = []
+
+    class _Session:
+        def __enter__(self) -> _Session:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def rollback(self) -> None:
+            statements.append("ROLLBACK")
+
+    monkeypatch.setattr(verify_payments_intent_rollback, "SessionLocal", _Session)
+    monkeypatch.setattr(
+        verify_payments_intent_rollback,
+        "begin_read_only_snapshot",
+        lambda _db: statements.append("READ_ONLY_SNAPSHOT_OPTIONS"),
+    )
+    monkeypatch.setattr(
+        verify_payments_intent_rollback,
+        "read_payments_intent_schema_floor",
+        lambda _db: observation,
+    )
+
+    assert verify_payments_intent_rollback.main([]) == expected
+    assert statements == ["READ_ONLY_SNAPSHOT_OPTIONS", "ROLLBACK"]
+    if expected:
+        assert "installed or unproved floor" in capsys.readouterr().err
+
+
+def test_payments_intent_rollback_cli_redacts_catalog_errors(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class _Session:
+        def __enter__(self) -> _Session:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(verify_payments_intent_rollback, "SessionLocal", _Session)
+    monkeypatch.setattr(
+        verify_payments_intent_rollback,
+        "begin_read_only_snapshot",
+        lambda _db: (_ for _ in ()).throw(RuntimeError("private connection detail")),
+    )
+
+    assert verify_payments_intent_rollback.main([]) == 2
+    error = capsys.readouterr().err
+    assert "private connection detail" not in error
+    assert "catalog proof unavailable" in error
+
+
+@pytest.mark.parametrize(
+    ("observation", "expected_floor", "expected_rc"),
+    [
+        (PaymentsIntentSchemaObservation(True, 0, 0, 0, 0, False), "predecessor", 0),
+        (PaymentsIntentSchemaObservation(True, 2, 2, 1, 1, True), "installed", 0),
+        (PaymentsIntentSchemaObservation(False, 2, 2, 1, 1, True), "unknown", 2),
+        (PaymentsIntentSchemaObservation(True, 1, 0, 0, 0, False), "unknown", 2),
+        (PaymentsIntentSchemaObservation(False, 2, 1, 1, 1, False), "unknown", 2),
+    ],
+)
+def test_payments_intent_floor_inspect_is_closed_and_typed(
+    observation: PaymentsIntentSchemaObservation,
+    expected_floor: str,
+    expected_rc: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _Session:
+        def __enter__(self) -> _Session:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+    monkeypatch.setattr(verify_payments_intent_rollback, "SessionLocal", _Session)
+    monkeypatch.setattr(
+        verify_payments_intent_rollback,
+        "begin_read_only_snapshot",
+        lambda _db: None,
+    )
+    monkeypatch.setattr(
+        verify_payments_intent_rollback,
+        "read_payments_intent_schema_floor",
+        lambda _db: observation,
+    )
+
+    assert verify_payments_intent_rollback.main(["inspect"]) == expected_rc
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    assert payload["floor"] == expected_floor
+    assert (
+        payload["observation"]["installed_shape_complete"]
+        is observation.installed_shape_complete
+    )

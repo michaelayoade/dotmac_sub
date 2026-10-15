@@ -452,6 +452,25 @@ existing staging backup files are unchanged.
   `from_revision`/`to_revision` transition plus a change reference and reason;
   there is no boolean override, and a document written for a different
   transition is refused rather than reused.
+- Production transition control comes from the verified authorizing main revision.
+  The staged checkout remains inert until that trusted controller verifies its
+  exact commit, clean source and supported deployment-lock protocol. Ignored
+  import shadows and executable helpers also refuse; the production job disables
+  Python bytecode writes before preparing authorization documents.
+- The trusted controller holds `/var/lock/dotmac_sub_deploy.lock` through
+  verification, target execution and recovery. Descriptor 8 is inherited by the
+  target; its existing descriptor-9 lock uses a private per-invocation lock path.
+  The controller never rewrites historical source or accepts a skip-lock flag.
+- A backward or divergent transition requires both exact transition authority
+  and a complete predecessor Payments schema proof. The reader runs in a fresh
+  read-only, mount-free probe from the observed immutable running image ID, with
+  its database binding checked privately. A modified live container cannot
+  supply executable reader bytes. Installed, partial, unknown or unavailable
+  floor evidence refuses historical-image recovery, even with authorization.
+- These transition checks do not establish billing cutover readiness. A financial
+  caller transfer also requires integrated producer/worker drain, exact migration
+  terminal-state evidence and installed-floor proof before reopening service.
+  Hosted tests and digest-bound production authorization remain separate gates.
 - An empty running-revision observation never bypasses that gate. Docker daemon,
   inventory, and inspection failures and missing/malformed labels fail closed.
   Only a confirmed absent production container may use the separately typed
@@ -459,3 +478,55 @@ existing staging backup files are unchanged.
   `dotmac-sub-prod`, a change reference, and a reason.
 - Production deploys only a typed, authorized digest. The self-hosted production
   job runs bounded operational checks and no repository test suite.
+
+## Interrupted migration reconciliation and maintenance forward repair
+
+Status: prospective source; hosted behavioral acceptance and deployment approval
+are required before use. These controls do not authorize a billing ledger switch.
+
+The trusted controller reads the canonical migration journal while holding its
+canonical deployment lock. A pending invocation is reconciled against its exact
+invocation UUID, journal digest, immutable image, retained container identity,
+captured database/network and fresh schema observations. The closed outcomes are
+`UNRESOLVED`, `COMPLETE`, `SAFE_PREDDL` and `FORWARD_REPAIR_REQUIRED`.
+Unknown, partial, missing or inconsistent evidence remains refused. An absent
+container alone never proves that DDL did not run.
+
+Reconciliation never launches the deployment wrapper or starts, retries, removes
+or kills the retained migration container or a financial writer. It may create
+only the fixed, bounded read-only head, schema-floor and predecessor probes.
+Broker drain observations belong to maintenance admission. The original journal is retained durably before a subsequent invocation
+can consume it; operators must not delete or edit it to bypass refusal.
+
+An installed floor with stopped incumbent writers uses the distinct maintenance
+forward-repair admission. It requires the existing staging-backed production
+authorization for the exact candidate digest, and that candidate must be the
+same revision and digest, or a forward descendant of the failed candidate. Fresh database
+heads must match the failed candidate's recorded heads; the complete installed
+Payments floor must be recognized. Every captured writer stays stopped, the
+broker must have stable empty observations, and the complete container inventory
+must match, including previously inactive services. A raw image ID or another
+alias of an application image does not escape inventory checks. Unknown schema
+or an unexpected writer requires investigation, not a generic retry.
+
+The controller passes a bounded, canonical, read-only, unlinked context through
+descriptor 7 while retaining the canonical lock on descriptor 8. This transport
+is not authorization: the migration helper revalidates authority, source,
+invocation/digest and live facts before admitting DDL. Authorization-run and
+actual deployment-run identities remain distinct. Consuming the original
+invocation invalidates stale contexts. Missing descriptors and lock mismatches
+refuse; they cannot fall back to ordinary deployment.
+
+Maintenance repair retains backup, image pinning, migrations, schema verification
+and health gates. It does not use the post-migration resume shortcut or skip DDL.
+Any failure keeps legacy writers stopped and refuses historical image recovery,
+including shared error, signal and health-failure handlers. Recovery is a new
+reviewed forward attempt. This handoff protects operational evidence; it makes
+no unforgeability claim against the deployment UID, host root or Docker
+administrator.
+
+Hosted acceptance must execute real PostgreSQL and Docker rehearsals across
+migration phases, process interruption, retained terminal cleanup, archive
+publication/retry, descriptor/lock refusal, stale-context replay, complete writer
+inventory and maintenance failure traps. Authored unit canaries and static
+checks alone do not establish deployability.
