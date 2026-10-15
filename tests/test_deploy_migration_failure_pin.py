@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,34 @@ def _base_env() -> dict[str, str]:
 
 def _slice(source: str, start: str, end: str) -> str:
     return source[source.index(start) : source.index(end)]
+
+
+def _resume_shell_functions_in_source_order(source: str) -> str:
+    """Extract resume helpers in their real top-level definition order."""
+    starts = (
+        "database_name_from_url() {",
+        "database_heads() {",
+        "candidate_heads() {",
+        "verify_post_migration_resume() {",
+    )
+    end_markers = (*starts[1:], "read_alembic_heads() {")
+    definitions = []
+    for start in starts:
+        offset = source.index(start)
+        end_offsets = [
+            source.index(marker, offset + len(start))
+            for marker in end_markers
+            if source.find(marker, offset + len(start)) >= 0
+        ]
+        if start == starts[-1]:
+            end_offsets.append(source.index("# Deploy-integrity gate.", offset))
+        definitions.append((offset, min(end_offsets), start))
+    call_offset = source.index('if ! BACKUP_MODE="$(verify_post_migration_resume)"')
+    return "".join(
+        source[start:end]
+        for start, end, _ in sorted(definitions)
+        if start < call_offset
+    )
 
 
 def _script() -> str:
@@ -321,6 +350,85 @@ database_heads; echo "RC=$?"
     assert "PGCONNECT_TIMEOUT=5" in args
     assert "RC=1" in result.stdout
     assert "s3cret-not-real" not in args + result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("database_head", "expected_mode", "expected_error"),
+    [
+        ("670_a", "skip_production_post_migration_resume", None),
+        ("669_a", None, "database_not_at_candidate_heads"),
+    ],
+)
+def test_post_migration_resume_reads_database_heads_before_backup_mode(
+    tmp_path: Path,
+    database_head: str,
+    expected_mode: str | None,
+    expected_error: str | None,
+) -> None:
+    """Exercise the real early resume call, URL parser and fail-closed policy."""
+    source = DEPLOY_SH.read_text(encoding="utf-8")
+    backup = tmp_path / "dotmac_sub_run_38762087445_2026-10-15.sql.gz"
+    backup.write_bytes(b"retained backup evidence")
+    (tmp_path / ".env").write_text(f"DATABASE_URL={DB_URL}\n", encoding="utf-8")
+    resume_functions = _resume_shell_functions_in_source_order(source)
+    run_repo_module = _slice(
+        source, "run_repo_module() {", "# Host-specific, so resolve shell env"
+    )
+    script = f"""
+set -uo pipefail
+env_value() {{ grep "^$1=" .env | head -1 | cut -d= -f2-; }}
+{run_repo_module}
+CALLS="$PWD/docker-args"
+docker() {{
+  printf '%s\\n' "$*" >>"$CALLS"
+  case "$1" in
+    inspect) printf '%s\\n' "$PREVIOUS_IMAGE" ;;
+    exec) printf '%s\\n' "$DATABASE_HEAD" ;;
+    run) printf '%s (head)\\n' "$CANDIDATE_HEAD" ;;
+    *) return 99 ;;
+  esac
+}}
+DB_CONTAINER=pg
+APP_CONTAINER=dotmac_sub_app
+IMAGE="{NEW_IMAGE}"
+PREV_IMAGE="{OLD_IMAGE}"
+TAG="sha256:{"b" * 64}"
+PREVIOUS_IMAGE="{OLD_IMAGE}"
+CANDIDATE_HEAD=670_a
+DATABASE_HEAD="{database_head}"
+DEPLOYMENT_TARGET=production
+PRODUCTION_DEPLOY_RESUME_AFTER_MIGRATION=1
+PRODUCTION_DEPLOY_RESUME_FAILED_RUN_ID=38762087445
+PRODUCTION_DEPLOY_RESUME_AUTHORIZATION_RUN_ID=38761622018
+PRODUCTION_DEPLOY_RESUME_BACKUP_PATH="{backup}"
+REPO_DIR="{ROOT}"
+PYTHON_BIN="{sys.executable}"
+{resume_functions}
+if BACKUP_MODE="$(verify_post_migration_resume)"; then
+  printf 'BACKUP_MODE=%s\\n' "$BACKUP_MODE"
+else
+  echo RESUME_REJECTED
+  printf 'POLICY_OUTPUT=%s\\n' "$BACKUP_MODE"
+fi
+"""
+    result = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=_base_env(),
+    )
+    combined = result.stdout + result.stderr
+    docker_args = (tmp_path / "docker-args").read_text(encoding="utf-8")
+    assert result.returncode == 0, combined
+    assert "s3cret-not-real" not in combined + docker_args
+    assert "-d dotmac_sub" in docker_args
+    if expected_mode is not None:
+        assert f"BACKUP_MODE={expected_mode}" in result.stdout
+        assert expected_error is None
+    else:
+        assert "RESUME_REJECTED" in result.stdout
+        assert expected_error is not None and expected_error in combined
 
 
 def test_failed_migration_never_touches_the_guarded_rollback_or_containers(
