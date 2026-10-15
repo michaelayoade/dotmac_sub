@@ -92,6 +92,16 @@ class MigrationReconciliationOutcome:
     phase: MigrationPhase
 
 
+class SupportedSchemaFloor(StrEnum):
+    PREDECESSOR = "predecessor"
+    INSTALLED = "installed"
+
+
+class MaintenanceForwardRepairBasis(StrEnum):
+    INSTALLED_AT_FAILED_CANDIDATE = "installed-at-failed-candidate"
+    UNCHANGED_KNOWN_PREDECESSOR = "unchanged-known-predecessor"
+
+
 @dataclass(frozen=True, slots=True)
 class MaintenanceForwardRepairAdmission:
     failed_invocation_id: str
@@ -99,10 +109,20 @@ class MaintenanceForwardRepairAdmission:
     target_revision: str
     target_digest: str
     target_image_id: str
+    basis: MaintenanceForwardRepairBasis
+    start_heads: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if (
-            not _valid_uuid(self.failed_invocation_id)
+            type(self.basis) is not MaintenanceForwardRepairBasis
+            or not self.start_heads
+            or type(self.start_heads) is not tuple
+            or any(
+                type(head) is not str or _HEAD.fullmatch(head) is None
+                for head in self.start_heads
+            )
+            or tuple(sorted(set(self.start_heads))) != self.start_heads
+            or not _valid_uuid(self.failed_invocation_id)
             or re.fullmatch(r"[0-9a-f]{64}", self.failed_journal_sha256) is None
             or _SHA.fullmatch(self.target_revision) is None
             or _DIGEST.fullmatch(self.target_digest) is None
@@ -789,6 +809,36 @@ def _captured_writers_stopped(binding: probe.CapturedNetworkBinding) -> bool:
     return True
 
 
+def _observe_supported_floors(
+    binding: probe.CapturedNetworkBinding,
+) -> tuple[SupportedSchemaFloor, SupportedSchemaFloor]:
+    """Fresh fixed read-only owner observations; unknown evidence raises refusal."""
+    email_output = probe._probe(
+        binding,
+        image="candidate",
+        module="scripts.verify_payment_email_rollback",
+        arguments=("inspect",),
+        operation="payment-email-supported",
+    )
+    email = probe._validate_payment_email_floor_output(
+        "payment-email-supported", email_output
+    )
+    payments_output = probe._probe(
+        binding,
+        image="candidate",
+        module="scripts.verify_payments_intent_rollback",
+        arguments=("inspect",),
+        operation="payments-supported",
+    )
+    payments = probe._validate_payments_floor_output(
+        "payments-supported", payments_output
+    )
+    # Both validators restrict these fields to the two supported string values.
+    return SupportedSchemaFloor(str(email["floor"])), SupportedSchemaFloor(
+        str(payments["floor"])
+    )
+
+
 def _classify_terminal_state(
     binding: probe.CapturedNetworkBinding,
     record: MigrationInvocation,
@@ -807,40 +857,24 @@ def _classify_terminal_state(
         candidate_heads = _observe_heads(binding, image="candidate", current=False)
         if candidate_heads != record.candidate_heads:
             return MigrationDisposition.FORWARD_REPAIR_REQUIRED
+        email_floor, payments_floor = _observe_supported_floors(binding)
         if terminal.exit_code == 0 and current_heads == record.candidate_heads:
-            installed = probe._probe(
-                binding,
-                image="candidate",
-                module="scripts.verify_payments_intent_rollback",
-                arguments=("inspect",),
-                operation="payments-installed",
-            )
-            evidence = probe._validate_payments_floor_output(
-                "payments-installed", installed
-            )
-            observation = evidence["observation"]
             if (
-                type(observation) is dict
-                and observation.get("legacy_shape_complete") is True
-                and observation.get("installed_shape_complete") is True
+                email_floor is SupportedSchemaFloor.INSTALLED
+                and payments_floor is SupportedSchemaFloor.INSTALLED
             ):
                 return MigrationDisposition.COMPLETE
         if terminal.exit_code != 0 and current_heads == record.heads_before:
-            probe._probe(
-                binding,
-                image="candidate",
-                module="scripts.verify_payment_email_rollback",
-                arguments=(),
-                operation="payment-email-predecessor",
-            )
-            probe._probe(
-                binding,
-                image="candidate",
-                module="scripts.verify_payments_intent_rollback",
-                arguments=(),
-                operation="payments-predecessor",
-            )
-            return MigrationDisposition.SAFE_PREDDL
+            if (
+                email_floor is SupportedSchemaFloor.PREDECESSOR
+                and payments_floor is SupportedSchemaFloor.PREDECESSOR
+            ):
+                return MigrationDisposition.SAFE_PREDDL
+            if (
+                email_floor is SupportedSchemaFloor.INSTALLED
+                and payments_floor is SupportedSchemaFloor.PREDECESSOR
+            ):
+                return MigrationDisposition.FORWARD_REPAIR_REQUIRED
         return MigrationDisposition.FORWARD_REPAIR_REQUIRED
     except (MigrationRefused, probe.ProbeRefused, OSError, ValueError):
         return MigrationDisposition.UNRESOLVED
@@ -1218,22 +1252,24 @@ def validate_maintenance_admission(
             raise MigrationRefused("maintenance_writers_not_stopped")
         probe.verify_fixed_compose_inventory(binding, known_terminal_ids=known_terminal)
         current_heads = _observe_heads(binding, image="candidate", current=True)
-        if current_heads != record.candidate_heads:
-            raise MigrationRefused("maintenance_heads_unproved")
-        installed = probe._probe(
-            binding,
-            image="candidate",
-            module="scripts.verify_payments_intent_rollback",
-            arguments=("inspect",),
-            operation="payments-installed",
-        )
-        floor = probe._validate_payments_floor_output("payments-installed", installed)
-        observation = floor["observation"]
+        email_floor, payments_floor = _observe_supported_floors(binding)
         if (
-            type(observation) is not dict
-            or observation.get("legacy_shape_complete") is not True
-            or observation.get("installed_shape_complete") is not True
+            current_heads == record.candidate_heads
+            and email_floor is SupportedSchemaFloor.INSTALLED
+            and payments_floor is SupportedSchemaFloor.INSTALLED
         ):
+            basis = MaintenanceForwardRepairBasis.INSTALLED_AT_FAILED_CANDIDATE
+        elif (
+            current_heads == record.heads_before
+            and record.phase is MigrationPhase.FORWARD_REPAIR_REQUIRED
+            and record.terminal.exit_code != 0
+            and email_floor is SupportedSchemaFloor.INSTALLED
+            and payments_floor is SupportedSchemaFloor.PREDECESSOR
+        ):
+            basis = MaintenanceForwardRepairBasis.UNCHANGED_KNOWN_PREDECESSOR
+        elif current_heads not in (record.heads_before, record.candidate_heads):
+            raise MigrationRefused("maintenance_heads_unproved")
+        else:
             raise MigrationRefused("maintenance_floor_unproved")
         drain = probe._probe(
             binding,
@@ -1253,12 +1289,18 @@ def validate_maintenance_admission(
         if not _captured_writers_stopped(binding):
             raise MigrationRefused("maintenance_writers_not_stopped")
         probe.verify_fixed_compose_inventory(binding, known_terminal_ids=known_terminal)
+        if _observe_heads(binding, image="candidate", current=True) != current_heads:
+            raise MigrationRefused("maintenance_heads_changed")
+        if _observe_supported_floors(binding) != (email_floor, payments_floor):
+            raise MigrationRefused("maintenance_floor_changed")
         return MaintenanceForwardRepairAdmission(
             context.failed_invocation_id,
             context.failed_journal_sha256,
             context.target_revision,
             context.target_digest,
             context.target_image_id,
+            basis,
+            current_heads,
         )
     except MigrationRefused:
         raise
@@ -1289,9 +1331,9 @@ def prepare_maintenance_context(
         candidate_digest=image_digest,
         candidate_revision=context.target_revision,
     )
-    validate_maintenance_admission(context, binding)
+    admission = validate_maintenance_admission(context, binding)
     candidate_heads = _observe_heads(binding, image="candidate", current=False)
-    return binding, record.candidate_heads, candidate_heads
+    return binding, admission.start_heads, candidate_heads
 
 
 def _validate_stable_broker_empty(output: str) -> None:
@@ -1589,7 +1631,7 @@ def run_migration(
             or maintenance_admission.target_digest != candidate_digest
             or maintenance_admission.target_image_id != binding.candidate_image_id
             or previous is None
-            or tuple(sorted(set(heads_before))) != previous.candidate_heads
+            or heads_before != maintenance_admission.start_heads
         ):
             raise MigrationRefused("maintenance_repair_admission_unproved")
         prior_binding = probe._binding_from_json(json.dumps(previous.network_binding))
