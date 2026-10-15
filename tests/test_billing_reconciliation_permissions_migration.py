@@ -15,8 +15,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import sqlalchemy as sa
-from alembic.config import Config
-from alembic.script import ScriptDirectory
+
+from tests.migration_graph_helpers import composed_sub_graph
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -136,17 +136,13 @@ def _seed_source_holders(connection, tables, ids, now) -> None:
     )
 
 
-def test_migration_extends_the_single_head_chain():
+def test_migration_extends_the_single_sub_head_chain():
     migration = _load("billing_recon_chain", MIGRATION)
     parent = _load("billing_recon_parent", "480_quote_discount_history.py")
 
     assert migration.down_revision == parent.revision
 
-    config = Config(str(REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
-    script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
+    script, heads = composed_sub_graph(REPO_ROOT)
     assert len(heads) == 1
     assert migration.revision in {
         item.revision

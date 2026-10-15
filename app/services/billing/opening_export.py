@@ -17,7 +17,7 @@ from enum import Enum
 from uuid import UUID
 
 from sqlalchemy import Table, inspect, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Mapper, Session
 
 from app.models.billing import (
     CreditNote,
@@ -322,6 +322,10 @@ def _locked_population_relations(db: Session, *, include_cash: bool) -> tuple[st
     relations = ["alembic_version"]
     for model in models:
         mapper = inspect(model)
+        if not isinstance(mapper, Mapper):
+            raise _fail(
+                "locked_capture_required", "Every census model requires a mapped table."
+            )
         table = mapper.local_table
         # Check mapper routing AND table-only routing used by Core/helper SQL.
         # Refuse a distinct bind before it can open another connection/transaction.
