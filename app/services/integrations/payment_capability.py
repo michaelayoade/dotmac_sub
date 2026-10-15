@@ -24,7 +24,6 @@ from app.models.integration_platform import (
     IntegrationInstallation,
     IntegrationInstallationState,
 )
-from app.services.common import coerce_uuid
 from app.services.integrations import installations
 from app.services.integrations.connectors.payment_gateway import (
     PAYMENT_INTENT_CAPABILITY,
@@ -226,7 +225,7 @@ def _binding(
     if checkout_binding_id is not None:
         source = db.get(
             IntegrationCapabilityBinding,
-            coerce_uuid(str(checkout_binding_id)),
+            uuid.UUID(str(checkout_binding_id)),
         )
         if source is None:
             raise PaymentCapabilityError("checkout capability binding not found")

@@ -15,7 +15,7 @@ import logging
 import uuid
 from datetime import UTC, date, datetime, time
 from decimal import ROUND_HALF_UP, Decimal
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, TypeVar
 
 from fastapi import HTTPException
 
@@ -27,19 +27,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-@overload
-def coerce_uuid(value: None) -> None: ...
-
-
-@overload
-def coerce_uuid(value: str | uuid.UUID) -> uuid.UUID: ...
-
-
-@overload
-def coerce_uuid(value: object) -> uuid.UUID | None: ...
-
-
-def coerce_uuid(value: object) -> uuid.UUID | None:
+def coerce_uuid(value):
     """Convert value to UUID, returning None if value is None."""
     if value is None:
         return None
