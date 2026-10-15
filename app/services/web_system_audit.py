@@ -262,6 +262,11 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
         change_summary = format_changes(changes)
         action_label = humanize_action(event.action)
         entity_label = humanize_entity(event.entity_type, event.entity_id)
+        module_label = (
+            humanize_entity(event.entity_type)
+            if event.entity_type
+            else "Unknown module"
+        )
         event_views.append(
             {
                 "occurred_at": event.occurred_at,
@@ -276,6 +281,7 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
                 "entity_type": event.entity_type,
                 "entity_id": event.entity_id,
                 "entity_label": entity_label,
+                "module_label": module_label,
                 "is_success": event.is_success,
                 "status_code": event.status_code,
             }

@@ -187,6 +187,17 @@ def test_audit_table_labels_action_and_module_columns_correctly():
     assert 'colspan="6"' in source
 
 
+def test_audit_table_always_shows_module_and_record_id():
+    source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "event.module_label" in source
+    assert "Unknown module" in source
+    assert "Record ID:" in source
+    assert "{% if event.entity_id %}" not in source
+
+
 def test_build_audit_list_query_normalizes_and_defaults():
     query = web_system_audit.build_audit_list_query(
         actor_id=" ",

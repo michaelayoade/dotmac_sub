@@ -1170,6 +1170,9 @@ and 10/25/50/100-row page-size choices.
 #### Table
 Timestamp | Actor | Action | Module | Details | Status
 
+Module and Record ID remain visible for every row. Legacy events without a
+module are labelled `Unknown module` rather than leaving the column blank.
+
 ### 8g. Health (`/admin/system/health`)
 
 #### Service Status Cards
