@@ -163,7 +163,10 @@ jobs:
     needs: verify
     runs-on: [self-hosted, linux, x64, dotmac-sub-production]
     environment: production
-    timeout-minutes: 45
+    # The deploy's backup, migrations, warm handoff and existing health gates
+    # share this job budget. Individual health/schema/identity limits remain
+    # unchanged and continue to fail closed.
+    timeout-minutes: 75
     steps:
       # This job deploys to the live production host (backup, migrations, the
       # actual container cutover) after a human approval, so it must never be
