@@ -157,7 +157,9 @@ def test_exact_amount_is_never_rounded_into_a_match(
     assert result.mismatched_fields == (shadow.IntentBindingField.AMOUNT,)
 
 
-@pytest.mark.parametrize("metadata_target", [None, str(uuid4())])
+@pytest.mark.parametrize(
+    "metadata_target", [None, "00000000-0000-0000-0000-000000000003"]
+)
 def test_legacy_adapter_uses_structural_target_and_original_instants(
     binding: shadow.AuthorizedInvoiceIntentBinding,
     metadata_target: str | None,
