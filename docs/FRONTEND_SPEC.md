@@ -1264,6 +1264,12 @@ receives owner-computed impact and permission-aware
 Users with only `billing:extension:read` can see summarized activity but no
 action controls.
 
+When the lifecycle owner refuses self-approval, the apply adapter re-renders
+the detail page with status 200 and the owner's safe message in an accessible
+inline error alert. It does not replace the page with the generic 400 screen;
+the unchanged pending extension and its available actions remain visible so a
+different authorized staff member can approve it.
+
 Applied extensions expose reversal only to `billing:extension:reverse`. The
 operator supplies a reviewed reason, then a separate owner-computed confirmation
 page shows exact invalidated-grant counts, exact-anchor restorations, and later,

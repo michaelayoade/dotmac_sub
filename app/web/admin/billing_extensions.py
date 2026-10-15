@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -358,16 +358,32 @@ def service_extension_detail(
     request: Request, extension_id: str, db: Session = Depends(get_db)
 ):
     try:
-        projection = web_billing_service_extensions.build_service_extension_detail(
-            db,
-            extension_id=uuid.UUID(extension_id),
-            auth=getattr(request.state, "auth", None),
-        )
+        parsed_extension_id = uuid.UUID(extension_id)
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
             detail="Service extension identifier is invalid.",
         ) from exc
+    return _service_extension_detail_response(
+        request,
+        db,
+        extension_id=parsed_extension_id,
+    )
+
+
+def _service_extension_detail_response(
+    request: Request,
+    db: Session,
+    *,
+    extension_id: uuid.UUID,
+    error: str | None = None,
+) -> Response:
+    try:
+        projection = web_billing_service_extensions.build_service_extension_detail(
+            db,
+            extension_id=extension_id,
+            auth=getattr(request.state, "auth", None),
+        )
     except DomainError as exc:
         raise _extension_http_error(exc) from exc
     return templates.TemplateResponse(
@@ -375,7 +391,7 @@ def service_extension_detail(
         _context(
             request,
             db,
-            {"detail": projection},
+            {"detail": projection, "error": error},
         ),
     )
 
@@ -409,6 +425,13 @@ def service_extension_apply(
             detail="Service extension identifier is invalid.",
         ) from exc
     except DomainError as exc:
+        if exc.code.endswith("self_approval_forbidden"):
+            return _service_extension_detail_response(
+                request,
+                db,
+                extension_id=uuid.UUID(extension_id),
+                error=exc.message,
+            )
         raise _extension_http_error(exc) from exc
     return RedirectResponse(
         url=f"/admin/billing/service-extensions/{extension_id}", status_code=303

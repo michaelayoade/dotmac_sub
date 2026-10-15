@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from starlette.requests import Request
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.catalog import SubscriptionStatus
@@ -20,12 +22,14 @@ from app.models.service_extension import (
 )
 from app.models.system_user import SystemUser
 from app.services import service_extensions
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.web_billing_service_extensions import (
     ServiceExtensionActivityProvenance,
     build_customer_service_extension_history,
     build_service_extension_detail,
 )
+from app.web.admin import billing_extensions
 from app.web.admin.billing_extensions import templates
 
 _NOW = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
@@ -592,6 +596,97 @@ def test_template_renders_owner_projection_without_local_decision_maps():
     assert "status_colors" not in source
     assert "app_datetime" not in source
     assert "View all" not in source
+
+
+def test_apply_self_approval_renders_detail_with_inline_error(db_session, monkeypatch):
+    extension_id = uuid4()
+    projection = object()
+    captured: dict[str, object] = {}
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/admin/billing/service-extensions/{extension_id}/apply",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "https",
+            "server": ("testserver", 443),
+            "client": ("testclient", 123),
+        }
+    )
+    request.state.request_id = str(uuid4())
+    request.state.auth = _ADMIN_AUTH
+
+    def refuse_self_approval(*_args, **_kwargs):
+        raise DomainError(
+            code="financial.service_extensions.self_approval_forbidden",
+            message=(
+                "A service extension must be approved by a different staff member "
+                "than the one who created it."
+            ),
+            retryable=False,
+        )
+
+    def build_detail(_db, *, extension_id, auth):
+        captured["extension_id"] = extension_id
+        captured["auth"] = auth
+        return projection
+
+    def render(template_name, context, status_code=200):
+        captured["template_name"] = template_name
+        captured["context"] = context
+        return SimpleNamespace(status_code=status_code)
+
+    monkeypatch.setattr(
+        billing_extensions.service_extensions_service,
+        "apply_service_extension",
+        refuse_self_approval,
+    )
+    monkeypatch.setattr(
+        billing_extensions.web_billing_service_extensions,
+        "build_service_extension_detail",
+        build_detail,
+    )
+    monkeypatch.setattr(
+        billing_extensions.web_admin_service,
+        "get_actor_id",
+        lambda _request: "maker-1",
+    )
+    monkeypatch.setattr(
+        billing_extensions,
+        "_context",
+        lambda _request, _db, extra: {"request": _request, **extra},
+    )
+    monkeypatch.setattr(billing_extensions.templates, "TemplateResponse", render)
+
+    response = billing_extensions.service_extension_apply(
+        request,
+        str(extension_id),
+        str(uuid4()),
+        db_session,
+    )
+
+    assert response.status_code == 200
+    assert captured["extension_id"] == extension_id
+    assert captured["auth"] == _ADMIN_AUTH
+    assert captured["template_name"] == ("admin/billing/service_extension_detail.html")
+    context = captured["context"]
+    assert isinstance(context, dict)
+    assert context["detail"] is projection
+    assert context["error"] == (
+        "A service extension must be approved by a different staff member "
+        "than the one who created it."
+    )
+
+
+def test_detail_template_has_inline_error_alert():
+    source = Path("templates/admin/billing/service_extension_detail.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "{% if error %}" in source
+    assert 'role="alert"' in source
+    assert "{{ error }}" in source
 
 
 def test_reversal_confirmation_template_compiles():
