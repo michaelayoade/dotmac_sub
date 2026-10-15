@@ -13,7 +13,6 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
-from datetime import timedelta
 from urllib.parse import urlsplit
 
 import pytest
@@ -251,7 +250,7 @@ def test_actual_worker_active_reserved_eta_and_missing_node(
             block.delay()
             assert started.wait(5)
             noop.delay()
-            noop.apply_async(countdown=60, expires=timedelta(seconds=90))
+            noop.apply_async(countdown=60, expires=90)
             # Each raw inspect waits its bounded response window, letting the
             # real consumer reserve queued and ETA tasks before the next command.
             result = observe_writer_drain(request=request, source=observer)
