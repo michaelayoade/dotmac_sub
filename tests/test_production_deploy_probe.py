@@ -437,7 +437,7 @@ def test_timed_out_docker_mutation_is_indeterminate(
 
 def test_candidate_compose_environment_rejects_unresolved_values() -> None:
     with pytest.raises(probe.ProbeRefused, match="compose_configuration_unproved"):
-        probe._compose_environment({"DATABASE_URL": None})
+        probe._compose_environment({"environment": {"DATABASE_URL": None}})
 
 
 def test_binding_cannot_inject_arbitrary_compose_flags_or_source_files() -> None:

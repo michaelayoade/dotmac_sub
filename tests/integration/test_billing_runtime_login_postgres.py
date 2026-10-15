@@ -220,7 +220,35 @@ def test_admin_role_impersonation_is_not_authentication(
         admin.execute("RESET SESSION AUTHORIZATION")
 
 
+@pytest.mark.parametrize(
+    "options",
+    (
+        "INHERIT TRUE, SET FALSE, ADMIN FALSE",
+        "INHERIT FALSE, SET TRUE, ADMIN FALSE",
+        "INHERIT FALSE, SET FALSE, ADMIN TRUE",
+        "INHERIT FALSE, SET FALSE, ADMIN FALSE",
+    ),
+    ids=("inherit", "set", "dormant-admin", "all-false-dormant"),
+)
 def test_unknown_inherit_set_and_dormant_admin_paths_refuse(
+    runtime_connections: RuntimeConnections,
+    options: str,
+) -> None:
+    admin, runtime = runtime_connections.admin, runtime_connections.runtime
+    role = sql.Identifier(f"runtime_login_path_{uuid4().hex}")
+    admin.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(role))
+    runtime.execute("BEGIN ISOLATION LEVEL READ COMMITTED")
+    try:
+        admin.execute(sql.SQL("GRANT {} TO app_user WITH " + options).format(role))
+        _refused(runtime, BillingRuntimeLoginRefusal.ROLE_PATH)
+        admin.execute(sql.SQL("REVOKE {} FROM app_user").format(role))
+        require_billing_runtime_login(runtime)
+    finally:
+        admin.execute(sql.SQL("REVOKE {} FROM app_user").format(role))
+        admin.execute(sql.SQL("DROP ROLE {}").format(role))
+
+
+def test_dormant_membership_with_transitive_role_path_refuses(
     runtime_connections: RuntimeConnections,
 ) -> None:
     admin, runtime = runtime_connections.admin, runtime_connections.runtime
@@ -228,16 +256,6 @@ def test_unknown_inherit_set_and_dormant_admin_paths_refuse(
     admin.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(role))
     runtime.execute("BEGIN ISOLATION LEVEL READ COMMITTED")
     try:
-        for options in (
-            "INHERIT TRUE, SET FALSE, ADMIN FALSE",
-            "INHERIT FALSE, SET TRUE, ADMIN FALSE",
-            "INHERIT FALSE, SET FALSE, ADMIN TRUE",
-            "INHERIT FALSE, SET FALSE, ADMIN FALSE",
-        ):
-            admin.execute(sql.SQL("GRANT {} TO app_user WITH " + options).format(role))
-            _refused(runtime, BillingRuntimeLoginRefusal.ROLE_PATH)
-            admin.execute(sql.SQL("REVOKE {} FROM app_user").format(role))
-            require_billing_runtime_login(runtime)
         second_role = sql.Identifier(f"runtime_login_target_{uuid4().hex}")
         admin.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(second_role))
         try:
