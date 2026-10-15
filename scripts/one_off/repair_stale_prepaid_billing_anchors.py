@@ -23,7 +23,7 @@ may select explicit subscription UUIDs and opt into unsupported-lead repair;
 an applied service extension still quarantines the row rather than being
 silently clawed back.
 
-Preview-then-apply, idempotent, and evidence-producing:
+Historical repair behavior (now preview-only; --apply is disabled by policy):
   * preview is read-only and fingerprint-bound;
   * apply re-reads every candidate under an account lock and skips any row
     whose coverage changed since the preview;
@@ -32,7 +32,7 @@ Preview-then-apply, idempotent, and evidence-producing:
   * a repaired subscription leaves the cohort permanently, so repeated runs
     drive the cohort to zero.
 
-No money is posted, moved, or forgiven. Dry run by default.
+No money is posted, moved, or forgiven. Only read-only previews remain available.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from app.services.prepaid_service_renewals import (
     apply_stale_prepaid_billing_anchor_repair,
     preview_stale_prepaid_billing_anchor_repair,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 DEFAULT_LIMIT = 500
 
@@ -54,7 +55,7 @@ def main() -> None:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Write the repair. Default is a read-only preview.",
+        help="Disabled by policy. Only read-only previews are available.",
     )
     parser.add_argument(
         "--reviewed-sha256",
@@ -95,6 +96,7 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     if args.include_unsupported_leads and not args.subscription_id:
         parser.error("--include-unsupported-leads requires --subscription-id")
@@ -135,8 +137,8 @@ def main() -> None:
             )
         if not args.apply:
             print(
-                "\nDRY RUN — nothing written. Review the cohort, then re-run "
-                "with --apply --reviewed-sha256 <preview fingerprint>."
+                "\nDRY RUN — nothing written. --apply is disabled by policy; "
+                "record the case for the billing exceptions review instead."
             )
             return
         if args.reviewed_sha256 != preview.fingerprint:

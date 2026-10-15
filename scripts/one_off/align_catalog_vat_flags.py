@@ -5,7 +5,7 @@ billing resolver treats a positive percent as taxable, but aligning the boolean
 keeps the admin catalog readable: taxable services show VAT enabled, exempt
 services remain ``with_vat=false`` with no positive percent.
 
-Dry-run by default.
+Preview-only; --apply is disabled by policy.
 """
 
 from __future__ import annotations
@@ -14,12 +14,14 @@ import argparse
 
 from app.db import SessionLocal
 from app.models.catalog import CatalogOffer
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="Write updates.")
+    parser.add_argument("--apply", action="store_true", help="Disabled by policy.")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     try:
