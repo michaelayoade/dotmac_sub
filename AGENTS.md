@@ -90,6 +90,14 @@ authoritative documents in the same change that updates the contract.
   Delivery happens after commit through the durable dispatcher/outbox.
 - Use structured logging. Do not log secrets, credentials, private payloads, or
   unnecessary customer identity data.
+- Audit attribution for a staff action must use the authenticated staff
+  principal's `principal_id` and the display name resolved from the canonical
+  staff account. Never use `subscriber_id` for staff attribution, accept a
+  manually entered actor name as application evidence, or substitute a generic
+  value such as `Admin`, `User`, or `System`.
+- If an action requires an actor name and no authenticated or canonical actor
+  identity is available, Codex must ask the user for the actor's name before
+  proceeding. Codex must never invent or infer the name.
 - Migrations follow expand, backfill, verify, cut over, and contract. Destructive
   or irreversible steps require an approved design and operator runbook.
 

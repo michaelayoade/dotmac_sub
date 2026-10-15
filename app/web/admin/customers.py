@@ -213,10 +213,9 @@ def _resolve_business_customer_id(db: Session, customer_id: str) -> str:
 
 
 def _get_actor_id(request: Request) -> str | None:
-    from app.web.admin import get_current_user
+    from app.services import web_admin as web_admin_service
 
-    current_user = get_current_user(request)
-    return str(current_user.get("subscriber_id")) if current_user else None
+    return web_admin_service.get_actor_id(request)
 
 
 def _get_bulk_message_actor_id(request: Request) -> UUID | None:
@@ -1870,10 +1869,7 @@ def customer_user_send_invite(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor_id = _get_actor_id(request)
     try:
         result = web_customer_user_access_service.send_customer_invite(
             db,
@@ -1920,10 +1916,7 @@ def customer_user_send_reset_link(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor_id = _get_actor_id(request)
     try:
         result = web_customer_user_access_service.send_customer_reset_link(
             db,
@@ -2048,10 +2041,7 @@ def customer_user_activate_login(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor_id = _get_actor_id(request)
     try:
         result = web_customer_user_access_service.set_customer_login_active(
             db,
@@ -2100,10 +2090,7 @@ def customer_user_deactivate_login(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor_id = _get_actor_id(request)
     try:
         result = web_customer_user_access_service.set_customer_login_active(
             db,
@@ -2478,16 +2465,13 @@ def person_update(
             reseller_id=reseller_id,
         )
         metadata_payload = build_changes_metadata(before, after)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
         log_audit_event(
             db=db,
             request=request,
             action="update",
             entity_type="subscriber",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor_id=_get_actor_id(request),
             metadata=metadata_payload,
         )
         destination = (
@@ -2597,16 +2581,13 @@ def business_update(
             reseller_id=reseller_id,
         )
         metadata_payload = build_changes_metadata(before, after)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
         log_audit_event(
             db=db,
             request=request,
             action="update",
             entity_type="subscriber",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor_id=_get_actor_id(request),
             metadata=metadata_payload,
         )
         return RedirectResponse(
@@ -2683,16 +2664,13 @@ def person_convert_to_business(
             )
         )
         metadata_payload = build_changes_metadata(before, after)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
         log_audit_event(
             db=db,
             request=request,
             action="convert_to_business",
             entity_type="subscriber",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor_id=_get_actor_id(request),
             metadata=metadata_payload,
         )
         return RedirectResponse(
@@ -2752,16 +2730,13 @@ def person_deactivate(
         actor_id=_get_actor_id(request),
     )
     metadata_payload = build_changes_metadata(before, after)
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
     log_audit_event(
         db=db,
         request=request,
         action="update",
         entity_type="subscriber",
         entity_id=str(customer_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        actor_id=_get_actor_id(request),
         metadata=metadata_payload,
     )
     if request.headers.get("HX-Request"):
@@ -2787,16 +2762,13 @@ def business_deactivate(
         customer_id=customer_id,
         actor_id=_get_actor_id(request),
     )
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
     log_audit_event(
         db=db,
         request=request,
         action="update",
         entity_type="subscriber",
         entity_id=str(customer_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        actor_id=_get_actor_id(request),
         metadata={"changes": {"is_active": {"from": True, "to": False}}},
     )
     if request.headers.get("HX-Request"):
