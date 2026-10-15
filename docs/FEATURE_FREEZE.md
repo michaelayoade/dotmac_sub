@@ -43,11 +43,14 @@ trigger and must not grow.
 
 ## Legacy one-off repair CLI freeze
 
-`scripts/one_off/soft_delete_failed_payment_reversal_pairs.py` and
-`scripts/one_off/repair_billing_date_anchors.py` refuse `--apply` immediately
-after argument parsing, before opening a database session or writing reports.
-This closes the ledger-pair/memo and billing-anchor CLI write paths. Existing
-preview modes remain available. Static and actual-main session-trap canaries
+`scripts/one_off/soft_delete_failed_payment_reversal_pairs.py`,
+`scripts/one_off/repair_billing_date_anchors.py`,
+`scripts/one_off/repair_stale_prepaid_billing_anchors.py`, and
+`scripts/one_off/align_catalog_vat_flags.py` refuse `--apply` immediately after
+argument parsing, before opening a database session or writing reports.
+This closes the ledger-pair/memo, billing-anchor, stale prepaid anchor, and
+catalog VAT-flag CLI write paths. Existing preview modes remain available.
+Static and actual-main session-trap canaries
 cover refusal order, preview routing, and removed or late guards.
 
 This is CLI retirement only: historical writer code remains, direct service

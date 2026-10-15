@@ -8,6 +8,7 @@ import copy
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -40,6 +41,8 @@ EXECUTE_CLIS = (
 ONE_OFF_APPLY_CLIS = (
     "soft_delete_failed_payment_reversal_pairs.py",
     "repair_billing_date_anchors.py",
+    "repair_stale_prepaid_billing_anchors.py",
+    "align_catalog_vat_flags.py",
     "repair_open_zero_vat_invoices.py",
     "backfill_payment_channel_attribution.py",
     "soft_delete_phantom_opening_balance_pairs.py",
@@ -409,6 +412,8 @@ def test_billing_target_shadow_nonfrozen_routes_remain_reachable(
         ("billing", APPLY_CLIS[0]),
         ("one_off", "soft_delete_failed_payment_reversal_pairs.py"),
         ("one_off", "repair_billing_date_anchors.py"),
+        ("one_off", "repair_stale_prepaid_billing_anchors.py"),
+        ("one_off", "align_catalog_vat_flags.py"),
     ),
 )
 def test_guard_detector_rejects_removed_or_late_guard(
@@ -516,6 +521,8 @@ def _compile_main(
         "reconcile_prepaid_drawdown_reversals.py",
         "soft_delete_failed_payment_reversal_pairs.py",
         "repair_billing_date_anchors.py",
+        "repair_stale_prepaid_billing_anchors.py",
+        "align_catalog_vat_flags.py",
     ),
 )
 def test_one_off_actual_main_apply_flag_refuses_before_session(
@@ -534,6 +541,8 @@ def test_one_off_actual_main_apply_flag_refuses_before_session(
         "refuse_apply": refuse_apply,
         "Path": Path,
         "DEFAULT_OUTPUT": "unused-preview.csv",
+        "DEFAULT_LIMIT": 500,
+        "UUID": UUID,
     }
     main = _compile_main(filename, "one_off", namespace)
     monkeypatch.setattr(sys, "argv", [filename])
