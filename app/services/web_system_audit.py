@@ -267,6 +267,7 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
             if event.entity_type
             else "Unknown module"
         )
+        safe_details = audit_service.redact_audit_details(event.details or metadata)
         event_views.append(
             {
                 "occurred_at": event.occurred_at,
@@ -275,6 +276,7 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
                 ),
                 "actor_name": actor_name,
                 "actor_id": event.actor_id,
+                "actor_type": event.actor_type.value,
                 "action": event.action,
                 "action_label": action_label,
                 "action_detail": change_summary,
@@ -282,8 +284,11 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
                 "entity_id": event.entity_id,
                 "entity_label": entity_label,
                 "module_label": module_label,
+                "request_id": event.request_id,
                 "is_success": event.is_success,
                 "status_code": event.status_code,
+                "ip_address": event.ip_address,
+                "safe_details": safe_details,
             }
         )
 

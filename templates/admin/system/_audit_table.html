@@ -34,6 +34,24 @@
                     {% else %}
                     <div class="text-xs text-slate-500 dark:text-slate-400">{{ event.entity_label | default(event.entity_type | default('N/A')) }}</div>
                     {% endif %}
+                    <details class="mt-2 text-xs">
+                        <summary class="cursor-pointer font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View event</summary>
+                        <dl class="mt-2 space-y-1 rounded-lg bg-slate-50 p-3 dark:bg-slate-900/50">
+                            <div><dt class="inline font-medium">Request ID:</dt> <dd class="inline break-all">{{ event.request_id | default('Not recorded', true) }}</dd></div>
+                            <div><dt class="inline font-medium">Record ID:</dt> <dd class="inline break-all">{{ event.entity_id | default('Not recorded', true) }}</dd></div>
+                            <div><dt class="inline font-medium">Status code:</dt> <dd class="inline">{{ event.status_code | default('Not recorded', true) }}</dd></div>
+                            <div><dt class="inline font-medium">Actor type:</dt> <dd class="inline">{{ event.actor_type | replace('_', ' ') | title }}</dd></div>
+                            <div><dt class="inline font-medium">IP address:</dt> <dd class="inline break-all">{{ event.ip_address | default('Not recorded', true) }}</dd></div>
+                            <div class="pt-1">
+                                <dt class="font-medium">Event details:</dt>
+                                {% if event.safe_details %}
+                                <dd><pre class="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-white p-2 text-[11px] dark:bg-slate-800">{{ event.safe_details | tojson(indent=2) }}</pre></dd>
+                                {% else %}
+                                <dd>Not recorded</dd>
+                                {% endif %}
+                            </div>
+                        </dl>
+                    </details>
                 </td>
                 <td class="break-words px-2 py-3 align-top">
                     {% if event.is_success is defined and event.is_success is not none %}

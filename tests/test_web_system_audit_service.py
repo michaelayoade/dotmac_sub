@@ -198,6 +198,35 @@ def test_audit_table_always_shows_module_and_record_id():
     assert "{% if event.entity_id %}" not in source
 
 
+def test_audit_event_details_are_expandable_and_redacted():
+    source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    detail_labels = (
+        "Request ID:",
+        "Record ID:",
+        "Status code:",
+        "Actor type:",
+        "IP address:",
+    )
+    for label in detail_labels:
+        assert label in source
+    assert "event.safe_details | tojson" in source
+
+    safe = audit_service.redact_audit_details(
+        {
+            "operation": "updated invoice",
+            "nested": {"access_token": "must-not-render"},
+            "database_password": "must-not-render",
+        }
+    )
+
+    assert safe["operation"] == "updated invoice"
+    assert safe["nested"] == {"access_token": "<redacted>"}
+    assert safe["database_password"] == "<redacted>"
+
+
 def test_build_audit_list_query_normalizes_and_defaults():
     query = web_system_audit.build_audit_list_query(
         actor_id=" ",

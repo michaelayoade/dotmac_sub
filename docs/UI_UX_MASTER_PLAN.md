@@ -1172,6 +1172,9 @@ Timestamp | Actor | Action | Module | Details | Status
 
 Module and Record ID remain visible for every row. Legacy events without a
 module are labelled `Unknown module` rather than leaving the column blank.
+Each row has an event expander with request and record IDs, status code, actor
+type, IP address, and bounded details whose sensitive values are redacted by
+the audit owner before they reach the template.
 
 ### 8g. Health (`/admin/system/health`)
 

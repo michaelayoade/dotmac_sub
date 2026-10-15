@@ -1,9 +1,11 @@
 import logging
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, cast
 
 from fastapi import HTTPException, Request, Response
+from pydantic import JsonValue
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
@@ -24,6 +26,73 @@ AuditEventOrderField = Literal[
     "status_code",
 ]
 AuditEventOrderDirection = Literal["asc", "desc"]
+
+_SENSITIVE_DETAIL_KEY_PARTS = frozenset(
+    {
+        "api_key",
+        "community",
+        "credential",
+        "nin",
+        "password",
+        "private_key",
+        "secret",
+        "token",
+    }
+)
+_MAX_DETAIL_DEPTH = 5
+_MAX_DETAIL_ITEMS = 100
+_MAX_DETAIL_TEXT_LENGTH = 500
+
+
+def _is_sensitive_detail_key(key: str) -> bool:
+    normalized = key.casefold().replace("-", "_")
+    return any(part in normalized for part in _SENSITIVE_DETAIL_KEY_PARTS)
+
+
+def _safe_detail_value(value: object, *, depth: int) -> JsonValue:
+    if depth >= _MAX_DETAIL_DEPTH:
+        return "<truncated>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if len(value) <= _MAX_DETAIL_TEXT_LENGTH:
+            return value
+        return f"{value[:_MAX_DETAIL_TEXT_LENGTH]}…"
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        result: dict[str, JsonValue] = {}
+        for index, (raw_key, child) in enumerate(value.items()):
+            if index >= _MAX_DETAIL_ITEMS:
+                result["_truncated"] = True
+                break
+            key = str(raw_key)
+            result[key] = (
+                "<redacted>"
+                if _is_sensitive_detail_key(key)
+                else _safe_detail_value(child, depth=depth + 1)
+            )
+        return result
+    if isinstance(value, (list, tuple)):
+        safe_items = [
+            _safe_detail_value(child, depth=depth + 1)
+            for child in value[:_MAX_DETAIL_ITEMS]
+        ]
+        if len(value) > _MAX_DETAIL_ITEMS:
+            safe_items.append("<truncated>")
+        return safe_items
+    return "<unsupported value>"
+
+
+def redact_audit_details(
+    details: Mapping[str, object] | None,
+) -> dict[str, JsonValue]:
+    """Return bounded audit details with sensitive values removed."""
+
+    if not details:
+        return {}
+    safe = _safe_detail_value(details, depth=0)
+    return safe if isinstance(safe, dict) else {}
 
 
 @dataclass(frozen=True)
