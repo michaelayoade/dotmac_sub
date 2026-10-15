@@ -148,9 +148,10 @@ def _script() -> str:
         )
         .replace(
             "@@PIN_AND_MIGRATE@@",
-            _slice(
+            _slice(src, "database_name_from_url() {", "database_heads() {")
+            + _slice(
                 src,
-                "database_name_from_url() {",
+                "read_alembic_heads() {",
                 "# --- End pre-swap pin and migration",
             ),
         )
@@ -327,7 +328,7 @@ def test_database_heads_query_is_time_bounded_and_timeout_is_unreadable(
 ) -> None:
     src = DEPLOY_SH.read_text(encoding="utf-8")
     fn = _slice(src, "database_heads() {", "candidate_heads() {") + _slice(
-        src, "database_name_from_url() {", "read_alembic_heads() {"
+        src, "database_name_from_url() {", "database_heads() {"
     )
     (tmp_path / ".env").write_text(f"DATABASE_URL={DB_URL}\n", encoding="utf-8")
     script = f"""
@@ -636,7 +637,7 @@ def test_database_heads_uses_the_shared_url_parser(
 ) -> None:
     src = DEPLOY_SH.read_text(encoding="utf-8")
     fn = _slice(src, "database_heads() {", "candidate_heads() {") + _slice(
-        src, "database_name_from_url() {", "read_alembic_heads() {"
+        src, "database_name_from_url() {", "database_heads() {"
     )
     (tmp_path / ".env").write_text(f"DATABASE_URL={url}\n", encoding="utf-8")
     script = f"""
