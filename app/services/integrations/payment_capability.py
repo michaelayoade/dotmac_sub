@@ -12,12 +12,16 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import inspect, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.integration_platform import (
     IntegrationBindingState,
     IntegrationCapabilityBinding,
+    IntegrationConfigRevision,
+    IntegrationInstallation,
     IntegrationInstallationState,
 )
 from app.services.common import coerce_uuid
@@ -27,9 +31,20 @@ from app.services.integrations.connectors.payment_gateway import (
     PAYMENT_RECONCILE_CAPABILITY,
     PAYMENT_REFUND_CAPABILITY,
     PAYMENT_WEBHOOK_CAPABILITY,
+    _decode_capture_record,
+)
+from app.services.integrations.payment_capture import (
+    CaptureProvenance,
+    CaptureProvider,
+    CaptureRefusal,
+    PaymentCaptureError,
+    PaymentCaptureOutcome,
+    PaymentCaptureQuery,
 )
 from app.services.integrations.runtime import OperationStatus, OperationTrigger
 from app.services.integrations.runtime_execution import (
+    RuntimeExecutionError,
+    _build_execution_context_from_binding,
     build_execution_context,
     make_operation_executor,
 )
@@ -207,7 +222,7 @@ def _binding(
     capability_id: str,
     *,
     checkout_binding_id: str | uuid.UUID | None = None,
-):
+) -> IntegrationCapabilityBinding:
     if checkout_binding_id is not None:
         source = db.get(
             IntegrationCapabilityBinding,
@@ -399,6 +414,249 @@ def verify_transaction(
     )
 
 
+def _capture_binding_snapshot(
+    *, db: Session, query: PaymentCaptureQuery
+) -> IntegrationCapabilityBinding | CaptureRefusal:
+    """Read scalar persistence facts without refreshing or overwriting callers."""
+    b = IntegrationCapabilityBinding.__table__
+    i = IntegrationInstallation.__table__
+    r = IntegrationConfigRevision.__table__
+    # Execute first so an aborted caller transaction cannot become a refusal.
+    row = (
+        db.execute(
+            select(
+                b.c.id.label("binding_id"),
+                b.c.installation_id.label("binding_installation_id"),
+                b.c.capability_id,
+                b.c.state.label("binding_state"),
+                i.c.id.label("installation_id"),
+                i.c.connector_key,
+                i.c.connector_version,
+                i.c.manifest_digest,
+                i.c.state.label("installation_state"),
+                i.c.current_config_revision_id,
+                r.c.id.label("revision_id"),
+                r.c.installation_id.label("revision_installation_id"),
+                r.c.schema_version,
+                r.c.config_json,
+                r.c.secret_refs,
+                r.c.config_digest,
+            )
+            .select_from(
+                b.join(i, b.c.installation_id == i.c.id).outerjoin(
+                    r, i.c.current_config_revision_id == r.c.id
+                )
+            )
+            .where(b.c.id == query.capability_binding_id)
+        )
+        .mappings()
+        .one_or_none()
+    )
+    relevant = {
+        IntegrationInstallation: (
+            "id",
+            "connector_key",
+            "connector_version",
+            "manifest_digest",
+            "state",
+            "current_config_revision_id",
+            "current_config_revision",
+        ),
+        IntegrationCapabilityBinding: (
+            "id",
+            "installation_id",
+            "capability_id",
+            "state",
+            "installation",
+        ),
+        IntegrationConfigRevision: (
+            "id",
+            "installation_id",
+            "config_json",
+            "secret_refs",
+            "schema_version",
+            "config_digest",
+        ),
+    }
+    for instance in db.identity_map.values():
+        state = inspect(instance)
+        if type(instance) not in relevant:
+            continue
+        # Inspect loaded values only: detecting caller changes must not cause IO.
+        loaded = state.dict
+        in_scope = (
+            state.identity == (query.installation_id,)
+            if isinstance(instance, IntegrationInstallation)
+            else state.identity == (query.capability_binding_id,)
+            if isinstance(instance, IntegrationCapabilityBinding)
+            else state.identity == (query.config_revision_id,)
+            or loaded.get("installation_id") == query.installation_id
+        )
+        if not in_scope:
+            continue
+        if any(
+            state.attrs[name].history.has_changes() for name in relevant[type(instance)]
+        ):
+            return CaptureRefusal.STALE_BINDING
+        if isinstance(instance, IntegrationConfigRevision) and all(
+            name in loaded
+            for name in (
+                "config_json",
+                "secret_refs",
+                "schema_version",
+                "config_digest",
+            )
+        ):
+            # Plain JSON may have untracked in-place changes. Never overwrite them.
+            if (
+                installations.config_revision_digest(
+                    config=loaded["config_json"],
+                    secret_refs=loaded["secret_refs"],
+                    schema_version=loaded["schema_version"],
+                )
+                != loaded["config_digest"]
+            ):
+                return CaptureRefusal.STALE_BINDING
+
+    if row is None or row["installation_id"] != query.installation_id:
+        return CaptureRefusal.UNBOUND
+    if row["revision_id"] is None:
+        return CaptureRefusal.STALE_BINDING
+    if row["revision_installation_id"] != row["installation_id"]:
+        return CaptureRefusal.UNBOUND
+    if (
+        row["revision_id"] != query.config_revision_id
+        or row["config_digest"] != query.config_digest
+    ):
+        return CaptureRefusal.STALE_BINDING
+    if (
+        installations.config_revision_digest(
+            config=row["config_json"],
+            secret_refs=row["secret_refs"],
+            schema_version=row["schema_version"],
+        )
+        != row["config_digest"]
+    ):
+        return CaptureRefusal.STALE_BINDING
+    revision = IntegrationConfigRevision(
+        id=row["revision_id"],
+        installation_id=row["revision_installation_id"],
+        config_json=row["config_json"],
+        secret_refs=row["secret_refs"],
+        schema_version=row["schema_version"],
+        config_digest=row["config_digest"],
+    )
+    installation = IntegrationInstallation(
+        id=row["installation_id"],
+        connector_key=row["connector_key"],
+        connector_version=row["connector_version"],
+        manifest_digest=row["manifest_digest"],
+        state=row["installation_state"],
+        current_config_revision_id=row["revision_id"],
+        current_config_revision=revision,
+    )
+    return IntegrationCapabilityBinding(
+        id=row["binding_id"],
+        installation_id=row["binding_installation_id"],
+        capability_id=row["capability_id"],
+        state=row["binding_state"],
+        installation=installation,
+    )
+
+
+def capture_transaction_record(
+    db: Session, *, query: PaymentCaptureQuery
+) -> PaymentCaptureOutcome:
+    """Capture an unqualified current record without a financial consequence.
+
+    Caller-asserted namespace provenance is deliberately distinct from the
+    provider response. It grants no merchant or cash qualification authority.
+    """
+    claim = query.asserted_merchant_namespace
+    if claim is None:
+        return PaymentCaptureOutcome(refusal=CaptureRefusal.UNBOUND)
+    if (
+        claim.installation_id != query.installation_id
+        or claim.config_revision_id != query.config_revision_id
+        or claim.config_digest != query.config_digest
+    ):
+        return PaymentCaptureOutcome(refusal=CaptureRefusal.UNBOUND)
+    # Even a dirty caller session cannot flush financial rows during this query.
+    with db.no_autoflush:
+        snapshot = _capture_binding_snapshot(db=db, query=query)
+        if isinstance(snapshot, CaptureRefusal):
+            return PaymentCaptureOutcome(refusal=snapshot)
+        binding = snapshot
+        installation = binding.installation
+        if (
+            binding.capability_id != PAYMENT_RECONCILE_CAPABILITY
+            or installation.connector_key != query.provider.value
+        ):
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.UNSUPPORTED)
+        revision = installation.current_config_revision
+        if revision is not None and revision.installation_id != installation.id:
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.UNBOUND)
+        if (
+            revision is None
+            or revision.id != query.config_revision_id
+            or revision.config_digest != query.config_digest
+        ):
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.STALE_BINDING)
+        try:
+            context = _build_execution_context_from_binding(binding=binding)
+            result = make_operation_executor(
+                context,
+                correlation_id=f"payment-capture:{uuid.uuid4()}",
+                trigger=OperationTrigger.reconcile,
+                actor="integration.payments",
+            )("verify", {"reference": query.reference, "capture_record": True})
+        except RuntimeExecutionError:
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.UNSUPPORTED)
+        except SQLAlchemyError:
+            raise
+        except Exception:
+            # Do not expose credential-store or runner exception contents.
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.PROVIDER_FAILURE)
+        if result.status != OperationStatus.succeeded:
+            return PaymentCaptureOutcome(
+                refusal=(
+                    CaptureRefusal.INVALID_RECORD
+                    if result.error_code == "provider_capture_invalid"
+                    else CaptureRefusal.PROVIDER_FAILURE
+                )
+            )
+        try:
+            record = _decode_capture_record(result.output)
+        except PaymentCaptureError:
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.INVALID_RECORD)
+        if record.provider != query.provider or record.reference != query.reference:
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.REFERENCE_MISMATCH)
+        if record.currency != query.expected_currency:
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.CURRENCY_MISMATCH)
+        expected = query.expected_amount
+        if query.provider is CaptureProvider.PAYSTACK:
+            sign, digits, exponent = expected.as_tuple()
+            assert isinstance(exponent, int)  # query rejects non-finite amounts
+            expected = Decimal((sign, digits, exponent + 2))
+        if record.amount != expected:
+            return PaymentCaptureOutcome(refusal=CaptureRefusal.AMOUNT_MISMATCH)
+        return PaymentCaptureOutcome(
+            refusal=None,
+            record=record,
+            provenance=CaptureProvenance(
+                installation_id=installation.id,
+                capability_binding_id=binding.id,
+                capability_id=binding.capability_id,
+                connector_key=installation.connector_key,
+                connector_version=installation.connector_version,
+                manifest_digest=installation.manifest_digest,
+                config_revision_id=revision.id,
+                config_digest=revision.config_digest,
+                asserted_merchant_namespace=claim,
+            ),
+        )
+
+
 def refund_transaction(
     db: Session,
     *,
@@ -492,7 +750,7 @@ def inbound_context(
     *,
     provider_type: str,
     secret_resolver: Callable[[str | None], str | None] = resolve_secret,
-):
+) -> tuple[IntegrationCapabilityBinding, dict[str, str]]:
     binding = _binding(db, provider_type, PAYMENT_WEBHOOK_CAPABILITY)
     context = build_execution_context(
         db, capability_binding_id=binding.id, secret_resolver=secret_resolver

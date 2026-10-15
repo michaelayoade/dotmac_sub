@@ -205,6 +205,26 @@ def build_execution_context(
     binding = db.get(IntegrationCapabilityBinding, capability_binding_id)
     if binding is None:
         raise RuntimeExecutionError("capability binding not found")
+    return _build_execution_context_from_binding(
+        binding=binding,
+        allow_disabled=allow_disabled,
+        runner_registry=runner_registry,
+        runner_override=runner_override,
+        external_runner_factory=external_runner_factory,
+        secret_resolver=secret_resolver,
+    )
+
+
+def _build_execution_context_from_binding(
+    *,
+    binding: IntegrationCapabilityBinding,
+    allow_disabled: bool = False,
+    runner_registry: RunnerRegistry | None = None,
+    runner_override: ConnectorRunner | None = None,
+    external_runner_factory: ExternalRunnerFactory | None = None,
+    secret_resolver: Callable[[str | None], str | None] = resolve_secret,
+) -> RuntimeExecutionContext:
+    """Materialize the supplied binding; callers own snapshot admission."""
     installation = binding.installation
     if installation.state in {
         IntegrationInstallationState.quarantined.value,
