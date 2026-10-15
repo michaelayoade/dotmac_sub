@@ -152,9 +152,13 @@ def cleanup_old_events(retention_days: int = 30):
         )
 
         logger.info(
-            "Cleaned up %s old completed events and %s handler attempts",
+            (
+                "Cleaned up %s old completed events and %s handler attempts; "
+                "preserved %s referenced events"
+            ),
             result["deleted"],
             result["handler_attempts_deleted"],
+            result["skipped_referenced"],
         )
         return result
 
