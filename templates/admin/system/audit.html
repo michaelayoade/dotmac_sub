@@ -9,6 +9,12 @@
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Track system changes and administrative activity</p>
     </div>
 
+    <div id="audit-filter-feedback" aria-live="polite">
+        {% if filter_error %}
+        {% include "admin/system/_audit_filter_error.html" %}
+        {% endif %}
+    </div>
+
     <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form id="audit-filters"
               hx-get="/admin/system/audit"

@@ -263,6 +263,44 @@ def test_build_audit_list_query_rejects_out_of_contract_params():
         )
 
 
+def test_invalid_audit_filters_return_clear_messages():
+    invalid_filters = (
+        (
+            {"date_from": "not-a-date"},
+            "Enter dates in YYYY-MM-DD format.",
+        ),
+        (
+            {"date_from": "2026-10-15", "date_to": "2026-10-14"},
+            "The From date cannot be later than the To date.",
+        ),
+        (
+            {"entity_id": "invoice-1", "entity_id_missing": True},
+            "Use either a Record ID or Missing record ID, not both.",
+        ),
+        (
+            {"request_id": "request-1", "request_id_missing": True},
+            "Use either a Request ID or Missing request ID, not both.",
+        ),
+    )
+
+    for filters, message in invalid_filters:
+        with pytest.raises(web_system_audit.AuditFilterValidationError, match=message):
+            web_system_audit.build_audit_list_query(**filters)
+
+
+def test_audit_filter_errors_are_visible_without_replacing_current_results():
+    page_source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+    table_source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+    route_source = Path("app/web/admin/system.py").read_text(encoding="utf-8")
+
+    assert 'id="audit-filter-feedback"' in page_source
+    assert 'hx-swap-oob="innerHTML"' in table_source
+    assert '"HX-Retarget"] = "#audit-filter-feedback"' in route_source
+    assert '"HX-Reswap"] = "innerHTML"' in route_source
+
+
 def test_get_audit_page_data_filters_through_the_query(db_session):
     user = SystemUser(
         first_name="Filter",

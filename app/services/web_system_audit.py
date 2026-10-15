@@ -29,6 +29,11 @@ from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
+
+class AuditFilterValidationError(ValueError):
+    """A safe, user-facing audit-filter validation failure."""
+
+
 # UI page contract for the admin audit-log list. This is the projection-boundary
 # owner: it declares which columns are filterable and sortable, the default
 # ordering, and the allowed page sizes. The route renders and submits through
@@ -85,10 +90,13 @@ def build_audit_list_query(
     """
     normalized_actor_type = (actor_type or "").strip()
     if normalized_actor_type:
-        AuditActorType(normalized_actor_type)
+        try:
+            AuditActorType(normalized_actor_type)
+        except ValueError as exc:
+            raise AuditFilterValidationError("Choose a valid actor type.") from exc
     normalized_result = (result or "").strip()
     if normalized_result and normalized_result not in {"success", "failed"}:
-        raise ValueError("unsupported audit result")
+        raise AuditFilterValidationError("Choose a valid result.")
     normalized_period = (period or "").strip()
     if normalized_period and normalized_period not in {
         "today",
@@ -96,48 +104,62 @@ def build_audit_list_query(
         "last_30_days",
         "custom",
     }:
-        raise ValueError("unsupported audit period")
+        raise AuditFilterValidationError("Choose a valid date range.")
     parsed_from = _parse_iso_date(date_from)
     parsed_to = _parse_iso_date(date_to)
     if not normalized_period and (parsed_from or parsed_to):
         normalized_period = "custom"
     if normalized_period == "custom" and not (parsed_from or parsed_to):
-        raise ValueError("custom audit period needs a start or end date")
+        raise AuditFilterValidationError("Choose at least one date for a custom range.")
     if parsed_from and parsed_to and parsed_from > parsed_to:
-        raise ValueError("audit start date cannot be after end date")
+        raise AuditFilterValidationError(
+            "The From date cannot be later than the To date."
+        )
     if entity_id and entity_id_missing:
-        raise ValueError("record ID and missing-record-ID filters conflict")
+        raise AuditFilterValidationError(
+            "Use either a Record ID or Missing record ID, not both."
+        )
     if request_id and request_id_missing:
-        raise ValueError("request ID and missing-request-ID filters conflict")
+        raise AuditFilterValidationError(
+            "Use either a Request ID or Missing request ID, not both."
+        )
 
-    return AUDIT_EVENTS_LIST_DEFINITION.build_query(
-        search=None,
-        filters={
-            "actor_id": actor_id,
-            "actor_type": normalized_actor_type,
-            "action": action,
-            "entity_type": entity_type,
-            "result": normalized_result,
-            "period": normalized_period,
-            "date_from": date_from,
-            "date_to": date_to,
-            "entity_id": entity_id,
-            "entity_id_missing": "1" if entity_id_missing else None,
-            "request_id": request_id,
-            "request_id_missing": "1" if request_id_missing else None,
-        },
-        sort_by=sort_by,
-        sort_dir=sort_dir,
-        page=page,
-        per_page=per_page,
-    )
+    try:
+        return AUDIT_EVENTS_LIST_DEFINITION.build_query(
+            search=None,
+            filters={
+                "actor_id": actor_id,
+                "actor_type": normalized_actor_type,
+                "action": action,
+                "entity_type": entity_type,
+                "result": normalized_result,
+                "period": normalized_period,
+                "date_from": date_from,
+                "date_to": date_to,
+                "entity_id": entity_id,
+                "entity_id_missing": "1" if entity_id_missing else None,
+                "request_id": request_id,
+                "request_id_missing": "1" if request_id_missing else None,
+            },
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError as exc:
+        raise AuditFilterValidationError(
+            "One or more filter options are invalid."
+        ) from exc
 
 
 def _parse_iso_date(value: str | None) -> date | None:
     normalized = (value or "").strip()
     if not normalized:
         return None
-    return date.fromisoformat(normalized)
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError as exc:
+        raise AuditFilterValidationError("Enter dates in YYYY-MM-DD format.") from exc
 
 
 def _date_bounds(query: ListQuery) -> tuple[datetime | None, datetime | None]:

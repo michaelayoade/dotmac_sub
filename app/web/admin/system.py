@@ -3540,10 +3540,21 @@ def audit_log(
             page=page,
             per_page=per_page,
         )
-    except ValueError:
-        # Out-of-contract sort/page params (e.g. hand-edited URL) fall back to
-        # the contract defaults rather than erroring the page.
-        list_query = web_system_audit_service.build_audit_list_query(page=page)
+    except web_system_audit_service.AuditFilterValidationError as exc:
+        if request.headers.get("HX-Request"):
+            response = templates.TemplateResponse(
+                "admin/system/_audit_filter_error.html",
+                {"request": request, "filter_error": str(exc)},
+            )
+            response.headers["HX-Retarget"] = "#audit-filter-feedback"
+            response.headers["HX-Reswap"] = "innerHTML"
+            return response
+        # Keep the page usable on a hand-edited invalid URL while making the
+        # reason visible instead of silently pretending the filters applied.
+        list_query = web_system_audit_service.build_audit_list_query()
+        filter_error = str(exc)
+    else:
+        filter_error = None
 
     page_data = web_system_audit_service.get_audit_page_data(db, list_query)
 
@@ -3552,6 +3563,7 @@ def audit_log(
             "admin/system/_audit_table.html",
             {
                 "request": request,
+                "clear_filter_error": True,
                 **page_data,
             },
         )
@@ -3566,6 +3578,7 @@ def audit_log(
         "admin/system/audit.html",
         {
             "request": request,
+            "filter_error": filter_error,
             **page_data,
             **filter_options,
             "active_page": "audit",

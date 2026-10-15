@@ -1175,6 +1175,9 @@ module are labelled `Unknown module` rather than leaving the column blank.
 Each row has an event expander with request and record IDs, status code, actor
 type, IP address, and bounded details whose sensitive values are redacted by
 the audit owner before they reach the template.
+Invalid dates and conflicting ID filters leave the current HTMX results in
+place and show a specific error above the filters. Full-page invalid URLs fall
+back to an unfiltered page with the same error visible.
 
 ### 8g. Health (`/admin/system/health`)
 
