@@ -362,7 +362,15 @@ def test_floor_reader_executes_in_exact_inspected_container(
     ]
     assert database_url not in " ".join(commands[create_index])
     assert inputs[create_index] == f"DATABASE_URL={database_url}\n"
-    assert commands[-1][:3] == ["docker", "rm", "--force"]
+    assert "--rm" not in commands[create_index]
+    probe_name = commands[create_index][commands[create_index].index("--name") + 1]
+    assert commands[create_index + 1 :] == [
+        ["docker", "inspect", "--format", "{{json .}}", probe_name],
+        ["docker", "start", "--attach", probe_name],
+        ["docker", "inspect", "--format", "{{json .}}", probe_name],
+        ["docker", "rm", "--force", probe_name],
+        ["docker", "inspect", "--format", "{{json .}}", CONTAINER_ID],
+    ]
 
 
 def test_floor_probe_create_failure_attempts_cleanup_before_refusing(
