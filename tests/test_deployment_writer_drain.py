@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-import signal
-import time
+import subprocess
+import sys
+import textwrap
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -28,7 +29,6 @@ from app.services.deployment_writer_drain import (
     wait_for_stable_writer_drain,
 )
 from app.services.deployment_writer_drain_transport import (
-    RedisCeleryDrainSource,
     RedisDrainConfiguration,
     _known_empty_error,
     _population_counts,
@@ -231,7 +231,7 @@ def test_only_exact_known_empty_passive_404_is_empty() -> None:
         "404",
     )
     assert _known_empty_error(error=known, queue="billing", virtual_host="0")
-    assert not _known_empty_error(error=known, queue="crm", virtual_host="0")
+    assert not _known_empty_error(error=known, queue="nin", virtual_host="0")
     assert not _known_empty_error(
         error=ChannelError("arbitrary", (50, 10), "Channel.queue_declare", "404"),
         queue="billing",
@@ -296,40 +296,80 @@ def test_evidence_contains_only_count_contract() -> None:
     assert result_json(result)["mode"] == "workers-and-broker"
 
 
-def test_hard_observation_deadline_interrupts_and_restores_alarm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = RedisCeleryDrainSource(
-        configuration=RedisDrainConfiguration(broker_url="redis://127.0.0.1:9/10")
+def run_isolated_signal_canary(code: str) -> None:
+    # pytest-timeout owns the parent's ITIMER_REAL. A fresh interpreter lets
+    # the actual POSIX guard run without disabling or replacing that timer.
+    prelude = """
+import json
+import signal
+import time
+from unittest.mock import patch
+from app.services.deployment_writer_drain_transport import RedisCeleryDrainSource
+from tests.test_deployment_writer_drain import (
+    DrainObservation, DrainObservationError, DrainRefusal, DrainRequest,
+    RedisDrainConfiguration, observation, observe_writer_drain, request, result_json,
+)
+source = RedisCeleryDrainSource(
+    configuration=RedisDrainConfiguration(broker_url="redis://127.0.0.1:9/10")
+)
+"""
+    process = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(prelude) + textwrap.dedent(code)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
     )
+    assert process.returncode == 0, process.stderr
 
+
+def test_hard_observation_deadline_interrupts_and_restores_alarm() -> None:
+    run_isolated_signal_canary("""
     def blocked(*, request: DrainRequest) -> DrainObservation:
         time.sleep(2)
         return observation()
-
-    monkeypatch.setattr(source, "_observe", blocked)
+    previous_handler = signal.getsignal(signal.SIGALRM)
     started = time.monotonic()
-    with pytest.raises(DrainObservationError) as error:
-        source.observe(request=request(), timeout=0.03)
-    assert error.value.code is DrainRefusal.INSPECTION_TIMEOUT
+    with patch.object(source, "_observe", blocked):
+        try:
+            source.observe(request=request(), timeout=0.03)
+        except DrainObservationError as error:
+            assert error.code is DrainRefusal.INSPECTION_TIMEOUT
+        else:
+            raise AssertionError("blocking observation did not time out")
     assert time.monotonic() - started < 1
     assert signal.getitimer(signal.ITIMER_REAL) == (0, 0)
+    assert signal.getsignal(signal.SIGALRM) is previous_handler
+    """)
 
 
-def test_transport_exception_text_never_crosses_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = RedisCeleryDrainSource(
-        configuration=RedisDrainConfiguration(broker_url="redis://127.0.0.1:9/10")
-    )
-
+def test_transport_exception_text_never_crosses_boundary() -> None:
+    run_isolated_signal_canary("""
     def failed(*, request: DrainRequest) -> DrainObservation:
         raise RuntimeError("private-transport-payload")
-
-    monkeypatch.setattr(source, "_observe", failed)
-    result = observe_writer_drain(request=request(), source=source)
+    with patch.object(source, "_observe", failed):
+        result = observe_writer_drain(request=request(), source=source)
     assert result.refusal is DrainRefusal.TRANSPORT_UNAVAILABLE
     assert "private-transport-payload" not in json.dumps(result_json(result))
+    """)
+
+
+def test_preexisting_alarm_refuses_without_replacing_it() -> None:
+    run_isolated_signal_canary("""
+    def parent_alarm(signum: int, frame: object) -> None:
+        raise AssertionError("existing alarm expired")
+    signal.signal(signal.SIGALRM, parent_alarm)
+    signal.setitimer(signal.ITIMER_REAL, 2)
+    try:
+        with patch.object(source, "_observe") as observed:
+            result = observe_writer_drain(request=request(), source=source)
+        assert result.refusal is DrainRefusal.UNSUPPORTED_RUNTIME
+        observed.assert_not_called()
+        assert signal.getsignal(signal.SIGALRM) is parent_alarm
+        assert 0 < signal.getitimer(signal.ITIMER_REAL)[0] <= 2
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    """)
 
 
 @pytest.mark.parametrize(

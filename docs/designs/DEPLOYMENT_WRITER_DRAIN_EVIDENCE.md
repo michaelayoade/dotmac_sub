@@ -189,3 +189,9 @@ Hosted Celery testing uses distinct controller hostnames for the extra-worker
 canary. Celery 5.4 `contrib/testing/worker.py:155-168` always supplies an
 anonymous PID/host name, so two workers in the same process otherwise collide.
 The explicit controllers replace that value while exercising real broadcasts.
+
+Hosted acceptance fixture binds the disposable base Celery broker URL and clears
+split read/write overrides, then asserts every worker effective broker URL matches
+that exclusive Redis database. The CLI retains its refusal of split overlays.
+Signal canaries run in isolated child processes because the hosted pytest timeout
+owner holds a process alarm; the production probe still refuses an existing alarm.

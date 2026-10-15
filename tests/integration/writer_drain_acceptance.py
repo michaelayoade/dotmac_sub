@@ -46,7 +46,9 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def disposable_broker() -> Iterator[tuple[str, Redis]]:
+def disposable_broker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[str, Redis]]:
     url = os.environ.get("TEST_WRITER_DRAIN_REDIS_URL", "")
     parsed = urlsplit(url)
     if (
@@ -61,6 +63,16 @@ def disposable_broker() -> Iterator[tuple[str, Redis]]:
     client = Redis.from_url(url, socket_timeout=2, socket_connect_timeout=2)
     assert client.ping()
     assert client.dbsize() == 0, "disposable drain DB must start empty"
+    # Celery 5.4 Settings gives these environment values precedence over
+    # Celery(..., broker=url). Root conftest deliberately binds memory://;
+    # real canary workers must instead share the observer's exclusive DB.
+    # The observer CLI deliberately refuses split-broker overlays, including
+    # equal URLs. Clear overlays so workers fall back to the same base URL
+    # and the fresh-process CLI canary inherits supported configuration.
+    for key in ("CELERY_BROKER_READ_URL", "CELERY_BROKER_WRITE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    for key in ("CELERY_BROKER_URL", "TEST_BROKER"):
+        monkeypatch.setenv(key, url)
     try:
         yield url, client
     finally:
@@ -75,6 +87,17 @@ def broker_request() -> DrainRequest:
 
 def source(url: str) -> RedisCeleryDrainSource:
     return RedisCeleryDrainSource(configuration=RedisDrainConfiguration(broker_url=url))
+
+
+def assert_disposable_worker_broker(*, app: Celery, url: str) -> None:
+    assert all(
+        effective == url
+        for effective in (
+            app.conf.broker_url,
+            app.conf.broker_read_url,
+            app.conf.broker_write_url,
+        )
+    ), "worker broker settings must resolve to the observer's disposable DB"
 
 
 def test_actual_empty404_all_priority_queues_and_orphan_unacked(
@@ -150,12 +173,12 @@ def test_actual_broker_observer_performs_only_read_commands(
 ) -> None:
     url, _client = disposable_broker
     commands: list[str] = []
-    original_client = Redis.execute_command
+    redis_execute_command = Redis.execute_command
     original_pipeline = Pipeline.execute_command
 
     def client_command(self: Redis, *args: object, **kwargs: object) -> object:
         commands.append(str(args[0]).upper())
-        return original_client(self, *args, **kwargs)
+        return redis_execute_command(self, *args, **kwargs)
 
     def pipeline_command(self: Pipeline, *args: object, **kwargs: object) -> object:
         commands.append(str(args[0]).upper())
@@ -184,6 +207,7 @@ def test_actual_worker_active_reserved_eta_and_missing_node(
         task_serializer="json",
         broker_transport_options={"socket_timeout": 2, "socket_connect_timeout": 2},
     )
+    assert_disposable_worker_broker(app=app, url=url)
     started = threading.Event()
     release = threading.Event()
 
@@ -349,6 +373,7 @@ def test_actual_extra_worker_is_not_hidden_by_destination_filter(
 
     with Celery("hosted_extra_worker", broker=url, set_as_current=False) as app:
         app.conf.task_queues = (Queue("billing"),)
+        assert_disposable_worker_broker(app=app, url=url)
         with start_worker(
             app, perform_ping_check=False, WorkController=IncumbentWorker
         ) as incumbent:
