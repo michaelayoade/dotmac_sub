@@ -612,9 +612,7 @@ def test_database_url_host_override_and_custom_runtime_dns_are_refused() -> None
             database=True,
         )
     with pytest.raises(probe.ProbeRefused, match="unsupported_name_resolution"):
-        probe._require_default_name_resolution(
-            {"HostConfig": {"ExtraHosts": ["postgres-local:172.20.0.99"]}}
-        )
+        probe._require_default_name_resolution({"HostConfig": {"Dns": ["192.0.2.53"]}})
 
 
 def test_production_deadline_uses_exact_server_recorded_job_start() -> None:
@@ -634,3 +632,317 @@ def test_production_deadline_uses_exact_server_recorded_job_start() -> None:
         in workflow
     )
     assert 'started="$(date -u +%s)"' not in workflow
+
+
+def _runtime_with_host_maps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    probe.CapturedNetworkBinding, dict[str, dict[str, object]], dict[str, object]
+]:
+    host_map = probe._extra_hosts(["Telemetry.Example.:192.0.2.50"])
+    writer = probe.WriterBinding(
+        "worker",
+        "9" * 64,
+        "sha256:" + "a" * 64,
+        "2026-10-15T00:00:00Z",
+        0,
+        "b" * 64,
+        "172.20.0.5",
+        ("worker",),
+        host_map,
+    )
+    binding = replace(_binding(), writers=(writer,), app_extra_hosts=host_map)
+    environment = {
+        "DATABASE_URL": binding.database_url,
+        "CELERY_BROKER_URL": binding.broker_url,
+    }
+    containers: dict[str, dict[str, object]] = {}
+    members: dict[str, object] = {}
+
+    def container(
+        identifier: str,
+        image: str,
+        name: str,
+        started: str,
+        endpoint_id: str,
+        address: str,
+        aliases: tuple[str, ...],
+        *,
+        hosts: bool,
+    ) -> None:
+        containers[identifier] = {
+            "Id": identifier,
+            "Image": image,
+            "Name": "/" + name,
+            "RestartCount": 0,
+            "State": {"Running": True, "Status": "running", "StartedAt": started},
+            "Config": {
+                "Env": [f"{key}={value}" for key, value in environment.items()],
+                "Image": f"{probe._REPOSITORY}@{binding.app_digest}",
+                "Labels": {probe._REVISION_LABEL: binding.app_revision},
+            },
+            "HostConfig": {
+                "ExtraHosts": ["TELEMETRY.example.:192.0.2.50"] if hosts else []
+            },
+            "NetworkSettings": {
+                "Networks": {
+                    binding.network_name: {
+                        "NetworkID": binding.network_id,
+                        "EndpointID": endpoint_id,
+                        "IPAddress": address,
+                        "Aliases": list(aliases),
+                        "DNSNames": [*aliases, name + "-dns"],
+                    }
+                }
+            },
+        }
+        members[identifier] = {
+            "Name": name,
+            "EndpointID": endpoint_id,
+            "IPv4Address": address + "/16",
+        }
+
+    container(
+        binding.app_container_id,
+        binding.app_image_id,
+        probe._APP_NAME,
+        binding.app_started_at,
+        "e" * 64,
+        "172.20.0.4",
+        ("app",),
+        hosts=True,
+    )
+    container(
+        writer.container_id,
+        writer.image_id,
+        "writer-container",
+        writer.started_at,
+        writer.endpoint_id,
+        writer.ipv4_address,
+        writer.aliases,
+        hosts=True,
+    )
+    for endpoint, name in (
+        (binding.database, "database-container"),
+        (binding.broker, "broker-container"),
+    ):
+        container(
+            endpoint.container_id,
+            endpoint.image_id,
+            name,
+            endpoint.started_at,
+            endpoint.endpoint_id,
+            endpoint.ipv4_address,
+            endpoint.aliases,
+            hosts=False,
+        )
+    services: dict[str, object] = {
+        service: {
+            "environment": dict(environment),
+            "extra_hosts": {"telemetry.example": "192.0.2.50"},
+        }
+        for service in ("app", "worker")
+    }
+    monkeypatch.setattr(probe, "_inspect", lambda identifier: containers[identifier])
+    monkeypatch.setattr(
+        probe, "_inspect_named", lambda name: containers[binding.app_container_id]
+    )
+    monkeypatch.setattr(
+        probe, "_network", lambda identifier: (binding.network_name, members)
+    )
+    monkeypatch.setattr(
+        probe,
+        "_candidate",
+        lambda *args: (binding.candidate_image_id, binding.candidate_digest, {}),
+    )
+    monkeypatch.setattr(probe, "_compose_services", lambda *args, **kwargs: services)
+    return binding, containers, services
+
+
+def test_noncritical_extra_hosts_are_captured_and_reverified_from_trusted_compose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding, _containers, _services = _runtime_with_host_maps(monkeypatch)
+    captured = probe._capture(
+        app_container=binding.app_container_id,
+        writer_specs=("worker=" + binding.writers[0].container_id,),
+        candidate_reference=f"{probe._REPOSITORY}@{binding.candidate_digest}",
+        candidate_revision=binding.candidate_revision,
+        inactive_services=(),
+        compose_arguments=binding.compose_arguments,
+    )
+    assert captured.app_extra_hosts == binding.app_extra_hosts
+    assert captured.writers[0].extra_hosts == binding.writers[0].extra_hosts
+    assert probe._verify(captured, allow_stopped_app=False) == (
+        binding.database_url,
+        binding.broker_url,
+        binding.broker_env_key,
+    )
+    restored = probe._binding_from_json(json.dumps(captured.public_json()))
+    assert restored.app_extra_hosts == captured.app_extra_hosts
+    assert restored.writers[0].extra_hosts == captured.writers[0].extra_hosts
+
+
+@pytest.mark.parametrize("service", ["app", "worker"])
+@pytest.mark.parametrize("changed", ["actual", "captured", "target"])
+def test_extra_host_map_drift_is_refused_for_app_and_each_writer(
+    monkeypatch: pytest.MonkeyPatch,
+    service: str,
+    changed: str,
+) -> None:
+    binding, containers, services = _runtime_with_host_maps(monkeypatch)
+    other = probe._extra_hosts({"telemetry.example": "192.0.2.51"})
+    identifier = (
+        binding.app_container_id
+        if service == "app"
+        else binding.writers[0].container_id
+    )
+    if changed == "actual":
+        containers[identifier]["HostConfig"] = {
+            "ExtraHosts": ["telemetry.example:192.0.2.51"]
+        }
+    elif changed == "target":
+        services[service]["extra_hosts"] = {"telemetry.example": "192.0.2.51"}
+    elif service == "app":
+        binding = replace(binding, app_extra_hosts=other)
+    else:
+        binding = replace(
+            binding, writers=(replace(binding.writers[0], extra_hosts=other),)
+        )
+    with pytest.raises(probe.ProbeRefused, match="extra_hosts_binding_changed"):
+        probe._verify(binding, allow_stopped_app=False)
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "POSTGRES-LOCAL.",
+        "DATABASE.",
+        "database-container",
+        "DATABASE-CONTAINER-DNS.",
+        "broker",
+    ],
+)
+@pytest.mark.parametrize("service", ["app", "worker"])
+def test_critical_url_alias_container_and_dns_names_cannot_be_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+    host: str,
+    service: str,
+) -> None:
+    binding, containers, services = _runtime_with_host_maps(monkeypatch)
+    mapping = probe._extra_hosts({host: "192.0.2.90"})
+    identifier = (
+        binding.app_container_id
+        if service == "app"
+        else binding.writers[0].container_id
+    )
+    containers[identifier]["HostConfig"] = {"ExtraHosts": [host + ":192.0.2.90"]}
+    services[service]["extra_hosts"] = {host: "192.0.2.90"}
+    if service == "app":
+        binding = replace(binding, app_extra_hosts=mapping)
+    else:
+        binding = replace(
+            binding, writers=(replace(binding.writers[0], extra_hosts=mapping),)
+        )
+    with pytest.raises(probe.ProbeRefused, match="critical_name_override"):
+        probe._verify(binding, allow_stopped_app=False)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        ["host:host-gateway"],
+        ["host:192.0.2.1", "HOST.:192.0.2.1"],
+        ["host:192.0.2.1", "HOST.:192.0.2.2"],
+        ["bad host:192.0.2.1"],
+        ["host:not-an-ip"],
+        ["host:fe80::1%eth0"],
+        ["host..:192.0.2.1"],
+        ["höst:192.0.2.1"],
+        ["host"],
+        {"host": ["192.0.2.1"]},
+    ],
+)
+def test_extra_hosts_rejects_gateways_duplicates_and_malformed_mappings(
+    value: object,
+) -> None:
+    with pytest.raises(probe.ProbeRefused, match="unsupported_name_resolution"):
+        probe._extra_hosts(value)
+
+
+def test_extra_hosts_canonicalizes_ascii_hosts_and_literal_ipv6() -> None:
+    assert probe._extra_hosts(["HOST.example.=[2001:0db8::1]"]) == (
+        probe.ExtraHostBinding("host.example", "2001:db8::1"),
+    )
+
+
+@pytest.mark.parametrize("key", ["Dns", "DnsSearch", "DnsOptions", "Links"])
+def test_noncritical_mapping_does_not_allow_custom_dns_or_links(key: str) -> None:
+    with pytest.raises(probe.ProbeRefused, match="unsupported_name_resolution"):
+        probe._require_default_name_resolution(
+            {
+                "HostConfig": {
+                    "ExtraHosts": ["telemetry.example:192.0.2.50"],
+                    key: ["custom"],
+                }
+            }
+        )
+
+
+def test_old_binding_omissions_mean_empty_only_and_duplicate_json_keys_refuse() -> None:
+    value = _binding().public_json()
+    value.pop("app_extra_hosts")
+    old = probe._binding_from_json(json.dumps(value))
+    assert old.app_extra_hosts == ()
+    source = json.dumps(value)
+    source = source.replace(
+        '"schema_version": 1', '"schema_version": 1, "schema_version": 1'
+    )
+    with pytest.raises(probe.ProbeRefused, match="captured_binding_unproved"):
+        probe._binding_from_json(source)
+
+
+def test_legacy_empty_binding_cannot_adopt_existing_nonempty_runtime_maps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding, _containers, _services = _runtime_with_host_maps(monkeypatch)
+    value = binding.public_json()
+    value.pop("app_extra_hosts")
+    for writer in value["writers"]:
+        writer.pop("extra_hosts")
+    old = probe._binding_from_json(json.dumps(value))
+    assert old.app_extra_hosts == () and old.writers[0].extra_hosts == ()
+    with pytest.raises(probe.ProbeRefused, match="extra_hosts_binding_changed"):
+        probe._verify(old, allow_stopped_app=False)
+
+
+def test_compose_render_remains_private_and_retains_only_canonical_host_projection(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(probe, "_validate_compose_arguments", lambda arguments: None)
+    rendered = {
+        "services": {
+            "app": {
+                "environment": {"PRIVATE_TEST_VALUE": "opaque-private-canary"},
+                "extra_hosts": {"Telemetry.Example.": "192.0.2.50"},
+            }
+        }
+    }
+    monkeypatch.setattr(
+        probe.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            0,
+            json.dumps(rendered),
+            "private-stderr-canary",
+        ),
+    )
+    services = probe._compose_services(
+        (), image_reference="candidate", revision="a" * 40
+    )
+    assert probe._compose_extra_hosts(services["app"]) == (
+        probe.ExtraHostBinding("telemetry.example", "192.0.2.50"),
+    )
+    assert capsys.readouterr() == ("", "")
