@@ -13,6 +13,8 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
@@ -354,39 +356,94 @@ def test_full_inspection_never_restores_expired_financial_unacked(
                 delivery.ack()
 
 
-def test_actual_extra_worker_is_not_hidden_by_destination_filter(
-    disposable_broker: tuple[str, Redis],
-) -> None:
-    url, _client = disposable_broker
+def run_isolated_canary_worker(*, node: str, ready: Path) -> None:
+    """Child-process entry point; never share Celery's global shutdown state."""
+    url = os.environ["TEST_WRITER_DRAIN_REDIS_URL"]
 
-    # Celery 5.4's start_worker always passes anon_nodename() (PID + host),
-    # giving both threads the same identity. Supplying hostname directly also
-    # collides with that keyword. Explicit controllers replace that value.
-    class IncumbentWorker(CeleryTestWorkController):
+    # start_worker supplies anon_nodename() itself; its controller must replace
+    # that keyword to expose the exact node identity used by the real census.
+    class NamedWorker(CeleryTestWorkController):
         def __init__(self, *, hostname: str, **kwargs: object) -> None:
-            super().__init__(hostname="incumbent@hosted-drain", **kwargs)
-
-    class ExtraWorker(CeleryTestWorkController):
-        def __init__(self, *, hostname: str, **kwargs: object) -> None:
-            super().__init__(hostname="extra@hosted-drain", **kwargs)
+            super().__init__(hostname=node, **kwargs)
 
     with Celery("hosted_extra_worker", broker=url, set_as_current=False) as app:
         app.conf.task_queues = (Queue("billing"),)
         assert_disposable_worker_broker(app=app, url=url)
         with start_worker(
-            app, perform_ping_check=False, WorkController=IncumbentWorker
-        ) as incumbent:
-            with start_worker(
-                app, perform_ping_check=False, WorkController=ExtraWorker
-            ) as extra:
-                assert incumbent.hostname != extra.hostname
-                full = DrainRequest(
-                    DrainMode.WORKERS_AND_BROKER,
-                    (WorkerNodeId(incumbent.hostname),),
-                    DrainBudgets(2, 30, 5),
-                )
-                result = observe_writer_drain(request=full, source=source(url))
-                assert result.refusal is DrainRefusal.UNEXPECTED_NODE
+            app, perform_ping_check=False, WorkController=NamedWorker
+        ) as worker:
+            assert worker.hostname == node
+            ready.touch()
+            # Parent closes stdin to request normal context-manager cleanup.
+            sys.stdin.buffer.read(1)
+
+
+@contextmanager
+def isolated_canary_worker(*, node: str, ready: Path) -> Iterator[WorkerNodeId]:
+    # Separate processes avoid nested testing-worker helpers resetting Celery's
+    # process-global should_terminate flag while another worker is still exiting.
+    code = """
+import runpy
+import sys
+from pathlib import Path
+namespace = runpy.run_path(sys.argv[1])
+namespace['run_isolated_canary_worker'](node=sys.argv[2], ready=Path(sys.argv[3]))
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", code, str(Path(__file__).resolve()), node, str(ready)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            assert process.poll() is None, "isolated canary worker failed at startup"
+            assert time.monotonic() < deadline, "isolated canary worker startup timeout"
+            time.sleep(0.05)
+        assert process.poll() is None, "isolated canary worker exited after startup"
+        yield WorkerNodeId(node)
+    finally:
+        assert process.stdin is not None
+        process.stdin.close()
+        forced_cleanup = False
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            forced_cleanup = True
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        assert process.poll() is not None, "isolated canary worker was not reaped"
+        # Forced cleanup prevents leaks but must never turn a broken fixture
+        # into successful acceptance evidence.
+        assert not forced_cleanup, "isolated canary worker required forced cleanup"
+        assert process.returncode == 0, (
+            f"isolated canary worker cleanup failed (exit {process.returncode})"
+        )
+
+
+def test_actual_extra_worker_is_not_hidden_by_destination_filter(
+    disposable_broker: tuple[str, Redis], tmp_path: Path
+) -> None:
+    url, _client = disposable_broker
+    with isolated_canary_worker(
+        node="incumbent@hosted-drain", ready=tmp_path / "incumbent.ready"
+    ) as incumbent:
+        with isolated_canary_worker(
+            node="extra@hosted-drain", ready=tmp_path / "extra.ready"
+        ) as extra:
+            assert incumbent != extra
+            full = DrainRequest(
+                DrainMode.WORKERS_AND_BROKER,
+                (incumbent,),
+                DrainBudgets(2, 30, 5),
+            )
+            result = observe_writer_drain(request=full, source=source(url))
+            assert result.refusal is DrainRefusal.UNEXPECTED_NODE
 
 
 def test_actual_control_polling_budget_sensitivity(
