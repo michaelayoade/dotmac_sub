@@ -2,19 +2,21 @@
 
 import hashlib
 import json
+from collections.abc import Iterator
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, TypeVar
 from unittest.mock import MagicMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.billing import InvoiceStatus, TaxApplication
+from app.models.billing import Invoice, InvoiceStatus, TaxApplication
 from app.models.billing_contract import BillingRecordAuthority
 from app.services.billing import opening_export as owner
+from app.services.billing._common import InvoiceSettlementAmounts
 from app.services.billing.customer_subledger import (
     CustomerFinancialPosition,
     CustomerSubledgerPositionEvidence,
@@ -29,7 +31,9 @@ from app.services.billing.opening_export_contracts import (
     ExceptionCode,
     ExclusionReason,
     FinancialSourceEvidence,
+    InvoiceLineEvidence,
     InvoiceOpeningEvidence,
+    OpeningControl,
     OriginalEvidenceRequirement,
     OriginalEvidenceUnavailableReason,
     PreviewBillingOpeningExportQuery,
@@ -834,3 +838,341 @@ def test_v3_cli_reports_unavailable_original_evidence_as_blocking(
     assert gap["reasons"] == [
         reason.value for reason in OriginalEvidenceUnavailableReason
     ]
+
+
+T = TypeVar("T")
+
+
+class CountedPopulation(tuple[T, ...]):
+    """Count visits to supplied rows, including fingerprint serialization."""
+
+    visits: int = 0
+
+    def __iter__(self) -> Iterator[T]:
+        for row in super().__iter__():
+            self.visits += 1
+            yield row
+
+
+def test_populated_controls_preserve_duplicate_and_unresolved_occurrences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = replace(
+        invoice(),
+        invoice_id=UUID(int=10),
+        invoice_number="OPEN",
+        line_ids=(UUID(int=11),),
+    )
+    closed = replace(
+        invoice(currency="USD", residual="25"),
+        invoice_id=UUID(int=12),
+        invoice_number="CLOSED",
+        status=InvoiceStatus.paid,
+        line_ids=(UUID(int=13),),
+    )
+    orphan = FinancialSourceEvidence(
+        SourceKind.refund,
+        UUID(int=14),
+        None,
+        "NGN",
+        Decimal("5"),
+        None,
+        "succeeded",
+        True,
+        None,
+        None,
+        None,
+        None,
+        AT,
+        AT,
+        AT,
+    )
+    unlinked = InvoiceLineEvidence(
+        UUID(int=15),
+        UUID(int=16),
+        None,
+        Decimal("1"),
+        Decimal("1"),
+        Decimal("1"),
+        True,
+        None,
+        AT,
+        AT,
+    )
+
+    def separate(
+        db: Session,
+        *,
+        account_id: UUID,
+        currency: str,
+        authority: BillingRecordAuthority,
+        as_of: datetime,
+    ) -> CustomerSubledgerPositionEvidence:
+        return resolve(ar=Decimal("200") if currency == "NGN" else Decimal("0"))(
+            db,
+            account_id=account_id,
+            currency=currency,
+            authority=authority,
+            as_of=as_of,
+        )
+
+    monkeypatch.setattr(owner, "resolve_position_evidence_at", separate)
+    result = owner._classify(
+        Mock(spec=Session),
+        QUERY,
+        CAPTURE,
+        (ACCOUNT,),
+        (first, first, closed),
+        (unlinked,),
+        (),
+        (orphan, orphan),
+        (),
+        UUID(int=3),
+    )
+    zero = Decimal("0")
+    assert result.controls == (
+        OpeningControl(
+            ACCOUNT, "NGN", 2, 0, 0, 2, Decimal("200"), zero, Decimal("200"), zero, 0
+        ),
+        OpeningControl(
+            ACCOUNT,
+            "USD",
+            1,
+            0,
+            1,
+            1,
+            Decimal("100"),
+            Decimal("75"),
+            Decimal("25"),
+            zero,
+            0,
+        ),
+        OpeningControl(None, "NGN", 0, 0, 0, 4, zero, zero, zero, zero, 2),
+        OpeningControl(None, None, 0, 0, 0, 1, zero, zero, zero, zero, 0),
+    )
+    assert result.invoices == (first, first, closed)
+    assert result.financial_sources == (orphan, orphan)
+    assert result.lines == (unlinked,)
+    assert result.eligible_invoice_ids == ()
+    assert len(result.blocking_exceptions) == 8
+    assert (
+        result.content_fingerprint
+        == "20d5146e656b2baea3fe460aa7d64ca3fdbfcf1d2e77f632b1a33d0c7f2551f9"
+    )
+
+
+@pytest.mark.parametrize("invoice_count,source_count", [(8, 3), (32, 19)])
+def test_census_visits_are_bounded_across_independent_populations(
+    monkeypatch: pytest.MonkeyPatch,
+    invoice_count: int,
+    source_count: int,
+) -> None:
+    items = CountedPopulation(
+        replace(invoice(), account_id=UUID(int=100 + index))
+        for index in range(invoice_count)
+    )
+    sources = CountedPopulation(
+        FinancialSourceEvidence(
+            SourceKind.payment,
+            UUID(int=500 + index),
+            UUID(int=1000 + index),
+            "USD",
+            Decimal("5"),
+            None,
+            "succeeded",
+            True,
+            None,
+            None,
+            None,
+            None,
+            AT,
+            AT,
+            AT,
+        )
+        for index in range(source_count)
+    )
+
+    def separate(
+        db: Session,
+        *,
+        account_id: UUID,
+        currency: str,
+        authority: BillingRecordAuthority,
+        as_of: datetime,
+    ) -> CustomerSubledgerPositionEvidence:
+        return resolve(ar=Decimal("100") if currency == "NGN" else Decimal("0"))(
+            db,
+            account_id=account_id,
+            currency=currency,
+            authority=authority,
+            as_of=as_of,
+        )
+
+    monkeypatch.setattr(owner, "resolve_position_evidence_at", separate)
+    subscribers = tuple(item.account_id for item in items) + tuple(
+        source.account_id for source in sources if source.account_id is not None
+    )
+    items.visits = sources.visits = 0
+    result = owner._classify(
+        Mock(spec=Session),
+        QUERY,
+        CAPTURE,
+        subscribers,
+        items,
+        (),
+        (),
+        sources,
+        (),
+        UUID(int=3),
+    )
+    assert len(result.eligible_invoice_ids) == invoice_count
+    assert len(result.controls) == invoice_count + source_count
+    assert items.visits <= 10 * invoice_count
+    assert sources.visits <= 10 * source_count
+
+
+def test_preview_reference_buckets_preserve_order_duplicates_and_canonical_discharge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = invoice(residual="60")
+    row = Mock(
+        spec=Invoice,
+        id=item.invoice_id,
+        account_id=item.account_id,
+        currency=item.currency,
+        invoice_number=item.invoice_number,
+        status=item.status,
+        is_active=True,
+        is_proforma=False,
+        issued_at=item.issued_at,
+        due_at=item.due_at,
+        due_date_basis=None,
+        due_date_basis_ref=None,
+        due_date_policy_version=None,
+        total=item.total,
+        balance_due=item.residual,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+    first = InvoiceLineEvidence(
+        UUID(int=40),
+        item.invoice_id,
+        None,
+        Decimal("100"),
+        Decimal("1"),
+        Decimal("100"),
+        True,
+        None,
+        AT,
+        AT,
+    )
+    second = replace(first, id=UUID(int=20))
+    unlinked = replace(first, id=UUID(int=50), invoice_id=UUID(int=999))
+    settlement = SettlementEvidence(
+        SettlementKind.payment,
+        UUID(int=60),
+        item.invoice_id,
+        UUID(int=61),
+        Decimal("50"),
+        None,
+        None,
+        True,
+        AT,
+    )
+    settlements = CountedPopulation((settlement, settlement))
+    db = MagicMock(spec=Session)
+    db.scalars.return_value = (ACCOUNT,)
+    db.execute.side_effect = [
+        [tuple(asdict(line).values()) for line in (first, unlinked, second, first)],
+        [row],
+        [],
+    ]
+    monkeypatch.setattr(owner, "_capture", Mock(return_value=CAPTURE))
+    monkeypatch.setattr(owner, "_sources", Mock(return_value=()))
+    monkeypatch.setattr(owner, "_settlements", Mock(return_value=settlements))
+    monkeypatch.setattr(owner, "authority_cutover", Mock(return_value=None))
+    # This typed result represents the existing owner's proportional refund:
+    # 50 allocated from 100 gross with 20 refunded leaves 40 discharged.
+    canonical = Mock(
+        return_value=InvoiceSettlementAmounts(
+            Decimal("40"),
+            Decimal("0"),
+            Decimal("0"),
+        )
+    )
+    monkeypatch.setattr(owner, "resolve_invoice_settlement_amounts", canonical)
+    monkeypatch.setattr(
+        owner, "resolve_position_evidence_at", resolve(ar=Decimal("60"))
+    )
+    result = owner.preview_billing_opening_export(db, query=QUERY)
+    captured = result.invoices[0]
+    assert captured.line_ids == (first.id, second.id, first.id)
+    assert captured.settlement_ids == (settlement.id, settlement.id)
+    assert captured.payments_applied == captured.canonical_discharge == Decimal("40")
+    assert captured.residual == Decimal("60")
+    assert result.lines == (first, unlinked, second, first)
+    assert result.settlements == settlements
+    canonical.assert_called_once_with(db, item.invoice_id)
+    assert settlements.visits <= 7 * len(settlements)
+
+
+def test_currency_case_remains_an_independent_blocked_control_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = invoice()
+    source = FinancialSourceEvidence(
+        SourceKind.payment,
+        UUID(int=71),
+        ACCOUNT,
+        "ngn",
+        Decimal("5"),
+        None,
+        "succeeded",
+        True,
+        None,
+        None,
+        None,
+        None,
+        AT,
+        AT,
+        AT,
+    )
+
+    def separate(
+        db: Session,
+        *,
+        account_id: UUID,
+        currency: str,
+        authority: BillingRecordAuthority,
+        as_of: datetime,
+    ) -> CustomerSubledgerPositionEvidence:
+        return resolve(ar=Decimal("100") if currency == "NGN" else Decimal("0"))(
+            db,
+            account_id=account_id,
+            currency=currency,
+            authority=authority,
+            as_of=as_of,
+        )
+
+    monkeypatch.setattr(owner, "resolve_position_evidence_at", separate)
+    result = owner._classify(
+        Mock(spec=Session),
+        QUERY,
+        CAPTURE,
+        (ACCOUNT,),
+        (item,),
+        (),
+        (),
+        (source,),
+        (),
+        UUID(int=3),
+    )
+    assert result.eligible_invoice_ids == (item.invoice_id,)
+    assert [
+        (c.currency, c.invoice_count, c.source_count, c.exception_count)
+        for c in result.controls
+    ] == [
+        ("NGN", 1, 0, 0),
+        ("ngn", 0, 1, 1),
+    ]
+    assert result.blocking_exceptions[0].code == ExceptionCode.currency_precision

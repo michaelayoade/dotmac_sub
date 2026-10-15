@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -621,10 +621,14 @@ def preview_billing_opening_export(
         )
         for source in sources:
             _finite(source.amount, source.secondary_amount)
+        settlement_ids: dict[UUID, list[UUID]] = defaultdict(list)
+        line_ids: dict[UUID, list[UUID]] = defaultdict(list)
         for settlement in settlements:
             _finite(settlement.amount)
+            settlement_ids[settlement.invoice_id].append(settlement.id)
         for line in lines:
             _finite(line.amount, line.quantity, line.unit_price)
+            line_ids[line.invoice_id].append(line.id)
         invoices: list[InvoiceOpeningEvidence] = []
         for r in db.execute(
             select(
@@ -685,8 +689,8 @@ def preview_billing_opening_export(
                     r.created_at,
                     r.updated_at,
                     due_known,
-                    tuple(l.id for l in lines if l.invoice_id == r.id),
-                    tuple(s.id for s in settlements if s.invoice_id == r.id),
+                    tuple(line_ids.get(r.id, ())),
+                    tuple(settlement_ids.get(r.id, ())),
                 )
             )
         effects = tuple(
@@ -846,18 +850,29 @@ def _classify(
     effects: tuple[PositionEffectEvidence, ...],
     cutover_id: UUID | None,
 ) -> BillingOpeningExportPreview:
-    for finite_invoice in invoices:
+    keys: set[tuple[UUID | None, str]] = set()
+    invoice_cohorts: dict[
+        tuple[UUID | None, str | None], list[InvoiceOpeningEvidence]
+    ] = defaultdict(list)
+    source_cohorts: dict[
+        tuple[UUID | None, str | None], list[FinancialSourceEvidence]
+    ] = defaultdict(list)
+    for item in invoices:
         _finite(
-            finite_invoice.total,
-            finite_invoice.stored_residual,
-            finite_invoice.payments_applied,
-            finite_invoice.credits_applied,
-            finite_invoice.opening_funding_applied,
-            finite_invoice.canonical_discharge,
-            finite_invoice.residual,
+            item.total,
+            item.stored_residual,
+            item.payments_applied,
+            item.credits_applied,
+            item.opening_funding_applied,
+            item.canonical_discharge,
+            item.residual,
         )
-    for finite_source in sources:
-        _finite(finite_source.amount, finite_source.secondary_amount)
+        invoice_cohorts[(item.account_id, item.currency)].append(item)
+        keys.add((item.account_id, item.currency))
+    for source in sources:
+        _finite(source.amount, source.secondary_amount)
+        source_cohorts[(source.account_id, source.currency)].append(source)
+        keys.add((source.account_id, source.currency))
     for settlement in settlements:
         _finite(settlement.amount)
     for line in lines:
@@ -870,9 +885,6 @@ def _classify(
     invoice_map = {i.invoice_id: i for i in invoices}
     source_map = {(s.kind, s.id): s for s in sources}
     ledger_map = {s.id: s for s in sources if s.kind == SourceKind.ledger}
-    keys = {(i.account_id, i.currency) for i in invoices} | {
-        (s.account_id, s.currency) for s in sources
-    }
     cutoff = query.economic_cutoff
 
     def block(
@@ -1396,15 +1408,8 @@ def _classify(
                 account,
                 "No effective runtime customer-subledger authority cutover; comparison only.",
             )
-        expected_ar = sum(
-            (
-                i.residual
-                for i in invoices
-                if (i.account_id, i.currency) == (account, currency)
-                and _exclusion(i) is None
-            ),
-            ZERO,
-        )
+        cohort = invoice_cohorts.get((account, currency), ())
+        expected_ar = sum((i.residual for i in cohort if _exclusion(i) is None), ZERO)
         if position.collectible_receivable != expected_ar:
             block(
                 ExceptionCode.residual_mismatch,
@@ -1436,8 +1441,7 @@ def _classify(
             and s.kind == SourceKind.ledger
             and s.invoice_id is None
             and s.amount != ZERO
-            for s in sources
-            if (s.account_id, s.currency) == (account, currency)
+            for s in source_cohorts.get((account, currency), ())
         ):
             block(
                 ExceptionCode.unbacked_lane,
@@ -1453,37 +1457,33 @@ def _classify(
         for s in subscribers
         if s not in active_accounts
     )
-    blocked_keys = {(e.account_id, e.currency) for e in exceptions}
+    exception_counts = Counter((e.account_id, e.currency) for e in exceptions)
     eligible = tuple(
         i.invoice_id
         for i in invoices
         if i.residual > ZERO
         and _exclusion(i) is None
-        and (i.account_id, i.currency) not in blocked_keys
+        and (i.account_id, i.currency) not in exception_counts
     )
+    eligible_ids = set(eligible)
     excluded_ids = {e.source_id for e in exclusions}
-    control_keys = keys | {(e.account_id, e.currency) for e in exceptions}
+    control_keys = keys | exception_counts.keys()
     controls: list[OpeningControl] = []
     for account, currency in sorted(control_keys, key=lambda k: (str(k[0]), str(k[1]))):
-        cohort = tuple(
-            i for i in invoices if (i.account_id, i.currency) == (account, currency)
-        )
+        cohort = invoice_cohorts.get((account, currency), ())
         controls.append(
             OpeningControl(
                 account,
                 currency,
                 len(cohort),
-                sum(i.invoice_id in eligible for i in cohort),
+                sum(i.invoice_id in eligible_ids for i in cohort),
                 sum(i.invoice_id in excluded_ids for i in cohort),
-                sum(
-                    (e.account_id, e.currency) == (account, currency)
-                    for e in exceptions
-                ),
+                exception_counts[(account, currency)],
                 sum((i.total for i in cohort), ZERO),
                 sum((i.canonical_discharge for i in cohort), ZERO),
                 sum((i.residual for i in cohort), ZERO),
-                sum((i.residual for i in cohort if i.invoice_id in eligible), ZERO),
-                sum((s.account_id, s.currency) == (account, currency) for s in sources),
+                sum((i.residual for i in cohort if i.invoice_id in eligible_ids), ZERO),
+                len(source_cohorts.get((account, currency), ())),
             )
         )
     result = BillingOpeningExportPreview(
