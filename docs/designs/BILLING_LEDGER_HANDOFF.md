@@ -235,8 +235,11 @@ that equation. The future owner must establish a reviewed exact amount binding;
 no blanket gross/net substitution or new fee-bearer policy is authorized here.
 
 The positive flush-only module cash participant remains unimplemented because
-Billing currently exposes no public frozen account observation to validate the
-structural mapping against account external identity, currency and scale. Billing
+The selected released Billing a1 assembly has no public frozen account
+observation to validate the structural mapping against account external
+identity, currency and scale. The upstream source contract and dependent
+candidate consumer described below are authored, with publication/pin and
+actual PostgreSQL acceptance still pending. Billing
 accounts are mutable; a composite foreign key proves existence and scope, not
 those facts. An upstream frozen account query is a required published contract;
 Sub adds no cross-module mutation guard or assumed immutable external reference.
@@ -292,3 +295,44 @@ occurrence column before applying 692. It asserts the resulting FK enforcement,
 RLS and append-only trigger catalog. This is branch coverage, not proof of a
 historical deployed image. The actual predecessor-image upgrade rehearsal and
 production-shaped end-to-end acceptance remain required.
+
+
+## Candidate public Billing account query consumer
+
+`get_module_invoice_billing_account` in the existing
+`provider_payment_settlements` owner is a read-only source candidate. Its frozen
+`ModuleInvoiceBillingAccountQuery` accepts only an observation ID and original
+checkout reference. It first reuses `get_module_invoice_cash_source`, then reads
+the persisted tenant/subscriber/currency mapping on the same caller Session and
+calls the public Billing `get_billing_account_observation` with a typed
+`GetBillingAccountObservationV1`. Sub imports no Billing ORM or persistence
+implementation and copies no query algorithm.
+
+The current returned account must match the internally resolved tenant/account,
+the persisted Payments checkout payer reference (the Sub subscriber UUID string
+under that existing contract), and exact currency code and minor units. A frozen
+`ModuleInvoiceBillingAccountObservation` returns the source facts and the public
+`BillingAccountObservationV1`. These are validated current observations, not an
+immutable historical binding, a lock, a balance, cash proof or financial
+admission. A later account change requires re-observation; no account mutation
+trigger, selector, cached approval or alternate lookup is introduced.
+
+The new public Billing contract is still unpublished relative to Sub's selected
+a1 pin. Precise TYPE_CHECKING/local imports preserve existing unrelated boot
+paths. Invoking this candidate with absent public symbols raises typed
+`ModuleInvoiceBillingAccountContractUnavailable`; there is no successful
+compatibility result or fallback. Core missing/corrupt account domain errors
+remain errors. No package pin/lock, runtime dispatch or money writer changes.
+Mypy against the current package and positive hosted account-consumer acceptance
+remain blocked until the query is published and the exact approved package is
+pinned. Source compatibility alone is not adoption evidence.
+
+Authored PostgreSQL canaries use the genuine public query and runtime login to
+check matching current identity, frozen returned values, zero confirmations/
+settlements/correlations, and refusal after actual current customer-reference,
+currency or scale drift. They contain no mocked positive account result and
+have not run. Missing candidate contracts fail these positive gates; no skip or
+path-installed package substitutes for the release. Trusted merchant namespace,
+exact amount binding, RLS-independent source integrity, installation handoff,
+caller migration and full hosted financial acceptance are still required before
+positive cash acceptance.

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -40,6 +41,10 @@ from app.services.events.types import (
     EventType,
 )
 from app.services.owner_commands import execute_owner_savepoint
+
+if TYPE_CHECKING:
+    from dotmac_billing import BillingAccountObservationV1
+
 
 logger = logging.getLogger(__name__)
 
@@ -654,4 +659,101 @@ def get_module_invoice_cash_source(
         observed_at=observed_at,
         opened_at=frozen.opened_at,
         expires_at=frozen.expires_at,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleInvoiceBillingAccountQuery:
+    """Address source facts; the account and tenant are resolved internally."""
+
+    observation_id: UUID
+    checkout_reference: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleInvoiceBillingAccountObservation:
+    """Current persisted account/binding observation, never cash admission.
+
+    The nested public Billing value copies current identity, not an immutable
+    historical account. Re-observe before use after mutable account changes.
+    """
+
+    source: ModuleInvoiceCashSource
+    billing_account: BillingAccountObservationV1
+
+
+class ModuleInvoiceBillingAccountContractUnavailable(DomainError, ValueError):
+    """The selected published assembly lacks the required public account query."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="financial.provider_invoice_module_cash_source.billing_account_contract_unavailable",
+            message="Published Billing account observation contract is unavailable",
+            retryable=False,
+        )
+
+
+def get_module_invoice_billing_account(
+    db: Session, query: ModuleInvoiceBillingAccountQuery
+) -> ModuleInvoiceBillingAccountObservation:
+    """Observe and validate current account identity on the caller's Session.
+
+    This source candidate requires the new public Billing query. Sub's current
+    Billing a1 pin cannot execute it; missing contracts refuse without fallback.
+    No lock, flush, transaction completion, monetary write or admission is staged.
+    """
+    from dotmac_kernel.cache import TenantScope
+
+    from app.models.billing import ModuleBillingAccountBinding
+
+    source = get_module_invoice_cash_source(
+        db,
+        ModuleInvoiceCashSourceQuery(
+            observation_id=query.observation_id,
+            checkout_reference=query.checkout_reference,
+        ),
+    )
+    with db.no_autoflush:
+        binding_account_id = db.scalar(
+            select(ModuleBillingAccountBinding.billing_account_id).where(
+                ModuleBillingAccountBinding.tenant_id == source.tenant_id,
+                ModuleBillingAccountBinding.account_id == source.account_id,
+                ModuleBillingAccountBinding.currency == source.currency,
+            )
+        )
+    if binding_account_id is None:
+        raise ModuleInvoiceCashSourceError(
+            "Persisted Billing account binding is absent"
+        )
+    # Precise local imports keep unrelated existing boot paths available while
+    # the published assembly gate is pending. This is refusal, not compatibility.
+    try:
+        from dotmac_billing import (
+            GetBillingAccountObservationV1,
+            get_billing_account_observation,
+        )
+    except ImportError as exc:
+        raise ModuleInvoiceBillingAccountContractUnavailable() from exc
+    scope = TenantScope(source.tenant_id)
+    current = get_billing_account_observation(
+        db,
+        scope=scope,
+        request=GetBillingAccountObservationV1(
+            scope=scope, account_id=binding_account_id
+        ),
+    )
+    if (
+        current.scope != scope
+        or current.account_id != binding_account_id
+        # The preceding Payments public query proved its persisted payer_ref
+        # equals this Sub subscriber UUID under the original checkout contract.
+        or current.external_account_ref != str(source.account_id)
+        or current.currency.code != source.currency
+        or current.currency.minor_units != source.minor_units
+    ):
+        raise ModuleInvoiceCashSourceError(
+            "Current Billing account identity differs from checkout binding"
+        )
+    return ModuleInvoiceBillingAccountObservation(
+        source=source, billing_account=current
     )

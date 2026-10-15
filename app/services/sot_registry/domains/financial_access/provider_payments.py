@@ -22,7 +22,10 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.provider_invoice_module_cash_source",
         module="app.services.provider_payment_settlements",
-        owns=("persisted module invoice cash source validation",),
+        owns=(
+            "persisted module invoice cash source validation",
+            "current module invoice Billing account binding validation",
+        ),
         depends_on=("financial.payment_provider_events", "financial.topup_intents"),
         notes=(
             "Source candidate query only. Does not qualify the physical merchant "
@@ -38,8 +41,30 @@ SERVICES: tuple[SOTService, ...] = (
                         "frozen Payments invoice checkout",
                     ),
                 ),
+                ConcernContract(
+                    name="current module invoice Billing account binding validation",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "persisted verified invoice cash facts",
+                        "frozen Payments invoice checkout",
+                        "persisted Sub to Billing account mapping",
+                        "current public Billing account identity",
+                    ),
+                ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="persisted Sub to Billing account mapping",
+                    owner="financial.provider_invoice_module_cash_source",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="Tenant/subscriber/currency composite-FK mapping observed on the caller Session; provisioning and financial admission remain separate pending contracts.",
+                ),
+                AuthorityInput(
+                    name="current public Billing account identity",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="Candidate public GetBillingAccountObservationV1/get_billing_account_observation query; frozen copy of current scope, account, external customer reference and exact currency/scale, not immutable history.",
+                ),
                 AuthorityInput(
                     name="persisted verified invoice cash facts",
                     owner="financial.payment_provider_events",
@@ -61,10 +86,19 @@ SERVICES: tuple[SOTService, ...] = (
                 retries="Missing or changed facts refuse; caller may retry only after authoritative missing evidence exists.",
             ),
             errors=ErrorContract(
-                domain_codes=("financial.provider_invoice_module_cash_source.invalid",),
+                domain_codes=(
+                    "financial.provider_invoice_module_cash_source.invalid",
+                    "financial.provider_invoice_module_cash_source.billing_account_contract_unavailable",
+                    "billing.account_observation_not_found",
+                    "billing.account_observation_corrupt",
+                    "billing.account_observation_request_invalid",
+                    "billing.scope_mismatch",
+                ),
                 mapping_owner="financial.payment_provider_events",
                 fail_closed_on=(
                     "missing evidence",
+                    "unavailable published Billing account observation contract",
+                    "current Billing customer identity/currency/scale differs from persisted checkout",
                     "tenant/provider/intent/money mismatch",
                     "missing provider occurrence time",
                     "outside original checkout lifetime",

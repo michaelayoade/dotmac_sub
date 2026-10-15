@@ -8,7 +8,7 @@ merchant namespace and published exact Billing assembly.
 """
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -51,8 +51,10 @@ from app.services.payment_provider_events import (
     PaymentProviderEvents,
 )
 from app.services.provider_payment_settlements import (
+    ModuleInvoiceBillingAccountQuery,
     ModuleInvoiceCashSourceError,
     ModuleInvoiceCashSourceQuery,
+    get_module_invoice_billing_account,
     get_module_invoice_cash_source,
 )
 from tests.integration import (
@@ -552,3 +554,91 @@ def test_real_predecessor_upgrade_refuses_unexpected_prospective_shape(
             )
     finally:
         engine.dispose()
+
+
+def test_candidate_public_billing_account_consumer_reads_current_frozen_identity(
+    source_case: SourceCase,
+) -> None:
+    """Requires the actually published/pinned public query; a1 must fail this gate."""
+    with Session(source_case.runtime) as db, db.begin():
+        result = get_module_invoice_billing_account(
+            db,
+            ModuleInvoiceBillingAccountQuery(
+                observation_id=source_case.query.observation_id,
+                checkout_reference=source_case.query.checkout_reference,
+            ),
+        )
+        assert result.source.account_id == source_case.account_id
+        assert result.billing_account.scope == TenantScope(OPERATOR_TENANT_ID)
+        assert result.billing_account.account_id == source_case.billing_account_id
+        assert result.billing_account.external_account_ref == str(
+            source_case.account_id
+        )
+        assert result.billing_account.currency == Currency("NGN", 2)
+        assert not db.new and not db.dirty
+        with pytest.raises(FrozenInstanceError):
+            result.source = result.source
+        with pytest.raises(FrozenInstanceError):
+            result.billing_account.external_account_ref = "unrelated"
+        assert (
+            db.scalar(
+                text("SELECT count(*) FROM public.module_invoice_cash_correlations")
+            )
+            == 0
+        )
+        assert (
+            db.scalar(
+                text(
+                    "SELECT count(*) FROM mod_payments.payment_confirmations WHERE intent_id=:id"
+                ),
+                {"id": result.source.module_intent_id},
+            )
+            == 0
+        )
+        assert (
+            db.scalar(
+                text(
+                    "SELECT count(*) FROM mod_billing.confirmed_settlements WHERE billing_account_id=:id"
+                ),
+                {"id": source_case.billing_account_id},
+            )
+            == 0
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "UPDATE mod_billing.billing_accounts SET external_account_ref='unrelated-customer' WHERE id=:id",
+        "UPDATE mod_billing.billing_accounts SET currency='USD' WHERE id=:id",
+        "UPDATE mod_billing.billing_accounts SET minor_units=3 WHERE id=:id",
+    ],
+)
+def test_candidate_account_consumer_reobserves_and_refuses_current_identity_drift(
+    source_case: SourceCase, mutation: str
+) -> None:
+    query = ModuleInvoiceBillingAccountQuery(
+        observation_id=source_case.query.observation_id,
+        checkout_reference=source_case.query.checkout_reference,
+    )
+    with Session(source_case.runtime) as db, db.begin():
+        original = get_module_invoice_billing_account(db, query)
+    # Billing account identity is mutable. Privileged setup changes that real
+    # account; the consumer must re-read the genuine public API, not a mock or
+    # cached earlier observation. No binding trigger is bypassed or disabled.
+    with source_case.admin.begin() as connection:
+        connection.execute(
+            text(mutation),
+            {"id": source_case.billing_account_id},
+        )
+    with (
+        Session(source_case.runtime) as db,
+        db.begin(),
+        pytest.raises(
+            ModuleInvoiceCashSourceError,
+            match="Current Billing account identity differs",
+        ),
+    ):
+        get_module_invoice_billing_account(db, query)
+    assert original.billing_account.external_account_ref == str(source_case.account_id)
+    assert original.billing_account.currency == Currency("NGN", 2)
