@@ -669,6 +669,22 @@ verify_database_prerequisites() {
     'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only'
 }
 
+# Print the database name from a postgres URL, or fail. Never echoes anything
+# that is not a plain identifier, so a malformed URL cannot leak credentials.
+# This is needed by database_heads during the early post-migration resume gate,
+# before the deploy reaches the later pre-swap migration helpers.
+database_name_from_url() {
+  local rest="$1" name
+  [[ "${rest}" == *://* ]] || return 1
+  rest="${rest#*://}"
+  rest="${rest%%\?*}"
+  rest="${rest##*@}"
+  [[ "${rest}" == */* ]] || return 1
+  name="${rest#*/}"
+  [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  printf '%s\n' "${name}"
+}
+
 database_heads() {
   local backup_db_user
   local backup_db_name
@@ -1552,19 +1568,6 @@ APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
 # never assumed: the alembic_version heads are read before and after. The pin is
 # put back ONLY when both reads succeed and are equal; otherwise the schema may
 # have advanced, the pin is left untouched and the operator must repair forward.
-# Print the database name from a postgres URL, or fail. Never echoes anything
-# that is not a plain identifier, so a malformed URL cannot leak credentials.
-database_name_from_url() {
-  local rest="$1" name
-  [[ "${rest}" == *://* ]] || return 1
-  rest="${rest#*://}"
-  rest="${rest%%\?*}"
-  rest="${rest##*@}"
-  [[ "${rest}" == */* ]] || return 1
-  name="${rest#*/}"
-  [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
-  printf '%s\n' "${name}"
-}
 read_alembic_heads() {
   local out url url_db target_db
   # Alembic connects with the DATABASE_URL the app container receives from
