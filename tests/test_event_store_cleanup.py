@@ -40,6 +40,8 @@ def test_cleanup_preserves_events_referenced_by_prepaid_receipts(
         )
     )
     db_session.commit()
+    protected_id = protected.id
+    deletable_id = deletable.id
 
     result = event_store_service.cleanup_completed_events(
         db_session,
@@ -47,8 +49,8 @@ def test_cleanup_preserves_events_referenced_by_prepaid_receipts(
     )
     db_session.commit()
 
-    assert db_session.get(EventStore, protected.id) is not None
-    assert db_session.get(EventStore, deletable.id) is None
+    assert db_session.get(EventStore, protected_id) is not None
+    assert db_session.get(EventStore, deletable_id) is None
     assert result == {
         "deleted": 1,
         "handler_attempts_deleted": 0,
