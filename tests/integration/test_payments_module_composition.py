@@ -7,6 +7,7 @@ backfill, complete shadow comparison and sealed cutover retire them.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -14,17 +15,29 @@ from uuid import uuid4
 import pytest
 import sqlalchemy as sa
 from alembic.config import Config
+from dotmac_kernel.cache import TenantScope
+from dotmac_payments import GetPaymentIntentV1, get_payment_intent_v1
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
 
 from alembic import command
+from app.models.billing import TopupIntent
+from app.services import session_hooks
 from app.services.operator_tenant import OPERATOR_TENANT_ID
+from app.services.payment_intent_module_shadow import (
+    AuthorizedInvoiceIntentBinding,
+    IntentBindingField,
+    IntentParityOutcome,
+    authorized_invoice_binding,
+    observe_invoice_intent_parity,
+)
 from tests.integration import test_kernel_lineage_rehearsal as kernel_rehearsal
 
 isolated_database = kernel_rehearsal.isolated_database
 
 SCHEMA = "mod_payments"
-PAYMENTS_HEAD = "pm_0001_payment_intents"
+PAYMENTS_HEAD = "pm_0003_confirmation_immutable"
 TABLES = (
     "payment_intents",
     "payment_transfer_proofs",
@@ -58,31 +71,46 @@ def _set_online_scope(connection: sa.Connection, tenant_id: str | None) -> None:
         )
 
 
-def _insert_intent(connection: sa.Connection, *, tenant_id: str) -> None:
+def _insert_intent(
+    connection: sa.Connection, *, tenant_id: str
+) -> AuthorizedInvoiceIntentBinding:
+    binding = AuthorizedInvoiceIntentBinding(
+        reference=f"composition-{uuid4()}",
+        account_id=uuid4(),
+        invoice_reference=None,
+        requested_amount=Decimal("100.00"),
+        currency="NGN",
+        provider_type="test",
+        channel="customer_selfcare",
+        opened_at=datetime.now(UTC),
+        expires_at=None,
+    )
     connection.execute(
         sa.text(
             """
             INSERT INTO mod_payments.payment_intents (
                 id, tenant_id, reference, payer_reference, target_reference,
                 purpose, provider_type, channel, currency_code,
-                requested_amount, confirmed_amount, status, opened_at,
+                requested_amount, confirmed_amount, minor_units, status, opened_at,
                 expires_at, settled_at
             ) VALUES (
                 :id, :tenant_id, :reference, :payer_reference, NULL,
-                'ACCOUNT_CREDIT_DEPOSIT', 'TEST', 'TRANSFER', 'NGN',
-                :requested_amount, NULL, 'PENDING', :opened_at, NULL, NULL
+                'INVOICE_SETTLEMENT', 'TEST', 'CUSTOMER_SELFCARE', 'NGN',
+                :requested_amount, NULL, 2, 'PENDING', :opened_at, NULL, NULL
             )
             """
         ),
         {
             "id": uuid4(),
             "tenant_id": tenant_id,
-            "reference": f"composition-{uuid4()}",
-            "payer_reference": "operator-account",
+            "reference": binding.reference,
+            "payer_reference": str(binding.account_id),
             "requested_amount": Decimal("100.000000"),
-            "opened_at": datetime.now(UTC),
+            "opened_at": binding.opened_at,
         },
     )
+
+    return binding
 
 
 def test_payments_lineage_catalog_effective_rls_and_replay(
@@ -122,7 +150,7 @@ def test_payments_lineage_catalog_effective_rls_and_replay(
         # Seed before denial checks so the read proof is non-vacuous.
         with engine.begin() as connection:
             _set_online_scope(connection, str(OPERATOR_TENANT_ID))
-            _insert_intent(connection, tenant_id=str(OPERATOR_TENANT_ID))
+            binding = _insert_intent(connection, tenant_id=str(OPERATOR_TENANT_ID))
             assert (
                 connection.scalar(
                     sa.text("SELECT count(*) FROM mod_payments.payment_intents")
@@ -151,6 +179,73 @@ def test_payments_lineage_catalog_effective_rls_and_replay(
             with pytest.raises(DBAPIError):
                 _insert_intent(connection, tenant_id=str(OPERATOR_TENANT_ID))
             transaction.rollback()
+
+        # Use an app_user connection and the actual root Session after_begin
+        # hook. There is deliberately no manual tenant SET in this canary.
+        runtime_engine = sa.create_engine(isolated_database)
+
+        @sa.event.listens_for(runtime_engine, "connect")
+        def runtime_role(dbapi_connection, _connection_record) -> None:
+            with dbapi_connection.cursor() as cursor:
+                cursor.execute("SET ROLE app_user")
+            dbapi_connection.commit()
+
+        session_hooks.install_session_hooks()
+        try:
+            with Session(runtime_engine) as db:
+                dirty = TopupIntent(
+                    reference=binding.reference,
+                    account_id=binding.account_id,
+                    requested_amount=binding.requested_amount,
+                    currency=binding.currency,
+                    provider_type=binding.provider_type,
+                    channel=binding.channel,
+                    created_at=binding.opened_at,
+                    expires_at=binding.expires_at,
+                    metadata_={"payment_flow": "invoice_payment"},
+                )
+                db.add(dirty)
+                assert (
+                    observe_invoice_intent_parity(
+                        db, authorized_invoice_binding(dirty)
+                    ).outcome
+                    is IntentParityOutcome.MATCH
+                )
+                assert dirty in db.new
+                assert db.scalar(sa.text("SELECT current_user")) == "app_user"
+                assert db.scalar(
+                    sa.text("SELECT current_setting('app.current_tenant')")
+                ) == str(OPERATOR_TENANT_ID)
+                assert (
+                    get_payment_intent_v1(
+                        db,
+                        scope=TenantScope(uuid4()),
+                        query=GetPaymentIntentV1(binding.reference),
+                    )
+                    is None
+                )
+                assert (
+                    observe_invoice_intent_parity(
+                        db, replace(binding, reference="missing-module-intent")
+                    ).outcome
+                    is IntentParityOutcome.MISSING
+                )
+                mismatch = observe_invoice_intent_parity(
+                    db,
+                    replace(
+                        binding,
+                        invoice_reference=str(uuid4()),
+                        requested_amount=Decimal("100.000001"),
+                    ),
+                )
+                assert mismatch.mismatched_fields == (
+                    IntentBindingField.TARGET,
+                    IntentBindingField.AMOUNT,
+                )
+                assert dirty in db.new
+                db.rollback()
+        finally:
+            runtime_engine.dispose()
 
         command.upgrade(config, "heads")
         with engine.connect() as connection:

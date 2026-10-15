@@ -21,6 +21,90 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="financial.payment_intent_module_shadow",
+        module="app.services.payment_intent_module_shadow",
+        owns=("authorized invoice checkout binding parity",),
+        depends_on=("financial.topup_intents", "tenancy.operator_tenant"),
+        notes=(
+            "Read-only released Payments getter consumer after account authorization. "
+            "Missing or mismatched bindings are telemetry, never settlement authority."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="authorized invoice checkout binding parity",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "authorized legacy invoice checkout",
+                        "released module intent observation",
+                        "operator tenant scope",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="authorized legacy invoice checkout",
+                    owner="financial.topup_intents",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Frozen authorized TopupIntent binding, original metadata invoice target, Numeric(12,2) amount and original instants",
+                ),
+                AuthorityInput(
+                    name="released module intent observation",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="Released get_payment_intent_v1 on caller Session and operator TenantScope; lifecycle and confirmed money confer no authority",
+                ),
+                AuthorityInput(
+                    name="operator tenant scope",
+                    owner="tenancy.operator_tenant",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="OPERATOR_TENANT_ID and root application Session after_begin tenant hook",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Caller session only; no writes, autoflush, session creation or transaction completion",
+                locking="No locks; getter observes persisted binding in the caller transaction",
+                idempotency="Same committed bindings yield the same comparison; counters count invocations",
+                retries="Database errors propagate; caller owns rollback and may repeat a complete authorized request",
+            ),
+            errors=ErrorContract(
+                domain_codes=(),
+                mapping_owner="Existing customer checkout caller",
+                fail_closed_on=(
+                    "database or tenant-scope failure",
+                    "module precision refusal",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.payment_intent_module_shadow",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="authorized invoice checkout binding parity",
+                    input_names=(
+                        "authorized legacy invoice checkout",
+                        "released module intent observation",
+                        "operator tenant scope",
+                    ),
+                    writer="financial.payment_intent_module_shadow",
+                    freshness="Synchronous request-local persisted observation before provider I/O",
+                    stale_behavior="No cached result; missing is an observed gap and never a match",
+                    drift_signal="payment_intent_module_parity_total with bounded outcome/field labels only",
+                    rebuild_operation="Repeat the authorized read against original bindings; no backfill or dual write",
+                    repair_owner="financial.topup_intents",
+                ),
+            ),
+            steward="finance operations",
+            design_refs=("docs/designs/PAYMENT_INTENT_MODULE_OBSERVATION.md",),
+            test_refs=(
+                "tests/test_payment_intent_module_shadow.py",
+                "tests/integration/test_payments_module_composition.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.topup_intents",
         module="app.services.topup_intents",
         owns=(

@@ -1,4 +1,4 @@
-"""Static boundary for Billing and Collections tenant-plane shadow composition."""
+"""Path-bound commercial shadow imports and released Payments read observation."""
 
 from __future__ import annotations
 
@@ -17,6 +17,11 @@ PYPROJECT = ROOT / "pyproject.toml"
 
 
 _SHADOW_IMPORTS = {
+    "app/services/payment_intent_module_shadow.py": {
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+    },
     "app/services/dotmac_erp/billing_adapter.py": {
         ("dotmac_billing", "AccountingFactV1"),
     },
@@ -36,7 +41,12 @@ _SHADOW_IMPORTS = {
 
 def _external_commercial_imports_under_app(root: Path = ROOT) -> list[str]:
     offenders: list[str] = []
-    prefixes = ("dotmac_billing", "dotmac_collections", "dotmac_subscriptions")
+    prefixes = (
+        "dotmac_billing",
+        "dotmac_collections",
+        "dotmac_subscriptions",
+        "dotmac_payments",
+    )
     for path in (root / "app").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         dynamic_names = {"__import__"}
@@ -146,7 +156,7 @@ def test_both_dual_plane_modules_select_tenant_only() -> None:
     assert tuple(selections["collections"].planes) == (ModulePlane.TENANT,)
 
 
-def test_shadow_storage_adds_no_runtime_import_or_provider_switch() -> None:
+def test_shadow_runtime_imports_are_path_bound_without_provider_switch() -> None:
     assert _external_commercial_imports_under_app() == []
 
     from app.composition import DEDICATED_ISP_PROFILE
@@ -244,3 +254,43 @@ def test_pending_consumer_guard_rejects_planted_activation(tmp_path: Path) -> No
         "stage(db, command, context=context)\n"
     )
     assert _committed_fact_runtime_activation(tmp_path)
+
+
+def test_payments_getter_allowlist_is_exact_and_path_bound(tmp_path: Path) -> None:
+    owner = tmp_path / "app/services/payment_intent_module_shadow.py"
+    owner.parent.mkdir(parents=True)
+    owner.write_text(
+        "from dotmac_payments import GetPaymentIntentV1, get_payment_intent_v1\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path) == []
+    owner.write_text("from dotmac_payments import record_confirmation\n")
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.write_text(
+        'from importlib import import_module\nimport_module("dotmac_payments.service")\n'
+    )
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.unlink()
+    (owner.parent / "wrong_owner.py").write_text(
+        "from dotmac_payments import get_payment_intent_v1\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path)
+
+
+def test_payments_released_getter_supply_pin() -> None:
+    project = tomllib.loads(PYPROJECT.read_text())
+    assert "dotmac-payments==0.1.0a2" in project["project"]["dependencies"]
+    assert project["tool"]["poetry"]["dependencies"]["dotmac-payments"] == {
+        "version": "0.1.0a2",
+        "source": "forgejo",
+    }
+    lock = tomllib.loads((ROOT / "poetry.lock").read_text())
+    package = next(
+        item for item in lock["package"] if item["name"] == "dotmac-payments"
+    )
+    assert package["version"] == "0.1.0a2"
+    assert package["files"] == [
+        {
+            "file": "dotmac_payments-0.1.0a2-py3-none-any.whl",
+            "hash": "sha256:da2877bc5365fc0d6cf93868a6235a608413edbb809199cd5c919f78390cf8ed",
+        }
+    ]

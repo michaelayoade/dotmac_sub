@@ -56,7 +56,7 @@ dependencies = [
     "dotmac-collections==0.1.0a1",
     "dotmac-inbox==0.1.0a1",
     "dotmac-numbering==0.1.0a2",
-    "dotmac-payments==0.1.0a1",
+    "dotmac-payments==0.1.0a2",
     "dotmac-service-orders==0.1.0a1",
     "dotmac-subscriptions==0.1.0a3",
     "dotmac-template-studio==0.2.0a5",
@@ -91,7 +91,7 @@ dotmac-collections = { version = "0.1.0a1", source = "forgejo" }
 dotmac-numbering = { version = "0.1.0a2", source = "forgejo" }
 # Tenant-only migration/shadow composition. Sub's incumbent payment writers
 # remain authoritative until a separate backfill, parity and sealed cutover.
-dotmac-payments = { version = "0.1.0a1", source = "forgejo" }
+dotmac-payments = { version = "0.1.0a2", source = "forgejo" }
 # First composed domain module. Its `so` lineage is registered in
 # alembic.ini and its prerequisites are bound in app/migration_bindings.py.
 dotmac-service-orders = { version = "0.1.0a1", source = "forgejo" }
@@ -589,3 +589,7 @@ forbidden_modules = [
     "app.services.splynx_customer_sync",
     "app.tasks.splynx_sync",
 ]
+
+[[tool.mypy.overrides]]
+module = ["app.services.payment_intent_module_shadow"]
+strict = true

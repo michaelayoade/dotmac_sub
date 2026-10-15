@@ -1237,14 +1237,13 @@ reference = "forgejo"
 
 [[package]]
 name = "dotmac-payments"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Payment intent and confirmation correlation"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main"]
 files = [
-    {file = "dotmac_payments-0.1.0a1-py3-none-any.whl", hash = "sha256:4b26d1c237e1b1f2c089d56b67a941c1e57e1f3aa2ccd7e1cfe066bf2482da6e"},
-    {file = "dotmac_payments-0.1.0a1.tar.gz", hash = "sha256:b2c368abb9f4e301b9194fee10de9aaf228900ce05d5624fbac62c360f74ed0e"},
+    {file = "dotmac_payments-0.1.0a2-py3-none-any.whl", hash = "sha256:da2877bc5365fc0d6cf93868a6235a608413edbb809199cd5c919f78390cf8ed"},
 ]
 
 [package.dependencies]
@@ -6269,4 +6268,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "c027ae36bc5503ee7840e5e6376503e29db08c3ede1c061e5f7da3c66b03202a"
+content-hash = "66892960c4749202c276844927526acc14535e9f114c7ea2f9843d19c515ac33"

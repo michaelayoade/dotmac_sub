@@ -43,6 +43,12 @@ APPLICATION_EXCEPTIONS = Counter(
     "Unhandled application exceptions by bounded route and exception fingerprint",
     ["surface", "exception_type"],
 )
+PAYMENT_INTENT_MODULE_PARITY = Counter(
+    "payment_intent_module_parity_total",
+    "Authorized invoice checkout module binding parity (bounded field names only)",
+    ["outcome", "field"],
+)
+
 PAYMENT_VERIFICATION_OUTCOMES = Counter(
     "payment_verification_outcomes_total",
     "Customer payment verification outcomes by channel and safe category",
