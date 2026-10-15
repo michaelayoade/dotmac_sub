@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from alembic import command
 from app.models.billing import Invoice
 from app.models.event_store import EventStore
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Reseller, Subscriber
 from app.services.operator_tenant import operator_tenant_id
 from app.services.payments_intent_schema_floor import (
     legacy_image_rollback_allowed,
@@ -85,8 +85,12 @@ def migrated_intents(cloned_database) -> Iterator[MigratedIntentDatabase]:
     admin = create_engine(url)
     historical = uuid4()
     with Session(admin) as db:
+        reseller = Reseller(name=f"Payments Intent Canary {uuid4()}", is_active=True)
         account = Subscriber(
-            first_name="Canary", last_name="Scope", email=f"{uuid4()}@example.invalid"
+            first_name="Canary",
+            last_name="Scope",
+            email=f"{uuid4()}@example.invalid",
+            reseller=reseller,
         )
         db.add(account)
         db.flush()

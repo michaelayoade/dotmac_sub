@@ -178,7 +178,7 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.POLICY,
                         input_names=(
                             "actual runtime catalog",
-                            "Payments schema floor observation",
+                            "installed schema observation",
                         ),
                     ),
                     ConcernContract(
