@@ -557,14 +557,21 @@ def _admit_event(
         )
         if not resumable:
             return existing, True
-        existing.source = observation.source
-        existing.observation_digest = observation.digest
-        existing.observed_payment_status = observation.observed_status
-        existing.provider_fee = observation.provider_fee
-        existing.net_amount = observation.net_amount
-        existing.provider_reference = observation.provider_reference
+        # Exact verified replays retain the first admission and normalized facts.
+        # Legacy rows still receive their first provenance after the strict
+        # replay checks above; verified financial digests exclude raw payload.
+        if existing.source not in (
+            PaymentProviderEventSource.verified_webhook,
+            PaymentProviderEventSource.gateway_reconciliation,
+        ):
+            existing.source = observation.source
+            existing.observation_digest = observation.digest
+            existing.observed_payment_status = observation.observed_status
+            existing.provider_fee = observation.provider_fee
+            existing.net_amount = observation.net_amount
+            existing.provider_reference = observation.provider_reference
+            existing.occurred_at = observation.command.occurred_at
         existing.payload = observation.payload
-        existing.occurred_at = observation.command.occurred_at
         existing.error_code = None
         existing.error = None
         return existing, False

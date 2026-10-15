@@ -26,7 +26,9 @@ SERVICES: tuple[SOTService, ...] = (
         depends_on=("financial.payment_provider_events", "financial.topup_intents"),
         notes=(
             "Source candidate query only. Does not qualify the physical merchant "
-            "namespace, admit ledger authority, confirm cash or post a settlement."
+            "namespace, admit ledger authority, confirm cash or post a settlement. "
+            "Requested customer credit and provider gross, fee and net are "
+            "independent observations; the query chooses no credit or fee policy."
         ),
         contract=ServiceContract(
             concerns=(
@@ -75,7 +77,7 @@ SERVICES: tuple[SOTService, ...] = (
                 new_owner="financial.provider_invoice_module_cash_source",
                 old_owner="financial.provider_payment_settlements",
                 verification="Hosted real migration-chain/source timestamp and binding canaries pending.",
-                cutover_gate="Published Billing account frozen query for target identity/currency/scale, independently qualified physical merchant namespace shared with opening, reviewed amount binding and RLS-independent source freeze, published Billing a8 exact pin, full installation handoff and hosted PostgreSQL acceptance.",
+                cutover_gate="Published Billing account frozen query for target identity/currency/scale, independently qualified physical merchant namespace shared with opening, reviewed amount binding and hosted acceptance of revision 693 RLS-independent source freeze, published Billing a8 exact pin, full installation handoff and hosted PostgreSQL acceptance.",
                 fallback_retirement="No runtime dispatch changed; final caller migration must remove every legacy money path.",
             ),
             steward="billing and finance operations",
@@ -123,7 +125,10 @@ SERVICES: tuple[SOTService, ...] = (
             "result, audit, and event before delegating financial consequences "
             "to named participants. Administrative observations cannot change "
             "payment state. Provider fee policy is intentionally not decided "
-            "here; the unresolved route policy remains with financial.payments."
+            "here; the unresolved route policy remains with financial.payments. "
+            "Revision 693 freezes first verified source facts using OLD/NEW only, "
+            "independent of correlation visibility; this integrity guard grants no "
+            "cash authority. Payload and processing state remain owner-mutable."
         ),
         contract=ServiceContract(
             concerns=(
@@ -267,7 +272,12 @@ SERVICES: tuple[SOTService, ...] = (
                     "webhook and gateway-verified observations may converge only when "
                     "those normalized fields match exactly; administrative evidence "
                     "cannot converge with either. A legacy incomplete row may resume "
-                    "once from verified evidence and receives canonical provenance."
+                    "once from verified evidence and receives canonical provenance. "
+                    "Subsequent verified replays retain the first verified source, "
+                    "digest, normalized facts and timestamps; pending processing may "
+                    "refresh raw payload, links, state and errors. Revision 693 "
+                    "enforces these facts without RLS-dependent joins and refuses "
+                    "observation deletion or truncation, including an empty table."
                 ),
                 retries=(
                     "Retry the complete owning coordinator with the same normalized "
@@ -370,6 +380,7 @@ SERVICES: tuple[SOTService, ...] = (
             design_refs=(
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                "docs/designs/BILLING_LEDGER_HANDOFF.md",
             ),
             test_refs=(
                 "tests/test_payment_provider_events.py",
@@ -378,6 +389,7 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/architecture/test_payment_provider_event_ownership.py",
                 "tests/architecture/test_payment_settlement_participants.py",
                 "tests/integration/test_payment_provider_event_concurrency.py",
+                "tests/integration/test_provider_invoice_module_cash_pg.py",
             ),
         ),
     ),

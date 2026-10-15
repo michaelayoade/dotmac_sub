@@ -227,12 +227,13 @@ capture time refuse the preparatory query. Late receipt is valid when actual
 capture falls inside the original checkout lifetime. A later confirmation must
 explicitly bind the Payments timestamp semantics without rewriting either time.
 
-The query's gross/fee/net bounds and net-equals-requested check describe the
-existing bound-invoice cash-first interpretation. They are not a new fee policy
-or a proof equating Payments confirmation with Billing credit. Existing code does
-not require gross = net + fee, and Billing's evidence allowlist does not validate
-that equation. The future owner must establish a reviewed exact amount binding;
-no blanket gross/net substitution or new fee-bearer policy is authorized here.
+The read-only query retains exact numerical, currency, identity and lifetime
+bounds while returning frozen requested customer credit, provider gross, provider
+fee and provider net as independent observations. It does not require provider
+net to equal requested credit, or gross = net + fee. Neither equality has an
+approved policy contract here. The future financial caller must establish a
+reviewed immutable amount binding before confirmation or Billing credit; this
+query grants no cash admission and chooses no fee bearer or credit calculation.
 
 The positive flush-only module cash participant remains unimplemented because
 Billing currently exposes no public frozen account observation to validate the
@@ -248,13 +249,29 @@ canonical contract. Checkout reference, installation/configuration identity,
 asserted PSP namespace and Payments confirmation UUID cannot replace these facts.
 The correlation schema preserves the intended original observation/intent/
 confirmation/account/settlement join, but inserts do not certify namespace or
-handoff authority. Only correlation rows are append-only; foreign keys preserve
-referenced rows against deletion. Provider observations retain their existing
-owner's legitimate pending/historical updates. No invoker trigger claims to
-freeze hidden RLS correlations, no SECURITY DEFINER bypass is introduced, and
-no blanket tenant-context check changes legacy observation updates. A reviewed
-RLS-independent source-freeze mechanism is mandatory before any positive cash
-correlation admission. No live correlation writer is mounted here.
+handoff authority. Correlation rows remain append-only. Successor revision
+`693_provider_source_facts` supplies the RLS-independent provider source-facts
+integrity prerequisite. Its SECURITY INVOKER trigger, with pg_catalog search_path,
+compares only OLD and NEW; it performs no reads or correlation/tenant joins.
+Once the old source is `verified_webhook` or `gateway_reconciliation`, it freezes
+id, provider_id, event_type, external_id, idempotency_key, source,
+observation_digest, observed_payment_status, amount, provider_fee, net_amount,
+provider_reference, currency, financial_effect, occurred_at and received_at.
+Both guards are ENABLE ALWAYS; downgrade refuses guard removal and recovery
+requires a reviewed forward migration. Equal values and equivalent timestamp instants
+are permitted. All observation DELETE and TRUNCATE operations are refused,
+including empty-table truncation and cascaded truncation. This guard does not
+restrict INSERT or qualify any source enum as cash evidence; privileged source
+assertion, normalized evidence and namespace qualification remain separate.
+
+The incumbent owner still checks exact evidence before first legacy_unknown
+provenance enrichment. There is no historical rewrite, backfill or repair.
+After first verified admission, pending verified-to-verified replay preserves
+that first source and normalized facts; it may replace raw transport payload
+and change payment_id, invoice_id, status, processed_at, error_code and error.
+The existing financial-observation digest deliberately excludes raw payload.
+No SECURITY DEFINER bypass or cross-module privilege grant is introduced.
+No positive cash writer or live correlation admission is mounted here.
 
 After that dependency exists, the same existing root transaction must serialize
 intent and account, call Payments `record_confirmation`, read the immutable
@@ -292,3 +309,16 @@ occurrence column before applying 692. It asserts the resulting FK enforcement,
 RLS and append-only trigger catalog. This is branch coverage, not proof of a
 historical deployed image. The actual predecessor-image upgrade rehearsal and
 production-shaped end-to-end acceptance remain required.
+
+The 693 source-freeze canaries are authored, not executed locally. Hosted CI must
+run the full real migration baseline and the real 692-to-693 predecessor rehearsal,
+then the actual unprivileged app_user-login canaries in
+`tests/integration/test_provider_invoice_module_cash_pg.py`. They cover unchanged
+historical rows and preexisting triggers, ALWAYS/invoker/search_path catalog
+shape, all frozen fields, hidden tenant binding context, equal values/equivalent
+instants, processing/payload updates, both verified replay directions, strict
+legacy enrichment, deletion, empty/cascaded truncation, atomic rollback and
+independent requested/gross/fee/net reads with zero cash postings. Truncation is
+exercised by the setup owner; the actual login receives no extra cascade-table
+privileges. Full repository CI and qualified namespace/policy/account/authority
+acceptance remain required before a later positive cash participant.

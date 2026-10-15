@@ -108,3 +108,117 @@ def test_provider_event_record_persists_trust_and_replay_evidence() -> None:
     ):
         assert field in model
         assert field in migration
+
+
+def test_verified_source_guard_uses_only_old_new_and_cannot_bypass_rls() -> None:
+    path = ROOT / "alembic/versions/693_provider_source_facts.py"
+    tree = _tree(path)
+    source = path.read_text(encoding="utf-8")
+    revision = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "revision"
+    )
+    assert isinstance(revision.value, ast.Constant)
+    assert len(revision.value.value) <= 32
+    sql = next(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and "CREATE FUNCTION" in node.value
+    )
+    assert "SECURITY INVOKER SET search_path = pg_catalog" in sql
+    assert "SECURITY DEFINER" not in source
+    for forbidden in (
+        "SELECT ",
+        " JOIN ",
+        "PERFORM ",
+        "EXECUTE ",
+        "module_invoice_cash_correlations",
+        "app_current_tenant_id",
+    ):
+        assert forbidden not in sql
+    for field in (
+        "id",
+        "provider_id",
+        "event_type",
+        "external_id",
+        "idempotency_key",
+        "source",
+        "observation_digest",
+        "observed_payment_status",
+        "amount",
+        "provider_fee",
+        "net_amount",
+        "provider_reference",
+        "currency",
+        "financial_effect",
+        "occurred_at",
+        "received_at",
+    ):
+        assert f"OLD.{field}" in sql
+        assert f"NEW.{field}" in sql
+    assert "OLD.source IN ('verified_webhook', 'gateway_reconciliation')" in sql
+    assert "IS DISTINCT FROM" in sql
+    assert "ENABLE ALWAYS TRIGGER" in source
+    assert "BEFORE UPDATE OR DELETE" in source
+    assert "BEFORE TRUNCATE" in source
+    assert "BEFORE INSERT" not in source
+    downgrade = ast.unparse(_function(path, "downgrade"))
+    assert "RuntimeError" in downgrade
+    assert "forward migration" in downgrade
+    assert "DROP" not in downgrade
+    assert "execute" not in _calls(_function(path, "downgrade"))
+    for mutable in (
+        "payload",
+        "payment_id",
+        "invoice_id",
+        "status",
+        "processed_at",
+        "error_code",
+        "error",
+    ):
+        assert f"NEW.{mutable}" not in sql
+
+
+def test_pending_verified_replay_keeps_first_admission_source() -> None:
+    admit = _function(OWNER, "_admit_event")
+    assignments = [
+        node
+        for node in ast.walk(admit)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "existing"
+            and target.attr == "source"
+            for target in node.targets
+        )
+    ]
+    assert len(assignments) == 1
+    assignment = assignments[0]
+    guard = next(
+        node
+        for node in ast.walk(admit)
+        if isinstance(node, ast.If)
+        and any(child is assignment for child in ast.walk(node))
+        and "existing.source not in" in ast.unparse(node.test)
+    )
+    assert "PaymentProviderEventSource.verified_webhook" in ast.unparse(guard.test)
+    assert "PaymentProviderEventSource.gateway_reconciliation" in ast.unparse(
+        guard.test
+    )
+    assert "existing.payload = observation.payload" in ast.unparse(admit)
+
+
+def test_cash_source_query_keeps_requested_credit_distinct_from_provider_net() -> None:
+    path = ROOT / "app/services/provider_payment_settlements.py"
+    query = ast.unparse(_function(path, "get_module_invoice_cash_source"))
+    assert "net != frozen.requested.amount" not in query
+    assert "requested_customer_credit_amount=frozen.requested.amount" in query
+    assert "gross_amount=gross" in query
+    assert "provider_fee=fee" in query
+    assert "net_amount=net" in query

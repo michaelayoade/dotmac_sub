@@ -605,7 +605,6 @@ def get_module_invoice_cash_source(
             or net <= 0
             or net > gross
             or fee > gross
-            or net != frozen.requested.amount
             or any(
                 value != value.quantize(Decimal("0.01")) for value in (gross, fee, net)
             )
