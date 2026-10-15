@@ -452,6 +452,25 @@ existing staging backup files are unchanged.
   `from_revision`/`to_revision` transition plus a change reference and reason;
   there is no boolean override, and a document written for a different
   transition is refused rather than reused.
+- Production transition control comes from the verified authorizing main revision.
+  The staged checkout remains inert until that trusted controller verifies its
+  exact commit, clean source and supported deployment-lock protocol. Ignored
+  import shadows and executable helpers also refuse; the production job disables
+  Python bytecode writes before preparing authorization documents.
+- The trusted controller holds `/var/lock/dotmac_sub_deploy.lock` through
+  verification, target execution and recovery. Descriptor 8 is inherited by the
+  target; its existing descriptor-9 lock uses a private per-invocation lock path.
+  The controller never rewrites historical source or accepts a skip-lock flag.
+- A backward or divergent transition requires both exact transition authority
+  and a complete predecessor Payments schema proof. The reader runs in a fresh
+  read-only, mount-free probe from the observed immutable running image ID, with
+  its database binding checked privately. A modified live container cannot
+  supply executable reader bytes. Installed, partial, unknown or unavailable
+  floor evidence refuses historical-image recovery, even with authorization.
+- These transition checks do not establish billing cutover readiness. A financial
+  caller transfer also requires integrated producer/worker drain, exact migration
+  terminal-state evidence and installed-floor proof before reopening service.
+  Hosted tests and digest-bound production authorization remain separate gates.
 - An empty running-revision observation never bypasses that gate. Docker daemon,
   inventory, and inspection failures and missing/malformed labels fail closed.
   Only a confirmed absent production container may use the separately typed

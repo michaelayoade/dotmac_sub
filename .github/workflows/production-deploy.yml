@@ -78,6 +78,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     outputs:
+      authorization_main_revision: ${{ steps.evidence.outputs.authorization_main_revision }}
       source_revision: ${{ steps.evidence.outputs.source_revision }}
       release_revision: ${{ steps.evidence.outputs.release_revision }}
       image_digest: ${{ steps.evidence.outputs.image_digest }}
@@ -162,8 +163,13 @@ jobs:
   deploy:
     needs: verify
     runs-on: [self-hosted, linux, x64, dotmac-sub-production]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     environment: production
-    timeout-minutes: 45
+    # The deploy's backup, migrations, warm handoff and existing health gates
+    # share this job budget. Individual health/schema/identity limits remain
+    # unchanged and continue to fail closed.
+    timeout-minutes: 120
     steps:
       # This job deploys to the live production host (backup, migrations, the
       # actual container cutover) after a human approval, so it must never be
@@ -191,13 +197,25 @@ jobs:
               );
             }
 
-      # ... while the application release is the STAGED revision named by the
-      # authorization document, which is generally an earlier commit.
-      - name: Checkout authorized staged release
+      # Anchor the immutable job deadline immediately after the job starts.
+      # deploy.sh receives this absolute timestamp; it never starts a fresh
+      # 120-minute allowance after the backup has finished.
+      - name: Capture production job deadline
+        id: job-budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          started="$(date -u +%s)"
+          echo "deadline_epoch=$((started + 120 * 60))" >>"$GITHUB_OUTPUT"
+
+      # This checkout is pinned to the already-verified authorizing main SHA.
+      # Its gate runs before the separately checked-out staged release wrapper.
+      - name: Checkout trusted production control
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.release_revision }}
+          ref: ${{ needs.verify.outputs.authorization_main_revision }}
           fetch-depth: 0
+          path: trusted-control
 
       - name: Download exact production authorization
         uses: actions/download-artifact@v4
@@ -208,6 +226,64 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.authorization_run_id }}
+
+      - name: Prepare typed transition authorization with trusted control
+        env:
+          AUTHORIZATION_RUN_ID: ${{ inputs.authorization_run_id }}
+          AUTHORIZATION_MAIN_REVISION: ${{ needs.verify.outputs.authorization_main_revision }}
+          ROLLBACK_FROM: ${{ inputs.rollback_from_revision }}
+          ROLLBACK_TO: ${{ inputs.rollback_to_revision }}
+          ROLLBACK_REF: ${{ inputs.rollback_change_reference }}
+          ROLLBACK_REASON: ${{ inputs.rollback_reason }}
+          BOOTSTRAP_TARGET: ${{ inputs.bootstrap_target_revision }}
+          BOOTSTRAP_REF: ${{ inputs.bootstrap_change_reference }}
+          BOOTSTRAP_REASON: ${{ inputs.bootstrap_reason }}
+        run: |
+          set -euo pipefail
+          control="$GITHUB_WORKSPACE/trusted-control"
+          mapfile -t files < <(find "$RUNNER_TEMP/authorization" -type f -name authorization.json)
+          test "${#files[@]}" -eq 1
+          rollback_args=()
+          if [ -n "$ROLLBACK_FROM$ROLLBACK_TO$ROLLBACK_REF$ROLLBACK_REASON" ]; then
+            if [ -z "$ROLLBACK_FROM" ] || [ -z "$ROLLBACK_TO" ] \
+              || [ -z "$ROLLBACK_REF" ] || [ -z "$ROLLBACK_REASON" ]; then
+              echo "A rollback authorization requires from-revision, to-revision, change reference and reason." >&2
+              exit 1
+            fi
+            (cd "$control" && python -m scripts.release_candidate_evidence write-rollback-authorization \
+              --from-revision "$ROLLBACK_FROM" --to-revision "$ROLLBACK_TO" \
+              --change-reference "$ROLLBACK_REF" --reason "$ROLLBACK_REASON" \
+              --output "$RUNNER_TEMP/rollback-authorization.json")
+            rollback_args+=(--rollback-authorization "$RUNNER_TEMP/rollback-authorization.json")
+          fi
+          bootstrap_args=()
+          if [ -n "$BOOTSTRAP_TARGET$BOOTSTRAP_REF$BOOTSTRAP_REASON" ]; then
+            if [ -z "$BOOTSTRAP_TARGET" ] || [ -z "$BOOTSTRAP_REF" ] \
+              || [ -z "$BOOTSTRAP_REASON" ]; then
+              echo "A bootstrap authorization requires target revision, change reference and reason." >&2
+              exit 1
+            fi
+            if [ -n "$ROLLBACK_FROM$ROLLBACK_TO$ROLLBACK_REF$ROLLBACK_REASON" ]; then
+              echo "Rollback and first-deployment bootstrap authorizations are mutually exclusive." >&2
+              exit 1
+            fi
+            (cd "$control" && python -m scripts.release_candidate_evidence write-bootstrap-authorization \
+              --target-revision "$BOOTSTRAP_TARGET" --target-server "dotmac-sub-prod" \
+              --change-reference "$BOOTSTRAP_REF" --reason "$BOOTSTRAP_REASON" \
+              --output "$RUNNER_TEMP/bootstrap-authorization.json")
+            bootstrap_args+=(--bootstrap-authorization "$RUNNER_TEMP/bootstrap-authorization.json")
+          fi
+          # Admission and the staged wrapper run together later under one
+          # trusted lock. This step only creates typed evidence documents.
+
+      # The staged checkout is inert source data. The trusted supervisor below
+      # proves the transition before invoking any staged executable.
+      - name: Checkout authorized staged release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.release_revision }}
+          fetch-depth: 0
+          path: staged-release
 
       - name: Verify production host contract
         env:
@@ -233,20 +309,31 @@ jobs:
           BOOTSTRAP_TARGET: ${{ inputs.bootstrap_target_revision }}
           BOOTSTRAP_REF: ${{ inputs.bootstrap_change_reference }}
           BOOTSTRAP_REASON: ${{ inputs.bootstrap_reason }}
-          TARGET_SERVER: ${{ inputs.target_server_name }}
           RESUME_AFTER_MIGRATION: ${{ inputs.resume_after_migration }}
           FAILED_DEPLOYMENT_RUN_ID: ${{ inputs.failed_deployment_run_id }}
           PRIOR_BACKUP_PATH: ${{ inputs.prior_backup_path }}
           AUTHORIZATION_RUN_ID: ${{ inputs.authorization_run_id }}
           DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_DEADLINE_EPOCH: ${{ steps.job-budget.outputs.deadline_epoch }}
           DB_BACKUP_BASENAME: dotmac_sub_run_${{ github.run_id }}
           DB_BACKUP_RETENTION_PREFIX: dotmac_sub_run_
           DB_BACKUP_RETENTION_COUNT: "5"
         run: |
           set -euo pipefail
+          control="$GITHUB_WORKSPACE/trusted-control"
+          staged="$GITHUB_WORKSPACE/staged-release"
           mapfile -t files < <(find "$RUNNER_TEMP/authorization" -type f -name authorization.json)
           test "${#files[@]}" -eq 1
-          args=("$IMAGE_DIGEST" "${files[0]}")
+          args=(
+            --production-authorization "${files[0]}"
+            --authorization-run-id "$AUTHORIZATION_RUN_ID"
+            --authorization-main-revision "${{ needs.verify.outputs.authorization_main_revision }}"
+            --target-revision "${{ needs.verify.outputs.release_revision }}"
+            --target-image-digest "$IMAGE_DIGEST"
+            --deploy-directory "$PRODUCTION_DEPLOY_DIR"
+            --staged-repository "$staged"
+            --control-repository "$control"
+          )
           # A rollback is authorized by NAMING the exact transition, never by
           # setting a flag. Partial attribution is refused rather than being
           # quietly treated as "no rollback intended".
@@ -256,12 +343,6 @@ jobs:
               echo "A rollback authorization requires from-revision, to-revision, change reference and reason." >&2
               exit 1
             fi
-            python -m scripts.release_candidate_evidence write-rollback-authorization \
-              --from-revision "$ROLLBACK_FROM" \
-              --to-revision "$ROLLBACK_TO" \
-              --change-reference "$ROLLBACK_REF" \
-              --reason "$ROLLBACK_REASON" \
-              --output "$RUNNER_TEMP/rollback-authorization.json"
             args+=(--rollback-authorization "$RUNNER_TEMP/rollback-authorization.json")
           fi
           # Bootstrap is a distinct, typed authority for a confirmed empty
@@ -277,25 +358,19 @@ jobs:
               echo "Rollback and first-deployment bootstrap authorizations are mutually exclusive." >&2
               exit 1
             fi
-            python -m scripts.release_candidate_evidence write-bootstrap-authorization \
-              --target-revision "$BOOTSTRAP_TARGET" \
-              --target-server "$TARGET_SERVER" \
-              --change-reference "$BOOTSTRAP_REF" \
-              --reason "$BOOTSTRAP_REASON" \
-              --output "$RUNNER_TEMP/bootstrap-authorization.json"
             args+=(--bootstrap-authorization "$RUNNER_TEMP/bootstrap-authorization.json")
           fi
           if [ "$HOTFIX" = "true" ]; then
-            args+=(--hotfix-no-migrations --change-reference "$CHANGE_REFERENCE" --reason "$HOTFIX_REASON")
+            args+=(--hotfix-change-reference "$CHANGE_REFERENCE" --hotfix-reason "$HOTFIX_REASON")
           elif [ -n "$CHANGE_REFERENCE" ] || [ -n "$HOTFIX_REASON" ]; then
             echo "Hotfix attribution was supplied without hotfix_no_migrations." >&2
             exit 1
           fi
           if [ "$RESUME_AFTER_MIGRATION" = "true" ]; then
-            args+=(--resume-after-migration --failed-run-id "$FAILED_DEPLOYMENT_RUN_ID" --backup-path "$PRIOR_BACKUP_PATH")
+            args+=(--resume-failed-run-id "$FAILED_DEPLOYMENT_RUN_ID" --resume-backup-path "$PRIOR_BACKUP_PATH")
           elif [ -n "$FAILED_DEPLOYMENT_RUN_ID" ] || [ -n "$PRIOR_BACKUP_PATH" ]; then
             echo "Resume evidence was supplied without resume_after_migration." >&2
             exit 1
           fi
-          REPO_DIR="$GITHUB_WORKSPACE" DEPLOY_DIR="$PRODUCTION_DEPLOY_DIR" \
-            bash scripts/deploy_production.sh "${args[@]}"
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$control" python "$control/scripts/production_trusted_deploy.py" \
+            "${args[@]}"
