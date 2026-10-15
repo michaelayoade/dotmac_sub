@@ -1894,6 +1894,14 @@ Each follows the same pattern — context dict with list data, form helpers, and
 | `/admin/system/audit` | Audit log | events, filters, page |
 | `/admin/system/health` | System health | cpu, memory, disk, services |
 
+The audit list filters by recorded result, actor and actor type, action,
+application-local date period, exact record/request identifiers, and
+`entity_type`, which the UI labels **Module**. Module and action choices are
+bounded distinct values from existing active audit rows, not hardcoded template
+options. Pagination preserves the complete filter form and pushes the resulting
+URL into browser history. “Failed” means an audit row explicitly recorded with
+`is_success = false`; it does not claim to be a complete application-error log.
+
 The role editor submits role attributes and the complete visible permission
 policy to `auth.rbac_catalog` in one atomic command. Saving permissions preserves
 an unchanged legacy role name; only a genuine rename must satisfy the canonical

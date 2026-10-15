@@ -1153,10 +1153,17 @@ URL | Events | Status | Success Rate | Last Delivery | Actions
 ### 8f. Audit Log (`/admin/system/audit`)
 
 #### Filters
-- Actor (user dropdown)
-- Action type
-- Entity type
-- Date range
+- Actor name or identifier
+- Actor type (user, system, service, API key)
+- Result (successful or failed recorded audit events)
+- Module, backed by the exact recorded `entity_type` values rather than a separate module classification
+- Searchable action populated from recorded action values
+- Today, last 7 days, last 30 days, or a custom application-timezone date range
+- Exact record ID or request ID, including explicit missing-ID filters
+
+Filter state remains in pagination requests and the browser URL. Module and
+action options come from bounded distinct values owned by
+`observability.audit_log`; the template does not hardcode them.
 
 #### Table
 Timestamp | Actor | Action | Entity Type | Entity ID | Details (expandable)

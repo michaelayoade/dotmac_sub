@@ -3503,8 +3503,17 @@ def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db))
 def audit_log(
     request: Request,
     actor_id: str | None = None,
+    actor_type: str | None = None,
     action: str | None = None,
     entity_type: str | None = None,
+    result: str | None = None,
+    period: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    entity_id: str | None = None,
+    entity_id_missing: bool = False,
+    request_id: str | None = None,
+    request_id_missing: bool = False,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     page: int = Query(1, ge=1),
@@ -3515,8 +3524,17 @@ def audit_log(
     try:
         list_query = web_system_audit_service.build_audit_list_query(
             actor_id=actor_id,
+            actor_type=actor_type,
             action=action,
             entity_type=entity_type,
+            result=result,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            entity_id=entity_id,
+            entity_id_missing=entity_id_missing,
+            request_id=request_id,
+            request_id_missing=request_id_missing,
             sort_by=sort_by,
             sort_dir=sort_dir,
             page=page,
@@ -3540,14 +3558,16 @@ def audit_log(
 
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    filter_options = web_system_audit_service.get_audit_filter_options(
+        db,
+        selected_entity_type=list_query.filter_value("entity_type"),
+    )
     return templates.TemplateResponse(
         "admin/system/audit.html",
         {
             "request": request,
             **page_data,
-            "actor_id": actor_id,
-            "action": action,
-            "entity_type": entity_type,
+            **filter_options,
             "active_page": "audit",
             "active_menu": "system",
             "current_user": get_current_user(request),
