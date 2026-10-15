@@ -27,6 +27,70 @@ DOMAIN = DomainSOT(
     domain="runtime_infrastructure",
     services=(
         SOTService(
+            name="runtime.billing_runtime_login",
+            module="app.commercial_module_prereqs",
+            owns=("actual Billing runtime login diagnostics",),
+            notes="Diagnostic supplied-session boundary only; no complete Billing preflip, helper/ACL closure, root-transaction proof or activation authority.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="actual Billing runtime login diagnostics",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "actual PostgreSQL session",
+                            "runtime login policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="actual PostgreSQL session",
+                        owner="external:postgresql_catalog",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Supplied psycopg connection startup login, transaction status, PostgreSQL identity/OIDs, role posture, effective membership/USAGE/SET and application-object ownership. No password catalog is read.",
+                    ),
+                    AuthorityInput(
+                        name="runtime login policy",
+                        owner="runtime.billing_runtime_login",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Frozen BillingRuntimeLoginQuery fixes authenticated app_user on PostgreSQL 16+, active READ COMMITTED and no privileged posture, other reachable role or relation/schema/function/database ownership, including catalog and temporary namespaces without exemptions.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Read catalog through the caller's active connection and transaction; never connect, commit, roll back, switch role or create a transaction. Caller owns the root transaction; INTRANS cannot detect arbitrary SAVEPOINTs.",
+                    locking="No business locks or catalog mutation. Final admission owner must re-observe under its own locks; returned diagnostics are not proof tokens.",
+                    idempotency="Repeated calls observe current READ COMMITTED state without persisting evidence or activating Billing.",
+                    retries="No retries or transaction repair. Unsupported server, stale isolation, impersonation, unknown role paths and catalog failures refuse.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "billing_runtime_login.inactive_transaction",
+                        "billing_runtime_login.unsupported_postgres",
+                        "billing_runtime_login.isolation",
+                        "billing_runtime_login.identity",
+                        "billing_runtime_login.privileged_role",
+                        "billing_runtime_login.role_path",
+                        "billing_runtime_login.ownership",
+                        "billing_runtime_login.catalog_unavailable",
+                    ),
+                    mapping_owner="Calling maintenance adapter maps BillingRuntimeLoginRefused; no runtime enforcement is installed by this slice.",
+                    fail_closed_on=(
+                        "unavailable actual session evidence",
+                        "privileged identity, owner or membership drift",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.billing_runtime_login",
+                    verification="Authored migrated hosted PostgreSQL canaries require genuine app_user authentication and reject role/session impersonation. Runtime execution remains pending.",
+                ),
+                steward="runtime operations",
+                design_refs=("docs/designs/BILLING_LEDGER_HANDOFF.md",),
+                test_refs=("tests/integration/test_billing_runtime_login_postgres.py",),
+            ),
+        ),
+        SOTService(
             name="runtime.writer_drain",
             module="app.services.deployment_writer_drain",
             implementation_modules=(

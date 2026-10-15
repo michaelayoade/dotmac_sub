@@ -53,6 +53,36 @@ principal or any online login a path to admin or table ownership.
 The runtime login must be nonowner. Revoking ACLs cannot fence a runtime table
 owner, which can change its own guards. Verify actual login identity, role OIDs,
 inheritance and SET-role reachability; do not infer them from configuration names.
+
+The bounded `runtime.billing_runtime_login` diagnostic is implemented by
+`require_billing_runtime_login` in `app/commercial_module_prereqs.py`. Its frozen
+query inspects the supplied actual psycopg connection on PostgreSQL 16 or later,
+requiring an active READ COMMITTED transaction. libpq's startup user and both
+PostgreSQL identities must be `app_user`; administrative `SET ROLE` and
+`SET SESSION AUTHORIZATION` do not qualify. It rejects elevated role flags,
+every distinct effective MEMBER/USAGE/SET path (including unknown or dormant
+memberships), and any relation/schema/function/database ownership in the current
+database, including catalog and temporary namespaces without exemptions.
+This conservative diagnostic does not grant an exception for an apparently
+harmless role. It reads no password catalog and never opens a connection,
+completes a transaction or changes roles. It is callable explicitly; default
+bootstrap and runtime startup behavior are unchanged.
+
+Returned database/backend/role OIDs and transaction identity are observations,
+not reusable admission evidence. The caller owns the root transaction: libpq's
+INTRANS status cannot prove that no manually issued SAVEPOINT exists. Exact
+Billinga1 migration-derived catalog shape, PUBLIC and column grants, privileged
+helper/outbox closure, preflip revocation and locked final admission remain
+unimplemented by this boundary. Its authored hosted PostgreSQL canaries have
+not yet been executed. Their role mutations require the existing isolated
+`integration-shards` PostgreSQL service, prove pristine posture/memberships and
+an originally NULL password using boolean checks, and hold a shared
+maintenance-database advisory lock through restoration. The lock coordinates
+participating fixtures only; the hosted service and serial suite supply cluster
+isolation. Unknown prior state refuses before mutation. This does not establish
+complete preflip denial, an opening seal, a legacy fence or ledger activation
+readiness.
+
 No generic privilege grant, test-only role repair or unchecked SECURITY DEFINER
 helper may substitute for the real production role contract. Provision the exact
 selected-plane opening/idempotency/outbox closure required by Billing
