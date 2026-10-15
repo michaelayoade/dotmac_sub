@@ -30,7 +30,8 @@ replace this database privilege gate.
   collectors with a new locked final-verification API. Preserve the public
   preview's mandatory READ ONLY transaction.
 - One receipt model and Alembic revision: singleton append-only operational
-  evidence, initial ordinary module DML denial and permanent legacy guards.
+  evidence and initial ordinary module DML denial. Permanent legacy denial
+  becomes effective only inside the final handoff transaction.
 - Existing commercial prerequisite/bootstrap owner: provision and verify exact
   offline, opening and online role separation. Do not create a second bootstrap.
 - One thin maintenance adapter: invoke the owner transaction; no clear, reset,
@@ -53,7 +54,15 @@ The runtime login must be nonowner. Revoking ACLs cannot fence a runtime table
 owner, which can change its own guards. Verify actual login identity, role OIDs,
 inheritance and SET-role reachability; do not infer them from configuration names.
 No generic privilege grant, test-only role repair or unchecked SECURITY DEFINER
-helper may substitute for the real production role contract.
+helper may substitute for the real production role contract. Provision the exact
+selected-plane opening/idempotency/outbox closure required by Billing
+`bi_0009_opening_window`, plus reviewed SELECT for the final verifier. The opening
+principal receives no ordinary/admin membership. Reverify effective preflip
+module DML denial after subsequent module migrations, which may introduce grants.
+
+Provisioning requires effective `app_admin`; import and seal require the bound
+opening principal; legacy DDL requires the verified actual table owner. The
+offline executor remains the session identity throughout.
 
 1. Stop and prove the complete incumbent writer population and obtain stable
    drain evidence through the existing deployment owner.
@@ -62,6 +71,8 @@ helper may substitute for the real production role contract.
    commit while maintenance remains in force; online module DML stays denied.
 3. Begin the final owner transaction. Acquire the required table locks before
    observing the final population, including locks needed to install the fence.
+   Use a fresh snapshot that observes every legacy commit preceding successful
+   lock acquisition; a pre-existing REPEATABLE READ snapshot is insufficient.
 4. Recompute complete populations, economic watermark, role/catalog closure and
    exact writer/image evidence. Install owner-controlled permanent legacy guards.
 5. Assume the bound opening principal with the correct tenant context. Call
@@ -82,14 +93,15 @@ PostgreSQL acceptance. Source-compatible SET ROLE sequencing is not that proof.
 ## Effective fence and retained product writes
 
 Enumerate exact legacy financial tables and retained-column contracts. No runtime
-wildcard may decide the archived population. Inspect owners, table/column ACLs,
+wildcard may decide the archived population. The source-derived starting inventory
+is recorded in `BILLING_LEGACY_FENCE_INVENTORY.md`; it is not catalog closure. Inspect owners, table/column ACLs,
 PUBLIC, inherited and assumable roles, partition/inheritance children, rules,
 triggers and reachable SECURITY DEFINER functions. Refuse unknown closure.
 
 Archive fences deny INSERT, UPDATE, DELETE and TRUNCATE at statement level and
 remove every effective online mutation path, while preserving reviewed SELECT.
 Review privileged helpers individually; legitimate outbox infrastructure must
-not be broken by indiscriminate function revocation. Migration 691's temporary
+not be broken by indiscriminate function revocation. Migration 691's existing
 `UPDATE(id)` grants on invoices and subscribers are real DML and need explicit
 final disposition.
 
@@ -120,14 +132,19 @@ permanent rollback floor; post-handoff recovery never reopens legacy money write
   changes, membership direction, tenant isolation and inaccessible admin paths.
 - Before handoff: online ORM/direct SQL Billing mutations fail; restricted
   qualified opening imports succeed.
-- Owner, PUBLIC, inherited/assumable roles, column grants, cascades and privileged
-  helper attempts cannot bypass either archive or preflip module fences.
+- Reject online owner/admin/assumable-owner identities. Prove PUBLIC, inherited
+  privileges, column grants, cascades and reachable privileged helpers cannot
+  bypass archive or preflip module fences. Offline owner/admin authority remains
+  trusted; an owner can alter its own guards.
 - Archived INSERT/UPDATE/DELETE/TRUNCATE fail while retained product writes work.
 - Concurrent opening admission and seal cannot escape the final frozen population.
+  Race a legacy commit before lock acquisition and prove final capture sees it.
 - Inject failures between fence, seal, grant and receipt; no partial activation
   commits and no legacy restart occurs.
-- Exact replay is stable; changed scope, epoch, image, inventory, manifest or
-  watermark refuses.
+- Exact handoff replay is stable; changed scope, epoch, image, inventory, manifest
+  or watermark refuses replay of that operation. Reviewed forward images consume
+  the existing receipt through deployment compatibility checks; they do not
+  reseal or require equality with the original handoff image.
 - After a real normal Billing posting, legacy SQL/scripts and old-image admission
   remain refused, while reviewed forward deployment succeeds.
 

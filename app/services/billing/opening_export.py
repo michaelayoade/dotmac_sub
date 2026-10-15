@@ -16,7 +16,7 @@ from decimal import Decimal
 from enum import Enum
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import Table, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -57,7 +57,9 @@ from app.services.billing.opening_export_contracts import (
     BillingOpeningExportPreview,
     BillingOpeningExportPreviewV2,
     BillingOpeningExportPreviewV3,
+    BillingOpeningPopulation,
     CaptureEvidence,
+    CaptureLockedBillingOpeningPopulationQuery,
     CashEvidencePopulation,
     CashInboxEvidence,
     CashPaymentEvidence,
@@ -79,6 +81,7 @@ from app.services.billing.opening_export_contracts import (
     InvoiceLineEvidence,
     InvoiceOpeningEvidence,
     LaneEvidence,
+    LockedBillingOpeningPopulation,
     OpeningControl,
     OpeningException,
     OpeningExclusion,
@@ -180,7 +183,7 @@ def _settlement_ledger_matches(
     )
 
 
-def _capture(db: Session, query: PreviewBillingOpeningExportQuery) -> CaptureEvidence:
+def _validate_query(query: PreviewBillingOpeningExportQuery) -> None:
     if (
         re.fullmatch(r"[0-9a-f]{40}", query.source_repository_sha) is None
         or query.population_version
@@ -200,6 +203,10 @@ def _capture(db: Session, query: PreviewBillingOpeningExportQuery) -> CaptureEvi
             "invalid_query",
             "Declare exact repository SHA, population version, aware cutoff and source two-decimal currency evidence.",
         )
+
+
+def _capture(db: Session, query: PreviewBillingOpeningExportQuery) -> CaptureEvidence:
+    _validate_query(query)
     if not db.in_transaction() or db.new or db.dirty or db.deleted:
         raise _fail(
             "snapshot_required",
@@ -230,6 +237,218 @@ def _capture(db: Session, query: PreviewBillingOpeningExportQuery) -> CaptureEvi
             "schema_evidence_missing", "Migration-chain schema heads are required."
         )
     return CaptureEvidence(query, heads, row[2], row[3], row[0], True)
+
+
+# Exact census relations only; this is NOT a complete legacy-writer fence.
+# PostgreSQL public-schema relations match the unqualified model selections below.
+_PopulationModel = (
+    Subscriber
+    | Invoice
+    | InvoiceLine
+    | Payment
+    | CreditNote
+    | LedgerEntry
+    | CustomerPostingGroup
+    | CustomerPositionEffect
+    | PaymentRefund
+    | PaymentReversal
+    | PrepaidFundingBaseline
+    | CustomerSubledgerOpeningPosition
+    | PaymentAllocation
+    | CreditNoteApplication
+    | PrepaidOpeningFundingConsumption
+    | PaymentSettlement
+    | PaymentProviderEvent
+    | IntegrationInbox
+    | PaymentProof
+    | PaymentProofCorrection
+    | TopupIntent
+)
+_BASE_POPULATION_MODELS: tuple[type[_PopulationModel], ...] = (
+    Subscriber,
+    Invoice,
+    InvoiceLine,
+    Payment,
+    CreditNote,
+    LedgerEntry,
+    CustomerPostingGroup,
+    CustomerPositionEffect,
+    PaymentRefund,
+    PaymentReversal,
+    PrepaidFundingBaseline,
+    CustomerSubledgerOpeningPosition,
+    PaymentAllocation,
+    CreditNoteApplication,
+    PrepaidOpeningFundingConsumption,
+)
+_CASH_POPULATION_MODELS: tuple[type[_PopulationModel], ...] = (
+    PaymentSettlement,
+    PaymentProviderEvent,
+    IntegrationInbox,
+    PaymentProof,
+    PaymentProofCorrection,
+    TopupIntent,
+)
+
+
+def _locked_population_relations(db: Session, *, include_cash: bool) -> tuple[str, ...]:
+    """Prove the closed ORM inventory uses the lock-check connection unchanged.
+
+    Built-in Session routing is bounded by mapper and Table bindings. Custom
+    routing is unsupported; probing examples cannot prove arbitrary get_bind.
+    No SQL/population read is issued while resolving these public bindings.
+    """
+    if (
+        getattr(db.get_bind, "__func__", None) is not Session.get_bind
+        or getattr(db.connection, "__func__", None) is not Session.connection
+    ):
+        raise _fail("locked_capture_required", "Custom Session routing is unsupported.")
+    bind = db.get_bind()
+    connection = db.connection()
+    transaction = connection.get_transaction()
+    if (
+        bind.get_execution_options().get("schema_translate_map")
+        or connection.get_execution_options().get("schema_translate_map")
+        or transaction is None
+        or connection.in_nested_transaction()
+    ):
+        raise _fail(
+            "locked_capture_required",
+            "Locked census requires an untranslated active root connection.",
+        )
+    models = _BASE_POPULATION_MODELS
+    if include_cash:
+        models += _CASH_POPULATION_MODELS
+    relations = ["alembic_version"]
+    for model in models:
+        mapper = inspect(model)
+        table = mapper.local_table
+        # Check mapper routing AND table-only routing used by Core/helper SQL.
+        # Refuse a distinct bind before it can open another connection/transaction.
+        if (
+            not isinstance(table, Table)
+            or table.schema not in {None, "public"}
+            or db.get_bind(mapper=mapper) is not bind
+            or db.get_bind(clause=table) is not bind
+        ):
+            raise _fail(
+                "locked_capture_required",
+                "Every census mapper and table must use the lock-check bind.",
+            )
+        if (
+            db.connection(bind_arguments={"mapper": mapper}) is not connection
+            or db.connection(bind_arguments={"clause": table}) is not connection
+            or connection.get_transaction() is not transaction
+        ):
+            raise _fail(
+                "locked_capture_required",
+                "Every census read must use the lock-check connection and transaction.",
+            )
+        relations.append(table.name)
+    return tuple(relations)
+
+
+def capture_locked_billing_opening_population(
+    db: Session, *, query: CaptureLockedBillingOpeningPopulationQuery
+) -> LockedBillingOpeningPopulation:
+    """Observe the census inside a future handoff owner's locked write transaction.
+
+    Acquires no locks and creates/completes no transaction. Actual PostgreSQL
+    state is mandatory; caller declarations never prove a fence or freshness.
+    This population carries no eligibility, lane authority or import approval.
+    """
+    requested = query.source
+    _validate_query(requested)
+    if (
+        not db.in_transaction()
+        or db.in_nested_transaction()
+        or db.new
+        or db.dirty
+        or db.deleted
+        or db.get_bind().dialect.name != "postgresql"
+    ):
+        raise _fail(
+            "locked_capture_required",
+            "Supply a clean active PostgreSQL root transaction.",
+        )
+    with db.no_autoflush:
+        relations = _locked_population_relations(
+            db,
+            include_cash=requested.population_version
+            != "sub-billing-opening-census-v1",
+        )
+        settings = db.execute(
+            text(
+                "SELECT current_setting('transaction_isolation'), "
+                "current_setting('transaction_read_only')"
+            )
+        ).one()
+        if settings[0] != "read committed" or settings[1] != "off":
+            raise _fail(
+                "locked_capture_required",
+                "Locked capture requires READ WRITE READ COMMITTED; older repeatable snapshots are refused.",
+            )
+        for relation in relations:
+            # No SQL identifier interpolation. Resolve both names to refuse
+            # search_path/temp shadowing, and prove this backend's granted lock.
+            held = db.execute(
+                text("""
+                SELECT to_regclass(:relation) = to_regclass(:qualified)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM pg_inherits
+                    WHERE inhrelid = to_regclass(:qualified)
+                       OR inhparent = to_regclass(:qualified)
+                  )
+                  AND (SELECT relkind = 'r' FROM pg_class WHERE oid = to_regclass(:qualified))
+                  AND EXISTS (
+                    SELECT 1 FROM pg_locks
+                    WHERE pid = pg_backend_pid() AND granted
+                      AND locktype = 'relation'
+                      AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                      AND relation = to_regclass(:qualified)
+                      AND mode IN ('ShareRowExclusiveLock', 'ExclusiveLock', 'AccessExclusiveLock')
+                  )
+            """),
+                {"relation": relation, "qualified": "public." + relation},
+            ).scalar_one()
+            if held is not True:
+                raise _fail(
+                    "population_lock_required",
+                    "Every census relation needs a granted current-backend SHARE ROW EXCLUSIVE or stronger lock.",
+                )
+        # READ COMMITTED obtains a new snapshot after all required locks are
+        # granted. All subsequent census reads are stable behind those locks.
+        row = db.execute(
+            text("SELECT pg_current_snapshot()::text, clock_timestamp()")
+        ).one()
+        if requested.economic_cutoff > row[1]:
+            raise _fail(
+                "invalid_query", "Economic cutoff cannot be later than capture."
+            )
+        heads = tuple(
+            db.execute(
+                text("SELECT version_num FROM alembic_version ORDER BY version_num")
+            ).scalars()
+        )
+        if not heads:
+            raise _fail(
+                "schema_evidence_missing", "Migration-chain schema heads are required."
+            )
+        capture = CaptureEvidence(requested, heads, row[0], row[1], settings[0], True)
+        population = _population(db, query=requested)
+        cash = (
+            None
+            if requested.population_version == "sub-billing-opening-census-v1"
+            else _cash_evidence(db)
+        )
+        documentary = (
+            _documentary_observations(db, invoices=population.invoices)
+            if requested.population_version == "sub-billing-opening-census-v3"
+            else None
+        )
+        return LockedBillingOpeningPopulation(
+            capture, relations, population, cash, documentary
+        )
 
 
 def _sources(db: Session) -> tuple[FinancialSourceEvidence, ...]:
@@ -588,6 +807,137 @@ def _exclusion(invoice: InvoiceOpeningEvidence) -> ExclusionReason | None:
     return None
 
 
+def _population(
+    db: Session, *, query: PreviewBillingOpeningExportQuery
+) -> BillingOpeningPopulation:
+    """Collect typed observations; qualification remains outside this helper."""
+    subscribers = tuple(db.scalars(select(Subscriber.id).order_by(Subscriber.id)))
+    sources = _sources(db)
+    settlements = _settlements(db)
+    lines = tuple(
+        InvoiceLineEvidence(*r)
+        for r in db.execute(
+            select(
+                InvoiceLine.id,
+                InvoiceLine.invoice_id,
+                InvoiceLine.subscription_id,
+                InvoiceLine.amount,
+                InvoiceLine.quantity,
+                InvoiceLine.unit_price,
+                InvoiceLine.is_active,
+                InvoiceLine.billing_line_key,
+                InvoiceLine.created_at,
+                InvoiceLine.updated_at,
+            ).order_by(InvoiceLine.id)
+        )
+    )
+    for source in sources:
+        _finite(source.amount, source.secondary_amount)
+    settlement_ids: dict[UUID, list[UUID]] = defaultdict(list)
+    line_ids: dict[UUID, list[UUID]] = defaultdict(list)
+    for settlement in settlements:
+        _finite(settlement.amount)
+        settlement_ids[settlement.invoice_id].append(settlement.id)
+    for line in lines:
+        _finite(line.amount, line.quantity, line.unit_price)
+        line_ids[line.invoice_id].append(line.id)
+    invoices: list[InvoiceOpeningEvidence] = []
+    for r in db.execute(
+        select(
+            Invoice.id,
+            Invoice.account_id,
+            Invoice.currency,
+            Invoice.invoice_number,
+            Invoice.status,
+            Invoice.is_active,
+            Invoice.is_proforma,
+            Invoice.issued_at,
+            Invoice.due_at,
+            Invoice.due_date_basis,
+            Invoice.due_date_basis_ref,
+            Invoice.due_date_policy_version,
+            Invoice.total,
+            Invoice.balance_due,
+            Invoice.created_at,
+            Invoice.updated_at,
+        ).order_by(Invoice.id)
+    ):
+        _finite(r.total, r.balance_due)
+        applied = resolve_invoice_settlement_amounts(db, r.id)
+        _finite(
+            applied.payments_applied,
+            applied.credits_applied,
+            applied.opening_funding_applied,
+        )
+        due_known = (
+            r.due_date_basis is not None
+            and r.due_date_basis != InvoiceDueDateBasis.unknown_unverified
+            and bool(r.due_date_basis_ref)
+            and bool(r.due_date_policy_version)
+            and r.due_at is not None
+        )
+        invoices.append(
+            InvoiceOpeningEvidence(
+                r.id,
+                r.account_id,
+                r.currency,
+                dict(query.currency_precisions).get(r.currency),
+                r.invoice_number,
+                r.status,
+                r.is_active,
+                r.is_proforma,
+                r.issued_at,
+                r.due_at,
+                r.due_date_basis,
+                r.due_date_basis_ref,
+                r.due_date_policy_version,
+                r.total,
+                r.balance_due,
+                applied.payments_applied,
+                applied.credits_applied,
+                applied.opening_funding_applied,
+                applied.total_applied,
+                r.total - applied.total_applied,
+                r.created_at,
+                r.updated_at,
+                due_known,
+                tuple(line_ids.get(r.id, ())),
+                tuple(settlement_ids.get(r.id, ())),
+            )
+        )
+    effects = tuple(
+        PositionEffectEvidence(
+            r.id,
+            r.group_id,
+            r.effect.value,
+            r.amount,
+            r.currency,
+            r.obligation_id,
+            r.invoice_id,
+            r.payment_id,
+            r.credit_note_id,
+            r.entitlement_id,
+        )
+        for r in db.execute(
+            select(
+                CustomerPositionEffect.id,
+                CustomerPositionEffect.group_id,
+                CustomerPositionEffect.effect,
+                CustomerPositionEffect.amount,
+                CustomerPositionEffect.currency,
+                CustomerPositionEffect.obligation_id,
+                CustomerPositionEffect.invoice_id,
+                CustomerPositionEffect.payment_id,
+                CustomerPositionEffect.credit_note_id,
+                CustomerPositionEffect.entitlement_id,
+            ).order_by(CustomerPositionEffect.id)
+        )
+    )
+    return BillingOpeningPopulation(
+        subscribers, tuple(invoices), lines, settlements, sources, effects
+    )
+
+
 def preview_billing_opening_export(
     db: Session, *, query: PreviewBillingOpeningExportQuery
 ) -> BillingOpeningExportPreview:
@@ -599,128 +949,13 @@ def preview_billing_opening_export(
     # Restore autoflush exactly; never complete or create the caller transaction.
     with db.no_autoflush:
         capture = _capture(db, query)
-        subscribers = tuple(db.scalars(select(Subscriber.id).order_by(Subscriber.id)))
-        sources = _sources(db)
-        settlements = _settlements(db)
-        lines = tuple(
-            InvoiceLineEvidence(*r)
-            for r in db.execute(
-                select(
-                    InvoiceLine.id,
-                    InvoiceLine.invoice_id,
-                    InvoiceLine.subscription_id,
-                    InvoiceLine.amount,
-                    InvoiceLine.quantity,
-                    InvoiceLine.unit_price,
-                    InvoiceLine.is_active,
-                    InvoiceLine.billing_line_key,
-                    InvoiceLine.created_at,
-                    InvoiceLine.updated_at,
-                ).order_by(InvoiceLine.id)
-            )
-        )
-        for source in sources:
-            _finite(source.amount, source.secondary_amount)
-        settlement_ids: dict[UUID, list[UUID]] = defaultdict(list)
-        line_ids: dict[UUID, list[UUID]] = defaultdict(list)
-        for settlement in settlements:
-            _finite(settlement.amount)
-            settlement_ids[settlement.invoice_id].append(settlement.id)
-        for line in lines:
-            _finite(line.amount, line.quantity, line.unit_price)
-            line_ids[line.invoice_id].append(line.id)
-        invoices: list[InvoiceOpeningEvidence] = []
-        for r in db.execute(
-            select(
-                Invoice.id,
-                Invoice.account_id,
-                Invoice.currency,
-                Invoice.invoice_number,
-                Invoice.status,
-                Invoice.is_active,
-                Invoice.is_proforma,
-                Invoice.issued_at,
-                Invoice.due_at,
-                Invoice.due_date_basis,
-                Invoice.due_date_basis_ref,
-                Invoice.due_date_policy_version,
-                Invoice.total,
-                Invoice.balance_due,
-                Invoice.created_at,
-                Invoice.updated_at,
-            ).order_by(Invoice.id)
-        ):
-            _finite(r.total, r.balance_due)
-            applied = resolve_invoice_settlement_amounts(db, r.id)
-            _finite(
-                applied.payments_applied,
-                applied.credits_applied,
-                applied.opening_funding_applied,
-            )
-            due_known = (
-                r.due_date_basis is not None
-                and r.due_date_basis != InvoiceDueDateBasis.unknown_unverified
-                and bool(r.due_date_basis_ref)
-                and bool(r.due_date_policy_version)
-                and r.due_at is not None
-            )
-            invoices.append(
-                InvoiceOpeningEvidence(
-                    r.id,
-                    r.account_id,
-                    r.currency,
-                    dict(query.currency_precisions).get(r.currency),
-                    r.invoice_number,
-                    r.status,
-                    r.is_active,
-                    r.is_proforma,
-                    r.issued_at,
-                    r.due_at,
-                    r.due_date_basis,
-                    r.due_date_basis_ref,
-                    r.due_date_policy_version,
-                    r.total,
-                    r.balance_due,
-                    applied.payments_applied,
-                    applied.credits_applied,
-                    applied.opening_funding_applied,
-                    applied.total_applied,
-                    r.total - applied.total_applied,
-                    r.created_at,
-                    r.updated_at,
-                    due_known,
-                    tuple(line_ids.get(r.id, ())),
-                    tuple(settlement_ids.get(r.id, ())),
-                )
-            )
-        effects = tuple(
-            PositionEffectEvidence(
-                r.id,
-                r.group_id,
-                r.effect.value,
-                r.amount,
-                r.currency,
-                r.obligation_id,
-                r.invoice_id,
-                r.payment_id,
-                r.credit_note_id,
-                r.entitlement_id,
-            )
-            for r in db.execute(
-                select(
-                    CustomerPositionEffect.id,
-                    CustomerPositionEffect.group_id,
-                    CustomerPositionEffect.effect,
-                    CustomerPositionEffect.amount,
-                    CustomerPositionEffect.currency,
-                    CustomerPositionEffect.obligation_id,
-                    CustomerPositionEffect.invoice_id,
-                    CustomerPositionEffect.payment_id,
-                    CustomerPositionEffect.credit_note_id,
-                    CustomerPositionEffect.entitlement_id,
-                ).order_by(CustomerPositionEffect.id)
-            )
-        )
+        population = _population(db, query=query)
+        subscribers = population.subscriber_ids
+        invoices = population.invoices
+        lines = population.lines
+        settlements = population.settlements
+        sources = population.financial_sources
+        effects = population.effects
         cutover = authority_cutover(db)
         report = _classify(
             db,
@@ -739,7 +974,7 @@ def preview_billing_opening_export(
 
         if query.population_version == "sub-billing-opening-census-v1":
             return report
-        cash = _cash_evidence(db, query=query, report=report)
+        cash = _classify_cash(_cash_evidence(db), query=query, report=report)
         extended = BillingOpeningExportPreviewV2(
             report.capture,
             report.subscriber_ids,
@@ -758,7 +993,7 @@ def preview_billing_opening_export(
         )
         if query.population_version == "sub-billing-opening-census-v2":
             return replace(extended, content_fingerprint=_fingerprint(extended))
-        observations = _documentary_observations(db, report=report)
+        observations = _documentary_observations(db, invoices=report.invoices)
         documentary = BillingOpeningExportPreviewV3(
             report.capture,
             report.subscriber_ids,
@@ -780,7 +1015,7 @@ def preview_billing_opening_export(
 
 
 def _documentary_observations(
-    db: Session, *, report: BillingOpeningExportPreview
+    db: Session, *, invoices: tuple[InvoiceOpeningEvidence, ...]
 ) -> DocumentaryObservationPopulation:
     """Observe current columns without reconstructing or qualifying originals.
 
@@ -788,7 +1023,8 @@ def _documentary_observations(
     Null line snapshots remain null, including lines with no tax-rate identity.
     Existing AR eligibility and cash observations are independent of these gaps.
     """
-    invoices = tuple(
+    invoice_evidence = invoices
+    invoices_observed = tuple(
         CurrentInvoiceDocumentObservation(*row)
         for row in db.execute(
             select(
@@ -818,14 +1054,14 @@ def _documentary_observations(
             ).order_by(InvoiceLine.id)
         )
     )
-    for invoice in invoices:
+    for invoice in invoices_observed:
         _finite(
             invoice.subtotal, invoice.discount_amount, invoice.tax_total, invoice.total
         )
     for line in lines:
         _finite(line.tax_rate_percent_snapshot)
     return DocumentaryObservationPopulation(
-        current_invoices=invoices,
+        current_invoices=invoices_observed,
         current_lines=lines,
         unavailable_original_evidence=tuple(
             UnavailableOriginalInvoiceEvidence(
@@ -833,7 +1069,7 @@ def _documentary_observations(
                 requirements=tuple(OriginalEvidenceRequirement),
                 reasons=tuple(OriginalEvidenceUnavailableReason),
             )
-            for invoice in report.invoices
+            for invoice in invoice_evidence
         ),
     )
 
@@ -1504,12 +1740,7 @@ def _classify(
     return replace(result, content_fingerprint=_fingerprint(result))
 
 
-def _cash_evidence(
-    db: Session,
-    *,
-    query: PreviewBillingOpeningExportQuery,
-    report: BillingOpeningExportPreview,
-) -> CashEvidencePopulation:
+def _cash_evidence(db: Session) -> CashEvidencePopulation:
     """Capture whole raw receipt populations in the existing caller snapshot."""
     payments = tuple(
         CashPaymentEvidence(*row)
@@ -1749,7 +1980,7 @@ def _cash_evidence(
         ),
         (),
     )
-    return _classify_cash(population, query=query, report=report)
+    return population
 
 
 def _cash_consequence_id(value: object) -> tuple[UUID | None, bool]:
