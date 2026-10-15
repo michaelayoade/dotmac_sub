@@ -1,6 +1,10 @@
 import logging
 import os
 
+from app.dependency_warning_filters import install_celery_dependency_warning_filters
+
+install_celery_dependency_warning_filters()
+
 from celery import Celery, current_task
 from celery.signals import (
     beat_init,
