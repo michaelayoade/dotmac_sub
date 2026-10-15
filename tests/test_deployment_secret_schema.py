@@ -343,7 +343,14 @@ def test_non_relational_application_objects_refuse_bootstrap(
 
 
 def test_actual_candidate_graph_predecessors_and_head_predicates() -> None:
+    from tests.migration_graph_helpers import composed_sub_graph
+
     graph = owner._candidate_graph()
+    # Composed module heads may also be dependencies of Sub's head; together
+    # they are an overlapping revision set rather than a database frontier.
+    _, sub_heads = composed_sub_graph(Path(__file__).resolve().parents[1])
+    assert len(sub_heads) == 1
+    assert set(sub_heads) <= set(graph.get_heads())
     for anchor, catalogue in (
         (owner._INTEGRATION_ANCHOR, _catalogue()),
         (owner._MACHINE_ANCHOR, _catalogue(integrations=True)),
@@ -358,7 +365,7 @@ def test_actual_candidate_graph_predecessors_and_head_predicates() -> None:
         assert not result.machine_attribution_available
     head = owner._classify_versioned(
         graph,
-        frozenset(graph.get_heads()),
+        frozenset(sub_heads),
         _catalogue(integrations=True, machine=True, attribution=True),
     )
     assert head.ok and head.machine_attribution_available
