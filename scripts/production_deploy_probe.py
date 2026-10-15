@@ -155,6 +155,18 @@ class ProbeIndeterminate(ProbeRefused):
 
 
 @dataclass(frozen=True, slots=True)
+class ExtraHostBinding:
+    hostname: str
+    address: str
+
+    def __post_init__(self) -> None:
+        if self.hostname != _canonical_host(
+            self.hostname
+        ) or self.address != _literal_ip(self.address):
+            raise ProbeRefused("unsupported_name_resolution")
+
+
+@dataclass(frozen=True, slots=True)
 class EndpointBinding:
     container_id: str
     image_id: str
@@ -190,7 +202,10 @@ class WriterBinding:
     ipv4_address: str
     aliases: tuple[str, ...]
 
+    extra_hosts: tuple[ExtraHostBinding, ...] = ()
+
     def __post_init__(self) -> None:
+        _validate_host_bindings(self.extra_hosts)
         if (
             not self.service
             or _ID.fullmatch(self.container_id) is None
@@ -230,7 +245,10 @@ class CapturedNetworkBinding:
     broker_url: str = field(repr=False, compare=False)
     broker_env_key: str = field(repr=False, compare=False)
 
+    app_extra_hosts: tuple[ExtraHostBinding, ...] = ()
+
     def __post_init__(self) -> None:
+        _validate_host_bindings(self.app_extra_hosts)
         if (
             _ID.fullmatch(self.network_id) is None
             or not self.network_name
@@ -300,6 +318,7 @@ class CapturedNetworkBinding:
             "database": _endpoint_json(self.database),
             "broker_hostname": self.broker_hostname,
             "broker": _endpoint_json(self.broker),
+            "app_extra_hosts": _extra_hosts_json(self.app_extra_hosts),
             "writers": [
                 {
                     "service": item.service,
@@ -310,6 +329,7 @@ class CapturedNetworkBinding:
                     "endpoint_id": item.endpoint_id,
                     "ipv4_address": item.ipv4_address,
                     "aliases": list(item.aliases),
+                    "extra_hosts": _extra_hosts_json(item.extra_hosts),
                 }
                 for item in self.writers
             ],
@@ -494,13 +514,163 @@ def _url_host(value: str, *, database: bool) -> str:
     return hostname
 
 
-def _require_default_name_resolution(container: dict[str, object]) -> None:
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _canonical_host(value: object) -> str:
+    if type(value) is not str or not value.isascii():
+        raise ProbeRefused("unsupported_name_resolution")
+    host = value.lower().removesuffix(".")
+    if (
+        len(host) > 253
+        or not host
+        or any(
+            re.fullmatch(r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?", label) is None
+            for label in host.split(".")
+        )
+    ):
+        raise ProbeRefused("unsupported_name_resolution")
+    return host
+
+
+def _literal_ip(value: object) -> str:
+    if type(value) is not str or "%" in value:
+        raise ProbeRefused("unsupported_name_resolution")
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        raise ProbeRefused("unsupported_name_resolution") from None
+
+
+def _extra_hosts(value: object) -> tuple[ExtraHostBinding, ...]:
+    """Canonical Docker/Compose host mappings; no gateway or DNS resolution."""
+    pairs: list[tuple[object, object]] = []
+    if value is None:
+        return ()
+    if type(value) is dict:
+        pairs = list(value.items())
+    elif type(value) is list:
+        for item in value:
+            if type(item) is not str:
+                raise ProbeRefused("unsupported_name_resolution")
+            hostname, separator, address = item.partition("=" if "=" in item else ":")
+            if not separator:
+                raise ProbeRefused("unsupported_name_resolution")
+            pairs.append((hostname, address))
+    else:
+        raise ProbeRefused("unsupported_name_resolution")
+    result: dict[str, ExtraHostBinding] = {}
+    for hostname, address in pairs:
+        host = _canonical_host(hostname)
+        if host in result:
+            raise ProbeRefused("unsupported_name_resolution")
+        result[host] = ExtraHostBinding(host, _literal_ip(address))
+    return tuple(result[host] for host in sorted(result))
+
+
+def _validate_host_bindings(value: tuple[ExtraHostBinding, ...]) -> None:
+    if type(value) is not tuple or any(
+        type(item) is not ExtraHostBinding for item in value
+    ):
+        raise ProbeRefused("captured_binding_unproved")
+    if value != _extra_hosts(_extra_hosts_json(value)) or len(
+        {item.hostname for item in value}
+    ) != len(value):
+        raise ProbeRefused("captured_binding_unproved")
+
+
+def _extra_hosts_json(value: tuple[ExtraHostBinding, ...]) -> dict[str, str]:
+    return {item.hostname: item.address for item in value}
+
+
+def _require_default_name_resolution(
+    container: dict[str, object],
+) -> tuple[ExtraHostBinding, ...]:
     host_config = container.get("HostConfig")
     if type(host_config) is not dict or any(
         host_config.get(key) not in (None, [])
-        for key in ("ExtraHosts", "Dns", "DnsSearch", "DnsOptions", "Links")
+        for key in ("Dns", "DnsSearch", "DnsOptions", "Links")
     ):
         raise ProbeRefused("unsupported_name_resolution")
+    return _extra_hosts(host_config.get("ExtraHosts"))
+
+
+def _compose_extra_hosts(service: object) -> tuple[ExtraHostBinding, ...]:
+    # Full rendered services/environment stay private process memory. Only this
+    # canonical nonsecret projection can be retained in the binding artifact.
+    if type(service) is not dict:
+        raise ProbeRefused("compose_configuration_unproved")
+    if any(
+        service.get(key) not in (None, [], "")
+        for key in ("dns", "dns_search", "dns_opt", "links", "external_links")
+    ):
+        raise ProbeRefused("unsupported_name_resolution")
+    return _extra_hosts(service.get("extra_hosts"))
+
+
+def _critical_endpoint_hosts(
+    *,
+    database_host: str,
+    broker_host: str,
+    database: EndpointBinding,
+    broker: EndpointBinding,
+    network_members: dict[str, object],
+) -> frozenset[str]:
+    names = {_canonical_host(database_host), _canonical_host(broker_host)}
+    for expected in (database, broker):
+        current = _inspect(expected.container_id)
+        _env, _state, settings = _container_parts(current)
+        name = current.get("Name")
+        if type(name) is not str or not name.startswith("/") or not name[1:]:
+            raise ProbeRefused("runtime_endpoint_unproved")
+        names.add(_canonical_host(name[1:]))
+        membership = network_members.get(expected.container_id)
+        member_name = membership.get("Name") if type(membership) is dict else None
+        if type(member_name) is not str or not member_name:
+            raise ProbeRefused("runtime_endpoint_unproved")
+        names.add(_canonical_host(member_name))
+        networks = settings.get("Networks")
+        if type(networks) is not dict or len(networks) != 1:
+            raise ProbeRefused("unsupported_network_topology")
+        endpoint = next(iter(networks.values()))
+        if type(endpoint) is not dict:
+            raise ProbeRefused("runtime_endpoint_unproved")
+        for key in ("Aliases", "DNSNames"):
+            aliases = endpoint.get(key)
+            if aliases is None and key == "DNSNames":
+                continue  # Older supported Docker inspect does not expose DNSNames.
+            if type(aliases) is not list or any(
+                type(alias) is not str for alias in aliases
+            ):
+                raise ProbeRefused("runtime_endpoint_unproved")
+            names.update(_canonical_host(alias) for alias in aliases)
+        names.update(_canonical_host(alias) for alias in expected.aliases)
+    return frozenset(names)
+
+
+def _attest_extra_hosts(
+    actual: tuple[ExtraHostBinding, ...],
+    captured: tuple[ExtraHostBinding, ...],
+    target: tuple[ExtraHostBinding, ...],
+    *,
+    critical_hosts: frozenset[str],
+) -> None:
+    if any(
+        item.hostname in critical_hosts
+        for mapping in (actual, captured, target)
+        for item in mapping
+    ):
+        raise ProbeRefused("critical_name_override")
+    if actual != captured or captured != target:
+        raise ProbeRefused("extra_hosts_binding_changed")
 
 
 def _one_network(
@@ -718,7 +888,7 @@ def _compose_services(
     if result.returncode:
         raise ProbeRefused("compose_configuration_unproved")
     try:
-        value = json.loads(result.stdout)
+        value = json.loads(result.stdout, object_pairs_hook=_unique_json_object)
     except (TypeError, ValueError):
         raise ProbeRefused("compose_configuration_unproved") from None
     services = value.get("services") if type(value) is dict else None
@@ -737,7 +907,7 @@ def _capture(
     compose_arguments: tuple[str, ...],
 ) -> CapturedNetworkBinding:
     app = _inspect(app_container)
-    _require_default_name_resolution(app)
+    app_extra_hosts = _require_default_name_resolution(app)
     app_env, app_state, _settings = _container_parts(app)
     if app.get("Name") != f"/{_APP_NAME}" or app_state.get("Running") is not True:
         raise ProbeRefused("app_identity_unproved")
@@ -761,7 +931,7 @@ def _capture(
         if not separator or not service or _ID.fullmatch(container_id) is None:
             raise ProbeRefused("writer_identity_unproved")
         container = _inspect(container_id)
-        _require_default_name_resolution(container)
+        writer_extra_hosts = _require_default_name_resolution(container)
         writer_env, state, _settings = _container_parts(container)
         writer_database, writer_broker, _key = _optional_service_urls(writer_env)
         writer_network, writer_network_name, endpoint = _one_network(container)
@@ -802,6 +972,7 @@ def _capture(
                 endpoint_id,
                 address,
                 tuple(aliases),
+                writer_extra_hosts,
             )
         )
     if len({item.service for item in writers}) != len(writers) or len(
@@ -815,6 +986,19 @@ def _capture(
         compose_arguments,
         image_reference=candidate_reference,
         revision=candidate_revision,
+    )
+    critical_hosts = _critical_endpoint_hosts(
+        database_host=database_host,
+        broker_host=broker_host,
+        database=database,
+        broker=broker,
+        network_members=_members,
+    )
+    _attest_extra_hosts(
+        app_extra_hosts,
+        app_extra_hosts,
+        _compose_extra_hosts(services.get("app")),
+        critical_hosts=critical_hosts,
     )
     app_target = candidate_defaults | _compose_environment(services.get("app"))
     for key in ("DATABASE_URL", "CELERY_BROKER_URL", "REDIS_URL", *_OVERLAY_KEYS):
@@ -838,6 +1022,12 @@ def _capture(
             raise ProbeRefused("writer_configuration_unproved")
         if writer_broker and writer_broker != broker_url:
             raise ProbeRefused("writer_configuration_unproved")
+        _attest_extra_hosts(
+            writer.extra_hosts,
+            writer.extra_hosts,
+            _compose_extra_hosts(services[writer.service]),
+            critical_hosts=critical_hosts,
+        )
         target_env = candidate_defaults | _compose_environment(services[writer.service])
         for key in (
             "DATABASE_URL",
@@ -888,6 +1078,7 @@ def _capture(
         database_url,
         broker_url,
         broker_key,
+        app_extra_hosts,
     )
     _verify(binding, allow_stopped_app=False)
     return binding
@@ -915,13 +1106,22 @@ def _endpoint_from_json(value: object) -> EndpointBinding:
 
 def _binding_from_json(source: str) -> CapturedNetworkBinding:
     try:
-        value = json.loads(source)
+        value = json.loads(source, object_pairs_hook=_unique_json_object)
         if type(value) is not dict or value.get("schema_version") != 1:
             raise ValueError
         raw_writers = value["writers"]
         if type(raw_writers) is not list:
             raise ValueError
-        writers = tuple(WriterBinding(**entry) for entry in raw_writers)
+        writers_list: list[WriterBinding] = []
+        for entry in raw_writers:
+            if type(entry) is not dict:
+                raise ValueError
+            fields = dict(entry)
+            if type(fields.get("extra_hosts", {})) is not dict:
+                raise ValueError
+            fields["extra_hosts"] = _extra_hosts(fields.get("extra_hosts", {}))
+            writers_list.append(WriterBinding(**fields))
+        writers = tuple(writers_list)
         raw_inactive_services = value["inactive_services"]
         if type(raw_inactive_services) is not list or any(
             type(item) is not str or not item for item in raw_inactive_services
@@ -931,6 +1131,8 @@ def _binding_from_json(source: str) -> CapturedNetworkBinding:
         if type(raw_compose_arguments) is not list or any(
             type(item) is not str or not item for item in raw_compose_arguments
         ):
+            raise ValueError
+        if type(value.get("app_extra_hosts", {})) is not dict:
             raise ValueError
         return CapturedNetworkBinding(
             value["network_id"],
@@ -954,6 +1156,7 @@ def _binding_from_json(source: str) -> CapturedNetworkBinding:
             "",
             "",
             "CELERY_BROKER_URL",
+            _extra_hosts(value.get("app_extra_hosts", {})),
         )
     except (KeyError, TypeError, ValueError):
         raise ProbeRefused("captured_binding_unproved") from None
@@ -970,7 +1173,7 @@ def _verify(
     if named_app.get("Id") != binding.app_container_id:
         raise ProbeRefused("app_identity_changed")
     environment, state, _settings = _container_parts(app)
-    _require_default_name_resolution(app)
+    app_extra_hosts = _require_default_name_resolution(app)
     if app.get("Name") != f"/{_APP_NAME}":
         raise ProbeRefused("app_identity_changed")
     if allow_stopped_app:
@@ -1035,6 +1238,19 @@ def _verify(
         image_reference=expected_candidate_ref,
         revision=binding.candidate_revision,
     )
+    critical_hosts = _critical_endpoint_hosts(
+        database_host=_url_host(database_url, database=True),
+        broker_host=_url_host(broker_url, database=False),
+        database=binding.database,
+        broker=binding.broker,
+        network_members=members,
+    )
+    _attest_extra_hosts(
+        app_extra_hosts,
+        binding.app_extra_hosts,
+        _compose_extra_hosts(services.get("app")),
+        critical_hosts=critical_hosts,
+    )
     relevant_keys = ("DATABASE_URL", "CELERY_BROKER_URL", "REDIS_URL", *_OVERLAY_KEYS)
     app_target = candidate_defaults | _compose_environment(services.get("app"))
     if any(
@@ -1079,7 +1295,7 @@ def _verify(
             raise ProbeRefused("endpoint_identity_changed")
     for expected in binding.writers:
         current = _inspect(expected.container_id)
-        _require_default_name_resolution(current)
+        writer_extra_hosts = _require_default_name_resolution(current)
         writer_env, writer_state, settings = _container_parts(current)
         writer_database, writer_broker, _writer_key = _optional_service_urls(writer_env)
         membership = members.get(expected.container_id)
@@ -1092,6 +1308,12 @@ def _verify(
             raise ProbeRefused("writer_configuration_changed")
         if expected.service not in services:
             raise ProbeRefused("compose_configuration_unproved")
+        _attest_extra_hosts(
+            writer_extra_hosts,
+            expected.extra_hosts,
+            _compose_extra_hosts(services[expected.service]),
+            critical_hosts=critical_hosts,
+        )
         writer_target = candidate_defaults | _compose_environment(
             services[expected.service]
         )

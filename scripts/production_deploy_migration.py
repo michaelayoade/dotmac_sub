@@ -683,7 +683,17 @@ def _parse_invocation(value: dict[str, object]) -> MigrationInvocation:
         }:
             raise ValueError
         parsed_binding = probe._binding_from_json(json.dumps(value["network_binding"]))
-        if parsed_binding.public_json() != value["network_binding"]:
+        # Old schema-1 artifacts admitted only empty ExtraHosts. Preserve that
+        # exact meaning; never infer a newly observed nonempty mapping.
+        compatible_binding = dict(value["network_binding"])
+        compatible_binding.setdefault("app_extra_hosts", {})
+        compatible_writers: list[dict[str, object]] = []
+        for writer in compatible_binding["writers"]:
+            compatible_writer = dict(writer)
+            compatible_writer.setdefault("extra_hosts", {})
+            compatible_writers.append(compatible_writer)
+        compatible_binding["writers"] = compatible_writers
+        if parsed_binding.public_json() != compatible_binding:
             raise ValueError
         identity = MigrationIdentity(**value["identity"])
         phase = MigrationPhase(value["phase"])
@@ -1592,6 +1602,7 @@ def run_migration(
             or binding.app_revision != prior_binding.app_revision
             or binding.app_started_at != prior_binding.app_started_at
             or binding.app_restart_count != prior_binding.app_restart_count
+            or binding.app_extra_hosts != prior_binding.app_extra_hosts
             or binding.database != prior_binding.database
             or binding.broker != prior_binding.broker
             or binding.writers != prior_binding.writers

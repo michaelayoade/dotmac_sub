@@ -1361,3 +1361,150 @@ def test_unknown_docker_outcome_retains_blocking_journal(
     assert [command[1] for command in calls] == expected_commands[failure_at]
     with pytest.raises(migration.MigrationRefused):
         migration.guard_interlock(deploy)
+
+
+def test_host_mapping_journal_roundtrip_preserves_app_and_each_writer() -> None:
+    mapping = probe._extra_hosts({"telemetry.example": "192.0.2.50"})
+    writer = probe.WriterBinding(
+        "worker",
+        "9" * 64,
+        "sha256:" + "a" * 64,
+        "2026-10-15T00:00:00Z",
+        0,
+        "b" * 64,
+        "172.20.0.5",
+        ("worker",),
+        mapping,
+    )
+    binding = replace(_binding(), app_extra_hosts=mapping, writers=(writer,))
+    record = replace(
+        _record(migration.MigrationPhase.COMPLETE),
+        network_binding=binding.public_json(),
+    )
+    wire = json.loads(json.dumps(migration._invocation_json(record)))
+    restored = migration._parse_invocation(wire)
+    assert restored == record
+    restored_binding = probe._binding_from_json(json.dumps(restored.network_binding))
+    assert restored_binding.app_extra_hosts == mapping
+    assert restored_binding.writers[0].extra_hosts == mapping
+
+
+def test_old_journal_host_mapping_omissions_remain_empty() -> None:
+    writer = probe.WriterBinding(
+        "worker",
+        "9" * 64,
+        "sha256:" + "a" * 64,
+        "2026-10-15T00:00:00Z",
+        0,
+        "b" * 64,
+        "172.20.0.5",
+        ("worker",),
+    )
+    old_binding = replace(_binding(), writers=(writer,)).public_json()
+    old_binding.pop("app_extra_hosts")
+    old_binding["writers"][0].pop("extra_hosts")
+    record = replace(
+        _record(migration.MigrationPhase.COMPLETE), network_binding=old_binding
+    )
+    restored = migration._parse_invocation(
+        json.loads(json.dumps(migration._invocation_json(record)))
+    )
+    restored_binding = probe._binding_from_json(json.dumps(restored.network_binding))
+    assert restored_binding.app_extra_hosts == ()
+    assert restored_binding.writers[0].extra_hosts == ()
+    assert restored.network_binding == old_binding
+
+
+def test_journal_does_not_treat_explicit_unknown_host_map_as_empty() -> None:
+    record = _record(migration.MigrationPhase.COMPLETE)
+    wire = json.loads(json.dumps(migration._invocation_json(record)))
+    wire["network_binding"]["app_extra_hosts"] = None
+    with pytest.raises(migration.MigrationRefused, match="migration_journal_unproved"):
+        migration._parse_invocation(wire)
+
+
+def test_legacy_omitted_host_maps_preserve_real_journal_digest_phase_and_archive(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    writer = probe.WriterBinding(
+        "worker",
+        "9" * 64,
+        "sha256:" + "a" * 64,
+        "2026-10-15T00:00:00Z",
+        0,
+        "b" * 64,
+        "172.20.0.5",
+        ("worker",),
+    )
+    legacy_binding = replace(_binding(), writers=(writer,)).public_json()
+    legacy_binding.pop("app_extra_hosts")
+    legacy_binding["writers"][0].pop("extra_hosts")
+    legacy = replace(
+        _record(migration.MigrationPhase.RUNNING),
+        network_binding=legacy_binding,
+    )
+    deploy = tmp_path.resolve() / "legacy-deploy"
+    deploy.mkdir()
+    journal = migration._journal_path(deploy)
+    journal.parent.mkdir(mode=0o700)
+    journal.parent.chmod(0o700)
+    # Seed the exact canonical bytes an old producer would have written.
+    original = migration._canonical(
+        {
+            "schema": migration._RECORD_SCHEMA,
+            "invocation": migration._invocation_json(legacy),
+        }
+    )
+    journal.write_bytes(original)
+    journal.chmod(0o600)
+    original_sha = hashlib.sha256(original).hexdigest()
+
+    loaded, digest = migration._load_journal(journal)
+    assert loaded == legacy and digest == original_sha
+    assert loaded is not None
+    assert loaded.network_binding == legacy_binding
+    parsed = probe._binding_from_json(json.dumps(loaded.network_binding))
+    assert parsed.app_extra_hosts == () and parsed.writers[0].extra_hosts == ()
+
+    migration._write(journal, loaded)
+    assert journal.read_bytes() == original
+    rewritten, rewritten_sha = migration._load_journal(journal)
+    assert rewritten == loaded and rewritten_sha == original_sha
+
+    successful_terminal = _record(migration.MigrationPhase.COMPLETE).terminal
+    assert successful_terminal is not None
+    terminal_record = migration._write_phase(
+        journal,
+        loaded,
+        migration.MigrationPhase.EXITED,
+        terminal=successful_terminal,
+        terminal_detail=None,
+    )
+    for phase in (
+        migration.MigrationPhase.REMOVE_REQUESTED,
+        migration.MigrationPhase.REMOVED,
+        migration.MigrationPhase.COMPLETE,
+    ):
+        terminal_record = migration._write_phase(journal, terminal_record, phase)
+        phase_bytes = journal.read_bytes()
+        phase_loaded, phase_sha = migration._load_journal(journal)
+        assert phase_loaded == terminal_record
+        assert phase_sha == hashlib.sha256(phase_bytes).hexdigest()
+        phase_binding = json.loads(phase_bytes)["invocation"]["network_binding"]
+        assert phase_binding == legacy_binding
+        assert "app_extra_hosts" not in phase_binding
+        assert "extra_hosts" not in phase_binding["writers"][0]
+
+    terminal_bytes = journal.read_bytes()
+    migration._archive_terminal(journal, terminal_record)
+    archive = journal.parent / "history" / f"{legacy.identity.invocation_id}.json"
+    assert archive.read_bytes() == terminal_bytes
+    archived, archive_sha = migration._load_journal(archive)
+    assert archived == terminal_record
+    assert archive_sha == hashlib.sha256(terminal_bytes).hexdigest()
+    # Retrying publication preserves the immutable archived representation.
+    migration._archive_terminal(journal, terminal_record)
+    assert archive.read_bytes() == terminal_bytes
+    assert journal.read_bytes() == terminal_bytes
