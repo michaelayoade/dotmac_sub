@@ -56,10 +56,12 @@
                 </div>
                 <div>
                     <label for="audit-action" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Action</label>
-                    <input id="audit-action" type="text" name="action" list="audit-action-options" value="{{ filter_state.get('action', '') }}" placeholder="Search recorded actions" autocomplete="off" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    <input id="audit-action" type="search" list="audit-action-options" value="{{ selected_action_display }}" placeholder="Search recorded actions" autocomplete="off" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
+                    <input id="audit-action-value" type="hidden" name="action" value="{{ filter_state.get('action', '') }}" />
                     <datalist id="audit-action-options">
-                        {% for option in action_options %}<option value="{{ option }}"></option>{% endfor %}
+                        {% for option in action_options %}<option value="{{ option.display }}" data-action-value="{{ option.value }}" data-action-label="{{ option.label }}"></option>{% endfor %}
                     </datalist>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose a recorded action; its exact stored value is submitted.</p>
                 </div>
                 <div>
                     <label for="audit-period" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Period</label>
@@ -127,4 +129,9 @@
         {% include "admin/system/_audit_table.html" %}
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="/static/js/admin-audit.js?v=20261015a" defer></script>
 {% endblock %}

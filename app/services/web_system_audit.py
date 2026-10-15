@@ -204,6 +204,7 @@ def get_audit_filter_options(
     db: Session,
     *,
     selected_entity_type: str | None = None,
+    selected_action: str | None = None,
 ) -> dict[str, object]:
     """Return display-ready suggestions sourced from recorded audit values."""
 
@@ -214,8 +215,28 @@ def get_audit_filter_options(
     entity_types = options.entity_types
     if selected_entity_type and selected_entity_type not in entity_types:
         entity_types = tuple(sorted((*entity_types, selected_entity_type)))
+    actions = options.actions
+    if selected_action and selected_action not in actions:
+        actions = tuple(sorted((*actions, selected_action)))
+    action_options = tuple(
+        {
+            "value": value,
+            "label": humanize_action(value),
+            "display": f"{humanize_action(value)} - {value}",
+        }
+        for value in actions
+    )
+    selected_action_display = next(
+        (
+            option["display"]
+            for option in action_options
+            if option["value"] == selected_action
+        ),
+        selected_action or "",
+    )
     return {
-        "action_options": options.actions,
+        "action_options": action_options,
+        "selected_action_display": selected_action_display,
         "module_options": tuple(
             {"value": value, "label": humanize_entity(value)} for value in entity_types
         ),

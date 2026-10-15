@@ -1182,6 +1182,9 @@ From and To controls appear only for Custom. Choosing a preset clears stale
 custom dates in both the submitted filters and the browser URL.
 Missing Record ID and Request ID values are shown as `Not recorded`; they are
 never represented by a blank space or a hidden field.
+The Action control searches friendly labels from recorded values, resolves a
+unique choice, and submits the exact stored action. Unmatched free text is not
+sent as a misleading exact-match filter.
 
 ### 8g. Health (`/admin/system/health`)
 

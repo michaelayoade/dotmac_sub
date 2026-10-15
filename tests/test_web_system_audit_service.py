@@ -419,6 +419,22 @@ def test_audit_filter_options_come_from_recorded_values(db_session):
     assert "invoice" in options.entity_types
     assert "support_ticket" in options.entity_types
 
+    display_options = web_system_audit.get_audit_filter_options(
+        db_session,
+        selected_action="invoice.issue",
+    )
+    selected = next(
+        option
+        for option in display_options["action_options"]
+        if option["value"] == "invoice.issue"
+    )
+    assert selected == {
+        "value": "invoice.issue",
+        "label": "Invoice.Issue",
+        "display": "Invoice.Issue - invoice.issue",
+    }
+    assert display_options["selected_action_display"] == selected["display"]
+
 
 def test_audit_owner_filters_missing_identifiers(db_session):
     db_session.add_all(
@@ -481,6 +497,14 @@ def test_audit_filter_ui_uses_recorded_options_and_pushes_filter_urls():
     assert "page_meta.start_item" in table_source
     assert "page_meta.end_item" in table_source
     assert 'name="per_page"' in page_source
+    assert 'type="search" list="audit-action-options"' in page_source
+    assert 'type="hidden" name="action"' in page_source
+    assert "option.display" in page_source
+    assert "option.value" in page_source
+
+    picker_source = Path("static/js/admin-audit.js").read_text(encoding="utf-8")
+    assert "storedInput.value = matches[0].stored" in picker_source
+    assert "Choose a recorded action from the list." in picker_source
 
 
 def test_audit_page_data_returns_canonical_numbered_pagination(db_session):

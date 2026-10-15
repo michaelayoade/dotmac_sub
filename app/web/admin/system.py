@@ -3573,6 +3573,7 @@ def audit_log(
     filter_options = web_system_audit_service.get_audit_filter_options(
         db,
         selected_entity_type=list_query.filter_value("entity_type"),
+        selected_action=list_query.filter_value("action"),
     )
     return templates.TemplateResponse(
         "admin/system/audit.html",
