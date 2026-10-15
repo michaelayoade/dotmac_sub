@@ -1180,6 +1180,8 @@ place and show a specific error above the filters. Full-page invalid URLs fall
 back to an unfiltered page with the same error visible.
 From and To controls appear only for Custom. Choosing a preset clears stale
 custom dates in both the submitted filters and the browser URL.
+Missing Record ID and Request ID values are shown as `Not recorded`; they are
+never represented by a blank space or a hidden field.
 
 ### 8g. Health (`/admin/system/health`)
 

@@ -195,7 +195,17 @@ def test_audit_table_always_shows_module_and_record_id():
     assert "event.module_label" in source
     assert "Unknown module" in source
     assert "Record ID:" in source
+    assert "Not recorded" in source
     assert "{% if event.entity_id %}" not in source
+
+
+def test_missing_audit_identifiers_are_labelled_not_recorded():
+    source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "event.entity_id | default('Not recorded', true)" in source
+    assert "event.request_id | default('Not recorded', true)" in source
 
 
 def test_audit_event_details_are_expandable_and_redacted():
