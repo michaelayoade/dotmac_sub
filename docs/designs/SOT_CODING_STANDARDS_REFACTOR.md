@@ -471,7 +471,9 @@ currency and invoice-settlement net evidence are never invented, and the
 unresolved provider gross/net/fee policy remains explicitly owned by
 `financial.payments` and Finance. Revision 693 additionally freezes first verified
 provider identity, normalized facts and timestamps with a direct OLD/NEW
-SECURITY INVOKER guard independent of tenant/correlation visibility. Exact
+SECURITY INVOKER AFTER row guard independent of tenant/correlation visibility.
+The final tuple is checked after all BEFORE row triggers; TRUNCATE retains a
+BEFORE statement guard. Exact
 pending replays preserve the first verified source; raw payload, links and
 processing fields remain mutable. Strict first legacy provenance enrichment
 remains possible. Observation deletion and truncation are refused, and no
