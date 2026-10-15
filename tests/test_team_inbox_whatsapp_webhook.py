@@ -8,6 +8,7 @@ import threading
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import OperationalError
 from starlette.requests import Request
 
 from app.api import inbox_webhooks
@@ -339,6 +340,39 @@ def test_meta_whatsapp_webhook_acknowledges_dead_letter_provider_retry(
     assert response == {}
     assert receipt.state == "dead_letter"
     assert receipt.attempt_count == 1
+
+
+def test_meta_whatsapp_webhook_returns_503_for_transient_database_failure(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(inbox_webhooks, "_app_secret", lambda db: META_TEST_SECRET)
+    body = b'{"entry":[]}'
+
+    def _fail_with_lock_timeout(*_args, **_kwargs):
+        raise OperationalError(
+            "UPDATE inbox_conversations",
+            {},
+            RuntimeError("lock timeout"),
+        )
+
+    monkeypatch.setattr(
+        inbox_webhooks.team_inbox_channel_receive,
+        "receive_whatsapp_webhook_batch_committed",
+        _fail_with_lock_timeout,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _run_async(
+            inbox_webhooks.receive_meta_whatsapp_webhook(
+                _request(body, {"X-Hub-Signature-256": _sign(body)}),
+                db_session,
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    receipt = db_session.query(IntegrationInbox).one()
+    assert receipt.state == "retryable"
+    assert receipt.error_code == "whatsapp_consequence_failed"
 
 
 def test_meta_whatsapp_webhook_preserves_media_message(db_session, monkeypatch):
