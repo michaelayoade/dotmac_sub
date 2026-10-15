@@ -1969,6 +1969,79 @@ class ConsolidatedPaymentSettlementReconciliationEvidence(Base):
     topup_intent = relationship("TopupIntent")
 
 
+class ModuleBillingAccountBinding(Base):
+    """Immutable Sub account identity; cross-module composite FKs are DDL-owned."""
+
+    __tablename__ = "module_billing_account_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "billing_account_id", name="uq_module_billing_binding_target"
+        ),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    currency: Mapped[str] = mapped_column(String(3), primary_key=True)
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+
+
+class ModuleInvoiceCashCorrelation(Base):
+    """Append-only join evidence; money authority remains in Payments/Billing."""
+
+    __tablename__ = "module_invoice_cash_correlations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "confirmation_id", name="uq_module_invoice_cash_confirmation"
+        ),
+        UniqueConstraint(
+            "tenant_id", "settlement_id", name="uq_module_invoice_cash_settlement"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "source_system",
+            "source_settlement_key",
+            name="uq_module_invoice_cash_source",
+        ),
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    observation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_provider_events.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    topup_intent_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("topup_intents.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    module_intent_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    confirmation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    settlement_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    source_system: Mapped[str] = mapped_column(String(120), nullable=False)
+    source_settlement_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    observation_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class TopupIntent(Base):
     __tablename__ = "topup_intents"
     __table_args__ = (
@@ -2792,6 +2865,8 @@ class PaymentProviderEvent(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+    # Provider occurrence is distinct from first receipt time; history stays NULL.
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     provider = relationship("PaymentProvider", back_populates="events")

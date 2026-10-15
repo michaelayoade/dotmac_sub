@@ -182,3 +182,113 @@ Execute end-to-end on a production-shaped copy, with timings, economic
 reconciliation, manual blocked-account queue and the pre-handoff abort boundary.
 Only that evidence plus exact package and production approvals can admit the
 single ledger switch. No runtime implementation or acceptance is claimed here.
+
+## Invoice cash source foundation (source candidate, 2026-10-15)
+
+`financial.provider_invoice_module_cash_source` is a read-only preparatory query
+in the existing `provider_payment_settlements` module. Its typed input addresses
+only a persisted verified observation and the original checkout reference. It
+reads the Payments a2 public frozen checkout and exact original local link,
+and refuses mismatched provider, payer, invoice, money, scale or original
+lifetime. It returns source facts only; no Billing account ID crosses this
+query as validated financial identity. It does not read current invoice
+eligibility or substitute today's TTL.
+It returns observations, not a caller-constructed permission to move money.
+
+Revision `692_module_invoice_cash` expands the schema after 691. Its Billing
+dependency is the already released `bi_0001_billing`: that migration declares both referenced composite
+account and settlement/account keys. It does not depend on or claim release of
+Billing a8. Binding and correlation tables use tenant RLS, cross-module composite
+foreign keys, append-only update/delete/truncate guards and app_user SELECT-only
+grants. The actual runtime login may own tables or reach an owner role; these
+grants do not establish offline-only authority. Trusted binding provisioning,
+actual owner/login separation and final catalog qualification remain missing.
+No public binding CRUD writer is introduced and no historical row is backfilled.
+The shortened revision fits Alembic's existing version column. Prospective tables
+already emitted by the squashed base are accepted only after locked catalog
+validation of the known empty column/default/constraint/index shape and each
+local foreign key's exact four ordinary enabled internal RI triggers (including
+referenced-side actions by constraint OID), with no
+unknown rules, triggers, RLS policies, inheritance or population. The nullable
+occurrence column must likewise match its declared default-free shape with no
+prior occurrence facts or dependent constraints/indexes. Unexpected partial
+installs refuse; IF NOT EXISTS does not silently adopt them. These catalog checks
+are authored migration behavior, not hosted deployed-schema acceptance.
+
+Provider observations gain nullable `occurred_at`. A future migrated verified
+adapter must supply an explicit timezone-aware provider capture timestamp, such
+as the already-parsed signed webhook `provider_paid_at`; transaction creation,
+receipt, retry time and wall-clock defaults cannot substitute. The normalized
+digest includes that fact only when supplied, preserving existing digest bytes
+for current callers. Historical evidence cannot be replay-enriched with a new
+capture time. First `received_at` remains the distinct durable observation time.
+Current runtime dispatch and adapters are unchanged; observations without a
+capture time refuse the preparatory query. Late receipt is valid when actual
+capture falls inside the original checkout lifetime. A later confirmation must
+explicitly bind the Payments timestamp semantics without rewriting either time.
+
+The query's gross/fee/net bounds and net-equals-requested check describe the
+existing bound-invoice cash-first interpretation. They are not a new fee policy
+or a proof equating Payments confirmation with Billing credit. Existing code does
+not require gross = net + fee, and Billing's evidence allowlist does not validate
+that equation. The future owner must establish a reviewed exact amount binding;
+no blanket gross/net substitution or new fee-bearer policy is authorized here.
+
+The positive flush-only module cash participant remains unimplemented because
+Billing currently exposes no public frozen account observation to validate the
+structural mapping against account external identity, currency and scale. Billing
+accounts are mutable; a composite foreign key proves existence and scope, not
+those facts. An upstream frozen account query is a required published contract;
+Sub adds no cross-module mutation guard or assumed immutable external reference.
+Also, no existing trusted resolver independently qualifies provider plus physical
+merchant namespace. `source_system` must share that qualified namespace with
+opening imports; `source_settlement_key` must be the exact provider transaction
+ID (`event.external_id` / provider `data.id`), and source_version still needs its
+canonical contract. Checkout reference, installation/configuration identity,
+asserted PSP namespace and Payments confirmation UUID cannot replace these facts.
+The correlation schema preserves the intended original observation/intent/
+confirmation/account/settlement join, but inserts do not certify namespace or
+handoff authority. Only correlation rows are append-only; foreign keys preserve
+referenced rows against deletion. Provider observations retain their existing
+owner's legitimate pending/historical updates. No invoker trigger claims to
+freeze hidden RLS correlations, no SECURITY DEFINER bypass is introduced, and
+no blanket tenant-context check changes legacy observation updates. A reviewed
+RLS-independent source-freeze mechanism is mandatory before any positive cash
+correlation admission. No live correlation writer is mounted here.
+
+After that dependency exists, the same existing root transaction must serialize
+intent and account, call Payments `record_confirmation`, read the immutable
+public confirmation, derive the narrow evidence allowlist internally, apply the
+reviewed gross/fee/net binding, accept Billing `AVAILABLE_CREDIT`, and append
+correlation/outbox with only flushes. Return typed allocation-pending evidence;
+allocation is a later module caller migration. Do not create legacy financial
+rows, dual writes or fallback after module acceptance. Full single authority also
+requires removal of every incumbent caller, the global handoff and permanent
+legacy fence; this query does not activate any writer or manufacture a receipt.
+
+Hosted tests in `test_provider_invoice_module_cash_pg.py` are authored foundation
+canaries only and have not run. They include real predecessor upgrade refusal
+for malformed prospective schema or disabled FK enforcement, both native
+CREATE/ADD and known-squashed-shape adoption, and typed informational observation-owner
+canaries for aware-time persistence, exact/changed replay, NULL history, naive
+time refusal and first receipt preservation. Informational events create no cash
+confirmation or settlement and do not prove verified-money admission. They require real Alembic heads and an actual
+non-superuser app_user login, with no test-only privilege repair. They reuse the existing isolated hosted
+`runtime_connections` fixture, which owns its temporary test authentication,
+maintenance-database lock, pristine-role checks and independent original-NULL
+cleanup. No new credential environment or administrative SET ROLE is introduced. Required next
+acceptance includes predecessor upgrade plus fresh baseline, tenant mismatch and
+binding constraints, changed-fact replay, concurrent duplicates, rollback at
+confirmation/posting/correlation, late webhook against opening cash claims and
+original capture/receipt semantics. These financial tests await the qualified
+namespace/amount contracts and published exact Billing a8 pin; current Billing
+a1 cannot execute the new API. No path-installed package, create_all, fake final
+handoff receipt or source-compatible candidate call is acceptance evidence.
+
+The 692 absence/adoption canaries use a clone produced by the real current
+migration chain. Because its squashed base declares today's prospective ORM
+shape, the absence variant removes only the two empty future tables and nullable
+occurrence column before applying 692. It asserts the resulting FK enforcement,
+RLS and append-only trigger catalog. This is branch coverage, not proof of a
+historical deployed image. The actual predecessor-image upgrade rehearsal and
+production-shaped end-to-end acceptance remain required.
