@@ -1,15 +1,16 @@
 <div class="overflow-hidden">
     <table class="w-full table-fixed divide-y divide-slate-200 dark:divide-slate-700">
         <colgroup>
-            <col class="w-[15%]">
-            <col class="w-[20%]">
-            <col class="w-[15%]">
-            <col class="w-[40%]">
-            <col class="w-[10%]">
+            <col class="w-[14%]">
+            <col class="w-[18%]">
+            <col class="w-[16%]">
+            <col class="w-[16%]">
+            <col class="w-[28%]">
+            <col class="w-[8%]">
         </colgroup>
         <thead class="bg-slate-50 dark:bg-slate-800/50">
             <tr>
-                {% for label in ["Time", "Actor", "Entity", "Details", "Status"] %}
+                {% for label in ["Time", "Actor", "Action", "Module", "Details", "Status"] %}
                 <th class="break-words px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ label }}</th>
                 {% endfor %}
             </tr>
@@ -22,6 +23,9 @@
                 <td class="break-words px-3 py-3 align-top text-sm text-slate-900 dark:text-white">{{ event.actor_name | default('Former or unknown user', true) }}</td>
                 <td class="break-words px-3 py-3 align-top text-sm text-slate-600 dark:text-slate-300">
                     <div class="font-medium text-slate-700 dark:text-slate-200">{{ event.action_label | default(event.action | default('Unknown')) }}</div>
+                </td>
+                <td class="break-words px-3 py-3 align-top text-sm text-slate-600 dark:text-slate-300">
+                    {{ event.entity_type | default('N/A', true) | replace('_', ' ') | title }}
                 </td>
                 <td class="break-words px-3 py-3 align-top text-sm text-slate-600 dark:text-slate-300">
                     {% if event.action_detail %}
@@ -48,7 +52,7 @@
             {% endfor %}
             {% else %}
             <tr>
-                <td colspan="5" class="px-6 py-12">
+                <td colspan="6" class="px-6 py-12">
                     {% set title = "No audit events" %}
                             {% set message = "System activity will appear here as it occurs." %}
                             {% include "components/data/empty_state.html" %}

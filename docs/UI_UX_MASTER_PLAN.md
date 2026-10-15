@@ -1168,7 +1168,7 @@ shows the exact visible range and total, compact numbered pages, Previous/Next,
 and 10/25/50/100-row page-size choices.
 
 #### Table
-Timestamp | Actor | Action | Entity Type | Entity ID | Details (expandable)
+Timestamp | Actor | Action | Module | Details | Status
 
 ### 8g. Health (`/admin/system/health`)
 

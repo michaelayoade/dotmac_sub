@@ -175,6 +175,18 @@ def test_audit_results_do_not_scroll_horizontally():
     assert "whitespace-nowrap" not in source
 
 
+def test_audit_table_labels_action_and_module_columns_correctly():
+    source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    headings = '["Time", "Actor", "Action", "Module", "Details", "Status"]'
+    assert headings in source
+    assert "event.action_label" in source
+    assert "event.entity_type" in source
+    assert 'colspan="6"' in source
+
+
 def test_build_audit_list_query_normalizes_and_defaults():
     query = web_system_audit.build_audit_list_query(
         actor_id=" ",
