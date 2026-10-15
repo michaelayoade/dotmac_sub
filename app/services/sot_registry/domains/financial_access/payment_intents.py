@@ -46,7 +46,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="authorized legacy invoice checkout",
                     owner="financial.topup_intents",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                    source="Frozen authorized TopupIntent binding, original metadata invoice target, Numeric(12,2) amount and original instants",
+                    source="Frozen authorized TopupIntent binding with structural account_id and invoice_id, Numeric(12,2) amount and original instants; missing structural invoice identity refuses parity",
                 ),
                 AuthorityInput(
                     name="released module intent observation",

@@ -49,8 +49,8 @@ class AuthorizedInvoiceIntentBinding:
     """Frozen input after account authorization; never a provider observation.
 
     Scale is two, from TopupIntent.requested_amount Numeric(12, 2), rather
-    than an inferred currency registry default. Metadata is the original
-    invoice target consumed by the existing checkout verifier.
+    than an inferred currency registry default. Account and invoice identity
+    come only from the legacy record's structural foreign keys.
     """
 
     reference: str
@@ -72,11 +72,12 @@ class IntentBindingParity:
 
 def authorized_invoice_binding(intent: TopupIntent) -> AuthorizedInvoiceIntentBinding:
     """Adapt the authorized legacy record without rounding or refreshing TTL."""
-    target = (intent.metadata_ or {}).get("invoice_id")
     return AuthorizedInvoiceIntentBinding(
         reference=intent.reference,
         account_id=intent.account_id,
-        invoice_reference=str(target) if target else None,
+        invoice_reference=str(intent.invoice_id)
+        if intent.invoice_id is not None
+        else None,
         requested_amount=intent.requested_amount,
         currency=intent.currency,
         provider_type=intent.provider_type,
@@ -107,7 +108,8 @@ def observe_invoice_intent_parity(
             ),
             (
                 IntentBindingField.TARGET,
-                observed.target_reference == binding.invoice_reference,
+                binding.invoice_reference is not None
+                and observed.target_reference == binding.invoice_reference,
             ),
             (
                 IntentBindingField.PURPOSE,

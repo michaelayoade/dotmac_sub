@@ -17,6 +17,7 @@ from dotmac_payments import (
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
+from app.models.billing import TopupIntent
 from app.services import payment_intent_module_shadow as shadow
 from app.services.operator_tenant import OPERATOR_TENANT_ID
 
@@ -26,7 +27,7 @@ def binding() -> shadow.AuthorizedInvoiceIntentBinding:
     return shadow.AuthorizedInvoiceIntentBinding(
         reference="original-checkout",
         account_id=UUID("00000000-0000-0000-0000-000000000001"),
-        invoice_reference=None,
+        invoice_reference="00000000-0000-0000-0000-000000000002",
         requested_amount=Decimal("100.01"),
         currency="NGN",
         provider_type="paystack",
@@ -156,23 +157,66 @@ def test_exact_amount_is_never_rounded_into_a_match(
     assert result.mismatched_fields == (shadow.IntentBindingField.AMOUNT,)
 
 
-def test_legacy_adapter_retains_missing_target_and_original_instants(
+@pytest.mark.parametrize("metadata_target", [None, str(uuid4())])
+def test_legacy_adapter_uses_structural_target_and_original_instants(
     binding: shadow.AuthorizedInvoiceIntentBinding,
+    metadata_target: str | None,
 ) -> None:
-    from app.models.billing import TopupIntent
-
+    assert binding.invoice_reference is not None
     intent = TopupIntent(
         reference=binding.reference,
         account_id=binding.account_id,
+        invoice_id=UUID(binding.invoice_reference),
         requested_amount=binding.requested_amount,
         currency=binding.currency,
         provider_type=binding.provider_type,
         channel=binding.channel,
         created_at=binding.opened_at,
         expires_at=binding.expires_at,
-        metadata_={"payment_flow": "invoice_payment"},
+        metadata_={"invoice_id": metadata_target, "account_id": str(uuid4())},
     )
     assert shadow.authorized_invoice_binding(intent) == binding
+
+
+@pytest.mark.parametrize("missing_field", ["account_id", "invoice_reference"])
+def test_missing_structural_identity_cannot_match_even_equal_absence(
+    monkeypatch: pytest.MonkeyPatch,
+    binding: shadow.AuthorizedInvoiceIntentBinding,
+    missing_field: str,
+) -> None:
+    assert binding.invoice_reference is not None
+    intent = TopupIntent(
+        reference=binding.reference,
+        account_id=None if missing_field == "account_id" else binding.account_id,
+        invoice_id=(
+            None
+            if missing_field == "invoice_reference"
+            else UUID(binding.invoice_reference)
+        ),
+        requested_amount=binding.requested_amount,
+        currency=binding.currency,
+        provider_type=binding.provider_type,
+        channel=binding.channel,
+        created_at=binding.opened_at,
+        expires_at=binding.expires_at,
+        metadata_={
+            "invoice_id": binding.invoice_reference,
+            "account_id": str(binding.account_id),
+        },
+    )
+    adapted = shadow.authorized_invoice_binding(intent)
+    monkeypatch.setattr(
+        shadow, "get_payment_intent_v1", Mock(return_value=observation(adapted))
+    )
+    result = shadow.observe_invoice_intent_parity(Mock(spec=Session), adapted)
+    assert result == shadow.IntentBindingParity(
+        shadow.IntentParityOutcome.MISMATCH,
+        (
+            shadow.IntentBindingField.PAYER
+            if missing_field == "account_id"
+            else shadow.IntentBindingField.TARGET,
+        ),
+    )
 
 
 def test_metric_labels_contain_only_closed_outcome_and_field_names(

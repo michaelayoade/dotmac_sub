@@ -9,7 +9,7 @@ PostgreSQL tenant scope. The consumer creates no session, lock, transaction,
 savepoint, mutable authority switch, write, flush or transaction completion.
 
 The frozen legacy input is the authorized `TopupIntent`: payer/account,
-original metadata invoice target including absence, invoice-settlement purpose,
+structural account_id and invoice_id (missing invoice identity refuses parity), invoice-settlement purpose,
 requested Decimal amount, currency, storage scale, normalized provider/channel,
 created/opened instant and original expiry including absence. Gateway invoice
 creation freezes the invoice balance/total as requested amount; this read never
@@ -18,7 +18,8 @@ The legacy scale of two is evidence from `Numeric(12,2)`, not currency policy.
 Amount comparison never rounds. Currency case normalization follows released
 Kernel `Currency` uppercasing; whitespace is not silently repaired. Provider and
 channel normalize surrounding whitespace and case only. No new TTL is derived.
-Metadata target remains observation input, with no new settlement authority.
+Metadata never supplies parity identity; conflicting metadata cannot override structural IDs.
+The incumbent settlement path retains its existing owner until its separate migration.
 
 The detached module observation is compared only on those binding facts.
 Module status, confirmed money and settlement time carry no legacy state

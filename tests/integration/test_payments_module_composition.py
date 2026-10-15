@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -19,9 +19,9 @@ from dotmac_kernel.cache import TenantScope
 from dotmac_payments import GetPaymentIntentV1, get_payment_intent_v1
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import Session
 
 from alembic import command
+from app.db import SessionLocal
 from app.models.billing import TopupIntent
 from app.services import session_hooks
 from app.services.operator_tenant import OPERATOR_TENANT_ID
@@ -77,7 +77,7 @@ def _insert_intent(
     binding = AuthorizedInvoiceIntentBinding(
         reference=f"composition-{uuid4()}",
         account_id=uuid4(),
-        invoice_reference=None,
+        invoice_reference=str(uuid4()),
         requested_amount=Decimal("100.00"),
         currency="NGN",
         provider_type="test",
@@ -94,7 +94,7 @@ def _insert_intent(
                 requested_amount, confirmed_amount, minor_units, status, opened_at,
                 expires_at, settled_at
             ) VALUES (
-                :id, :tenant_id, :reference, :payer_reference, NULL,
+                :id, :tenant_id, :reference, :payer_reference, :target_reference,
                 'INVOICE_SETTLEMENT', 'TEST', 'CUSTOMER_SELFCARE', 'NGN',
                 :requested_amount, NULL, 2, 'PENDING', :opened_at, NULL, NULL
             )
@@ -105,6 +105,7 @@ def _insert_intent(
             "tenant_id": tenant_id,
             "reference": binding.reference,
             "payer_reference": str(binding.account_id),
+            "target_reference": binding.invoice_reference,
             "requested_amount": Decimal("100.000000"),
             "opened_at": binding.opened_at,
         },
@@ -182,27 +183,29 @@ def test_payments_lineage_catalog_effective_rls_and_replay(
 
         # Use an app_user connection and the actual root Session after_begin
         # hook. There is deliberately no manual tenant SET in this canary.
-        runtime_engine = sa.create_engine(isolated_database)
+        engine.dispose()
 
-        @sa.event.listens_for(runtime_engine, "connect")
+        @sa.event.listens_for(engine, "connect")
         def runtime_role(dbapi_connection, _connection_record) -> None:
             with dbapi_connection.cursor() as cursor:
                 cursor.execute("SET ROLE app_user")
             dbapi_connection.commit()
 
-        session_hooks.install_session_hooks()
         try:
-            with Session(runtime_engine) as db:
+            session_hooks.install_session_hooks()
+            assert binding.invoice_reference is not None
+            with SessionLocal(bind=engine) as db:
                 dirty = TopupIntent(
                     reference=binding.reference,
                     account_id=binding.account_id,
+                    invoice_id=UUID(binding.invoice_reference),
                     requested_amount=binding.requested_amount,
                     currency=binding.currency,
                     provider_type=binding.provider_type,
                     channel=binding.channel,
                     created_at=binding.opened_at,
                     expires_at=binding.expires_at,
-                    metadata_={"payment_flow": "invoice_payment"},
+                    metadata_={"invoice_id": str(uuid4())},
                 )
                 db.add(dirty)
                 assert (
@@ -243,9 +246,14 @@ def test_payments_lineage_catalog_effective_rls_and_replay(
                     IntentBindingField.AMOUNT,
                 )
                 assert dirty in db.new
+                unbound = authorized_invoice_binding(dirty)
+                assert observe_invoice_intent_parity(
+                    db, replace(unbound, invoice_reference=None)
+                ).mismatched_fields == (IntentBindingField.TARGET,)
                 db.rollback()
         finally:
-            runtime_engine.dispose()
+            sa.event.remove(engine, "connect", runtime_role)
+            engine.dispose()
 
         command.upgrade(config, "heads")
         with engine.connect() as connection:
