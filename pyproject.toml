@@ -591,9 +591,34 @@ forbidden_modules = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["app.services.payment_intent_module_shadow"]
+module = [
+    "app.services.payment_intent_module_shadow",
+    "app.services.deployment_writer_drain",
+    "app.services.deployment_writer_drain_transport",
+    "app.celery_queue_contract",
+    "scripts.observe_writer_drain",
+]
 # The strict preset mutates global options even inside mypy overrides.
 # List supported per-module strict checks so this boundary alone is enrolled.
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_unused_ignores = true
+warn_return_any = true
+implicit_reexport = false
+strict_equality = true
+extra_checks = true
+
+[[tool.mypy.overrides]]
+module = [
+    "app.services.integrations.payment_capability",
+    "app.services.integrations.payment_capture",
+]
+# Use per-module strict checks; the strict preset also mutates global options.
 disallow_any_generics = true
 disallow_subclassing_any = true
 disallow_untyped_calls = true

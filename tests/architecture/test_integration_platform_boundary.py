@@ -50,6 +50,7 @@ CURRENT_INTEGRATION_SERVICES = (
     "integration.oauth_tokens",
     "integration.installations",
     "integration.runtime",
+    "integration.payment_capture",
     "integration.delivery",
     "integration.meta_lead_conversion",
     "integration.meta_capi_lead",

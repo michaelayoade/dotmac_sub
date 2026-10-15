@@ -650,6 +650,158 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="integration.payment_capture",
+            module="app.services.integrations.payment_capability",
+            implementation_modules=("app.services.integrations.payment_capture",),
+            owns=("unqualified current PSP transaction response capture",),
+            depends_on=("integration.installations", "integration.runtime"),
+            notes=(
+                "capture_transaction_record composes payments.reconcile.v1 verify; "
+                "integration.runtime retains transport and secret authority. Caller "
+                "namespace provenance is asserted, never attested merchant identity "
+                "or Finance qualification. A fresh response is not an original "
+                "callback."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="unqualified current PSP transaction response capture",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "exact payment capture query and asserted namespace",
+                            "current explicit reconciliation binding snapshot",
+                            "version-pinned payment verification execution",
+                            "fresh PSP verification response",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="exact payment capture query and asserted namespace",
+                        owner="integration.payment_capture",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "PaymentCaptureQuery exact provider/reference, "
+                            "installation, "
+                            "binding, revision/digest, expected Decimal major-unit "
+                            "amount "
+                            "and currency; AssertedMerchantNamespace carries caller "
+                            "assertion UUID and matching installation/configuration "
+                            "pins, "
+                            "without independent issuer, merchant or Finance "
+                            "attestation"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current explicit reconciliation binding snapshot",
+                        owner="integration.installations",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Fresh scalar SQL projection of exact enabled "
+                            "payments.reconcile.v1 binding, installation, owned "
+                            "current "
+                            "immutable revision and recomputed configuration digest; "
+                            "no enabled-default fallback or cached ORM authority"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="version-pinned payment verification execution",
+                        owner="integration.runtime",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Existing pinned runner and bounded secret materialization "
+                            "from the validated detached binding snapshot for verify; "
+                            "no second session, transport owner or persisted runtime "
+                            "state"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="fresh PSP verification response",
+                        owner="external:paystack_flutterwave",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source=(
+                            "Allowlisted response-derived ProviderRecord: strict "
+                            "envelope "
+                            "status, transaction ID/reference/status, exact Decimal "
+                            "provider-native amount/fee units and fee field, optional "
+                            "provider timestamps and actual UTC retrieval time; no "
+                            "original callback bytes, signature, PII or merchant "
+                            "identity"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "Entire database read uses no_autoflush; no add, flush, "
+                        "commit, "
+                        "rollback, savepoint, event, retained artifact or financial "
+                        "consequence. Caller SQLAlchemy errors propagate unchanged."
+                    ),
+                    locking=(
+                        "No write locks; require exact current binding, revision "
+                        "ownership "
+                        "and digest, and refuse relevant dirty ORM or in-place JSON "
+                        "drift."
+                    ),
+                    idempotency=(
+                        "No durable idempotency state; each query obtains a fresh "
+                        "current "
+                        "response, so retrieval time and provider observations may "
+                        "change."
+                    ),
+                    retries=(
+                        "No automatic retries. A caller may request another fresh "
+                        "read; "
+                        "missing or mismatched asserted provenance refuses before "
+                        "database, "
+                        "secret or provider IO. Infrastructure database failures "
+                        "propagate."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "payment_capture_unbound",
+                        "payment_capture_unsupported",
+                        "payment_capture_stale_binding",
+                        "payment_capture_provider_failure",
+                        "payment_capture_invalid_record",
+                        "payment_capture_reference_mismatch",
+                        "payment_capture_amount_mismatch",
+                        "payment_capture_currency_mismatch",
+                    ),
+                    mapping_owner=(
+                        "Typed capture caller interprets "
+                        "PaymentCaptureOutcome.refusal; "
+                        "PaymentCaptureError validates values; SQLAlchemyError "
+                        "propagates "
+                        "without conversion, rollback or masking"
+                    ),
+                    fail_closed_on=(
+                        "absent or mismatched caller-asserted namespace provenance",
+                        "unbound, unsupported, stale, cross-linked or dirty "
+                        "configuration",
+                        "provider failure, invalid record or exact "
+                        "reference/amount/currency mismatch",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="integration.payment_capture",
+                ),
+                steward="platform integrations",
+                design_refs=(
+                    "docs/designs/OPENING_PSP_RESPONSE_CAPTURE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_payment_capture.py",
+                    "tests/architecture/test_sot_manifest_contracts.py",
+                    "tests/architecture/test_sot_registry_integrity.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="integration.delivery",
             module="app.services.integrations.delivery",
             owns=(

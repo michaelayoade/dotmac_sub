@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
@@ -11,6 +13,14 @@ from uuid import UUID
 import httpx
 
 from app.services.integrations.manifest import ConnectorManifest
+from app.services.integrations.payment_capture import (
+    CaptureProvider,
+    CaptureRefusal,
+    PaymentCaptureError,
+    ProviderAmountUnit,
+    ProviderFeeField,
+    ProviderRecord,
+)
 from app.services.integrations.runtime import (
     HealthResult,
     OperationEnvelope,
@@ -23,6 +33,112 @@ PAYMENT_INTENT_CAPABILITY = "payments.intent.v1"
 PAYMENT_WEBHOOK_CAPABILITY = "payments.webhook.v1"
 PAYMENT_RECONCILE_CAPABILITY = "payments.reconcile.v1"
 PAYMENT_REFUND_CAPABILITY = "payments.refund.v1"
+
+
+def _capture_text(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", value):
+        raise ValueError("invalid provider observation")
+    return value
+
+
+def _capture_identifier(value: object) -> str:
+    if type(value) is int and value > 0:
+        return str(value)
+    if (
+        isinstance(value, str)
+        and re.fullmatch(r"[0-9]{1,80}", value)
+        and int(value) > 0
+    ):
+        return value
+    raise ValueError("invalid provider transaction identity")
+
+
+def _capture_decimal(value: object) -> Decimal:
+    if not isinstance(value, (str, int, Decimal)) or isinstance(value, bool):
+        raise ValueError("invalid provider amount")
+    result = Decimal(value)
+    if not result.is_finite() or result < 0:
+        raise ValueError("invalid provider amount")
+    return result
+
+
+def _capture_optional_decimal(value: object) -> Decimal | None:
+    return None if value is None else _capture_decimal(value)
+
+
+def _capture_timestamp(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("invalid provider timestamp")
+    result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError("provider timestamp has no timezone")
+    return result
+
+
+def _decode_capture_record(output: Mapping[str, object]) -> ProviderRecord:
+    """Decode only the explicit connector JSON projection at the adapter seam."""
+    try:
+        raw = output.get("capture_record")
+        if not isinstance(raw, Mapping):
+            raise ValueError("missing record")
+        provider = CaptureProvider(raw["provider"])
+        envelope_status = raw["envelope_status"]
+        if not (
+            envelope_status is True
+            if provider is CaptureProvider.PAYSTACK
+            else envelope_status == "success"
+        ):
+            raise ValueError("failed envelope")
+        acquired = _capture_timestamp(raw["retrieved_at"])
+        if acquired is None:
+            raise ValueError("missing retrieval time")
+        currency = _capture_text(raw["currency"])
+        if not re.fullmatch(r"[A-Z]{3}", currency):
+            raise ValueError("invalid currency")
+        unit = (
+            ProviderAmountUnit.MINOR
+            if provider is CaptureProvider.PAYSTACK
+            else ProviderAmountUnit.MAJOR
+        )
+        fee_field = (
+            ProviderFeeField.PAYSTACK_FEES
+            if provider is CaptureProvider.PAYSTACK
+            else ProviderFeeField.FLUTTERWAVE_APP_FEE
+        )
+        amount = _capture_decimal(raw["amount"])
+        fee = _capture_optional_decimal(raw["fee"])
+        if (
+            raw["amount_unit"] != unit.value
+            or raw["fee_field"] != fee_field.value
+            or (
+                unit is ProviderAmountUnit.MINOR
+                and any(
+                    value is not None and value != value.to_integral_value()
+                    for value in (amount, fee)
+                )
+            )
+        ):
+            raise ValueError("invalid provider units")
+        return ProviderRecord(
+            provider=provider,
+            envelope_status=True if provider is CaptureProvider.PAYSTACK else "success",
+            transaction_id=_capture_identifier(raw["transaction_id"]),
+            reference=_capture_text(raw["reference"]),
+            transaction_status=_capture_text(raw["transaction_status"]),
+            amount=amount,
+            currency=currency,
+            fee=fee,
+            fee_field=fee_field,
+            amount_unit=unit,
+            provider_created_at=_capture_timestamp(raw["provider_created_at"]),
+            provider_paid_at=_capture_timestamp(raw["provider_paid_at"]),
+            retrieved_at=acquired,
+        )
+    except (ValueError, TypeError, KeyError, ArithmeticError) as exc:
+        raise PaymentCaptureError(CaptureRefusal.INVALID_RECORD) from exc
+
 
 _ACTIONS_BY_CAPABILITY = {
     PAYMENT_INTENT_CAPABILITY: {
@@ -71,6 +187,7 @@ class PaymentGatewayRunner:
         secret_material: Mapping[str, str],
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        exact_numbers: bool = False,
     ) -> dict[str, Any]:
         client = self._client_override or httpx.Client()
         owned = self._client_override is None
@@ -84,7 +201,9 @@ class PaymentGatewayRunner:
                 timeout=self._timeout(config),
             )
             response.raise_for_status()
-            body = response.json()
+            body = (
+                response.json(parse_float=Decimal) if exact_numbers else response.json()
+            )
         finally:
             if owned:
                 client.close()
@@ -148,6 +267,10 @@ class PaymentGatewayRunner:
         except httpx.HTTPError:
             return self._result(
                 envelope, OperationStatus.retryable, "provider_transport_error"
+            )
+        except PaymentCaptureError:
+            return self._result(
+                envelope, OperationStatus.rejected, "provider_capture_invalid"
             )
         except (KeyError, TypeError, ValueError):
             return self._result(
@@ -225,6 +348,7 @@ class PaymentGatewayRunner:
                     f"/transaction/verify/{reference}",
                     config=config,
                     secret_material=secret_material,
+                    exact_numbers=params.get("capture_record") is True,
                 )
             else:
                 body = self._request(
@@ -233,7 +357,10 @@ class PaymentGatewayRunner:
                     config=config,
                     secret_material=secret_material,
                     params={"tx_ref": str(params["reference"])},
+                    exact_numbers=params.get("capture_record") is True,
                 )
+            if params.get("capture_record") is True:
+                return {"capture_record": self._capture_record(body)}
             return {"item": self._provider_data(body)}
         if action == "refund":
             return {"item": self._refund(params, config, secret_material)}
@@ -310,6 +437,63 @@ class PaymentGatewayRunner:
                 else {},
             }
         raise ValueError("unsupported payment action")
+
+    def _capture_record(self, body: Mapping[str, object]) -> dict[str, object]:
+        """Sanitize immediately: customer, authorization, metadata never escape."""
+        envelope_status = body.get("status")
+        if not (
+            envelope_status is True
+            if self.provider == "paystack"
+            else envelope_status == "success"
+        ):
+            raise ValueError("provider envelope failed")
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("provider transaction missing")
+        record = ProviderRecord(
+            provider=CaptureProvider(self.provider),
+            envelope_status=True if self.provider == "paystack" else "success",
+            transaction_id=_capture_identifier(data.get("id")),
+            reference=_capture_text(
+                data.get("reference" if self.provider == "paystack" else "tx_ref")
+            ),
+            transaction_status=_capture_text(data.get("status")),
+            amount=_capture_decimal(data.get("amount")),
+            currency=_capture_text(data.get("currency")),
+            fee=_capture_optional_decimal(
+                data.get("fees" if self.provider == "paystack" else "app_fee")
+            ),
+            fee_field=ProviderFeeField.PAYSTACK_FEES
+            if self.provider == "paystack"
+            else ProviderFeeField.FLUTTERWAVE_APP_FEE,
+            amount_unit=ProviderAmountUnit.MINOR
+            if self.provider == "paystack"
+            else ProviderAmountUnit.MAJOR,
+            provider_created_at=_capture_timestamp(data.get("created_at")),
+            provider_paid_at=_capture_timestamp(data.get("paid_at")),
+            retrieved_at=datetime.now(UTC),
+        )
+        wire: dict[str, object] = {
+            "provider": record.provider.value,
+            "envelope_status": record.envelope_status,
+            "transaction_id": record.transaction_id,
+            "reference": record.reference,
+            "transaction_status": record.transaction_status,
+            "amount": str(record.amount),
+            "currency": record.currency,
+            "fee": str(record.fee) if record.fee is not None else None,
+            "fee_field": record.fee_field.value,
+            "amount_unit": record.amount_unit.value,
+            "provider_created_at": record.provider_created_at.isoformat()
+            if record.provider_created_at
+            else None,
+            "provider_paid_at": record.provider_paid_at.isoformat()
+            if record.provider_paid_at
+            else None,
+            "retrieved_at": record.retrieved_at.isoformat(),
+        }
+        _decode_capture_record({"capture_record": wire})
+        return wire
 
     def _initialize(
         self,

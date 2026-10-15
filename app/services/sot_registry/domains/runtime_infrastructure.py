@@ -27,6 +27,73 @@ DOMAIN = DomainSOT(
     domain="runtime_infrastructure",
     services=(
         SOTService(
+            name="runtime.writer_drain",
+            module="app.services.deployment_writer_drain",
+            implementation_modules=(
+                "app.services.deployment_writer_drain_transport",
+                "app.celery_queue_contract",
+            ),
+            owns=(
+                "incumbent writer drain observation",
+                "stable empty writer drain policy",
+            ),
+            notes="Count-only operational evidence. Deployment owns producer shutdown, captured container identity and migration admission; this query never switches ledger authority.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="incumbent writer drain observation",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("broker and worker observation", "drain contract"),
+                    ),
+                    ConcernContract(
+                        name="stable empty writer drain policy",
+                        role=OwnerRole.POLICY,
+                        input_names=("broker and worker observation", "drain contract"),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="broker and worker observation",
+                        owner="external:celery_redis",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Pinned Celery/Kombu/Redis count observations for every expected node's active, reserved and scheduled tasks, every declared priority queue, and both unacked hash and index; no customer task payload crosses the adapter.",
+                    ),
+                    AuthorityInput(
+                        name="drain contract",
+                        owner="runtime.writer_drain",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Frozen DrainRequest fixes exact queue inventory, node coverage, mode, deadline and two-zero stability interval. Broker-only mode is final evidence after deployment separately proves all writers stopped.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="No database Session or business writes. Redis observation reads queue/unacked counts; Celery inspection sends necessary transient control requests and receives replies only.",
+                    locking="No task or financial locks, purges, revokes, restores or visibility changes; deployment must stop producers independently.",
+                    idempotency="Repeated observations return current counts; no activation, admission, receipt or ledger state is persisted.",
+                    retries="Bounded observations until two complete zero observations separated by the stability interval. Missing, malformed, duplicate, unsupported or timed-out evidence refuses; no zero inference from arbitrary transport errors.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="observe_writer_drain CLI emits closed DrainRefusal codes and safe JSON/exit status; unexpected exceptions cannot authorize migration.",
+                    fail_closed_on=(
+                        "missing or duplicate worker coverage",
+                        "unknown broker configuration or runtime dependency",
+                        "malformed observation or exhausted deadline",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.writer_drain",
+                ),
+                steward="runtime operations",
+                design_refs=("docs/designs/DEPLOYMENT_WRITER_DRAIN_EVIDENCE.md",),
+                test_refs=(
+                    "tests/test_deployment_writer_drain.py",
+                    "tests/integration/writer_drain_acceptance.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="runtime.bandwidth_poller_health",
             module="app.services.poller_health",
             implementation_modules=("app.poller.mikrotik_poller",),
