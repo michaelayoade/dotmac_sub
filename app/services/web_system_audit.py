@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import csv
+import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from typing import cast
+from io import StringIO
+from typing import Literal, cast
 
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
+from app.schemas.audit import AuditEventRead
 from app.services import audit as audit_service
 from app.services.audit_helpers import (
     extract_changes,
@@ -29,9 +34,24 @@ from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
+AuditExportFormat = Literal["csv", "json"]
+AUDIT_EXPORT_MAX_ROWS = 10_000
+
 
 class AuditFilterValidationError(ValueError):
     """A safe, user-facing audit-filter validation failure."""
+
+
+class AuditExportTooLargeError(ValueError):
+    """The filtered export exceeds the explicit safe row limit."""
+
+
+@dataclass(frozen=True, slots=True)
+class AuditExportDocument:
+    content: bytes
+    media_type: str
+    filename: str
+    row_count: int
 
 
 # UI page contract for the admin audit-log list. This is the projection-boundary
@@ -247,12 +267,14 @@ def get_audit_filter_options(
     }
 
 
-def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
-    """Return audit events view rows and pagination totals for one page.
+def _owner_query(
+    query: ListQuery,
+    *,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> audit_service.AuditEventPageQuery:
+    """Translate the UI contract once for both list and export reads."""
 
-    Reads filters, ordering and pagination from the validated ``ListQuery``
-    (built via :func:`build_audit_list_query`); the caller is a thin adapter.
-    """
     # The Actor box searches the resolved label (person name / API-key label)
     # and also matches an exact actor id, so staff can paste a uuid or type a
     # name. It is no longer a uuid-only exact filter.
@@ -264,41 +286,38 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
     request_id = query.filter_value("request_id")
     result_value = query.filter_value("result")
     occurred_from, occurred_before = _date_bounds(query)
+    return audit_service.AuditEventPageQuery(
+        actor_search=actor_term,
+        actor_type=AuditActorType(actor_type_value) if actor_type_value else None,
+        action=action or None,
+        entity_type=entity_type or None,
+        entity_id=entity_id,
+        entity_id_missing=query.filter_value("entity_id_missing") == "1",
+        request_id=request_id,
+        request_id_missing=query.filter_value("request_id_missing") == "1",
+        is_success=(
+            True
+            if result_value == "success"
+            else False
+            if result_value == "failed"
+            else None
+        ),
+        status_code=None,
+        is_active=None,
+        occurred_from=occurred_from,
+        occurred_before=occurred_before,
+        order_by=cast(audit_service.AuditEventOrderField, query.sort_by),
+        order_dir=cast(audit_service.AuditEventOrderDirection, query.sort_dir),
+        limit=limit if limit is not None else query.per_page,
+        offset=offset if offset is not None else query.offset,
+    )
 
-    def owner_query(list_query: ListQuery) -> audit_service.AuditEventPageQuery:
-        return audit_service.AuditEventPageQuery(
-            actor_search=actor_term,
-            actor_type=AuditActorType(actor_type_value) if actor_type_value else None,
-            action=action if action else None,
-            entity_type=entity_type if entity_type else None,
-            entity_id=entity_id,
-            entity_id_missing=query.filter_value("entity_id_missing") == "1",
-            request_id=request_id,
-            request_id_missing=query.filter_value("request_id_missing") == "1",
-            is_success=(
-                True
-                if result_value == "success"
-                else False
-                if result_value == "failed"
-                else None
-            ),
-            status_code=None,
-            is_active=None,
-            occurred_from=occurred_from,
-            occurred_before=occurred_before,
-            order_by=cast(audit_service.AuditEventOrderField, list_query.sort_by),
-            order_dir=cast(audit_service.AuditEventOrderDirection, list_query.sort_dir),
-            limit=list_query.per_page,
-            offset=list_query.offset,
-        )
 
-    result = audit_service.audit_events.query_page(db, owner_query(query))
-    page_meta = PageMeta.from_query(query, result.total)
-    if page_meta.page != query.page:
-        query = query.with_page(page_meta.page)
-        result = audit_service.audit_events.query_page(db, owner_query(query))
-        page_meta = PageMeta.from_query(query, result.total)
-    events = result.events
+def _event_views(
+    db: Session,
+    events: tuple[AuditEventRead, ...],
+) -> list[dict[str, object]]:
+    """Build the one redacted projection shared by screen and exports."""
 
     try:
         people = load_audit_actor_subscribers(db, events)
@@ -343,6 +362,23 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
             }
         )
 
+    return event_views
+
+
+def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
+    """Return audit events view rows and pagination totals for one page.
+
+    Reads filters, ordering and pagination from the validated ``ListQuery``
+    (built via :func:`build_audit_list_query`); the caller is a thin adapter.
+    """
+    result = audit_service.audit_events.query_page(db, _owner_query(query))
+    page_meta = PageMeta.from_query(query, result.total)
+    if page_meta.page != query.page:
+        query = query.with_page(page_meta.page)
+        result = audit_service.audit_events.query_page(db, _owner_query(query))
+        page_meta = PageMeta.from_query(query, result.total)
+    event_views = _event_views(db, result.events)
+
     return {
         "events": event_views,
         "list_query": query,
@@ -354,6 +390,114 @@ def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
         "filter_state": dict(query.filters),
         "has_active_filters": bool(query.filters),
     }
+
+
+def _export_row(event: dict[str, object]) -> dict[str, object]:
+    occurred_at = event["occurred_at"]
+    return {
+        "occurred_at": (
+            occurred_at.isoformat() if isinstance(occurred_at, datetime) else ""
+        ),
+        "actor": event["actor_name"],
+        "actor_type": event["actor_type"],
+        "action": event["action"],
+        "module": event["entity_type"] or "Unknown module",
+        "record_id": event["entity_id"] or "Not recorded",
+        "request_id": event["request_id"] or "Not recorded",
+        "result": "successful" if event["is_success"] else "failed",
+        "status_code": event["status_code"],
+        "ip_address": event["ip_address"] or "Not recorded",
+        "details": event["safe_details"],
+    }
+
+
+def _csv_safe(value: object) -> str | int | float | bool | None:
+    if not isinstance(value, str):
+        return cast(str | int | float | bool | None, value)
+    if value.lstrip().startswith(("=", "+", "-", "@")):
+        return f"'{value}"
+    return value
+
+
+def build_audit_export(
+    db: Session,
+    *,
+    query: ListQuery,
+    export_format: AuditExportFormat,
+) -> AuditExportDocument:
+    """Build a bounded export from the exact canonical list filters."""
+
+    probe = audit_service.audit_events.query_page(
+        db,
+        _owner_query(query, limit=1, offset=0),
+    )
+    if probe.total > AUDIT_EXPORT_MAX_ROWS:
+        raise AuditExportTooLargeError(
+            f"This export contains {probe.total:,} events. Narrow the filters "
+            f"to {AUDIT_EXPORT_MAX_ROWS:,} events or fewer."
+        )
+    result = (
+        probe
+        if probe.total <= 1
+        else audit_service.audit_events.query_page(
+            db,
+            _owner_query(query, limit=AUDIT_EXPORT_MAX_ROWS, offset=0),
+        )
+    )
+    rows = tuple(_export_row(event) for event in _event_views(db, result.events))
+    generated_at = datetime.now(UTC)
+    filename_base = generated_at.strftime("audit-log-%Y%m%d-%H%M%S")
+
+    if export_format == "json":
+        payload = {
+            "generated_at": generated_at.isoformat(),
+            "row_count": len(rows),
+            "filters": dict(query.filters),
+            "events": rows,
+        }
+        return AuditExportDocument(
+            content=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+            media_type="application/json",
+            filename=f"{filename_base}.json",
+            row_count=len(rows),
+        )
+
+    output = StringIO(newline="")
+    fieldnames = (
+        tuple(rows[0])
+        if rows
+        else (
+            "occurred_at",
+            "actor",
+            "actor_type",
+            "action",
+            "module",
+            "record_id",
+            "request_id",
+            "result",
+            "status_code",
+            "ip_address",
+            "details",
+        )
+    )
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in rows:
+        csv_row = {
+            key: _csv_safe(
+                json.dumps(value, ensure_ascii=False, sort_keys=True)
+                if key == "details"
+                else value
+            )
+            for key, value in row.items()
+        }
+        writer.writerow(csv_row)
+    return AuditExportDocument(
+        content=output.getvalue().encode("utf-8-sig"),
+        media_type="text/csv",
+        filename=f"{filename_base}.csv",
+        row_count=len(rows),
+    )
 
 
 def _resolve_actor_name(event, people: dict[str, object]) -> str:

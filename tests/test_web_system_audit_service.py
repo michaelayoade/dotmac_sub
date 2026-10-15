@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -519,6 +520,61 @@ def test_audit_filtering_shows_loading_and_recoverable_failure_feedback():
     assert 'hx-indicator="#audit-loading"' in page_source
     assert 'workspace.addEventListener("htmx:sendError"' in script_source
     assert 'workspace.addEventListener("htmx:responseError"' in script_source
+
+
+def test_audit_exports_reuse_filters_and_redacted_event_projection(db_session):
+    db_session.add_all(
+        (
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="invoice.issue",
+                entity_type="invoice",
+                entity_id="invoice-1",
+                request_id="request-1",
+                details={
+                    "operation": "issued",
+                    "credentials": {"api_token": "must-not-export"},
+                },
+                is_success=True,
+            ),
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="invoice.cancel",
+                entity_type="invoice",
+                entity_id="invoice-2",
+                is_success=True,
+            ),
+        )
+    )
+    db_session.commit()
+    query = web_system_audit.build_audit_list_query(action="invoice.issue")
+
+    document = web_system_audit.build_audit_export(
+        db_session,
+        query=query,
+        export_format="json",
+    )
+    payload = json.loads(document.content)
+
+    assert document.media_type == "application/json"
+    assert document.row_count == 1
+    assert payload["filters"]["action"] == "invoice.issue"
+    assert payload["events"][0]["action"] == "invoice.issue"
+    assert payload["events"][0]["details"]["credentials"] == {"api_token": "<redacted>"}
+    assert "must-not-export" not in document.content.decode("utf-8")
+
+
+def test_audit_export_controls_use_current_filters_and_existing_permission():
+    page_source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+    script_source = Path("static/js/admin-audit.js").read_text(encoding="utf-8")
+    route_source = Path("app/web/admin/system.py").read_text(encoding="utf-8")
+
+    assert 'data-audit-export-format="csv"' in page_source
+    assert 'data-audit-export-format="json"' in page_source
+    assert "new URLSearchParams(new FormData(form))" in script_source
+    assert "/admin/system/audit/export/${format}" in script_source
+    assert '"/audit/export/{export_format}"' in route_source
+    assert 'require_permission("audit:read")' in route_source
 
 
 def test_audit_page_data_returns_canonical_numbered_pagination(db_session):

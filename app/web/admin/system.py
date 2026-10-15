@@ -7,7 +7,7 @@ import re
 from base64 import b64encode
 from datetime import UTC, datetime
 from io import BytesIO
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
 
@@ -3587,6 +3587,64 @@ def audit_log(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
+    )
+
+
+@router.get(
+    "/audit/export/{export_format}",
+    dependencies=[Depends(require_permission("audit:read"))],
+)
+def export_audit_log(
+    export_format: Literal["csv", "json"],
+    actor_id: str | None = None,
+    actor_type: str | None = None,
+    action: str | None = None,
+    entity_type: str | None = None,
+    result: str | None = None,
+    period: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    entity_id: str | None = None,
+    entity_id_missing: bool = False,
+    request_id: str | None = None,
+    request_id_missing: bool = False,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download the redacted audit rows matching the current filters."""
+
+    try:
+        query = web_system_audit_service.build_audit_list_query(
+            actor_id=actor_id,
+            actor_type=actor_type,
+            action=action,
+            entity_type=entity_type,
+            result=result,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            entity_id=entity_id,
+            entity_id_missing=entity_id_missing,
+            request_id=request_id,
+            request_id_missing=request_id_missing,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
+        document = web_system_audit_service.build_audit_export(
+            db,
+            query=query,
+            export_format=export_format,
+        )
+    except (
+        web_system_audit_service.AuditFilterValidationError,
+        web_system_audit_service.AuditExportTooLargeError,
+    ) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=document.content,
+        media_type=document.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{document.filename}"'},
     )
 
 

@@ -48,6 +48,20 @@
                 visibleInput.reportValidity();
             }
         });
+        document.querySelectorAll("[data-audit-export-format]").forEach((button) => {
+            button.addEventListener("click", function () {
+                if (!resolveAction()) {
+                    visibleInput.reportValidity();
+                    return;
+                }
+                const format = button.dataset.auditExportFormat;
+                if (!format) return;
+                const params = new URLSearchParams(new FormData(form));
+                window.location.assign(
+                    `/admin/system/audit/export/${format}?${params.toString()}`
+                );
+            });
+        });
     }
 
     function initRequestFeedback() {

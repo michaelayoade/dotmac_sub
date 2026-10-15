@@ -1188,6 +1188,9 @@ sent as a misleading exact-match filter.
 Filtering and pagination show a `Loading…` indicator. Network or server
 failures keep the current rows visible and show a Retry action using the same
 filter controls.
+CSV and JSON exports reuse the current filters, `audit:read` permission, and
+the same audit-owner redaction policy as row details. Exports above 10,000 rows
+fail with a request to narrow the filters; they are never silently truncated.
 
 ### 8g. Health (`/admin/system/health`)
 
