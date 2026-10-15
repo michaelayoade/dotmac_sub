@@ -61,6 +61,10 @@ from app.services.payment_gateway_adapter import (
     PaymentGatewayVerificationError,
     payment_gateway_adapter,
 )
+from app.services.payment_intent_module_shadow import (
+    authorized_invoice_binding,
+    observe_invoice_intent_parity,
+)
 from app.services.payment_reconciliation import (
     GATEWAY_OBSERVATION_SCOPE as RECONCILIATION_OBSERVATION_SCOPE,
 )
@@ -1339,6 +1343,7 @@ def verify_and_record_payment(
         raise ValueError("Payment reference was not issued for this invoice checkout")
     if not customer_can_access_account(db, customer, intent.account_id):
         raise ValueError("Payment reference does not belong to this account")
+    observe_invoice_intent_parity(db, authorized_invoice_binding(intent))
     provider_type = provider_for_intent(intent, provider).value
 
     tx = _observe_gateway_for_customer(

@@ -1677,3 +1677,25 @@ other locked package is changed here. The ephemeral smoke rebuild is not registr
 publication authority and does not establish a registry reissue. This entry records
 a source candidate only; it makes no adoption, deployment, runtime acceptance, or
 ledger-switch claim.
+
+
+**2026-10-15 — released `dotmac-payments==0.1.0a2` read-only invoice
+intent consumer.** `verify_and_record_payment` observes the authorized original
+checkout binding through `get_payment_intent_v1` on its existing scoped Session,
+before provider observation. Missing/mismatched rows produce bounded PII-free
+telemetry; legacy settlement remains authoritative. The a2 universal wheel is
+pinned to verified SHA256
+`da2877bc5365fc0d6cf93868a6235a608413edbb809199cd5c919f78390cf8ed`;
+the lock intentionally admits only that verified wheel, not an unverified sdist.
+Release run `38765607117` succeeded; annotated tag object
+`94ebb4d4856fdd9c88f1c6adc58a06fa4c62a47e` targets
+`4fc0295da94ce62919966baaf1dd909f9af5dcbe`. The migration head is now
+`pm_0003_confirmation_immutable`. The earlier a1 entry is historical preparation;
+its no-live-import assertion no longer describes this consumer.
+
+Hosted CI must establish the new getter/application-hook/RLS and dirty-session
+canaries plus existing payment and architecture gates; no local runtime tests
+were executed. This is one genuine observation consumer, not fleet parity,
+backfill, a financial authority switch, or permission to merge/deploy during the
+active production freeze. See
+`docs/designs/PAYMENT_INTENT_MODULE_OBSERVATION.md`.

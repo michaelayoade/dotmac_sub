@@ -55,6 +55,17 @@
       "reason": "Michael explicitly approved this scoped exception for PR #3630 on 2026-10-14. It covers only the listed network control-plane composition and router-control modules; CODEOWNERS review of this file remains required before merge.",
       "starter_contract": "Starter network control-plane composition API v1: typed layers, deterministic composition with provenance, and read-only drift reporting.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PAYMENTS-OBSERVATION-3640",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/payment_intent_module_shadow.py"
+      ],
+      "reason": "Michael explicitly approved the scoped exception for Sub PR #3640 at 189d0722a38a92602dc6843653a9f00af92f51e9 on 2026-10-15. Owner: financial.payment_intent_module_shadow; steward: finance operations. Actual production growth is 246 lines: 151 adapter, 5 caller, 6 metrics and 84 SOT declaration. This covers only a read-only consumer of the published Payments intent contract, with no settlement authority, cap relaxation or additional capability. Source merge requires current green CI and separate billing-owner approval.",
+      "starter_contract": "Published dotmac-payments 0.1.0a2 GetPaymentIntentV1 / get_payment_intent_v1: caller-owned tenant-scoped Session, persisted immutable intent binding observation, no autoflush or settlement authority.",
+      "deletion_trigger": "Delete the adapter, caller hook, metric, SOT entry and this exception when approved Payments ownership and complete backfill/parity permit retirement of legacy checkout bindings.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
