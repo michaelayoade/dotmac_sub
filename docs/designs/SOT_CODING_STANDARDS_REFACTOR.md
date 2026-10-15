@@ -469,7 +469,17 @@ command scopes. Provider locking serializes concurrent first inserts; exact
 replays return once and changed evidence fails closed. Required webhook
 currency and invoice-settlement net evidence are never invented, and the
 unresolved provider gross/net/fee policy remains explicitly owned by
-`financial.payments` and Finance. Atomic audit/event rollback, existing
+`financial.payments` and Finance. Revision 693 additionally freezes first verified
+provider identity, normalized facts and timestamps with a direct OLD/NEW
+SECURITY INVOKER guard independent of tenant/correlation visibility. Exact
+pending replays preserve the first verified source; raw payload, links and
+processing fields remain mutable. Strict first legacy provenance enrichment
+remains possible. Observation deletion and truncation are refused, and no
+historical rewrite or cash qualification is implied. The read-only module cash
+source query keeps frozen requested customer credit distinct from provider net;
+the financial caller still needs a reviewed immutable amount policy. Downgrade
+cannot remove the integrity guards; recovery requires a reviewed forward
+migration. Atomic audit/event rollback, existing
 settlement/refund/reversal behavior, architecture boundaries, and PostgreSQL
 concurrency tests protect the cutover. This moves the executable manifest from
 63 contracted/213 legacy services to 64 contracted/212 legacy services without
