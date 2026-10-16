@@ -575,7 +575,11 @@ def offer_usage_graph_data(
     return JSONResponse(data)
 
 
-@router.get("/subscriptions", response_class=HTMLResponse)
+@router.get(
+    "/subscriptions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:read"))],
+)
 def catalog_subscriptions(
     request: Request,
     status: str | None = None,
@@ -591,7 +595,11 @@ def catalog_subscriptions(
     return templates.TemplateResponse("admin/catalog/subscriptions.html", context)
 
 
-@router.get("/subscriptions/new", response_class=HTMLResponse)
+@router.get(
+    "/subscriptions/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:create"))],
+)
 def catalog_subscription_new(
     request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
@@ -631,7 +639,7 @@ def catalog_subscription_ipv4_addresses(
 @router.post(
     "/subscriptions",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:create"))],
 )
 def catalog_subscription_create(
     request: Request,
@@ -721,7 +729,7 @@ def catalog_subscription_edit(
     subscription_id: str,
     db: Session = Depends(get_db),
     auth: dict = Depends(
-        require_any_permission("catalog:read", ADDITIONAL_IP_WRITE_PERMISSION)
+        require_any_permission("subscription:update", ADDITIONAL_IP_WRITE_PERMISSION)
     ),
 ) -> HTMLResponse:
     form_context = (
@@ -741,7 +749,7 @@ def catalog_subscription_edit(
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(form_context)
     context["can_manage_subscription_catalog"] = has_permission(
-        auth, db, "catalog:write"
+        auth, db, "subscription:update"
     )
     context["can_manage_additional_ip"] = has_permission(
         auth, db, ADDITIONAL_IP_WRITE_PERMISSION
@@ -906,7 +914,11 @@ def catalog_subscription_service_access_move_confirm(
     return RedirectResponse(f"{edit_url}?notice={quote_plus(message)}", status_code=303)
 
 
-@router.get("/subscriptions/{subscription_id}", response_class=HTMLResponse)
+@router.get(
+    "/subscriptions/{subscription_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:read"))],
+)
 def catalog_subscription_detail(
     request: Request,
     subscription_id: str,
@@ -1370,7 +1382,7 @@ def catalog_subscription_reconcile_ipv4(
 @router.post(
     "/subscriptions/{subscription_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_update(
     request: Request,
