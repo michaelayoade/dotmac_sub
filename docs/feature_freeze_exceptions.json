@@ -76,6 +76,67 @@
       "reason": "Michael directed the thin-client health goal on 2026-10-16: keep the existing poller/syslog probes and product semantics Sub-local, serialize Starter Platform Health observations at the source edge, and create no Sub health subsystem or deployment authority. He approved commit, push and draft PR #3655 for hosted CI. This entry covers only the listed bounded serialization module; modifications to the existing probe owners need no exception. CODEOWNERS review of this file remains required before merge.",
       "starter_contract": "Starter dotmac-platform-health HealthObservationInput: source_ref, observation_key, component_code, healthy/degraded/unhealthy/unknown state, observed_at, received_at, summary and bounded labels; Platform Health remains the future sole durable observation/evidence owner and Integrator remains the authenticated transport boundary.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "BILLING-CONSOLIDATION-3668",
+      "kind": "feature-exception",
+      "paths": [
+        "app/celery_app.py",
+        "app/celery_queue_contract.py",
+        "app/commercial_module_prereqs.py",
+        "app/models/billing.py",
+        "app/services/autopay.py",
+        "app/services/billing/legacy_archive_fence.py",
+        "app/services/billing/legacy_archive_fence_contracts.py",
+        "app/services/billing/legacy_handoff_preparation.py",
+        "app/services/billing/legacy_handoff_preparation_contracts.py",
+        "app/services/billing/legacy_privilege_closure.py",
+        "app/services/billing/legacy_retained_columns_contracts.py",
+        "app/services/billing/legacy_retained_columns_fence.py",
+        "app/services/customer_portal_flow_payments.py",
+        "app/services/deployment_secret_schema.py",
+        "app/services/deployment_writer_drain.py",
+        "app/services/deployment_writer_drain_transport.py",
+        "app/services/events/types.py",
+        "app/services/gateway_topup_intents.py",
+        "app/services/integrations/connectors/payment_gateway.py",
+        "app/services/integrations/payment_capability.py",
+        "app/services/integrations/payment_capture.py",
+        "app/services/integrations/runtime_execution.py",
+        "app/services/owner_commands.py",
+        "app/services/payment_charge_contracts.py",
+        "app/services/payment_email_cutover.py",
+        "app/services/payment_gateway_adapter.py",
+        "app/services/payment_provider_events.py",
+        "app/services/payments_intent_schema_floor.py",
+        "app/services/poller_health.py",
+        "app/services/provider_payment_settlements.py",
+        "app/services/reseller_portal_billing.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py",
+        "app/services/sot_registry/domains/financial_access/payment_intents.py",
+        "app/services/sot_registry/domains/financial_access/provider_payments.py",
+        "app/services/sot_registry/domains/integration_control_plane.py",
+        "app/services/sot_registry/domains/network/subscriber_state.py",
+        "app/services/sot_registry/domains/runtime_infrastructure.py",
+        "app/services/sot_registry/payment_email_contracts.py",
+        "app/services/topup_intents.py",
+        "app/syslog/health.py"
+      ],
+      "reason": "Michael explicitly approved consolidating PRs #3642 through #3655, resolving their conflicts, merging the result and continuing the digest-gated release on 2026-10-16. This entry covers only the source preparation in PR #3668: bounded deployment drain evidence, trusted migration controls, typed Payments intent adoption, provenance-bound PSP observations, immutable provider/source facts, private legacy-fence participants and the existing probe owners that feed the separately approved THIN-3655 serializer. It does not activate the final Billing handoff, grant financial authority, relax a baseline or authorize additional growth.",
+      "starter_contract": "Published dotmac-kernel 0.1.0a105 conflict protocol, dotmac-payments 0.1.0a2 payment-intent contracts and dotmac-billing 0.1.0a1 opening/handoff contracts; Sub retains only the typed caller, observation, deployment-evidence and legacy-fence responsibilities required for the future single-owner cutover.",
+      "deletion_trigger": "Remove this exception as the private preparation surfaces retire after the accepted single Billing handoff and the remaining probe serialization moves behind the authenticated Platform Health transport.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "BILLING-SCHEMA-3668",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/691_payments_intent_correlation.py",
+        "alembic/versions/692_module_invoice_cash.py",
+        "alembic/versions/693_provider_source_facts.py"
+      ],
+      "reason": "Michael explicitly approved the consolidated corrective schema scope for PR #3668 on 2026-10-16. The incumbent schema can represent an unpaired Payments intent, mutable invoice-cash correlation and verified provider facts that drift after observation. Revisions 691-693 add the paired tenant identity, immutable correlation and exact source-fact guards needed to fail closed while preserving historical rows; they do not switch ledger authority.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
