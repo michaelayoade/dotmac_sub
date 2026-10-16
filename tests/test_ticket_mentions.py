@@ -11,7 +11,12 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
-from app.models.support import Ticket, TicketCommentMention
+from app.models.support import (
+    Ticket,
+    TicketComment,
+    TicketCommentMention,
+    TicketStatus,
+)
 from app.models.system_user import SystemUser
 from app.schemas.support import (
     TicketCommentCreate,
@@ -76,6 +81,44 @@ def test_resolve_mentions_expands_groups_and_filters_inactive(db_session):
     )
 
     assert resolved == [str(active.id)]
+
+
+def test_dashboard_mentions_include_direct_and_active_group_mentions(db_session):
+    member = _system_user(db_session, email="dashboard-mention@example.com")
+    team = ServiceTeam(name="Dashboard Ops", team_type=ServiceTeamType.support.value)
+    ticket = Ticket(
+        title="Investigate access issue",
+        number="TCK-DASH-1",
+        status=TicketStatus.open.value,
+    )
+    db_session.add_all([team, ticket])
+    db_session.flush()
+    db_session.add(ServiceTeamMember(team_id=team.id, person_id=member.person_party_id))
+    comment = TicketComment(
+        ticket_id=ticket.id,
+        author_type="staff",
+        body="Please review this ticket",
+    )
+    db_session.add(comment)
+    db_session.flush()
+    db_session.add(TicketCommentMention(comment_id=comment.id, service_team_id=team.id))
+    db_session.commit()
+
+    items = ticket_mentions.list_dashboard_mentions(
+        db_session, system_user_id=member.id
+    )
+
+    assert len(items) == 1
+    assert items[0].ticket_id == ticket.id
+    assert items[0].ticket_reference == "TCK-DASH-1"
+    assert items[0].href == f"/admin/support/tickets/{ticket.id}"
+
+    ticket.status = TicketStatus.closed.value
+    db_session.commit()
+    assert (
+        ticket_mentions.list_dashboard_mentions(db_session, system_user_id=member.id)
+        == ()
+    )
 
 
 def test_notify_ticket_comment_mentions_queues_absolute_link(db_session, monkeypatch):

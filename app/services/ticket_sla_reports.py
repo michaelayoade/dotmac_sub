@@ -5,8 +5,9 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import case, distinct, func
 from sqlalchemy.orm import Session
@@ -130,6 +131,229 @@ class TicketSlaSummary:
             "by_region": bucket_values(self.by_region),
             "by_assignee": bucket_values(self.by_assignee),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class TicketPerformancePoint:
+    """One calendar-day point in the dashboard ticket-performance chart."""
+
+    day: date
+    newly_created: int
+    approaching_sla: int
+    breached_sla: int
+
+
+@dataclass(frozen=True, slots=True)
+class TicketPerformanceSeries:
+    """One service-team series, with an explicit all-teams cohort."""
+
+    key: str
+    label: str
+    points: tuple[TicketPerformancePoint, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TicketPerformanceDashboard:
+    """Typed, freshness-bearing dashboard projection for ticket operations."""
+
+    observed_at: datetime
+    window_days: int
+    series: tuple[TicketPerformanceSeries, ...]
+
+    def as_serializable(self) -> list[dict[str, object]]:
+        return [
+            {
+                "key": item.key,
+                "label": item.label,
+                "points": [
+                    {
+                        "label": point.day.strftime("%a"),
+                        "date": point.day.isoformat(),
+                        "newly_created": point.newly_created,
+                        "approaching_sla": point.approaching_sla,
+                        "breached_sla": point.breached_sla,
+                    }
+                    for point in item.points
+                ],
+            }
+            for item in self.series
+        ]
+
+
+def dashboard_performance(
+    db: Session, *, observed_at: datetime | None = None, window_days: int = 7
+) -> TicketPerformanceDashboard:
+    """Project real ticket activity for the dashboard, grouped by service team.
+
+    Historical points use canonical ticket creation and SLA breach timestamps.
+    "Approaching SLA" is a current-state signal, so it appears only on the
+    observation day and uses each clock's configured warning window.
+    """
+
+    from app.models.ticket_workflow import SlaTarget
+
+    now = _as_aware_utc(observed_at) or datetime.now(UTC)
+    days = max(2, min(int(window_days), 30))
+    first_day = now.date() - timedelta(days=days - 1)
+    start_at = datetime.combine(first_day, datetime.min.time(), tzinfo=UTC)
+    day_values = tuple(first_day + timedelta(days=index) for index in range(days))
+
+    active_teams = (
+        db.query(ServiceTeam.id, ServiceTeam.name)
+        .filter(ServiceTeam.is_active.is_(True))
+        .order_by(ServiceTeam.name.asc())
+        .all()
+    )
+    team_labels = {str(team_id): str(name) for team_id, name in active_teams}
+    team_labels["unassigned"] = "Unassigned"
+
+    created_rows = (
+        db.query(
+            func.date(Ticket.created_at), Ticket.service_team_id, func.count(Ticket.id)
+        )
+        .filter(Ticket.is_active.is_(True), Ticket.created_at >= start_at)
+        .group_by(func.date(Ticket.created_at), Ticket.service_team_id)
+        .all()
+    )
+    breached_rows = (
+        db.query(
+            func.date(SlaClock.breached_at),
+            Ticket.service_team_id,
+            func.count(distinct(Ticket.id)),
+        )
+        .join(
+            Ticket,
+            (Ticket.id == SlaClock.entity_id)
+            & (SlaClock.entity_type == WorkflowEntityType.ticket.value),
+        )
+        .filter(Ticket.is_active.is_(True), SlaClock.breached_at >= start_at)
+        .group_by(func.date(SlaClock.breached_at), Ticket.service_team_id)
+        .all()
+    )
+
+    warning_rows = (
+        db.query(SlaTarget.policy_id, SlaTarget.priority, SlaTarget.warning_minutes)
+        .filter(SlaTarget.is_active.is_(True))
+        .all()
+    )
+    warning_by_target = {
+        (row.policy_id, str(row.priority or "").strip().lower()): int(
+            row.warning_minutes or 0
+        )
+        for row in warning_rows
+    }
+    clock_rows = (
+        db.query(
+            Ticket.id,
+            Ticket.service_team_id,
+            SlaClock.policy_id,
+            SlaClock.priority,
+            SlaClock.due_at,
+        )
+        .join(
+            Ticket,
+            (Ticket.id == SlaClock.entity_id)
+            & (SlaClock.entity_type == WorkflowEntityType.ticket.value),
+        )
+        .filter(
+            Ticket.is_active.is_(True),
+            Ticket.status.in_(
+                (
+                    TicketStatus.new.value,
+                    TicketStatus.open.value,
+                    TicketStatus.pending.value,
+                    TicketStatus.lastmile_rerun.value,
+                    TicketStatus.waiting_on_customer.value,
+                    TicketStatus.on_hold.value,
+                    TicketStatus.site_under_construction.value,
+                )
+            ),
+            SlaClock.status == SlaClockStatus.running.value,
+        )
+        .all()
+    )
+
+    def team_key(raw: object) -> str:
+        return str(raw) if raw is not None else "unassigned"
+
+    def calendar_day(raw: object) -> date:
+        return raw if isinstance(raw, date) else date.fromisoformat(str(raw))
+
+    created: dict[tuple[date, str], int] = {}
+    breached: dict[tuple[date, str], int] = {}
+    approaching: dict[str, int] = {}
+    approaching_ticket_ids: set[UUID] = set()
+    for day_value, service_team_id, count in created_rows:
+        created[(calendar_day(day_value), team_key(service_team_id))] = int(count or 0)
+    for day_value, service_team_id, count in breached_rows:
+        if day_value is not None:
+            breached[(calendar_day(day_value), team_key(service_team_id))] = int(
+                count or 0
+            )
+    for row in clock_rows:
+        due_at = _as_aware_utc(row.due_at)
+        warning_minutes = warning_by_target.get(
+            (row.policy_id, str(row.priority or "").strip().lower()),
+            warning_by_target.get((row.policy_id, ""), 0),
+        )
+        if (
+            due_at is not None
+            and warning_minutes > 0
+            and now < due_at <= now + timedelta(minutes=warning_minutes)
+            and row.id not in approaching_ticket_ids
+        ):
+            approaching_ticket_ids.add(row.id)
+            key = team_key(row.service_team_id)
+            approaching[key] = approaching.get(key, 0) + 1
+
+    team_keys = sorted(
+        set(team_labels) | {key for _, key in created} | {key for _, key in breached},
+        key=lambda key: (team_labels.get(key, "Unassigned").lower(), key),
+    )
+
+    def points_for(key: str | None) -> tuple[TicketPerformancePoint, ...]:
+        return tuple(
+            TicketPerformancePoint(
+                day=day_value,
+                newly_created=sum(
+                    count
+                    for (point_day, point_key), count in created.items()
+                    if point_day == day_value and (key is None or point_key == key)
+                ),
+                approaching_sla=(
+                    sum(approaching.values())
+                    if key is None and day_value == now.date()
+                    else approaching.get(key, 0)
+                    if key is not None and day_value == now.date()
+                    else 0
+                ),
+                breached_sla=sum(
+                    count
+                    for (point_day, point_key), count in breached.items()
+                    if point_day == day_value and (key is None or point_key == key)
+                ),
+            )
+            for day_value in day_values
+        )
+
+    series = [
+        TicketPerformanceSeries(
+            key="all", label="All service teams", points=points_for(None)
+        )
+    ]
+    series.extend(
+        TicketPerformanceSeries(
+            key=key,
+            label=team_labels.get(key, "Unassigned"),
+            points=points_for(key),
+        )
+        for key in team_keys
+    )
+    return TicketPerformanceDashboard(
+        observed_at=now,
+        window_days=days,
+        series=tuple(series),
+    )
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:

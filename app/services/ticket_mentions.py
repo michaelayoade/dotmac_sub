@@ -10,10 +10,11 @@ from functools import partial
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.service_team import ServiceTeam, ServiceTeamMember
+from app.models.support import Ticket, TicketComment, TicketCommentMention, TicketStatus
 from app.models.system_user import SystemUser
 from app.schemas.support import TicketMentionTarget
 from app.services.branding_config import get_brand
@@ -45,6 +46,87 @@ class TicketMentionMessage:
     subject: str
     body: str
     target_url: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TicketMentionWorkItem:
+    """One open ticket that directly or collectively mentioned a staff user."""
+
+    ticket_id: UUID
+    ticket_reference: str
+    title: str
+    mentioned_at: datetime
+
+    @property
+    def href(self) -> str:
+        return f"/admin/support/tickets/{self.ticket_id}"
+
+
+def list_dashboard_mentions(
+    db: Session, *, system_user_id: str | UUID, limit: int = 3
+) -> tuple[TicketMentionWorkItem, ...]:
+    """Return the current user's latest open ticket mentions.
+
+    A mention addressed to any active service team containing the staff user's
+    canonical Person is equivalent to a direct mention for this projection.
+    """
+
+    user_id = coerce_uuid(str(system_user_id))
+    user = db.get(SystemUser, user_id)
+    if user is None or not user.is_active:
+        return ()
+
+    target_filters = [TicketCommentMention.system_user_id == user.id]
+    if user.person_party_id is not None:
+        team_ids = (
+            db.query(ServiceTeamMember.team_id)
+            .join(ServiceTeam, ServiceTeam.id == ServiceTeamMember.team_id)
+            .filter(
+                ServiceTeamMember.person_id == user.person_party_id,
+                ServiceTeamMember.is_active.is_(True),
+                ServiceTeam.is_active.is_(True),
+            )
+        )
+        target_filters.append(TicketCommentMention.service_team_id.in_(team_ids))
+
+    rows = (
+        db.query(
+            Ticket.id,
+            Ticket.number,
+            Ticket.title,
+            TicketCommentMention.created_at,
+        )
+        .select_from(TicketCommentMention)
+        .join(TicketComment, TicketComment.id == TicketCommentMention.comment_id)
+        .join(Ticket, Ticket.id == TicketComment.ticket_id)
+        .filter(
+            or_(*target_filters),
+            Ticket.is_active.is_(True),
+            Ticket.status.notin_(
+                [TicketStatus.closed.value, TicketStatus.canceled.value, "merged"]
+            ),
+        )
+        .order_by(TicketCommentMention.created_at.desc())
+        .limit(max(int(limit or 3), 1) * 4)
+        .all()
+    )
+    items: list[TicketMentionWorkItem] = []
+    seen: set[UUID] = set()
+    for ticket_id, number, title, mentioned_at in rows:
+        if ticket_id in seen:
+            continue
+        seen.add(ticket_id)
+        items.append(
+            TicketMentionWorkItem(
+                ticket_id=ticket_id,
+                ticket_reference=str(number or ticket_id),
+                title=str(title or "Support ticket"),
+                mentioned_at=mentioned_at,
+            )
+        )
+        if len(items) >= max(int(limit or 3), 1):
+            break
+    return tuple(items)
 
 
 def _absolute_ticket_url(*, public_base_url: str, ticket_id: UUID) -> str | None:

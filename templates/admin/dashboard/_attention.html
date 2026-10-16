@@ -17,7 +17,7 @@
          hx-get="/admin/dashboard/attention"
          hx-trigger="every 60s"
          hx-swap="outerHTML"
-         class="rounded-2xl border border-rose-200/70 bg-white shadow-sm dark:border-rose-900/40 dark:bg-slate-800">
+         class="min-h-56 overflow-hidden rounded-2xl border border-rose-200/70 bg-white shadow-sm dark:border-rose-900/40 dark:bg-slate-800/90">
     <div class="flex items-center justify-between border-b border-rose-100 px-5 py-3 dark:border-rose-900/30">
         <div class="flex items-center gap-2.5">
             <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400" aria-hidden="true">
@@ -28,7 +28,7 @@
         <span class="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">{{ attention_rows | length }}</span>
     </div>
     {% if attention_rows %}
-    <div class="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 dark:divide-slate-700/40">
+    <div class="grid max-h-72 grid-cols-1 divide-y divide-slate-100 overflow-y-auto sm:grid-cols-2 sm:divide-y-0 dark:divide-slate-700/40">
         {% for item in attention_rows %}
         <a href="{{ item.href }}" class="group flex min-h-11 items-center gap-3 px-5 py-2.5 text-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:hover:bg-slate-700/40">
             <span class="status-tone-dot status-tone-dot-{{ item.tone }} h-2 w-2 shrink-0 rounded-full" aria-hidden="true"></span>

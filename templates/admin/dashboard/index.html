@@ -1,56 +1,54 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import ambient_background, action_button, icon_plus %}
 
-{% block title %}Dashboard - DotMac Subs{% endblock %}
+{% block title %}Operations Dashboard - DotMac Subs{% endblock %}
 
 {% block content %}
 {{ ambient_background("amber", "slate") }}
+{% set operator_name = current_user.name.split(' ')[0] if current_user and current_user.name else 'there' %}
 
-<div class="space-y-8">
-    {# ═══════════ Section 1: Header ═══════════ #}
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-            <h1 class="font-display text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Operations Overview</h1>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Customers, support, service activity, and billing at a glance.</p>
-            {# Snapshot freshness carries its own state: rendered only when present,
-               never a stale render-time clock standing in for an unresolved build. #}
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{% if data_freshness is defined and data_freshness.is_present %}Data as of {{ data_freshness.value | app_datetime('%b %d, %Y %H:%M') }}{% else %}Data freshness {{ data_freshness.placeholder if data_freshness is defined else 'Unknown' }}{% endif %}</p>
+<div class="space-y-6 pb-8" data-dashboard-root>
+    <header class="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
+        <div class="min-w-0">
+            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700 dark:text-amber-300">Operations overview</p>
+            <h1 class="mt-2 font-display text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl dark:text-white">{{ dashboard_greeting.label }}, {{ operator_name }}</h1>
+            <p class="mt-1 max-w-2xl text-sm text-slate-600 dark:text-slate-300">Customers, support, service activity, and billing at a glance.</p>
+            <p class="mt-2 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true"></span>{% if data_freshness is defined and data_freshness.is_present %}Updated {{ data_freshness.value | app_datetime('%b %d, %Y at %H:%M') }}{% else %}Data freshness {{ data_freshness.placeholder if data_freshness is defined else 'Unknown' }}{% endif %}</p>
         </div>
-        <div class="flex flex-wrap items-center gap-3">
-            {{ action_button("Add Customer", "/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-stretch xl:justify-end">
             {% if show_attendance %}
-            <section id="attendance-widget"
-                     hx-get="/admin/dashboard/attendance"
-                     hx-trigger="load"
-                     hx-swap="outerHTML"
-                     aria-label="Attendance"
-                     class="flex min-h-11 min-w-40 items-center rounded-xl border border-slate-200/60 bg-white px-3 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-                <span class="h-4 w-28 animate-pulse rounded bg-slate-100 dark:bg-slate-700/50" aria-label="Loading attendance"></span>
-            </section>
+            <section id="attendance-widget" hx-get="/admin/dashboard/attendance" hx-trigger="load" hx-swap="outerHTML" aria-label="Attendance" class="flex min-h-12 min-w-52 items-center rounded-xl border border-slate-200/70 bg-white px-3 shadow-sm dark:border-slate-700 dark:bg-slate-800"><span class="h-4 w-32 animate-pulse rounded bg-slate-100 dark:bg-slate-700/50" aria-label="Loading attendance"></span></section>
             {% endif %}
+            {{ action_button("Add Customer", "/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}
         </div>
-    </div>
+    </header>
 
     {% if whats_new_items %}
     {% set whats_new = whats_new_items[0] %}
-    <div x-data="{ dismissed: localStorage.getItem('dotmac_whats_new_dismissed') === '{{ whats_new.id }}' }"
-         x-show="!dismissed" x-cloak
-         class="flex items-center gap-3 rounded-2xl border border-amber-200/70 bg-amber-50/70 px-5 py-3 dark:border-amber-500/20 dark:bg-amber-900/10">
-        <span class="shrink-0 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">What's new</span>
-        <p class="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200"><span class="font-semibold text-slate-900 dark:text-white">{{ whats_new.title }}</span><span class="hidden sm:inline"> — {{ whats_new.message }}</span></p>
-        {% if whats_new.button_link and whats_new.button_text %}<a href="{{ whats_new.button_link }}" class="shrink-0 text-sm font-semibold text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200">{{ whats_new.button_text }} →</a>{% endif %}
-        <button type="button" x-on:click="dismissed = true; localStorage.setItem('dotmac_whats_new_dismissed', '{{ whats_new.id }}')" class="min-h-11 min-w-11 shrink-0 rounded-md p-1 text-slate-400 transition hover:bg-amber-100 hover:text-slate-600 dark:hover:bg-amber-900/30 dark:hover:text-slate-200" aria-label="Dismiss"><svg class="mx-auto h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
-    </div>
+    <aside x-data="{ dismissed: localStorage.getItem('dotmac_whats_new_dismissed') === '{{ whats_new.id }}' }" x-show="!dismissed" x-cloak aria-label="What's new" class="relative overflow-hidden rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-5 py-4 shadow-sm dark:border-amber-500/25 dark:from-amber-950/45 dark:to-orange-950/25">
+        <div class="absolute -right-12 -top-20 h-40 w-40 rounded-full bg-amber-300/20 blur-2xl dark:bg-amber-500/10" aria-hidden="true"></div>
+        <div class="relative flex items-start gap-3 pr-10">
+            <span class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500 text-slate-950" aria-hidden="true"><svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.05 2.93a1 1 0 011.9 0l.93 2.86a1 1 0 00.95.69h3.01a1 1 0 01.59 1.81L16 10.06a1 1 0 00-.36 1.12l.93 2.86a1 1 0 01-1.54 1.12l-2.43-1.77a1 1 0 00-1.18 0l-2.43 1.77a1 1 0 01-1.54-1.12l.93-2.86A1 1 0 008 10.06L5.57 8.29a1 1 0 01.59-1.81h3.01a1 1 0 00.95-.69l.93-2.86z"/></svg></span>
+            <div class="min-w-0"><p class="text-[11px] font-bold uppercase tracking-[0.16em] text-amber-800 dark:text-amber-300">What's new</p><h2 class="mt-1 text-sm font-semibold text-slate-950 dark:text-white">{{ whats_new.title }}</h2><p class="mt-1 text-sm leading-6 text-slate-700 dark:text-slate-300">{{ whats_new.message }}</p>{% if whats_new.button_link and whats_new.button_text %}<a href="{{ whats_new.button_link }}" class="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-amber-800 hover:text-amber-950 dark:text-amber-300 dark:hover:text-amber-200">{{ whats_new.button_text }} <span class="ml-1" aria-hidden="true">→</span></a>{% endif %}</div>
+        </div>
+        <button type="button" x-on:click="dismissed = true; localStorage.setItem('dotmac_whats_new_dismissed', '{{ whats_new.id }}')" class="absolute right-3 top-3 flex min-h-11 min-w-11 items-center justify-center rounded-lg text-amber-800 transition hover:bg-amber-200/60 dark:text-amber-300 dark:hover:bg-amber-900/50" aria-label="Dismiss What's new"><svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+    </aside>
     {% endif %}
 
-    {% include "admin/dashboard/_attention.html" %}
-
-    {# ═══════════ Section 3: KPI Grid (single row, 4 cols on desktop) ═══════════ #}
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(18rem,0.8fr)]">{% include "admin/dashboard/_attention.html" %}{% include "admin/dashboard/_my_work.html" %}</div>
     {% include "admin/dashboard/_stats.html" %}
+    {% if show_performance_trend %}
+    <div class="grid items-stretch gap-6 {% if show_support %}xl:grid-cols-2{% endif %}">{% include "admin/dashboard/_performance_trend.html" %}{% if show_support %}{% include "admin/dashboard/_ticket_performance.html" %}{% endif %}</div>
+    <div id="activity-feed" hx-get="/admin/dashboard/activity" hx-trigger="every 180s" hx-swap="innerHTML">{% include "admin/dashboard/_activity.html" %}</div>
+    {% else %}
+    <div class="grid items-stretch gap-6 {% if show_support %}xl:grid-cols-2{% endif %}">{% if show_support %}<div class="min-w-0">{% include "admin/dashboard/_ticket_performance.html" %}</div>{% endif %}<div id="activity-feed" class="min-w-0" hx-get="/admin/dashboard/activity" hx-trigger="every 180s" hx-swap="innerHTML">{% include "admin/dashboard/_activity.html" %}</div></div>
+    {% endif %}
+    {% include "admin/dashboard/_quick_actions.html" %}
 </div>
 {% endblock %}
 
 {% block scripts %}
 {{ super() }}
 {% if show_attendance %}<script src="/static/js/admin-attendance.js"></script>{% endif %}
+<script src="/static/js/admin-dashboard-charts.js"></script>
 {% endblock %}

@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Lock, Thread
 from time import monotonic
@@ -9,6 +10,7 @@ from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -17,8 +19,14 @@ from app.schemas.status_presentation import StatusTone
 from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_attention as admin_attention_service
 from app.services import admin_whats_new as admin_whats_new_service
+from app.services import (
+    display_format,
+    settings_spec,
+    sla_assignment,
+    ticket_mentions,
+    ticket_sla_reports,
+)
 from app.services import infrastructure_health as infrastructure_health_service
-from app.services import settings_spec, sla_assignment
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -60,6 +68,54 @@ _DASHBOARD_GLOBAL_MAX_STALE_SECONDS = max(
     _DASHBOARD_GLOBAL_TTL_SECONDS,
     settings.dashboard_global_max_stale_seconds,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardGreeting:
+    label: str
+    login_count_today: int
+    observed_at: datetime
+
+
+def _dashboard_greeting(
+    db: Session, *, principal_id: str, observed_at: datetime
+) -> DashboardGreeting:
+    """Resolve the time-aware greeting from canonical display time and audit."""
+
+    from app.models.audit import AuditEvent
+
+    local_now = observed_at.astimezone(display_format.display_timezone(db))
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = local_start + timedelta(days=1)
+    start_at = local_start.astimezone(UTC)
+    end_at = local_end.astimezone(UTC)
+    login_count = 0
+    if principal_id:
+        login_count = int(
+            db.query(func.count(AuditEvent.id))
+            .filter(
+                AuditEvent.actor_id == principal_id,
+                AuditEvent.action == "auth.login_succeeded",
+                AuditEvent.is_success.is_(True),
+                AuditEvent.occurred_at >= start_at,
+                AuditEvent.occurred_at < end_at,
+            )
+            .scalar()
+            or 0
+        )
+    if login_count > 1:
+        label = "Welcome"
+    elif local_now.hour < 12:
+        label = "Good morning"
+    elif local_now.hour < 17:
+        label = "Good afternoon"
+    else:
+        label = "Good evening"
+    return DashboardGreeting(
+        label=label,
+        login_count_today=login_count,
+        observed_at=observed_at,
+    )
 
 
 def _network_monitoring_int_setting(db: Session, key: str, default: int) -> int:
@@ -534,6 +590,19 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     support_attention = sla_assignment.ticket_attention_summary(
         db, query=sla_assignment.TicketAttentionQuery(as_of=observed_at)
     )
+    try:
+        ticket_performance = ticket_sla_reports.dashboard_performance(
+            db, observed_at=observed_at, window_days=7
+        )
+        ticket_performance_series = ticket_performance.as_serializable()
+        ticket_performance_observed_at = ticket_performance.observed_at
+        ticket_performance_available = True
+    except Exception:
+        logger.exception("Failed to load ticket performance for dashboard")
+        _rollback_after_failed_query(db)
+        ticket_performance_series = []
+        ticket_performance_observed_at = observed_at
+        ticket_performance_available = False
     onboarding_attention = subscriber_service.onboarding_attention_summary(
         db,
         query=subscriber_service.OnboardingAttentionQuery(as_of=observed_at),
@@ -632,6 +701,9 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "pon_outages": pon_outages,
         "vpn_tunnels": [],
         "whats_new_items": whats_new_items,
+        "ticket_performance_series": ticket_performance_series,
+        "ticket_performance_observed_at": ticket_performance_observed_at,
+        "ticket_performance_available": ticket_performance_available,
         "unconfigured_ont_count": unconfigured_ont_count,
         # Wall-clock time this snapshot was built. Travels with the cached
         # context so the header shows real freshness, not render time.
@@ -796,12 +868,39 @@ def dashboard(request: Request, db: Session):
 
     show_attendance = can(request, "attendance:self:use")
     global_ctx = _get_cached_dashboard_global_context(db)
+    observed_at = datetime.now(UTC)
+    auth = getattr(request.state, "auth", None) or {}
+    role_names = {str(role).strip().lower() for role in auth.get("roles") or []}
+    if not role_names and auth.get("principal_type") == "system_user":
+        from app.services.auth_dependencies import user_role_names
+
+        role_names = {
+            str(role).strip().lower()
+            for role in user_role_names(db, current_user.get("id")) or set()
+        }
+    show_performance_trend = bool({"admin", "super_admin"} & role_names)
+    greeting = _dashboard_greeting(
+        db,
+        principal_id=str(current_user.get("id") or ""),
+        observed_at=observed_at,
+    )
+    mention_work_items: tuple[ticket_mentions.TicketMentionWorkItem, ...] = ()
+    mention_work_available = True
+    if show_support and auth.get("principal_type") == "system_user":
+        try:
+            mention_work_items = ticket_mentions.list_dashboard_mentions(
+                db, system_user_id=str(current_user.get("id") or ""), limit=3
+            )
+        except Exception:
+            logger.exception("Dashboard mention projection is unavailable")
+            _rollback_after_failed_query(db)
+            mention_work_available = False
 
     return templates.TemplateResponse(
         "admin/dashboard/index.html",
         {
             "request": request,
-            "now": datetime.now(UTC),
+            "now": observed_at,
             # Real freshness of the cached snapshot, not render time.
             "data_as_of": global_ctx.get("refreshed_at") or datetime.now(UTC),
             "active_page": "dashboard",
@@ -811,6 +910,10 @@ def dashboard(request: Request, db: Session):
             "show_subscribers": show_subscribers,
             "show_support": show_support,
             "show_attendance": show_attendance,
+            "show_performance_trend": show_performance_trend,
+            "dashboard_greeting": greeting,
+            "mention_work_items": mention_work_items,
+            "mention_work_available": mention_work_available,
             **global_ctx,
         },
     )

@@ -1,10 +1,14 @@
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.network_monitoring import (
     DeviceInterface,
     InterfaceStatus,
     NetworkDevice,
 )
 from app.services.network_monitoring import pon_interface_summary
-from app.services.web_admin_dashboard import _build_online_customer_summary
+from app.services.web_admin_dashboard import (
+    _build_online_customer_summary,
+    _dashboard_greeting,
+)
 
 
 def test_build_online_customer_summary_counts_distinct_customers(
@@ -106,3 +110,59 @@ def test_build_pon_interface_summary_counts_only_pon_like_interfaces(db_session)
         "unknown": 1,
         "total": 3,
     }
+
+
+def test_dashboard_greeting_tracks_time_and_repeat_login(db_session, monkeypatch):
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    principal_id = "dashboard-greeting-user"
+    monkeypatch.setattr(
+        "app.services.web_admin_dashboard.display_format.display_timezone",
+        lambda _db: ZoneInfo("UTC"),
+    )
+    morning = datetime(2026, 10, 16, 9, 0, tzinfo=UTC)
+    afternoon = datetime(2026, 10, 16, 14, 0, tzinfo=UTC)
+
+    assert (
+        _dashboard_greeting(
+            db_session, principal_id=principal_id, observed_at=morning
+        ).label
+        == "Good morning"
+    )
+    assert (
+        _dashboard_greeting(
+            db_session, principal_id=principal_id, observed_at=afternoon
+        ).label
+        == "Good afternoon"
+    )
+
+    db_session.add_all(
+        [
+            AuditEvent(
+                actor_type=AuditActorType.user,
+                actor_id=principal_id,
+                action="auth.login_succeeded",
+                entity_type="auth_session",
+                status_code=200,
+                is_success=True,
+                occurred_at=morning,
+            ),
+            AuditEvent(
+                actor_type=AuditActorType.user,
+                actor_id=principal_id,
+                action="auth.login_succeeded",
+                entity_type="auth_session",
+                status_code=200,
+                is_success=True,
+                occurred_at=afternoon,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    greeting = _dashboard_greeting(
+        db_session, principal_id=principal_id, observed_at=afternoon
+    )
+    assert greeting.label == "Welcome"
+    assert greeting.login_count_today == 2

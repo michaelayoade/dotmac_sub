@@ -14,6 +14,7 @@ from app.models.ticket_workflow import (
     SlaClock,
     SlaClockStatus,
     SlaPolicy,
+    SlaTarget,
     WorkflowEntityType,
 )
 from app.services import ticket_sla_reports
@@ -249,6 +250,86 @@ def test_ticket_sla_report_trend_daily_honors_date_window(db_session):
             "breach_rate": 0.0,
         }
     ]
+
+
+def test_dashboard_ticket_performance_uses_real_team_events_and_warning_window(
+    db_session,
+):
+    observed_at = datetime(2026, 10, 16, 9, 0, tzinfo=UTC)
+    team = ServiceTeam(
+        name="Service Assurance", team_type=ServiceTeamType.support.value
+    )
+    policy = _policy(db_session)
+    db_session.add_all(
+        [
+            team,
+            SlaTarget(
+                policy_id=policy.id,
+                priority="normal",
+                target_minutes=240,
+                warning_minutes=60,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+    new_ticket = Ticket(
+        title="New team ticket",
+        service_team_id=team.id,
+        priority="normal",
+        created_at=observed_at - timedelta(days=1),
+    )
+    at_risk_ticket = Ticket(
+        title="At risk team ticket",
+        service_team_id=team.id,
+        priority="normal",
+        created_at=observed_at - timedelta(days=3),
+    )
+    breached_ticket = Ticket(
+        title="Breached team ticket",
+        service_team_id=team.id,
+        priority="normal",
+        created_at=observed_at - timedelta(days=4),
+    )
+    db_session.add_all([new_ticket, at_risk_ticket, breached_ticket])
+    db_session.flush()
+    db_session.add_all(
+        [
+            SlaClock(
+                policy_id=policy.id,
+                entity_type=WorkflowEntityType.ticket.value,
+                entity_id=at_risk_ticket.id,
+                priority="normal",
+                status=SlaClockStatus.running.value,
+                started_at=observed_at - timedelta(hours=3),
+                due_at=observed_at + timedelta(minutes=30),
+            ),
+            SlaClock(
+                policy_id=policy.id,
+                entity_type=WorkflowEntityType.ticket.value,
+                entity_id=breached_ticket.id,
+                priority="normal",
+                status=SlaClockStatus.breached.value,
+                started_at=observed_at - timedelta(days=2),
+                due_at=observed_at - timedelta(days=1, hours=1),
+                breached_at=observed_at - timedelta(days=1),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    dashboard = ticket_sla_reports.dashboard_performance(
+        db_session, observed_at=observed_at, window_days=7
+    )
+    by_key = {series.key: series for series in dashboard.series}
+    team_series = by_key[str(team.id)]
+    by_day = {point.day: point for point in team_series.points}
+
+    assert by_day[(observed_at - timedelta(days=1)).date()].newly_created == 1
+    assert by_day[(observed_at - timedelta(days=1)).date()].breached_sla == 1
+    assert by_day[observed_at.date()].approaching_sla == 1
+    assert by_key["all"].points[-1].approaching_sla == 1
+    assert dashboard.as_serializable()[0]["label"] == "All service teams"
 
 
 def test_ticket_sla_report_violation_records(db_session):
