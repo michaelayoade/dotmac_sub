@@ -11,6 +11,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from app.services.customer_occasion_contracts import (
+    READ_PERMISSION as OCCASION_READ_PERMISSION,
+)
+from app.services.customer_occasion_contracts import (
+    TEST_PERMISSION as OCCASION_TEST_PERMISSION,
+)
+from app.services.customer_occasion_contracts import (
+    UPDATE_PERMISSION as OCCASION_UPDATE_PERMISSION,
+)
 from app.services.integrations.registry import (
     META_CONNECTION_ADMIN_PATH,
     META_CONNECTION_READ_PERMISSION,
@@ -1211,7 +1220,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Notifications",
         "Manage notifications",
         "Communications and system administrators",
-        "Manage templates, policies, delivery queues, and notification evidence.",
+        "Manage templates, policies, annual customer greetings, delivery queues, and notification evidence.",
         ("/admin/notifications",),
         "Choose Templates, Policies, Queue, or Delivery Logs for the task you need to perform.",
         "Search and open the exact notification record before editing or retrying anything.",
@@ -1222,6 +1231,10 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review delivery failure evidence before retrying or canceling a queued notification.",
         "Before a controlled payment email adoption, review the receipt and invoice-paid comparison report, including both template IDs, purpose, conditions, and active state.",
         "An authorized operator can copy both reviewed payment email templates once, then rerun the comparison. Resolve conflicts before retrying; customer delivery uses the current templates until the separate cutover.",
+        "Open Birthday and anniversary emails from Notification Setup. Review missing dates and today's recipient sample; both automations start disabled. Anniversaries apply only to active and suspended customers, with marketing consent and communication preferences still required.",
+        "Edit each greeting's subject, message, timezone and send time, then save with Enable this automation unchecked during review. Verify the Disabled state after saving; enable an automation only after its separate operational review.",
+        "Use Send saved message as test with your review email address. This queues one marked test email without enabling the automation or consuming a customer's annual greeting.",
+        "Review recent greeting activity and open delivery history for provider outcomes. A greeting is admitted once per customer, occasion and year; missing joining dates must be corrected through the customer record, never inferred from import or account creation time.",
         notes=(
             "After the reviewed payment email cutover, Template Studio's published versions own receipt and invoice-paid email wording. The old email content is sealed; notification purpose, conditions, and active routing remain in Sub.",
             "Payment email publication is an authorized operator API operation, not a control on this page. It requires the expected published version; reload and review the current version if another publication changed it.",
@@ -2253,6 +2266,30 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Copy reviewed payment email templates",
             8,
             permission="notification:write",
+        ),
+        _action(
+            "review-customer-greetings",
+            "Review birthday and anniversary dates",
+            9,
+            permission=OCCASION_READ_PERMISSION,
+        ),
+        _action(
+            "configure-customer-greetings",
+            "Save customer greeting settings",
+            10,
+            permission=OCCASION_UPDATE_PERMISSION,
+        ),
+        _action(
+            "test-customer-greetings",
+            "Send a saved greeting as a test",
+            11,
+            permission=OCCASION_TEST_PERMISSION,
+        ),
+        _action(
+            "inspect-customer-greetings",
+            "Review greeting delivery evidence",
+            12,
+            permission=OCCASION_READ_PERMISSION,
         ),
     ),
     "provisioning": (

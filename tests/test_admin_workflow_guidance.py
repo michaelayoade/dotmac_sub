@@ -567,3 +567,29 @@ def test_installed_talk_guide_explains_save_validation_and_unchanged_delivery():
     assert "both settings and secrets write access" in content
     assert "without sending a notification" in content
     assert "global notification setting unchanged" in content
+
+
+def test_customer_greeting_guidance_explains_disabled_review_and_action_permissions() -> (
+    None
+):
+    guide = guidance_for_path("/admin/notifications/occasions")
+    assert guide is not None
+    content = " ".join(guide.steps).lower()
+    for phrase in (
+        "start disabled",
+        "active and suspended",
+        "marketing consent",
+        "unchecked during review",
+        "without enabling",
+        "never inferred",
+    ):
+        assert phrase in content
+    actions = {action.id: action for action in help_actions_for(guide)}
+    assert (
+        actions["review-customer-greetings"].permission == "notification:occasion:read"
+    )
+    assert (
+        actions["configure-customer-greetings"].permission
+        == "notification:occasion:update"
+    )
+    assert actions["test-customer-greetings"].permission == "notification:occasion:test"
