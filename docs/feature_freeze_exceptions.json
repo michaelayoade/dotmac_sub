@@ -55,6 +55,16 @@
       "reason": "Michael explicitly approved this scoped exception for PR #3630 on 2026-10-14. It covers only the listed network control-plane composition and router-control modules; CODEOWNERS review of this file remains required before merge.",
       "starter_contract": "Starter network control-plane composition API v1: typed layers, deterministic composition with provenance, and read-only drift reporting.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-3655",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/platform_health_observations.py"
+      ],
+      "reason": "Michael directed the thin-client health goal on 2026-10-16: keep the existing poller/syslog probes and product semantics Sub-local, serialize Starter Platform Health observations at the source edge, and create no Sub health subsystem or deployment authority. He approved commit, push and draft PR #3655 for hosted CI. This entry covers only the listed bounded serialization module; modifications to the existing probe owners need no exception. CODEOWNERS review of this file remains required before merge.",
+      "starter_contract": "Starter dotmac-platform-health HealthObservationInput: source_ref, observation_key, component_code, healthy/degraded/unhealthy/unknown state, observed_at, received_at, summary and bounded labels; Platform Health remains the future sole durable observation/evidence owner and Integrator remains the authenticated transport boundary.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
