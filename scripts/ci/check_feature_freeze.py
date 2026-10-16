@@ -47,7 +47,14 @@ OPENAPI_MANIFEST = "tests/architecture/openapi_contract_surface.json"
 #: regardless of its title. Override with FREEZE_SIZE_THRESHOLD or
 #: ``--size-threshold``.
 SIZE_THRESHOLD_LINES = 400
-SIZE_COUNTED_PATTERNS = ("app/**", "templates/**")
+#: static/ is counted for JavaScript only (not CSS or images); vendored and
+#: minified JS is excluded below.
+SIZE_COUNTED_PATTERNS = (
+    "app/**",
+    "templates/**",
+    "static/**/*.js",
+    "app/static/**/*.js",
+)
 SIZE_EXCLUDED_PATTERNS = (
     "tests/**",
     "alembic/**",
@@ -58,6 +65,10 @@ SIZE_EXCLUDED_PATTERNS = (
     "**/*.min.js",
     "**/*.min.css",
     "**/*.md",
+    "static/vendor/**",
+    "static/**/vendor/**",
+    "**/node_modules/**",
+    "**/dist/**",
 )
 NEW_TEMPLATE_PATTERNS = ("templates/**",)
 
@@ -286,8 +297,10 @@ def classify(
     ]
 
 
-def load_exceptions(root: Path) -> list[dict[str, object]]:
-    path = root / EXCEPTIONS_PATH
+def load_exceptions(
+    root: Path, exceptions_file: Path | None = None
+) -> list[dict[str, object]]:
+    path = exceptions_file or root / EXCEPTIONS_PATH
     if not path.is_file():
         return []
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -367,6 +380,13 @@ def main() -> int:
         help="Max added lines in app/ + templates/ before an exception is "
         f"required (default {SIZE_THRESHOLD_LINES}).",
     )
+    parser.add_argument(
+        "--exceptions",
+        type=Path,
+        default=None,
+        help="Exceptions JSON to trust (CI passes the base branch's copy; "
+        f"default {EXCEPTIONS_PATH} in the working tree).",
+    )
     args = parser.parse_args()
 
     pr = _event_pull_request()
@@ -377,7 +397,7 @@ def main() -> int:
     )
 
     root = Path.cwd()
-    entries = load_exceptions(root)
+    entries = load_exceptions(root, args.exceptions)
     problems = validate_exceptions(entries)
     for problem in problems:
         print(f"::error::feature-freeze: {problem}")

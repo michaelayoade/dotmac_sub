@@ -50,6 +50,19 @@ Each finding names the rule and the file; an exception entry covers it by
 listing the file in `paths`. The dashboard templates and
 `web_admin_dashboard.py` are also CODEOWNERS-protected.
 
+`static/**/*.js` is counted toward the size threshold too (not CSS or
+images; `*.min.js`, `vendor/`, `node_modules/` and `dist/` are excluded).
+
+### The gate runs from the base branch
+
+The workflow extracts `scripts/ci/check_feature_freeze.py` and
+`docs/feature_freeze_exceptions.json` from `origin/<base>` and runs that
+script against the PR checkout with `--exceptions` pointing at the base copy.
+Consequences: an exception must merge to `main` in its own (code-owned) PR
+before the PR it exempts can pass, and changes to the gate itself take
+effect only after they merge. A PR cannot weaken the gate or approve its own
+exception.
+
 Billing is additionally pinned by
 `tests/architecture/test_billing_thin_client_ratchet.py`: the billing file
 inventory is exact, the total line count is two-directional (shrinkage must

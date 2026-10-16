@@ -318,3 +318,38 @@ def test_approved_growth_covers_template_and_size_but_not_modules() -> None:
         [entry], "feature-exception", "app/services/a.py", "uncountable-diff"
     )
     assert not freeze.exception_covers([entry], "feature-exception", "templates/x.html")
+
+
+def test_static_js_counts_toward_size_but_css_images_vendor_min_do_not() -> None:
+    added = {
+        "static/js/admin/big.js": 401,
+        "static/css/app.css": 900,
+        "static/avatars/a.svg": 900,
+        "static/js/vendor/lib.js": 900,
+        "static/vendor/leaflet/l.js": 900,
+        "static/js/app.min.js": 900,
+        "static/js/dist/x.js": 900,
+    }
+    findings = freeze.classify_detailed([], "fix: x", added)
+    assert [p for _, p, _ in findings] == ["static/js/admin/big.js"]
+    only_noise = {k: v for k, v in added.items() if k != "static/js/admin/big.js"}
+    assert freeze.classify([], "fix: x", only_noise) == []
+
+
+def test_load_exceptions_uses_explicit_file(tmp_path: Path) -> None:
+    f = tmp_path / "ex.json"
+    f.write_text('{"exceptions": [{"id": "X"}]}', encoding="utf-8")
+    assert freeze.load_exceptions(tmp_path / "elsewhere", f) == [{"id": "X"}]
+    assert freeze.load_exceptions(tmp_path / "elsewhere") == []
+
+
+def test_workflow_uses_base_branch_gate_and_trusted_inputs() -> None:
+    wf = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/feature-freeze.yml"
+    ).read_text(encoding="utf-8")
+    assert "name: Feature Freeze Gate" in wf
+    assert "origin/${BASE_REF}:scripts/ci/check_feature_freeze.py" in wf
+    assert "--exceptions" in wf
+    assert "python3 scripts/ci/check_feature_freeze.py" not in wf
+    assert "github.event.pull_request.title" not in wf
+    assert "run: git fetch --no-tags origin ${{ github.base_ref }}" in wf
