@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC
 from decimal import Decimal
 from uuid import uuid4
 
@@ -294,3 +295,122 @@ def test_semantically_equal_verified_sources_share_one_canonical_event(db_sessio
         .count()
         == 1
     )
+
+
+@pytest.mark.parametrize("webhook_first", [True, False])
+def test_pending_verified_replay_preserves_first_source_and_facts(
+    db_session, webhook_first: bool
+) -> None:
+    provider = _provider(db_session)
+    command = PaymentProviderEventCommand(
+        provider_id=provider.id,
+        event_type="charge.success",
+        amount=Decimal("100.00"),
+        provider_fee=Decimal("1.50"),
+        net_amount=Decimal("98.50"),
+        currency="NGN",
+        external_id=f"pending-{uuid4()}",
+        idempotency_key=f"pending-key-{uuid4()}",
+        payload={"delivery": "first"},
+    )
+    methods = (
+        (PaymentProviderEvents.stage_verified_webhook_event, WEBHOOK_PARTICIPANT_SCOPE),
+        (
+            PaymentProviderEvents.stage_verified_reconciliation_event,
+            RECONCILIATION_PARTICIPANT_SCOPE,
+        ),
+    )
+    if not webhook_first:
+        methods = tuple(reversed(methods))
+    first = methods[0][0](
+        db_session,
+        command,
+        context=CommandContext.system(
+            actor="pytest:pending-replay", scope=methods[0][1], reason="First admission"
+        ),
+    )
+    persisted = db_session.get(PaymentProviderEvent, first.id)
+    assert persisted is not None
+    persisted.status = PaymentProviderEventStatus.pending
+    persisted.error_code = "retry"
+    persisted.error = "retry processing"
+    db_session.commit()
+    second = methods[1][0](
+        db_session,
+        replace(command, payload={"delivery": "retry"}),
+        context=CommandContext.system(
+            actor="pytest:pending-replay",
+            scope=methods[1][1],
+            reason="Resume processing",
+        ),
+    )
+    assert second.id == first.id
+    assert not second.replayed
+    assert second.source is first.source
+    assert second.observation_digest == first.observation_digest
+    # SQLite drops the UTC timezone marker when reloading a persisted timestamp.
+    first_received_at = first.received_at
+    second_received_at = second.received_at
+    if first_received_at.tzinfo is None:
+        first_received_at = first_received_at.replace(tzinfo=UTC)
+    if second_received_at.tzinfo is None:
+        second_received_at = second_received_at.replace(tzinfo=UTC)
+    assert second_received_at == first_received_at
+    assert persisted.payload == {"delivery": "retry"}
+    assert persisted.status is PaymentProviderEventStatus.failed
+    assert persisted.error_code == "payment_not_found"
+    assert persisted.error == "Payment not found for provider event"
+
+
+@pytest.mark.parametrize("pending", [True, False])
+def test_legacy_first_verified_admission_survives_strict_replay_checks(
+    db_session, pending: bool
+) -> None:
+    from app.models.billing import PaymentProviderEventFinancialEffect
+
+    provider = _provider(db_session)
+    command = PaymentProviderEventCommand(
+        provider_id=provider.id,
+        event_type="charge.success",
+        external_id=f"legacy-{uuid4()}",
+        amount=Decimal("100.00"),
+        provider_fee=Decimal("1.50"),
+        net_amount=Decimal("98.50"),
+        currency="NGN",
+    )
+    legacy = PaymentProviderEvent(
+        provider_id=provider.id,
+        event_type=command.event_type,
+        external_id=command.external_id,
+        amount=command.amount,
+        currency=command.currency,
+        financial_effect=PaymentProviderEventFinancialEffect.none,
+        source=PaymentProviderEventSource.legacy_unknown,
+        status=(
+            PaymentProviderEventStatus.pending
+            if pending
+            else PaymentProviderEventStatus.failed
+        ),
+    )
+    db_session.add(legacy)
+    db_session.commit()
+    context = CommandContext.system(
+        actor="pytest:legacy-admission",
+        scope=WEBHOOK_PARTICIPANT_SCOPE,
+        reason="Verify first provenance enrichment",
+    )
+    with pytest.raises(PaymentProviderEventError, match="different evidence"):
+        PaymentProviderEvents.stage_verified_webhook_event(
+            db_session, replace(command, amount=Decimal("101.00")), context=context
+        )
+    assert legacy.source is PaymentProviderEventSource.legacy_unknown
+    result = PaymentProviderEvents.stage_verified_webhook_event(
+        db_session, command, context=context
+    )
+    assert result.id == legacy.id
+    assert not result.replayed
+    assert result.source is PaymentProviderEventSource.verified_webhook
+    assert result.observation_digest is not None
+    assert legacy.net_amount == Decimal("98.50")
+    assert legacy.provider_fee == Decimal("1.50")
+    assert legacy.payment_id is None

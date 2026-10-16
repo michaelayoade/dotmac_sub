@@ -645,19 +645,25 @@ def test_locked_population_refuses_preexisting_repeatable_snapshot(
         CaptureLockedBillingOpeningPopulationQuery,
     )
 
-    with census_factory.begin() as db:
-        db.execute(text("SET TRANSACTION ISOLATION LEVEL " + isolation))
-        db.execute(text("SELECT count(*) FROM public.invoices"))
-        _lock_census(db)
-        with pytest.raises(
-            BillingOpeningExportError, match="READ WRITE READ COMMITTED"
-        ):
-            capture_locked_billing_opening_population(
-                db,
-                query=CaptureLockedBillingOpeningPopulationQuery(
-                    query(census_rows.cutoff)
-                ),
-            )
+    with census_factory() as source:
+        engine = source.get_bind()
+        assert isinstance(engine, Engine)
+    # Owner session hooks can query immediately when a transaction begins.
+    # Configure the real connection before that first transaction/query.
+    with engine.connect().execution_options(isolation_level=isolation) as connection:
+        with connection.begin(), Session(bind=connection) as db:
+            assert db.scalar(text("SHOW transaction_isolation")) == isolation.lower()
+            db.execute(text("SELECT count(*) FROM public.invoices"))
+            _lock_census(db)
+            with pytest.raises(
+                BillingOpeningExportError, match="READ WRITE READ COMMITTED"
+            ):
+                capture_locked_billing_opening_population(
+                    db,
+                    query=CaptureLockedBillingOpeningPopulationQuery(
+                        query(census_rows.cutoff)
+                    ),
+                )
 
 
 def test_locked_population_preserves_readonly_preview_and_has_no_classification(

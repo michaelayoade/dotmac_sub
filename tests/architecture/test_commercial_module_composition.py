@@ -29,6 +29,11 @@ _SHADOW_IMPORTS = {
         ("dotmac_payments", "PaymentIntentObservationV1"),
         ("dotmac_payments", "PaymentPurpose"),
     },
+    "app/services/provider_payment_settlements.py": {
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+    },
     "app/services/payment_intent_module_shadow.py": {
         ("dotmac_payments", "GetPaymentIntentV1"),
         ("dotmac_payments", "PaymentPurpose"),
@@ -314,7 +319,7 @@ def test_invoice_binding_owner_uses_only_public_module_surfaces_and_one_root() -
         node
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
-        and node.name == "_create_invoice_gateway_topup_intent"
+        and node.name == "_create_customer_gateway_topup_intent"
     )
     calls = {
         node.func.id
@@ -452,3 +457,21 @@ def test_saved_authorization_public_boundary_is_immutable_and_precise() -> None:
                 )
                 callers += 1
     assert callers == 5
+
+
+def test_provider_source_query_imports_remain_read_only_and_path_bound(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "app/services/provider_payment_settlements.py"
+    owner.parent.mkdir(parents=True)
+    owner.write_text(
+        "from dotmac_payments import GetPaymentIntentV1, PaymentPurpose, get_payment_intent_v1\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path) == []
+    owner.write_text("from dotmac_payments import record_confirmation\n")
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.unlink()
+    (owner.parent / "wrong_provider_owner.py").write_text(
+        "from dotmac_payments import get_payment_intent_v1\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path)

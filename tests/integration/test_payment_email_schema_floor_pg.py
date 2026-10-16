@@ -66,7 +66,7 @@ def test_real_638_catalog_is_installed_without_reading_activation_rows(
         "ALTER FUNCTION public.prevent_sealed_payment_email_content() SECURITY DEFINER",
         "ALTER FUNCTION public.prevent_sealed_payment_email_content() SET search_path = pg_catalog",
         "CREATE OR REPLACE FUNCTION public.prevent_sealed_payment_email_content() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
-        "CREATE FUNCTION public.prevent_sealed_payment_email_content(integer) RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
+        "CREATE FUNCTION public.prevent_sealed_payment_email_content(integer) RETURNS integer LANGUAGE sql AS $$ SELECT $1 $$",
         "CREATE TRIGGER extra_email_guard BEFORE UPDATE ON public.notification_templates FOR EACH ROW EXECUTE FUNCTION public.prevent_sealed_payment_email_content()",
         "DROP TABLE public.payment_email_cutovers",
     ],
