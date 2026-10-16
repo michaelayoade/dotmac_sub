@@ -333,6 +333,9 @@ def test_spam_resolution_rechecks_identity_before_writing(
             db_session.add(customer_party)
             db_session.flush()
             customer.party_id = customer_party.id
+            customer.party_bound_at = datetime.now(UTC)
+            customer.party_binding_source = "pytest"
+            customer.party_binding_reason = "Explicit conflicting identity fixture"
             conversation.subscriber_id = customer.id
     db_session.flush()
     assert not team_inbox_status.resolution_readiness(
