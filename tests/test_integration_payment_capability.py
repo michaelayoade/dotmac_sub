@@ -192,3 +192,387 @@ def test_pinned_checkout_source_must_be_payment_intent_binding(db_session):
             PAYMENT_RECONCILE_CAPABILITY,
             checkout_binding_id=bindings["payments.webhook.v1"].id,
         )
+
+
+def test_saved_authorization_charge_sends_explicit_currency_without_default():
+    client = _Client(
+        {"status": True, "data": {"reference": "currency-ref", "status": "success"}}
+    )
+    runner = PaymentGatewayRunner("paystack", client_override=client)
+    result = runner.execute(
+        _envelope(
+            "charge_authorization",
+            {
+                "authorization_code": "test-authorization",
+                "email": "payer@example.test",
+                "amount_kobo": 250001,
+                "currency": "USD",
+                "reference": "currency-ref",
+                "metadata": {},
+            },
+        ),
+        config={"base_url": "https://gateway.example.test", "default_currency": "NGN"},
+        secret_material={"gateway_credentials": "materialized-test-secret"},
+    )
+    assert result.status == OperationStatus.succeeded
+    assert client.calls[0]["json"]["amount"] == 250001
+    assert client.calls[0]["json"]["currency"] == "USD"
+
+
+def test_charge_capability_preserves_required_currency(monkeypatch):
+    from unittest.mock import Mock
+
+    from app.services.payment_charge_contracts import (
+        ChargeAuthorizationCommand,
+        IntentChargeMetadata,
+        PaymentGatewayProviderStatus,
+        ProviderAcceptance,
+    )
+
+    client = _Client(
+        {"status": True, "data": {"reference": "currency-ref", "status": "success"}}
+    )
+    runner = PaymentGatewayRunner("paystack", client_override=client)
+    execute = Mock(
+        side_effect=lambda action, params: runner.execute(
+            _envelope(action, params),
+            config={"base_url": "https://gateway.example.test"},
+            secret_material={"gateway_credentials": "materialized-test-secret"},
+        )
+    )
+    monkeypatch.setattr(
+        payment_capability, "_authorization_executor", Mock(return_value=execute)
+    )
+    command = ChargeAuthorizationCommand(
+        authorization_code="test-authorization",
+        email="payer@example.test",
+        amount_subunits=10001,
+        currency="USD",
+        reference="currency-ref",
+        metadata=IntentChargeMetadata(uuid4()),
+        checkout_binding_id=uuid4(),
+    )
+    observation = payment_capability.charge_authorization(Mock(), command)
+    assert execute.call_args.args[1]["currency"] == "USD"
+    assert observation.acceptance is ProviderAcceptance.accepted
+    assert observation.provider_status is PaymentGatewayProviderStatus.success
+    assert observation.reference == command.reference
+    assert observation.amount_subunits is None
+    assert observation.currency is None
+    assert command.authorization_code not in repr(command)
+    assert command.email not in repr(command)
+
+
+@pytest.mark.parametrize("acceptance", (False, "true", "success", 1, None))
+def test_charge_never_infers_acceptance_from_nested_success(monkeypatch, acceptance):
+    from unittest.mock import Mock
+
+    from app.services.payment_charge_contracts import (
+        ChargeAuthorizationCommand,
+        IntentChargeMetadata,
+    )
+
+    client = _Client(
+        {"status": acceptance, "data": {"status": "success", "reference": "bound-ref"}}
+    )
+    runner = PaymentGatewayRunner("paystack", client_override=client)
+
+    def execute(action, params):
+        return runner.execute(
+            _envelope(action, params),
+            config={"base_url": "https://gateway.example.test"},
+            secret_material={"gateway_credentials": "materialized-test-secret"},
+        )
+
+    monkeypatch.setattr(
+        payment_capability, "_authorization_executor", Mock(return_value=execute)
+    )
+    command = ChargeAuthorizationCommand(
+        "authorization",
+        "payer@example.test",
+        10000,
+        "NGN",
+        "bound-ref",
+        IntentChargeMetadata(uuid4()),
+        uuid4(),
+    )
+    with pytest.raises(
+        payment_capability.PaymentCapabilityError, match="charge_provider_not_accepted"
+    ):
+        payment_capability.charge_authorization(Mock(), command)
+
+
+@pytest.mark.parametrize(
+    "status,reference",
+    (
+        (None, "bound-ref"),
+        ("unknown", "bound-ref"),
+        ("success", None),
+        ("success", "unrelated-ref"),
+    ),
+)
+def test_charge_refuses_missing_unknown_or_unrelated_facts(
+    monkeypatch, status, reference
+):
+    from unittest.mock import Mock
+
+    from app.services.payment_charge_contracts import (
+        ChargeAuthorizationCommand,
+        IntentChargeMetadata,
+    )
+
+    client = _Client(
+        {"status": True, "data": {"status": status, "reference": reference}}
+    )
+    runner = PaymentGatewayRunner("paystack", client_override=client)
+
+    def execute(action, params):
+        return runner.execute(
+            _envelope(action, params),
+            config={"base_url": "https://gateway.example.test"},
+            secret_material={"gateway_credentials": "materialized-test-secret"},
+        )
+
+    monkeypatch.setattr(
+        payment_capability, "_authorization_executor", Mock(return_value=execute)
+    )
+    command = ChargeAuthorizationCommand(
+        "authorization",
+        "payer@example.test",
+        10000,
+        "NGN",
+        "bound-ref",
+        IntentChargeMetadata(uuid4()),
+        uuid4(),
+    )
+    with pytest.raises(payment_capability.PaymentCapabilityError):
+        payment_capability.charge_authorization(Mock(), command)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("amount", "10000"),
+        ("amount", 100.1),
+        ("amount", True),
+        ("fees", -1),
+        ("currency", ""),
+        ("currency", "ngn"),
+        ("paid_at", "invalid"),
+    ),
+)
+def test_charge_refuses_present_malformed_money_or_time(field, value):
+    client = _Client(
+        {
+            "status": True,
+            "data": {"status": "success", "reference": "bound-ref", field: value},
+        }
+    )
+    runner = PaymentGatewayRunner("paystack", client_override=client)
+    result = runner.execute(
+        _envelope(
+            "charge_authorization",
+            {
+                "authorization_code": "authorization",
+                "email": "payer@example.test",
+                "amount_kobo": 10000,
+                "currency": "NGN",
+                "reference": "bound-ref",
+                "metadata": {},
+            },
+        ),
+        config={"base_url": "https://gateway.example.test"},
+        secret_material={"gateway_credentials": "materialized-test-secret"},
+    )
+    assert result.status is OperationStatus.rejected
+
+
+def test_typed_charge_observation_retains_observed_money_without_expected_defaults(
+    monkeypatch,
+):
+    from unittest.mock import Mock
+
+    from app.services.payment_charge_contracts import (
+        ChargeAuthorizationCommand,
+        IntentChargeMetadata,
+    )
+
+    client = _Client(
+        {
+            "status": True,
+            "data": {
+                "status": "success",
+                "reference": "bound-ref",
+                "amount": 100,
+                "currency": "USD",
+                "fees": 1,
+                "authorization": {"authorization_code": "response-secret"},
+                "customer": {"email": "private@example.test"},
+            },
+        }
+    )
+    runner = PaymentGatewayRunner("paystack", client_override=client)
+    wire_results = []
+
+    def execute(action, params):
+        result = runner.execute(
+            _envelope(action, params),
+            config={"base_url": "https://gateway.example.test"},
+            secret_material={"gateway_credentials": "materialized-test-secret"},
+        )
+        wire_results.append(result)
+        return result
+
+    monkeypatch.setattr(
+        payment_capability, "_authorization_executor", Mock(return_value=execute)
+    )
+    observation = payment_capability.charge_authorization(
+        Mock(),
+        ChargeAuthorizationCommand(
+            "authorization",
+            "payer@example.test",
+            10000,
+            "NGN",
+            "bound-ref",
+            IntentChargeMetadata(uuid4()),
+            uuid4(),
+        ),
+    )
+    assert observation.amount_subunits == 100
+    assert observation.currency == "USD"
+    assert observation.fee_subunits == 1
+    assert "response-secret" not in str(wire_results[0].output)
+    assert "private@example.test" not in str(wire_results[0].output)
+
+
+def test_typed_reference_observation_uses_same_verify_transport(monkeypatch):
+    from unittest.mock import Mock
+
+    from app.services.payment_charge_contracts import (
+        ObserveAuthorizationChargeReference,
+        PaymentGatewayProviderStatus,
+        ProviderAcceptance,
+    )
+
+    client = _Client(
+        {"status": True, "data": {"status": "success", "reference": "bound-ref"}}
+    )
+    runner = PaymentGatewayRunner("paystack", client_override=client)
+
+    def execute(action, params):
+        assert action == "verify"
+        return runner.execute(
+            _envelope(action, params, capability_id=PAYMENT_RECONCILE_CAPABILITY),
+            config={"base_url": "https://gateway.example.test"},
+            secret_material={"gateway_credentials": "materialized-test-secret"},
+        )
+
+    monkeypatch.setattr(
+        payment_capability, "_authorization_executor", Mock(return_value=execute)
+    )
+    observation = payment_capability.observe_authorization_charge_reference(
+        Mock(), ObserveAuthorizationChargeReference("bound-ref", uuid4())
+    )
+    assert observation.acceptance is ProviderAcceptance.accepted
+    assert observation.provider_status is PaymentGatewayProviderStatus.success
+    assert client.calls[0]["url"].endswith("/transaction/verify/bound-ref")
+
+
+def test_charge_values_are_frozen_and_binding_identity_is_precise():
+    from dataclasses import FrozenInstanceError
+
+    from app.services.payment_charge_contracts import (
+        ChargeAuthorizationCommand,
+        ChargeProtocolError,
+        IntentChargeMetadata,
+    )
+
+    command = ChargeAuthorizationCommand(
+        "authorization",
+        "payer@example.test",
+        10000,
+        "NGN",
+        "bound-ref",
+        IntentChargeMetadata(uuid4()),
+        uuid4(),
+    )
+    with pytest.raises(FrozenInstanceError):
+        command.reference = "different"
+    with pytest.raises(ChargeProtocolError, match="charge_binding_invalid"):
+        ChargeAuthorizationCommand(
+            "authorization",
+            "payer@example.test",
+            10000,
+            "NGN",
+            "bound-ref",
+            IntentChargeMetadata(uuid4()),
+            "transport-string",
+        )
+
+
+@pytest.mark.parametrize("currency", ["ÑGN", "NＧN", "NG1", "ngn"])
+def test_charge_currency_rejects_non_ascii_and_non_iso_shape(currency):
+    from app.services.integrations.connectors.payment_gateway import (
+        _authorization_payload,
+        _observed_currency,
+    )
+    from app.services.payment_charge_contracts import (
+        ChargeAuthorizationCommand,
+        ChargeProtocolError,
+        IntentChargeMetadata,
+    )
+
+    with pytest.raises(ChargeProtocolError, match="charge_currency_invalid"):
+        ChargeAuthorizationCommand(
+            "authorization",
+            "payer@example.test",
+            100,
+            currency,
+            "bound-ref",
+            IntentChargeMetadata(uuid4()),
+            uuid4(),
+        )
+    with pytest.raises(ChargeProtocolError, match="charge_currency_invalid"):
+        _observed_currency(currency)
+    with pytest.raises(ChargeProtocolError, match="charge_currency_invalid"):
+        _authorization_payload(
+            {
+                "authorization_code": "authorization",
+                "email": "payer@example.test",
+                "reference": "bound-ref",
+                "currency": currency,
+                "amount_kobo": 100,
+                "metadata": {},
+            }
+        )
+
+
+@pytest.mark.parametrize("status_code", [400, 404, 500])
+def test_typed_reference_transport_preserves_recovery_error_classification(
+    monkeypatch, status_code
+):
+    from unittest.mock import Mock
+
+    from app.services.integrations.runtime import OperationResult
+    from app.services.payment_charge_contracts import (
+        ObserveAuthorizationChargeReference,
+    )
+
+    failed = OperationResult(
+        operation_id=uuid4(),
+        status=OperationStatus.rejected,
+        error_code=f"provider_http_{status_code}",
+    )
+    monkeypatch.setattr(
+        payment_capability,
+        "_authorization_executor",
+        Mock(return_value=Mock(return_value=failed)),
+    )
+    with pytest.raises(payment_capability.PaymentCapabilityError) as caught:
+        payment_capability.observe_authorization_charge_reference(
+            Mock(), ObserveAuthorizationChargeReference("bound-ref", uuid4())
+        )
+    assert caught.value.status_code == status_code
+    assert payment_capability.is_verification_not_found(caught.value) is (
+        status_code in {400, 404}
+    )

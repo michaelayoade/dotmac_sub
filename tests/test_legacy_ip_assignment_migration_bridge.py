@@ -3,8 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
+from tests.migration_graph_helpers import composed_sub_graph
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,14 +77,10 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
     )
     assert current.down_revision == "382_ticket_work_order_handoff"
 
-    config = Config(str(REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
-    script = ScriptDirectory.from_config(config)
-    # Single-headed with 375 in the head's ancestry; later revisions (e.g. the
+    script, heads = composed_sub_graph(REPO_ROOT)
+    # Sub is single-headed within the composed graph, with 375 in its ancestry; later revisions (e.g. the
     # integration platform chain) may extend past it — asserting the exact
     # head breaks on every subsequent migration.
-    heads = script.get_heads()
     assert len(heads) == 1
     ancestry = {
         rev.revision for rev in script.walk_revisions(base="base", head=heads[0])

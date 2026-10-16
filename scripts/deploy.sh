@@ -111,6 +111,12 @@ CANDIDATE_DRAIN_SECONDS="${CANDIDATE_DRAIN_SECONDS:-2}"
 BACKGROUND_RUNTIME_TIMEOUT_SECONDS="${BACKGROUND_RUNTIME_TIMEOUT_SECONDS:-90}"
 BACKGROUND_STABILITY_SECONDS="${BACKGROUND_STABILITY_SECONDS:-15}"
 CELERY_INSPECT_TIMEOUT_SECONDS="${CELERY_INSPECT_TIMEOUT_SECONDS:-5}"
+PRODUCTION_DEPLOY_DRAIN_BUDGET_SECONDS=600
+PRODUCTION_DEPLOY_CLOCK_SKEW_ALLOWANCE_SECONDS=30
+# Reserved after drain: 20m migration, 10m warm candidate health, 10m
+# primary health, 10m recovery, and 27.5m for bounded stop/schema/start work.
+PRODUCTION_DEPLOY_CUTOVER_RESERVE_SECONDS=4650
+PRODUCTION_DEPLOY_MIGRATION_BUDGET_SECONDS=1200
 # Every service that runs the app image and must be recreated on a new build.
 #
 # Note what is NOT here, because it is load-bearing and easy to miss:
@@ -145,6 +151,7 @@ CELERY_WORKER_SERVICES=(celery-worker celery-worker-bandwidth \
   celery-worker-notifications-immediate celery-worker-notifications \
   celery-worker-billing celery-worker-tr069)
 CELERY_BEAT_SERVICE="celery-beat"
+PRODUCTION_PRODUCER_SERVICES=(app bandwidth-poller syslog-listener team-inbox-smtp)
 
 DB_CONTAINER="${DB_CONTAINER:-$(env_value DB_CONTAINER)}"
 DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
@@ -303,6 +310,7 @@ assert_background_service_running() {
 
 background_runtime_ready() {
   local service
+  local include_beat="${1:-1}"
   local container
   local hostname
   local probe_container=""
@@ -312,7 +320,7 @@ background_runtime_ready() {
 
   # Beat is profile-gated off on staging (it must never originate production
   # work there), so assert it only where it is actually declared.
-  if service_is_declared "${CELERY_BEAT_SERVICE}"; then
+  if [[ "${include_beat}" == 1 ]] && service_is_declared "${CELERY_BEAT_SERVICE}"; then
     assert_background_service_running "${CELERY_BEAT_SERVICE}" || return 1
   fi
   for service in "${CELERY_WORKER_SERVICES[@]}"; do
@@ -352,6 +360,17 @@ background_runtime_ready() {
     echo "BACKGROUND RUNTIME FAILURE: a Celery worker did not answer ping or consume its required queue." >&2
     return 1
   fi
+}
+
+wait_for_background_workers() {
+  local deadline=$((SECONDS + BACKGROUND_RUNTIME_TIMEOUT_SECONDS))
+  until background_runtime_ready 0; do
+    if ((SECONDS >= deadline)); then
+      echo "BACKGROUND RUNTIME FAILURE: workers did not become ready before the bounded deadline." >&2
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 wait_for_background_runtime() {
@@ -448,7 +467,30 @@ stop_candidate_gracefully() {
 }
 
 MIGRATION_RUN_PREFIX=""
+MIGRATION_INVOCATION_STARTED=0
 run_migrations() {
+  if [[ "${CUTOVER_PHASE:-idle}" != idle ]]; then
+    local -a args=(--deploy-directory "${DEPLOY_DIR}" \
+      --binding-json "${CUTOVER_BINDING_JSON}" \
+      --run-id "${DEPLOY_RUN_ID:-0}" \
+      --authorization-run-id "${AUTHORIZATION_RUN_ID:-0}" \
+      --target-revision "${FULL_SHA}" \
+      --candidate-digest "${IMAGE##*@}" \
+      --budget-seconds "${PRODUCTION_DEPLOY_MIGRATION_BUDGET_SECONDS}")
+    if [[ "${DOTMAC_MAINTENANCE_CONTEXT_FD:-}" == 7 ]]; then
+      args+=(--maintenance-context-fd 7)
+    fi
+    local head
+    while IFS= read -r head; do
+      [[ -n "${head}" ]] && args+=(--heads-before "${head}")
+    done <<<"${MIGRATION_HEADS_BEFORE}"
+    while IFS= read -r head; do
+      [[ -n "${head}" ]] && args+=(--candidate-head "${head}")
+    done < <(candidate_heads)
+    MIGRATION_INVOCATION_STARTED=1
+    run_repo_module scripts.production_deploy_migration run "${args[@]}"
+    return $?
+  fi
   local attempt=1
   MIGRATION_RUN_PREFIX="dotmac_sub_migrate_${DEPLOY_RUN_ID:-$$}_"
   local output
@@ -711,7 +753,9 @@ database_heads() {
 }
 
 candidate_heads() {
-  docker run --rm --entrypoint alembic "${IMAGE}" heads \
+  docker run --rm --entrypoint python "${IMAGE}" \
+    -I -B -c 'import sys; sys.path.insert(0, "/app"); from scripts.ci.migrated_test_database import install_migration_graph_environment; install_migration_graph_environment(); from alembic.config import main; main(argv=sys.argv[1:])' \
+    heads --resolve-dependencies \
     | sed -E 's/[[:space:]].*$//' \
     | grep -E '^[A-Za-z0-9_.-]+$'
 }
@@ -1493,11 +1537,15 @@ repin_prev() {
   restore_env_value GIT_SHA "${PREV_GIT_SHA_PRESENT}" "${PREV_GIT_SHA}" || return 1
 }
 previous_image_rollback_allowed() {
-  # Execute this check from the candidate image and its runtime DB connection,
+  # Execute both checks from the candidate image and its runtime DB connection,
   # before changing either pin or recreating a container from the old image.
+  # Each floor is permanent after installation; rollback needs proof of both.
   APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
     "${COMPOSE[@]}" run --rm --no-deps app \
-    python -m scripts.verify_payment_email_rollback
+    python -m scripts.verify_payment_email_rollback \
+    && APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" run --rm --no-deps app \
+      python -m scripts.verify_payments_intent_rollback
 }
 # A failure on or after `up -d` (below) may already have replaced/stopped the
 # previous containers — repinning .env alone does not bring anything back up.
@@ -1506,9 +1554,14 @@ previous_image_rollback_allowed() {
 # errexit for the entire function in that context.
 ROLLBACK_OUTCOME="unknown"
 restore_prev() {
+  if [[ "${DOTMAC_MAINTENANCE_CONTEXT_FD:-}" == 7 ]]; then
+    ROLLBACK_OUTCOME="maintenance_forward_only"
+    echo "DEPLOY RECOVERY REFUSED: maintenance repair keeps the incumbent stopped and repairs forward; no legacy pin or container restart is permitted." >&2
+    return 1
+  fi
   if ! previous_image_rollback_allowed; then
     ROLLBACK_OUTCOME="floor_refused"
-    echo "DEPLOY ROLLBACK REFUSED: payment email floor is installed or unproved; retain candidate and repair forward." >&2
+    echo "DEPLOY ROLLBACK REFUSED: a permanent Payments floor is installed or unproved; retain candidate and repair forward." >&2
     return 1
   fi
   ROLLBACK_OUTCOME="restore_failed"
@@ -1530,7 +1583,9 @@ restore_prev() {
   ROLLBACK_OUTCOME="restored"
 }
 report_rollback_outcome() {
-  if [[ "${ROLLBACK_OUTCOME}" == "floor_refused" ]]; then
+  if [[ "${ROLLBACK_OUTCOME}" == "maintenance_forward_only" ]]; then
+    echo "Maintenance repair remains stopped with its candidate pin retained; resolve forward under the trusted deployment lock." >&2
+  elif [[ "${ROLLBACK_OUTCOME}" == "floor_refused" ]]; then
     echo "Automatic image rollback refused; deployment pin left as-is and candidate retained where available. Repair forward." >&2
   else
     echo "Previous-image restore incomplete; inspect APP_IMAGE/GIT_SHA, candidate retained where available. Repair forward." >&2
@@ -1597,26 +1652,499 @@ read_alembic_heads() {
   [[ -n "${out}" ]] || return 1
   printf '%s\n' "${out}"
 }
-# Shared by a failed migration and an INT/TERM/HUP during it. The pin is put
-# back ONLY when both head reads succeeded and match; never via restore_prev.
-# Always returns 1 (the deploy has failed).
-# Confirm the one-off migration container is gone first (it can outlive a dead
-# compose client). Still running or unknown = unreadable; it is never killed.
-migration_container_gone() {
-  local tries=0 max="${MIGRATION_PS_POLL_ATTEMPTS:-12}" ids
-  [[ -n "${MIGRATION_RUN_PREFIX}" ]] || return 0
-  while :; do
-    if ! ids="$(docker ps -q --filter "name=${MIGRATION_RUN_PREFIX}" 2>/dev/null)"; then
+
+# The workflow binds this absolute deadline at job start. Never treat time spent
+# on the backup as a fresh cutover allowance. Clock-skew allowance is deducted
+# before comparing the remaining interval with the explicit cutover reserve.
+require_production_cutover_budget() {
+  local deadline now remaining required="${1:-}"
+  deadline="${PRODUCTION_DEPLOY_DEADLINE_EPOCH:-}"
+  if [[ ! "${deadline}" =~ ^[0-9]{10}$ ]]; then
+    echo "DEPLOY REFUSED: trusted production job deadline is absent or malformed." >&2
+    return 1
+  fi
+  now="$(date -u +%s)" || return 1
+  [[ "${now}" =~ ^[0-9]{10}$ ]] || return 1
+  remaining=$((deadline - now - PRODUCTION_DEPLOY_CLOCK_SKEW_ALLOWANCE_SECONDS))
+  if [[ -z "${required}" ]]; then
+    required=$((PRODUCTION_DEPLOY_DRAIN_BUDGET_SECONDS + PRODUCTION_DEPLOY_CUTOVER_RESERVE_SECONDS))
+  fi
+  if ((remaining < required)); then
+    echo "DEPLOY REFUSED: insufficient trusted job time remains for bounded drain and cutover/recovery reserve." >&2
+    return 1
+  fi
+  printf '%s\n' "${remaining}"
+}
+
+# Freeze only the exact incumbent containers owned by the effective Compose
+# release. Container IDs and immutable image identities are rechecked before
+# every stop/start; an unknown app-image container or pre-existing warm
+# candidate makes the cutover unprovable.
+declare -a CUTOVER_IDS=() CUTOVER_SERVICES=() CUTOVER_STATES=() CUTOVER_NODES=() CUTOVER_INACTIVE_SERVICES=()
+declare -A CUTOVER_IMAGE_IDS=() CUTOVER_IMAGE_REFS=() CUTOVER_REVISIONS=()
+declare -A CUTOVER_RESTARTS=() CUTOVER_STOPPED_BY_US=()
+CUTOVER_PHASE="idle"
+CUTOVER_UNRESOLVED_STOP=0
+CUTOVER_BINDING_JSON=""
+capture_production_cutover() {
+  local service ids id metadata container_image writer_spec
+  local -a services=() probe_args=()
+  services+=("${APP_SERVICES[@]}")
+  if service_is_declared team-inbox-smtp; then
+    services+=(team-inbox-smtp)
+  fi
+  CUTOVER_IDS=(); CUTOVER_SERVICES=(); CUTOVER_STATES=(); CUTOVER_NODES=(); CUTOVER_INACTIVE_SERVICES=()
+  CUTOVER_IMAGE_IDS=(); CUTOVER_IMAGE_REFS=(); CUTOVER_REVISIONS=()
+  CUTOVER_RESTARTS=(); CUTOVER_STOPPED_BY_US=()
+  for service in "${services[@]}"; do
+    ids="$("${COMPOSE[@]}" ps -a -q "${service}")" || return 1
+    [[ -n "${ids}" ]] || {
+      if [[ "${service}" == "team-inbox-smtp" ]]; then
+        CUTOVER_INACTIVE_SERVICES+=("${service}")
+        continue
+      fi
+      echo "CUTOVER REFUSED: expected Compose service ${service} has no captured container." >&2
+      return 1
+    }
+    [[ "$(wc -l <<<"${ids}" | tr -d ' ')" == 1 ]] || {
+      echo "CUTOVER REFUSED: service ${service} has an ambiguous container count." >&2
+      return 1
+    }
+    id="${ids//$'\n'/}"
+    metadata="$(docker inspect --format '{{.Id}}|{{.Config.Image}}|{{.Image}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{.RestartCount}}|{{.Config.Hostname}}' "${id}")" || return 1
+    IFS='|' read -r id container_image image_id revision state exit_code oom restart_count hostname <<<"${metadata}"
+    [[ "${id}" =~ ^[0-9a-f]{64}$ && "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+    [[ "${container_image}" == "${PREV_IMAGE}" && "${revision}" == "${PREV_GIT_SHA}" ]] || {
+      echo "CUTOVER REFUSED: incumbent ${service} image/revision differs from the pinned release." >&2
+      return 1
+    }
+    if [[ "${service}" == team-inbox-smtp && "${state}" == exited && "${oom}" == false ]]; then
+      : # Optional producer already stopped; preserve its original state.
+    elif [[ "${state}" != running || "${oom}" != false ]]; then
+      echo "CUTOVER REFUSED: incumbent ${service} is not running cleanly." >&2
       return 1
     fi
-    [[ -z "${ids}" ]] && return 0
-    tries=$((tries + 1))
-    ((tries >= max)) && return 1
-    sleep "${MIGRATION_PS_POLL_SECONDS:-5}"
+    if [[ "${service}" == celery-worker* ]]; then
+      [[ "${hostname}" =~ ^[A-Za-z0-9_.@:-]{1,255}$ ]] || return 1
+      CUTOVER_NODES+=("celery@${hostname}")
+    fi
+    CUTOVER_IDS+=("${id}"); CUTOVER_SERVICES+=("${service}"); CUTOVER_STATES+=("${state}")
+    CUTOVER_IMAGE_IDS["${id}"]="${image_id}"
+    CUTOVER_IMAGE_REFS["${id}"]="${container_image}"
+    CUTOVER_REVISIONS["${id}"]="${revision}"
+    CUTOVER_RESTARTS["${id}"]="${restart_count}"
+    CUTOVER_STOPPED_BY_US["${id}"]=0
   done
+  [[ "${#CUTOVER_NODES[@]}" -eq "${#CELERY_WORKER_SERVICES[@]}" ]] || {
+    echo "CUTOVER REFUSED: could not capture all eight incumbent Celery worker nodes." >&2
+    return 1
+  }
+  local -a expected_app_image_ids=()
+  local i
+  for i in "${!CUTOVER_IDS[@]}"; do
+    [[ "${CUTOVER_IMAGE_REFS[${CUTOVER_IDS[$i]}]}" == "${PREV_IMAGE}" ]] \
+      && expected_app_image_ids+=("${CUTOVER_IDS[$i]}")
+  done
+  [[ "$(docker ps -a --filter "ancestor=${IMAGE_REPO}" --format '{{.ID}}' | sort | tr '\n' ' ')" == "$(printf '%s\n' "${expected_app_image_ids[@]}" | sort | tr '\n' ' ')" ]] || {
+    echo "CUTOVER REFUSED: an unknown or warm-candidate app-image container exists." >&2
+    return 1
+  }
+  [[ -z "$(docker ps -a --filter "name=^/${CANDIDATE_CONTAINER}$" --format '{{.ID}}')" ]] || {
+    echo "CUTOVER REFUSED: a warm candidate already exists." >&2
+    return 1
+  }
+  probe_args=(capture --app-container "$(captured_id_for_service app)"
+    --candidate-image "${IMAGE}" --candidate-revision "${FULL_SHA}")
+  for i in "${!CUTOVER_IDS[@]}"; do
+    service="${CUTOVER_SERVICES[$i]}"
+    if [[ "${service}" == team-inbox-smtp && "${CUTOVER_STATES[$i]}" == exited ]]; then
+      CUTOVER_INACTIVE_SERVICES+=("${service}")
+      continue
+    fi
+    [[ "${service}" == app || "${CUTOVER_STATES[$i]}" != running ]] && continue
+    probe_args+=(--writer "${service}=${CUTOVER_IDS[$i]}")
+  done
+  for service in "${CUTOVER_INACTIVE_SERVICES[@]}"; do
+    probe_args+=(--inactive-service "${service}")
+  done
+  for id in "${COMPOSE[@]:2}"; do
+    probe_args+=(--compose-argument "${id}")
+  done
+  if ! CUTOVER_BINDING_JSON="$(APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      run_repo_module scripts.production_deploy_probe "${probe_args[@]}")"; then
+    echo "CUTOVER REFUSED: exact database, broker, writer and candidate network bindings could not be captured." >&2
+    CUTOVER_BINDING_JSON=""
+    return 1
+  fi
+  [[ -n "${CUTOVER_BINDING_JSON}" ]] || return 1
+}
+
+assert_captured_container_unchanged() {
+  local id="$1" metadata image_id image_ref revision state exit_code oom restarts hostname
+  metadata="$(docker inspect --format '{{.Id}}|{{.Config.Image}}|{{.Image}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{.RestartCount}}|{{.Config.Hostname}}' "${id}")" || return 1
+  IFS='|' read -r id image_ref image_id revision state exit_code oom restarts hostname <<<"${metadata}"
+  [[ "${image_id}" == "${CUTOVER_IMAGE_IDS[${id}]}" \
+    && "${image_ref}" == "${CUTOVER_IMAGE_REFS[${id}]}" \
+    && "${revision}" == "${CUTOVER_REVISIONS[${id}]}" \
+    && "${restarts}" == "${CUTOVER_RESTARTS[${id}]}" \
+    && "${oom}" == false ]]
+}
+
+stop_captured_container_gracefully() {
+  local id="$1" timeout_seconds="$2" pid elapsed status
+  assert_captured_container_unchanged "${id}" || { CUTOVER_UNRESOLVED_STOP=1; return 1; }
+  [[ "$(docker inspect --format '{{.State.Status}}' "${id}")" == running ]] || { CUTOVER_UNRESOLVED_STOP=1; return 1; }
+  docker stop --time 2147483647 "${id}" >/dev/null 2>&1 &
+  pid=$!
+  elapsed=0
+  while ((elapsed < timeout_seconds)); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      wait "${pid}" || { CUTOVER_UNRESOLVED_STOP=1; return 1; }
+      status="$(docker inspect --format '{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{.RestartCount}}' "${id}")" || { CUTOVER_UNRESOLVED_STOP=1; return 1; }
+      [[ "${status}" == "exited|0|false|${CUTOVER_RESTARTS[${id}]}" ]] || { CUTOVER_UNRESOLVED_STOP=1; return 1; }
+      CUTOVER_STOPPED_BY_US["${id}"]=1
+      return 0
+    fi
+    sleep 1; elapsed=$((elapsed + 1))
+  done
+  # Stop waiting on the client only. The daemon receives no forced-kill
+  # timeout; an unresolved container state blocks DDL and legacy restart.
+  kill -TERM "${pid}" 2>/dev/null || true
+  wait "${pid}" 2>/dev/null || true
+  CUTOVER_UNRESOLVED_STOP=1
+  echo "CUTOVER REFUSED: graceful stop of a captured service exceeded its bound; no DDL will run." >&2
+  return 1
+}
+
+start_only_captured_containers() {
+  local wanted_service id service
+  for wanted_service in "${CELERY_WORKER_SERVICES[@]}" app bandwidth-poller syslog-listener team-inbox-smtp "${CELERY_BEAT_SERVICE}"; do
+    for id in "${CUTOVER_IDS[@]}"; do
+      service=""
+      local i
+      for i in "${!CUTOVER_IDS[@]}"; do
+        if [[ "${CUTOVER_IDS[$i]}" == "${id}" ]]; then service="${CUTOVER_SERVICES[$i]}"; break; fi
+      done
+      [[ "${service}" == "${wanted_service}" && "${CUTOVER_STOPPED_BY_US[${id}]:-0}" == 1 ]] || continue
+      assert_captured_container_unchanged "${id}" || return 1
+      [[ "$(docker inspect --format '{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{.RestartCount}}' "${id}")" == "exited|0|false|${CUTOVER_RESTARTS[${id}]}" ]] || return 1
+      docker start "${id}" >/dev/null || return 1
+      CUTOVER_STOPPED_BY_US["${id}"]=0
+    done
+  done
+}
+
+run_cutover_probe() {
+  local image="$1" operation="$2" status
+  shift 2
+  [[ -n "${CUTOVER_BINDING_JSON}" ]] || return 2
+  if APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    run_repo_module scripts.production_deploy_probe run \
+      --binding-json "${CUTOVER_BINDING_JSON}" --image "${image}" \
+      --operation "${operation}" "$@"; then
+    return 0
+  else
+    status=$?
+    if [[ "${status}" -eq 3 ]]; then
+      CUTOVER_UNRESOLVED_STOP=1
+      echo "CUTOVER REFUSED: a Docker probe side effect has no proven terminal state; incumbent resume and DDL are blocked." >&2
+    fi
+    return "${status}"
+  fi
+}
+
+verify_incumbent_predecessor_floors() {
+  local app_id="${1:-}" captured_app
+  captured_app="$(captured_id_for_service app)" || return 1
+  [[ -z "${app_id}" || "${app_id}" == "${captured_app}" ]] || return 1
+  # The reviewed reader is candidate-owned. It inspects the exact captured
+  # incumbent database through the bound network; the incumbent image may
+  # predate this reader entirely.
+  run_cutover_probe candidate payment-email-predecessor >/dev/null \
+    || { echo "CUTOVER REFUSED: incumbent Payment Email predecessor floor is unproved." >&2; return 1; }
+  run_cutover_probe candidate payments-predecessor >/dev/null \
+    || { echo "CUTOVER REFUSED: incumbent Payments predecessor floor is installed or unproved." >&2; return 1; }
+}
+
+verify_supported_payments_floor() {
+  run_cutover_probe candidate payments-supported >/dev/null \
+    || { echo "CUTOVER REFUSED: Payments schema is neither a complete supported predecessor nor installed floor." >&2; return 1; }
+}
+
+verify_installed_payments_floor() {
+  local output expected_heads actual_heads
+  output="$(run_cutover_probe candidate payments-installed 2>/dev/null)" || {
+      echo "DEPLOY REFUSED: installed Payments floor could not be inspected after migrations." >&2
+      return 1
+    }
+  if ! PAYMENT_FLOOR_INSPECTION="${output}" python3 - <<'PY'
+import json
+import os
+
+try:
+    value = json.loads(os.environ["PAYMENT_FLOOR_INSPECTION"])
+    observation = value["observation"]
+except (KeyError, TypeError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if value.get("schema_version") == 1
+                 and value.get("floor") == "installed"
+                 and isinstance(observation, dict)
+                 and observation.get("legacy_shape_complete") is True
+                 and observation.get("installed_shape_complete") is True else 1)
+PY
+  then
+    echo "DEPLOY REFUSED: exact installed Payments catalog floor is not proven." >&2
+    return 1
+  fi
+  expected_heads="$(candidate_heads | sort)" || return 1
+  actual_heads="$(read_alembic_heads | sort)" || return 1
+  [[ -n "${expected_heads}" && "${actual_heads}" == "${expected_heads}" ]] || {
+    echo "DEPLOY REFUSED: post-migration heads do not exactly match the candidate's declared heads." >&2
+    return 1
+  }
+}
+
+captured_id_for_service() {
+  local wanted="$1" i
+  for i in "${!CUTOVER_SERVICES[@]}"; do
+    if [[ "${CUTOVER_SERVICES[$i]}" == "${wanted}" ]]; then
+      printf '%s\n' "${CUTOVER_IDS[$i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+captured_state_for_service() {
+  local wanted="$1" i
+  for i in "${!CUTOVER_SERVICES[@]}"; do
+    if [[ "${CUTOVER_SERVICES[$i]}" == "${wanted}" ]]; then
+      printf '%s\n' "${CUTOVER_STATES[$i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+assert_all_incumbent_writers_stopped() {
+  local id service i state
+  for i in "${!CUTOVER_IDS[@]}"; do
+    id="${CUTOVER_IDS[$i]}"; service="${CUTOVER_SERVICES[$i]}"
+    case " ${CELERY_WORKER_SERVICES[*]} ${CELERY_BEAT_SERVICE} ${PRODUCTION_PRODUCER_SERVICES[*]} " in
+      *" ${service} "*) ;;
+      *) continue ;;
+    esac
+    state="$(docker inspect --format '{{.State.Status}}' "${id}")" || return 1
+    [[ "${state}" == exited ]] || {
+      echo "CUTOVER REFUSED: captured incumbent writer ${service} is still running." >&2
+      return 1
+    }
+  done
+}
+
+prepare_production_writer_cutover() {
+  local remaining app_id service id
+  [[ "${DEPLOYMENT_TARGET}" == production \
+    && "${BACKUP_MODE}" != skip_production_post_migration_resume ]] || return 0
+  if ! remaining="$(require_production_cutover_budget)"; then return 1; fi
+  if [[ "${DOTMAC_MAINTENANCE_CONTEXT_FD:-}" == 7 ]]; then
+    [[ "${BACKUP_MODE}" == required ]] || {
+      echo "CUTOVER REFUSED: maintenance repair requires a fresh verified production backup." >&2
+      return 1
+    }
+    local maintenance_context parsed binding_encoded heads_encoded
+    if ! maintenance_context="$(run_repo_module scripts.production_deploy_migration \
+      maintenance-context --fd 7)"; then
+      echo "CUTOVER REFUSED: inherited maintenance context or retained stopped-state proof is invalid." >&2
+      return 1
+    fi
+    if ! parsed="$(input_payload="${maintenance_context}" python3 -c 'import base64,json,os; p=json.loads(os.environ["input_payload"]); assert p.get("schema_version")==1; b=p["binding"]; h=p["heads_before"]; assert isinstance(b,dict) and isinstance(h,list) and h; print(base64.b64encode(json.dumps(b,separators=(",",":")).encode()).decode()); print(base64.b64encode(json.dumps(h,separators=(",",":")).encode()).decode())')"; then
+      echo "CUTOVER REFUSED: maintenance proof response is malformed." >&2
+      return 1
+    fi
+    binding_encoded="${parsed%%$'\n'*}"
+    heads_encoded="${parsed#*$'\n'}"
+    CUTOVER_BINDING_JSON="$(base64 -d <<<"${binding_encoded}")" || return 1
+    MIGRATION_HEADS_BEFORE="$(base64 -d <<<"${heads_encoded}" | python3 -c 'import json,sys; h=json.load(sys.stdin); assert isinstance(h,list) and h; print("\n".join(h))')" || return 1
+    [[ -n "${CUTOVER_BINDING_JSON}" && -n "${MIGRATION_HEADS_BEFORE}" ]] || return 1
+    CUTOVER_PHASE="maintenance-stopped-before-ddl"
+    log "Verified retained installed-floor migration state and exact stopped incumbent; running forward repair"
+    return 0
+  fi
+  log "Capturing exact incumbent service identities before writer drain"
+  capture_production_cutover || return 1
+  app_id="$(captured_id_for_service app)" || return 1
+  verify_supported_payments_floor || return 1
+  MIGRATION_HEADS_BEFORE="$(read_alembic_heads)" || {
+    echo "CUTOVER REFUSED: starting Alembic heads are not readable." >&2
+    return 1
+  }
+  CUTOVER_PHASE="preflight"
+
+  # Beat can create new scheduled work; then stop every incumbent producer.
+  id="$(captured_id_for_service "${CELERY_BEAT_SERVICE}" 2>/dev/null || true)"
+  if [[ -n "${id}" ]]; then stop_captured_container_gracefully "${id}" 60 || return 1; fi
+  for service in app bandwidth-poller syslog-listener team-inbox-smtp; do
+    id="$(captured_id_for_service "${service}" 2>/dev/null || true)"
+    if [[ -n "${id}" && "${CUTOVER_STOPPED_BY_US[${id}]}" == 0 \
+      && "$(captured_state_for_service "${service}")" == running ]]; then
+      stop_captured_container_gracefully "${id}" 120 || return 1
+    fi
+  done
+  CUTOVER_PHASE="draining-workers"
+  if ! observe_writer_drain wait-for-stable-empty workers-and-broker; then return 1; fi
+
+  for service in "${CELERY_WORKER_SERVICES[@]}"; do
+    id="$(captured_id_for_service "${service}")" || return 1
+    stop_captured_container_gracefully "${id}" 60 || return 1
+  done
+  CUTOVER_PHASE="final-broker-proof"
+  observe_writer_drain wait-for-stable-empty broker-only || return 1
+  assert_all_incumbent_writers_stopped || return 1
+  local heads_now
+  heads_now="$(read_alembic_heads)" || return 1
+  [[ "${heads_now}" == "${MIGRATION_HEADS_BEFORE}" ]] || {
+    echo "CUTOVER REFUSED: Alembic heads changed during the writer drain." >&2
+    return 1
+  }
+  if ! require_production_cutover_budget "${PRODUCTION_DEPLOY_CUTOVER_RESERVE_SECONDS}" >/dev/null; then
+    echo "CUTOVER REFUSED: remaining job time cannot cover migrations, startup health and recovery; the incumbent is being resumed." >&2
+    return 1
+  fi
+  verify_supported_payments_floor || return 1
+  run_cutover_probe candidate verify >/dev/null || {
+    echo "CUTOVER REFUSED: captured database, broker, network or named-app identity changed before DDL." >&2
+    return 1
+  }
+  CUTOVER_PHASE="stopped-before-ddl"
+  log "Exact incumbent writers are stopped and two broker-empty proofs are complete"
+}
+
+resume_exact_incumbent_preddl() {
+  local heads_now app_id
+  [[ "${CUTOVER_PHASE:-idle}" != idle && "${CUTOVER_PHASE}" != resumed-preddl \
+    && "${CUTOVER_PHASE}" != installed-floor-proven ]] || return 1
+  [[ "${CUTOVER_UNRESOLVED_STOP}" == 0 ]] || {
+    echo "CUTOVER RECOVERY REFUSED: a graceful service stop remains unresolved." >&2
+    return 1
+  }
+  heads_now="$(read_alembic_heads)" || return 1
+  [[ "${heads_now}" == "${MIGRATION_HEADS_BEFORE}" ]] || return 1
+  app_id="$(captured_id_for_service app)" || return 1
+  verify_incumbent_predecessor_floors "${app_id}" || return 1
+  local i id status
+  for i in "${!CUTOVER_IDS[@]}"; do
+    id="${CUTOVER_IDS[$i]}"
+    status="$(docker inspect --format '{{.State.Status}}' "${id}")" || return 1
+    if [[ "${CUTOVER_STOPPED_BY_US[${id}]}" == 0 ]]; then
+      [[ "${status}" == running ]] || return 1
+      assert_captured_container_unchanged "${id}" || return 1
+    else
+      [[ "${status}" == exited ]] || return 1
+    fi
+  done
+  start_only_captured_containers || return 1
+  wait_for_health "${HEALTH_URL}" "Resumed exact incumbent" "" \
+    "${HEALTH_TIMEOUT_SECONDS}" "${READY_URL}" || return 1
+  wait_for_background_runtime || return 1
+  CUTOVER_PHASE="resumed-preddl"
+}
+
+validate_writer_observation() {
+  local mode="$1" expected_outcome="$2" json="$3" nodes_csv="$4"
+  WRITER_OBSERVATION_JSON="${json}" python3 - "${mode}" "${expected_outcome}" "${nodes_csv}" <<'PY'
+import json
+import os
+import sys
+
+mode, expected_outcome, nodes_csv = sys.argv[1:]
+expected_nodes = set(nodes_csv.split(",")) if nodes_csv else set()
+try:
+    payload = json.loads(os.environ["WRITER_OBSERVATION_JSON"])
+except Exception:
+    raise SystemExit(1)
+
+def zero_observation(value):
+    if not isinstance(value, dict) or value.get("mode") != mode:
+        return False
+    workers = value.get("workers")
+    queues = value.get("queues")
+    unacked = value.get("unacknowledged")
+    if not isinstance(workers, list) or not isinstance(queues, list):
+        return False
+    if mode == "workers-and-broker":
+        actual = {item.get("node") for item in workers if isinstance(item, dict)}
+        if actual != expected_nodes or len(workers) != len(expected_nodes):
+            return False
+        if any(any(type(item.get(field)) is not int or item[field] != 0
+                   for field in ("active", "reserved", "scheduled"))
+               for item in workers):
+            return False
+    elif workers:
+        return False
+    if len(queues) != 11 or len({item.get("queue") for item in queues if isinstance(item, dict)}) != 11:
+        return False
+    if any(not isinstance(item, dict) or type(item.get("ready")) is not int or item["ready"] != 0
+           for item in queues):
+        return False
+    return (isinstance(unacked, dict)
+            and type(unacked.get("hash_entries")) is int and unacked["hash_entries"] == 0
+            and type(unacked.get("index_entries")) is int and unacked["index_entries"] == 0)
+
+if payload.get("schema_version") != 1 or payload.get("mode") != mode:
+    raise SystemExit(1)
+if payload.get("outcome") != expected_outcome or payload.get("refusal") is not None:
+    raise SystemExit(1)
+if not zero_observation(payload.get("observation")):
+    raise SystemExit(1)
+if expected_outcome == "stable-empty" and not zero_observation(payload.get("previous_zero")):
+    raise SystemExit(1)
+PY
+}
+
+observe_writer_drain() {
+  local operation="$1" mode="$2" expected="${3:-}" output rc
+  local -a args=(--mode "${mode}" --drain-operation "${operation}" \
+    --drain-budget "${PRODUCTION_DEPLOY_DRAIN_BUDGET_SECONDS}")
+  if [[ "${mode}" == workers-and-broker ]]; then
+    local node
+    for node in "${CUTOVER_NODES[@]}"; do args+=(--expected-node "${node}"); done
+    expected="$(IFS=,; echo "${CUTOVER_NODES[*]}")"
+  fi
+  if output="$(run_cutover_probe candidate drain "${args[@]}" 2>/dev/null)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [[ "${rc}" -eq 0 ]] || {
+    echo "CUTOVER REFUSED: writer drain observation was busy, incomplete or refused (exit ${rc})." >&2
+    return 1
+  }
+  if [[ "${operation}" == wait-for-stable-empty ]]; then
+    validate_writer_observation "${mode}" stable-empty "${output}" "${expected}" || {
+      echo "CUTOVER REFUSED: writer drain response did not prove the exact zero-state contract." >&2
+      return 1
+    }
+  else
+    validate_writer_observation "${mode}" observed-empty "${output}" "${expected}" || return 1
+  fi
+}
+# Shared by a failed migration and an INT/TERM/HUP during it. The pin is put
+# back ONLY when the typed journal proves exact terminal evidence, unchanged
+# heads, and both predecessor floors; never via restore_prev. Always returns
+# 1 (the deploy has failed). A missing acknowledgment or unknown state blocks
+# resume.
+migration_container_gone() {
+  [[ "${CUTOVER_PHASE:-idle}" != idle ]] || return 0
+  [[ "${MIGRATION_INVOCATION_STARTED}" == 1 ]] || return 0
+  run_repo_module scripts.production_deploy_migration \
+    require-safe-preddl --deploy-directory "${DEPLOY_DIR}" >/dev/null 2>&1
 }
 settle_failed_migration() {
   local heads_after running_image
+  if [[ "${DOTMAC_MAINTENANCE_CONTEXT_FD:-}" == 7 ]]; then
+    echo "Maintenance migration did not complete; the original stopped incumbent and candidate pin are retained for forward recovery." >&2
+    return 1
+  fi
   if migration_container_gone; then
     heads_after="$(read_alembic_heads)" || heads_after=""
   else
@@ -1629,8 +2157,23 @@ settle_failed_migration() {
     echo "Schema may have advanced (or could not be proven unchanged); .env pin left at ${IMAGE}. Do not recreate containers; repair forward." >&2
     return 1
   fi
+  if [[ "${CUTOVER_PHASE:-idle}" != idle ]]; then
+    app_id="$(captured_id_for_service app)" || app_id=""
+    if [[ -z "${app_id}" ]] || ! verify_incumbent_predecessor_floors "${app_id}"; then
+      echo "Migration heads are unchanged, but the incumbent predecessor floor is not proven; services remain stopped for forward repair." >&2
+      return 1
+    fi
+  fi
   running_image="$(docker inspect "${APP_CONTAINER}" --format '{{.Config.Image}}' 2>/dev/null || true)"
   if repin_prev; then
+    if [[ "${CUTOVER_PHASE:-idle}" != idle ]]; then
+      if ! resume_exact_incumbent_preddl; then
+        echo "Migration heads are unchanged, but exact incumbent resume failed; candidate pin was restored and services require forward/operator repair." >&2
+        return 1
+      fi
+      echo "Migration heads measured unchanged (${heads_after//$'\n'/ }); exact captured incumbent containers resumed and healthy." >&2
+      return 1
+    fi
     if [[ -z "${PREV_IMAGE}" && -z "${running_image}" ]]; then
       echo "Restored .env pin to <unset> (GIT_SHA ${PREV_GIT_SHA:-<unset>}): no previous pin and no running ${APP_CONTAINER} container (first deploy)." >&2
     elif [[ "${running_image}" == "${PREV_IMAGE}" ]]; then
@@ -1645,9 +2188,22 @@ settle_failed_migration() {
   return 1
 }
 MIGRATION_HEADS_BEFORE=""
+if [[ "${DEPLOYMENT_TARGET}" == production \
+  && "${BACKUP_MODE}" != skip_production_post_migration_resume ]]; then
+  if ! prepare_production_writer_cutover; then
+    if [[ "${CUTOVER_PHASE:-idle}" != idle ]]; then
+      if ! resume_exact_incumbent_preddl; then
+        echo "CUTOVER RECOVERY REFUSED: incumbent could not be proven safe to resume; no migration was started." >&2
+      fi
+    fi
+    trap - ERR
+    exit 1
+  fi
+fi
 pin_and_migrate() {
-  MIGRATION_HEADS_BEFORE=""
-  if [[ "${BACKUP_MODE}" != "skip_production_post_migration_resume" ]]; then
+  if [[ "${CUTOVER_PHASE:-idle}" == idle ]]; then MIGRATION_HEADS_BEFORE=""; fi
+  if [[ "${BACKUP_MODE}" != "skip_production_post_migration_resume" \
+    && "${CUTOVER_PHASE:-idle}" == idle ]]; then
     MIGRATION_HEADS_BEFORE="$(read_alembic_heads)" || MIGRATION_HEADS_BEFORE=""
   fi
 
@@ -1658,9 +2214,17 @@ pin_and_migrate() {
 
   log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
   if ! set_env_value APP_IMAGE "${IMAGE}" || ! set_env_value GIT_SHA "${FULL_SHA}"; then
+    if [[ "${DOTMAC_MAINTENANCE_CONTEXT_FD:-}" == 7 ]]; then
+      echo "DEPLOY PIN WRITE FAILED during maintenance repair; keep all captured containers stopped and resolve the pin manually before retrying." >&2
+      install_deploy_interrupt_trap
+      return 1
+    fi
     echo "DEPLOY PIN WRITE FAILED: restoring the previous pin; nothing was migrated or recreated." >&2
     if ! repin_prev; then
       echo "DEPLOY PIN RESTORE FAILED: .env may be half-updated; set APP_IMAGE=${PREV_IMAGE:-<unset>} GIT_SHA=${PREV_GIT_SHA:-<unset>} by hand before any container is recreated." >&2
+    fi
+    if [[ "${CUTOVER_PHASE:-idle}" != idle ]]; then
+      resume_exact_incumbent_preddl || echo "DEPLOY RECOVERY REFUSED: exact incumbent could not be resumed after pin-write failure." >&2
     fi
     install_deploy_interrupt_trap
     return 1
@@ -1675,6 +2239,14 @@ pin_and_migrate() {
     return 0
   fi
   if run_migrations; then
+    if [[ "${CUTOVER_PHASE:-idle}" != idle ]]; then
+      CUTOVER_PHASE="ddl-applied"
+      if ! verify_installed_payments_floor; then
+        install_deploy_interrupt_trap
+        return 1
+      fi
+      CUTOVER_PHASE="installed-floor-proven"
+    fi
     install_deploy_interrupt_trap
     return 0
   fi
@@ -1714,9 +2286,27 @@ CANDIDATE_STARTED=1
 assert_no_source_mount "${CANDIDATE_CONTAINER}"
 require_candidate_health
 
-log "Recreating services: ${APP_SERVICES[*]}"
+log "Starting candidate workers before any producers"
 PRIMARY_REPLACED=1
-"${COMPOSE[@]}" up -d "${APP_SERVICES[@]}"
+"${COMPOSE[@]}" up -d --force-recreate "${CELERY_WORKER_SERVICES[@]}"
+if [[ "${CUTOVER_PHASE:-idle}" == installed-floor-proven ]]; then
+  wait_for_background_workers
+fi
+
+declare -a PRODUCER_SERVICES_TO_START=()
+for service in "${APP_SERVICES[@]}"; do
+  case " ${CELERY_WORKER_SERVICES[*]} ${CELERY_BEAT_SERVICE} " in
+    *" ${service} "*) continue ;;
+  esac
+  PRODUCER_SERVICES_TO_START+=("${service}")
+done
+log "Starting application and producers after worker readiness"
+if ((${#PRODUCER_SERVICES_TO_START[@]})); then
+  "${COMPOSE[@]}" up -d --force-recreate "${PRODUCER_SERVICES_TO_START[@]}"
+fi
+if service_is_declared team-inbox-smtp; then
+  "${COMPOSE[@]}" up -d --force-recreate team-inbox-smtp
+fi
 
 log "Verifying deploy integrity (no host source bind-mount shadowing the image)"
 if ! assert_no_source_mount; then
@@ -1740,6 +2330,11 @@ if ! wait_for_health "${HEALTH_URL}" "Primary app" "" \
     log "No previous image recorded — candidate retained where available. Repair forward."
   fi
   exit 1
+fi
+
+if service_is_declared "${CELERY_BEAT_SERVICE}"; then
+  log "Starting Beat after workers and application producers are healthy"
+  "${COMPOSE[@]}" up -d --force-recreate "${CELERY_BEAT_SERVICE}"
 fi
 
 log "Verifying Celery workers and Beat (timeout ${BACKGROUND_RUNTIME_TIMEOUT_SECONDS}s)"
