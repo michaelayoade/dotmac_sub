@@ -99,6 +99,16 @@
       "starter_contract": "Starter Billing sole-ledger handoff prerequisite (M1, M8, ADR 0020): Sub owns denial of legacy and relay attachment capabilities before the module's sealed opening and single authority switch. No Starter financial implementation is copied or activated.",
       "deletion_trigger": "Retire the private installer and this exception after the completed global handoff and archived acceptance evidence permit its removal; preserve installed database guards and the read-only legacy archive.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PSP-CAPTURE-3644",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/integrations/payment_capture.py"
+      ],
+      "reason": "Michael explicitly approved the scoped source exception for Sub PR #3644 at 920999b066c247bf5738cf0a5eacfbedb68fd25b on 2026-10-15. The nine-file component adds 777 net app lines including its SOT declaration, reusing the existing Integrator for read-only PSP lookups. Provider observations remain distinct from caller-asserted namespace provenance; the source cannot qualify cash, record confirmations or post money. This approval covers source scope only; source merge, provider reads, custody writes and ledger activation require their separate approvals. No surface cap or baseline is relaxed.",
+      "starter_contract": "Starter Billing opening-evidence qualification prerequisite: newly acquired response-derived PSP observations for independent custody and qualification; consumes existing Sub Integrator payment reconciliation transport, without copying or activating unpublished Starter APIs.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
