@@ -906,7 +906,11 @@ def catalog_subscription_service_access_move_confirm(
     return RedirectResponse(f"{edit_url}?notice={quote_plus(message)}", status_code=303)
 
 
-@router.get("/subscriptions/{subscription_id}", response_class=HTMLResponse)
+@router.get(
+    "/subscriptions/{subscription_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
 def catalog_subscription_detail(
     request: Request,
     subscription_id: str,

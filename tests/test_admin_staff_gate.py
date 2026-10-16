@@ -8,6 +8,7 @@ the staff gate in place.
 """
 
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -27,8 +28,10 @@ def _request() -> Request:
     return Request({"type": "http", "method": "GET", "path": "/admin"})
 
 
-def _require(auth):
-    return require_admin_web_auth(request=_request(), auth=auth, db=MagicMock())
+def _require(auth, *, request: Request | None = None):
+    return require_admin_web_auth(
+        request=request or _request(), auth=auth, db=MagicMock()
+    )
 
 
 def test_admin_router_uses_staff_gate_not_bare_auth():
@@ -36,6 +39,60 @@ def test_admin_router_uses_staff_gate_not_bare_auth():
     assert require_admin_web_auth in calls, "/admin router must require the staff gate"
     # The bare authn-only dependency must not be the admin gate anymore.
     assert require_web_auth not in calls
+
+
+def test_staff_gate_hydrates_admin_navigation_permissions():
+    request = _request()
+    auth = {
+        "principal_type": "system_user",
+        "principal_id": str(uuid4()),
+        "roles": ["admin"],
+        "scopes": [],
+        "subscriber": SystemUser(
+            first_name="Admin",
+            last_name="User",
+            email="admin@example.test",
+            user_type=UserType.system_user,
+            is_active=True,
+        ),
+    }
+
+    result = _require(auth, request=request)
+
+    assert result is auth
+    assert request.state.auth is auth
+    assert auth["permission_keys"] == frozenset({"*"})
+
+
+def test_staff_gate_hydrates_restricted_staff_navigation_permissions(monkeypatch):
+    request = _request()
+    auth = {
+        "principal_type": "system_user",
+        "principal_id": str(uuid4()),
+        "roles": ["support"],
+        "scopes": [],
+        "subscriber": SystemUser(
+            first_name="Support",
+            last_name="User",
+            email="support@example.test",
+            user_type=UserType.system_user,
+            is_active=True,
+        ),
+    }
+
+    def hydrate_permission_keys(auth_values, _db):
+        auth_values["permission_keys"] = frozenset({"support:ticket:read"})
+        return auth_values["permission_keys"]
+
+    monkeypatch.setattr(
+        "app.web.auth.dependencies.load_permission_keys", hydrate_permission_keys
+    )
+
+    result = _require(auth, request=request)
+
+    assert result is auth
+    assert request.state.auth is auth
+    assert auth["permission_keys"] == frozenset({"support:ticket:read"})
 
 
 def test_admin_router_has_session_refresh_probe():
@@ -58,7 +115,9 @@ def test_staff_gate_rejects_missing_principal_type():
 def test_staff_gate_allows_system_user():
     auth = {
         "principal_type": "system_user",
-        "principal_id": "p",
+        "principal_id": str(uuid4()),
+        "roles": ["admin"],
+        "scopes": [],
         "subscriber": SystemUser(
             first_name="Admin",
             last_name="User",
