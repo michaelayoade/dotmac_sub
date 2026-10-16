@@ -17,6 +17,18 @@ PYPROJECT = ROOT / "pyproject.toml"
 
 
 _SHADOW_IMPORTS = {
+    "app/services/gateway_topup_intents.py": {
+        ("dotmac_payments", "Conflict"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "OpenPaymentIntent"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+        ("dotmac_payments", "open_payment_intent"),
+    },
+    "app/services/topup_intents.py": {
+        ("dotmac_payments", "PaymentIntentObservationV1"),
+        ("dotmac_payments", "PaymentPurpose"),
+    },
     "app/services/payment_intent_module_shadow.py": {
         ("dotmac_payments", "GetPaymentIntentV1"),
         ("dotmac_payments", "PaymentPurpose"),
@@ -294,3 +306,149 @@ def test_payments_released_getter_supply_pin() -> None:
             "hash": "sha256:da2877bc5365fc0d6cf93868a6235a608413edbb809199cd5c919f78390cf8ed",
         }
     ]
+
+
+def test_invoice_binding_owner_uses_only_public_module_surfaces_and_one_root() -> None:
+    tree = ast.parse((ROOT / "app/services/gateway_topup_intents.py").read_text())
+    owner = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_create_invoice_gateway_topup_intent"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {
+        "get_payment_intent_v1",
+        "open_payment_intent",
+        "OpenPaymentIntent",
+        "TenantScope",
+    } <= calls
+    assert "Session" not in calls
+    methods = {
+        node.func.attr
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert not {"commit", "rollback", "begin", "begin_nested"} & methods
+    stage = next(
+        node
+        for node in ast.parse((ROOT / "app/services/topup_intents.py").read_text()).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "stage_gateway_topup_intent"
+    )
+    guard = stage.body[1]  # after the docstring, before any DB/reference work
+    assert isinstance(guard, ast.If)
+    assert isinstance(guard.body[0], ast.Raise)
+    assert "invoice_payment" in ast.unparse(guard.test)
+
+
+def test_invoice_writer_public_import_allowance_does_not_admit_module_orm(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "app/services/gateway_topup_intents.py"
+    owner.parent.mkdir(parents=True)
+    owner.write_text(
+        "from dotmac_payments import OpenPaymentIntent, open_payment_intent\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path) == []
+    owner.write_text("from dotmac_payments import PaymentIntent\n")
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.write_text("from dotmac_payments.models import PaymentIntent\n")
+    assert _external_commercial_imports_under_app(tmp_path)
+
+
+def test_module_invoice_projection_has_only_the_existing_root_caller() -> None:
+    callers: set[str] = set()
+    for path in (ROOT / "app").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "app.services.topup_intents"
+            ):
+                if any(
+                    alias.name == "stage_invoice_gateway_projection"
+                    for alias in node.names
+                ):
+                    callers.add(path.relative_to(ROOT).as_posix())
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "stage_invoice_gateway_projection"
+            ):
+                callers.add(path.relative_to(ROOT).as_posix())
+    assert callers == {"app/services/gateway_topup_intents.py"}
+
+
+def test_saved_authorization_public_boundary_is_immutable_and_precise() -> None:
+    contracts = ast.parse(
+        (ROOT / "app/services/payment_charge_contracts.py").read_text()
+    )
+    values = {
+        node.name: node for node in contracts.body if isinstance(node, ast.ClassDef)
+    }
+    for name in (
+        "ChargeAuthorizationCommand",
+        "ChargeAuthorizationObservation",
+        "ObserveAuthorizationChargeReference",
+        "IntentChargeMetadata",
+        "ResellerChargeMetadata",
+        "AutopayChargeMetadata",
+        "InvoiceGatewayRoutingEvidence",
+    ):
+        declaration = values[name]
+        decorator = next(
+            node for node in declaration.decorator_list if isinstance(node, ast.Call)
+        )
+        assert any(
+            item.arg == "frozen"
+            and isinstance(item.value, ast.Constant)
+            and item.value.value is True
+            for item in decorator.keywords
+        )
+        assert not any(
+            isinstance(node, ast.Name) and node.id == "Any"
+            for node in ast.walk(declaration)
+        )
+    facade = ast.parse(
+        (ROOT / "app/services/integrations/payment_capability.py").read_text()
+    )
+    for name, input_name in (
+        ("charge_authorization", "ChargeAuthorizationCommand"),
+        (
+            "observe_authorization_charge_reference",
+            "ObserveAuthorizationChargeReference",
+        ),
+    ):
+        function = next(
+            node
+            for node in facade.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        assert ast.unparse(function.args.args[1].annotation) == input_name
+        assert ast.unparse(function.returns) == "ChargeAuthorizationObservation"
+        assert function.args.kwarg is None
+    callers = 0
+    for relative in (
+        "app/services/customer_portal_flow_payments.py",
+        "app/services/reseller_portal_billing.py",
+        "app/services/autopay.py",
+    ):
+        for node in ast.walk(ast.parse((ROOT / relative).read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "charge_authorization"
+            ):
+                assert {keyword.arg for keyword in node.keywords} == {"command"}
+                command = node.keywords[0].value
+                assert (
+                    isinstance(command, ast.Call)
+                    and isinstance(command.func, ast.Name)
+                    and command.func.id == "ChargeAuthorizationCommand"
+                )
+                callers += 1
+    assert callers == 5

@@ -25,9 +25,9 @@ import builtins
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.autopay import AutopayMandate
@@ -51,6 +51,14 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.integrations import payment_capability
 from app.services.invoice_collectibility import list_open_invoices
+from app.services.payment_charge_contracts import (
+    AutopayChargeMetadata,
+    ChargeAuthorizationCommand,
+    ChargeAuthorizationObservation,
+    ObserveAuthorizationChargeReference,
+    PaymentGatewayProviderStatus,
+    ProviderAcceptance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -236,26 +244,41 @@ def _already_recorded(db: Session, reference: str) -> bool:
     )
 
 
-def _recover_charge(db: Session, reference: str) -> dict | None:
+def _recover_charge(
+    db: Session, reference: str
+) -> ChargeAuthorizationObservation | None:
     """Best-effort: fetch an existing transaction by reference (used when a
     charge attempt errored but may already have captured). Returns the tx data
     or None if it can't be confirmed successful."""
     try:
-        tx = payment_capability.verify_transaction(
-            db, provider_type="paystack", reference=reference
+        tx = payment_capability.observe_authorization_charge_reference(
+            db, ObserveAuthorizationChargeReference(reference=reference)
         )
+    except SQLAlchemyError:
+        # A failed database read is not a provider non-confirmation and must
+        # never continue into a charge/write on an aborted transaction.
+        raise
     except Exception:  # noqa: BLE001 - couldn't confirm; treat as not charged
         return None
-    return tx if str(tx.get("status")) == "success" else None
+    return (
+        tx
+        if tx.acceptance is ProviderAcceptance.accepted
+        and tx.provider_status is PaymentGatewayProviderStatus.success
+        and tx.reference == reference
+        else None
+    )
 
 
-def _failure_reason(tx: dict[str, Any] | None) -> str:
+def _failure_reason(tx: ChargeAuthorizationObservation | None) -> str:
     if tx is None:
         return "charge_error"
-    for key in ("gateway_response", "message", "status"):
-        value = tx.get(key)
+    for value in (
+        tx.gateway_response,
+        tx.message,
+        tx.provider_status.value if tx.provider_status else None,
+    ):
         if value:
-            return str(value)[:255]
+            return value[:255]
     return "charge_failed"
 
 
@@ -360,7 +383,7 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
         ) or _already_recorded(db, reference):
             continue
 
-        tx: dict[str, Any] | None = None
+        tx: ChargeAuthorizationObservation | None = None
 
         # A prior attempt may have captured without us confirming it (charge
         # call errored after capture). Recover it instead of charging again.
@@ -378,11 +401,15 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
             try:
                 tx = payment_capability.charge_authorization(
                     db,
-                    authorization_code=token,
-                    email=email,
-                    amount_kobo=amount_kobo,
-                    reference=reference,
-                    metadata={"invoice_id": str(invoice.id), "autopay": True},
+                    command=ChargeAuthorizationCommand(
+                        authorization_code=token,
+                        email=email,
+                        amount_subunits=amount_kobo,
+                        currency=invoice.currency,
+                        reference=reference,
+                        metadata=AutopayChargeMetadata(invoice_id=invoice.id),
+                        checkout_binding_id=None,
+                    ),
                 )
             except Exception:  # noqa: BLE001 - one bad charge must not abort the run
                 # The charge may have actually gone through (e.g. a
@@ -391,7 +418,12 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
                 # on the next run.
                 tx = _recover_charge(db, reference)
 
-        if tx is None or str(tx.get("status")) != "success":
+        if (
+            tx is None
+            or tx.acceptance is not ProviderAcceptance.accepted
+            or tx.provider_status is not PaymentGatewayProviderStatus.success
+            or tx.reference != reference
+        ):
             reason = _failure_reason(tx)
             if tx is None:
                 logger.warning("autopay charge errored for invoice %s", invoice.id)
@@ -424,7 +456,7 @@ def run_account_autopay(db: Session, account_id: str) -> dict:
             logger.error(
                 "AUTOPAY RECONCILE: charged ref=%s for invoice=%s but failed to "
                 "record the payment",
-                str(tx.get("reference") or reference),
+                tx.reference or reference,
                 invoice.id,
                 exc_info=True,
             )

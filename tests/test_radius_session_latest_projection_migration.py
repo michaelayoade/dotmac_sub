@@ -3,8 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
+from tests.migration_graph_helpers import composed_sub_graph
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "alembic/versions/408_radius_session_latest_projection.py"
@@ -25,16 +24,12 @@ def _module():
 
 def test_radius_session_projection_remains_in_the_single_migration_chain() -> None:
     module = _module()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
-    script = ScriptDirectory.from_config(config)
+    script, heads = composed_sub_graph(ROOT)
 
     assert module.revision == "408_radius_session_latest_projection"
     assert module.down_revision == "407_retire_parallel_radius_refresh"
     # Single-headed with this revision in the head's ancestry. Naming the exact
     # head made every later migration break this test for no defect.
-    heads = script.get_heads()
     assert len(heads) == 1
     assert module.revision in {
         item.revision

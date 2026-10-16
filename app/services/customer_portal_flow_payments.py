@@ -55,6 +55,10 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import payment_capability
 from app.services.integrations.runtime_execution import RuntimeExecutionError
 from app.services.owner_commands import CommandContext
+from app.services.payment_charge_contracts import (
+    ChargeAuthorizationCommand,
+    IntentChargeMetadata,
+)
 from app.services.payment_gateway_adapter import (
     PaymentGatewayContext,
     PaymentGatewayTransaction,
@@ -1020,9 +1024,7 @@ def _charge_saved_card_for_invoice(
     customer: dict,
     *,
     invoice: Invoice,
-    amount: Decimal,
     payment_method_id: str,
-    checkout_metadata: dict,
     provider_id: uuid.UUID,
     capability_binding_id: uuid.UUID,
     idempotency_key: str | None,
@@ -1090,17 +1092,37 @@ def _charge_saved_card_for_invoice(
         ),
     )
 
+    if intent_result.replayed:
+        raise gateway_topup_intents.GatewayTopupIntentError(
+            code="financial.gateway_topup_intent_commands.invoice_charge_verification_required",
+            message="Invoice checkout already exists; verify its original reference before another charge",
+            details={"reference": intent_result.reference},
+        )
+    routing = intent_result.invoice_routing
+    if routing is None:
+        raise gateway_topup_intents.GatewayTopupIntentError(
+            code="financial.gateway_topup_intent_commands.record_invalid",
+            message="Invoice checkout routing evidence is incomplete",
+        )
+    reference = intent_result.reference
+    checkout_metadata = routing.checkout_metadata()
+
     from app.services.integrations import payment_capability
 
     try:
         payment_capability.charge_authorization(
             db,
-            authorization_code=token,
-            email=_resolve_customer_email(db, customer),
-            amount_kobo=payment_capability.amount_to_kobo(amount),
-            reference=reference,
-            metadata=checkout_metadata,
-            checkout_binding_id=capability_binding_id,
+            command=ChargeAuthorizationCommand(
+                authorization_code=token,
+                email=_resolve_customer_email(db, customer),
+                amount_subunits=payment_capability.amount_to_kobo(
+                    intent_result.requested_amount
+                ),
+                currency=intent_result.currency,
+                reference=reference,
+                metadata=routing,
+                checkout_binding_id=routing.capability_binding_id,
+            ),
         )
     except Exception:
         db_session_adapter.release_read_transaction(db)
@@ -1199,13 +1221,6 @@ def create_invoice_payment_intent(
     _require_gateway_email(provider_type, customer_email)
 
     invoice_number = getattr(invoice, "invoice_number", None)
-    checkout_metadata = {
-        "payment_flow": "invoice_payment",
-        "invoice_id": str(invoice.id),
-        "invoice_number": invoice_number or "",
-        "account_id": str(invoice.account_id),
-        "provider_id": str(route.provider_id),
-    }
 
     # Saved card -> server-to-server Paystack charge.
     if selected_payment_method_id:
@@ -1215,9 +1230,7 @@ def create_invoice_payment_intent(
             db,
             customer,
             invoice=invoice,
-            amount=amount,
             payment_method_id=selected_payment_method_id,
-            checkout_metadata=checkout_metadata,
             provider_id=route.provider_id,
             capability_binding_id=route.capability_binding_id,
             idempotency_key=idempotency_key,
@@ -1259,13 +1272,20 @@ def create_invoice_payment_intent(
             idempotency_key=(str(idempotency_key or "").strip() or None),
         ),
     )
+    routing = intent_result.invoice_routing
+    if routing is None:
+        raise gateway_topup_intents.GatewayTopupIntentError(
+            code="financial.gateway_topup_intent_commands.record_invalid",
+            message="Invoice checkout routing evidence is incomplete",
+        )
+    checkout_metadata = routing.checkout_metadata()
     result = {
-        "provider_type": gateway_context.provider_type,
+        "provider_type": intent_result.provider_type,
         "provider_public_key": gateway_context.public_key,
-        "reference": gateway_context.reference,
+        "reference": intent_result.reference,
         "amount": intent_result.requested_amount,
         "currency": intent_result.currency,
-        "invoice_number": invoice_number,
+        "invoice_number": routing.invoice_number,
         "customer_email": customer_email,
         "checkout_metadata": checkout_metadata,
         "charged": False,
@@ -1277,11 +1297,11 @@ def create_invoice_payment_intent(
             customer,
             provider_type=gateway_context.provider_type,
             amount=intent_result.requested_amount,
-            reference=gateway_context.reference,
+            reference=intent_result.reference,
             redirect_url=redirect_url,
             metadata=checkout_metadata,
             default_callback_path="/portal/billing/pay/verify",
-            capability_binding_id=route.capability_binding_id,
+            capability_binding_id=routing.capability_binding_id,
             currency=intent_result.currency,
         )
     return result
@@ -1758,14 +1778,17 @@ def create_topup_intent(
         try:
             payment_capability.charge_authorization(
                 db,
-                authorization_code=selected_payment_token,
-                email=customer_email,
-                amount_kobo=payment_capability.amount_to_kobo(
-                    intent_result.requested_amount
+                command=ChargeAuthorizationCommand(
+                    authorization_code=selected_payment_token,
+                    email=customer_email,
+                    amount_subunits=payment_capability.amount_to_kobo(
+                        intent_result.requested_amount
+                    ),
+                    currency=intent_result.currency,
+                    reference=intent_result.reference,
+                    metadata=IntentChargeMetadata(intent_id=intent_result.intent_id),
+                    checkout_binding_id=route.capability_binding_id,
                 ),
-                reference=intent_result.reference,
-                metadata=checkout_metadata,
-                checkout_binding_id=route.capability_binding_id,
             )
         except Exception:
             db_session_adapter.release_read_transaction(db)
@@ -1988,14 +2011,17 @@ def create_service_period_purchase_intent(
         # unknown and retry routes to verification, never a second card charge.
         payment_capability.charge_authorization(
             db,
-            authorization_code=selected_token,
-            email=customer_email,
-            amount_kobo=payment_capability.amount_to_kobo(
-                intent_result.requested_amount
+            command=ChargeAuthorizationCommand(
+                authorization_code=selected_token,
+                email=customer_email,
+                amount_subunits=payment_capability.amount_to_kobo(
+                    intent_result.requested_amount
+                ),
+                currency=intent_result.currency,
+                reference=intent_result.reference,
+                metadata=IntentChargeMetadata(intent_id=intent_result.intent_id),
+                checkout_binding_id=route.capability_binding_id,
             ),
-            reference=intent_result.reference,
-            metadata=checkout_metadata,
-            checkout_binding_id=route.capability_binding_id,
         )
         charged = True
     checkout_url = None

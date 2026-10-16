@@ -69,8 +69,10 @@ The optional executor may best-effort close its exact child; it never completes
 the participant's root. Cleanup preserves the first exception object and cause,
 adding static secondary cleanup diagnostics and exception types as notes,
 without copying database-bound values. It closes a child only while that exact
-child is still current. All private command
-and savepoint state is cleared when the owner exits. Acceptance requires
+child is still current. Sub's private command
+and optional-savepoint state is cleared when the owner exits; Kernel's root
+rollback latch remains Kernel-owned as specified in the amendment below.
+Acceptance requires
 migrated PostgreSQL canaries with an independent observer for publication
 timing, real unique flush-conflict recovery, reentrant listener refusal,
 diagnostic preservation, and clean session reuse. Hosted CI owns execution of
@@ -249,3 +251,59 @@ remain authoritative.
   enforces at least the same manifest, transaction, nesting, and event
   invariants.
 - Supersedes or is superseded by: none.
+
+
+## Released Kernel conflict-helper composition
+
+Amended 2026-10-16 for the bounded source prerequisite to future numbering
+activation. Sub remains the sole business-root owner and sole product optional
+executor. This changes no production activation, numbering series, counter,
+receipt policy, incumbent writer, or cutover authorization.
+
+The existing executor may compose with released Kernel `0.1.0a105` conflict
+helpers on its supplied Session. Its entire Kernel import allowlist is
+`ConflictSavepointPhase`, `claim_conflict_savepoint_commit`,
+`current_conflict_savepoint`, and `conflict_savepoint_requires_rollback` from
+public `dotmac_kernel.transactions`. The surface is engine-free. Private
+`_transactions`, `dotmac_kernel.db`, `session_runtime`, another Session or
+engine, and copied Kernel protocol state remain forbidden. Architecture tests
+include import/constructor sensitivity proofs.
+
+The commit guard checks the exact stored root identity and activity, Sub's
+helper-rollback poison, and Kernel's exact-root rollback latch before granting
+any completion. Existing Sub root and optional-child permissions remain
+single-use. Otherwise only consuming `claim_conflict_savepoint_commit` with
+that stored root permits the Kernel helper's exact release. Observing RELEASE
+alone grants no permission; later and reentrant listeners cannot reuse the
+claim.
+
+Rollback observation admits only a Kernel frame on that same still-current,
+active stored root: its exact child during ROLLBACK (including a detached
+handle), or its failed ORM flush's non-nested internal subtransaction whose
+parent is the observed inactive, still-current child during BODY or RELEASE.
+The internal flush event precedes Kernel's transition to ROLLBACK. Every other
+helper rollback keeps the existing fail-closed owner poison. Neither poison nor
+Kernel's latch can be cleared to recover a successful owner outcome. The latch
+outlives helper exit and outer optional rollback, and Kernel alone clears it
+when the matching root ends.
+
+Kernel helpers may nest and may run inside an optional callback, restoring the
+enclosing child on success or exact isolated conflict recovery. Product optional
+executors still refuse nesting. `current_owner_root_transaction` still requires
+the exact active root without any savepoint, preserving fence and global
+admission rules. Helpers do not acquire independent root ownership or optional
+business-consequence policy.
+
+Acceptance requires the actual published Kernel and Numbering `0.1.0a2`, the
+real migrated PostgreSQL schema and application login, and an independent
+observer proving no pre-owner-commit publication. Canaries must cover exact
+replay and changed fingerprints; real BODY/RELEASE unique conflicts and retained
+RLS; propagated/swallowed session, root and child completion attacks; consumed
+claims and reentrant listeners; optional-child restoration and durable failure
+evidence; cleanup-failure latch survival through outer cleanup; clean root reuse;
+and unchanged nested fence admission. Package-path shadows, mocked claims,
+`SET ROLE`, and metadata-created schemas cannot establish this evidence. Hosted
+CI owns execution; local AST, Ruff and diff checks are static source evidence
+only. Publish this source prerequisite separately after the preceding source CI
+gates; production activation remains a separately authorized owner-backed
+operation.

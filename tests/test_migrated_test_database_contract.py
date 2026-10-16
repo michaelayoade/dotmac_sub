@@ -112,15 +112,15 @@ def test_revision_state_requires_exact_repository_heads() -> None:
 def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     # The local provider revisions are used through ``depends_on`` by the
     # composed module branches. Alembic applies them, then records only the
-    # effective branch heads in its version table.
+    # effective branch heads in its version table. Migration 691 also consumes
+    # the released Payments pm_0003 head through its depends_on edge.
     assert repository_heads() == frozenset(
         {
-            "690_backdated_invoice_permissions",
+            "691_payments_intent_correlation",
             "bi_0001_billing",
             "cl_0001_collections",
             "ib_0001_conversations",
             "nu_0001_numbering",
-            "pm_0003_confirmation_immutable",
             "so_0001_service_delivery_orders",
             "su_0003_billing_treatments",
             "ts_0002_notify_identity",

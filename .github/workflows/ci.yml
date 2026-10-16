@@ -471,7 +471,7 @@ jobs:
 
   test:
     name: Tests
-    needs: [changes, python-environment, unit-shards, architecture, workflow-guidance]
+    needs: [changes, python-environment, unit-shards, architecture, workflow-guidance, writer-drain-acceptance]
     if: always() && needs.changes.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -486,11 +486,64 @@ jobs:
           UNIT_RESULT: ${{ needs.unit-shards.result }}
           ARCHITECTURE_RESULT: ${{ needs.architecture.result }}
           WORKFLOW_GUIDANCE_RESULT: ${{ needs.workflow-guidance.result }}
+          WRITER_DRAIN_RESULT: ${{ needs.writer-drain-acceptance.result }}
         run: |
           test "$PYTHON_ENVIRONMENT_RESULT" = "success"
           test "$UNIT_RESULT" = "success"
           test "$ARCHITECTURE_RESULT" = "success"
           test "$WORKFLOW_GUIDANCE_RESULT" = "success"
+          test "$WRITER_DRAIN_RESULT" = "success"
+
+  writer-drain-acceptance:
+    name: Writer Drain Acceptance (Redis and Celery)
+    needs: [changes, python-environment]
+    if: needs.changes.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dotmac_sub_writer_drain_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_writer_drain_test"
+      TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_writer_drain_test"
+      TEST_WRITER_DRAIN_REDIS_URL: "redis://localhost:6379/10"
+      TEST_WRITER_DRAIN_REDIS_DISPOSABLE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-ci-python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Prepare authoritative migrated test database
+        run: |
+          make assert-full-test-host bootstrap-test-database-roles
+          poetry run python -m scripts.ci.migrated_test_database
+      - name: Run real Redis and Celery drain acceptance
+        # Explicit target intentionally sits outside test_*.py shard discovery:
+        # this required job owns its exclusive disposable broker and PG setup.
+        run: >-
+          poetry run pytest tests/test_deployment_writer_drain.py
+          tests/integration/writer_drain_acceptance.py
+          -v --tb=short -o "addopts="
 
   coverage:
     name: Combine Coverage
