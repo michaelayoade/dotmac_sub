@@ -182,6 +182,13 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
             "financial.provider_invoice_module_cash_source",
             "financial.provider_payment_settlements",
         },
+        # One stateless Platform Health serialization value is shared by the
+        # two distinct local probe owners; neither gains the other's runtime
+        # authority, persistence, or transport responsibility.
+        "app.services.platform_health_observations": {
+            "runtime.bandwidth_poller_health",
+            "runtime.syslog_receiver_health",
+        },
     }
     for module, expected_names in split_boundaries.items():
         assert set(duplicates.get(module, ())) == expected_names, (
