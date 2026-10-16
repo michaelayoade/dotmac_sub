@@ -119,3 +119,12 @@ def test_review_template_renders_disabled_and_read_only_without_send_actions() -
     assert "active and suspended" in output and "No matching customers today" in output
     assert "Send saved message as test" not in output
     assert "Save anniversary settings" not in output
+
+
+def test_review_forms_use_shared_csrf_contract() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "templates/admin/notifications/occasions.html"
+    ).read_text(encoding="utf-8")
+    assert source.count('{% include "components/forms/csrf_input.html" %}') == 2
+    assert 'name="csrf_token"' not in source

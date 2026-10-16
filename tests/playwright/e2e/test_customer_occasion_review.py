@@ -33,3 +33,15 @@ def test_customer_occasion_review_stays_disabled(
     assert admin_page.evaluate(
         "document.documentElement.scrollWidth <= window.innerWidth"
     )
+
+    # Save the reviewed content without opting in; this exercises the real
+    # cookie-authenticated CSRF form boundary and revision handling.
+    admin_page.get_by_role("button", name="Save birthday settings").click()
+    expect(
+        admin_page.get_by_role("status").filter(has_text="Settings saved")
+    ).to_be_visible()
+    for occasion in ("birthday", "anniversary"):
+        form = admin_page.locator(
+            f'form[action="/admin/notifications/occasions/{occasion}"]'
+        )
+        expect(form.locator('input[name="enabled"]')).not_to_be_checked()
