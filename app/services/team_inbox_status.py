@@ -191,7 +191,6 @@ def resolution_readiness(
         allowed_resolution_reasons=tuple(
             (reason.value, RESOLUTION_REASON_LABELS[reason])
             for reason in InboxResolutionReason
-            if reason is not InboxResolutionReason.spam_irrelevant
         ),
     )
 
@@ -230,12 +229,27 @@ def _apply_status_transition(
         resolution_policy = resolution_readiness(
             db, conversation, evaluated_at=effective_at
         )
-    spam_resolution = (
+    # The identity-gate bypass is only for the explicit single-chat operator
+    # action; bulk and macro callers keep the Customer/Lead identity gate.
+    spam_requested = (
         command.status is InboxConversationStatus.resolved
         and command.resolution_reason is InboxResolutionReason.spam_irrelevant
+        and command.reason is InboxStatusReason.operator_change
     )
-    if spam_resolution and (
-        resolution_policy is None or not resolution_policy.can_resolve_as_spam
+    spam_resolution = bool(
+        spam_requested
+        and resolution_policy is not None
+        and resolution_policy.can_resolve_as_spam
+    )
+    # Linked chats with an expired WhatsApp window keep the pre-existing
+    # reason-selection path (spam included).
+    if (
+        spam_requested
+        and not spam_resolution
+        and (
+            resolution_policy is None
+            or not resolution_policy.requires_resolution_reason
+        )
     ):
         raise InboxResolutionError(
             code=f"{OWNER}.spam_resolution_not_allowed",

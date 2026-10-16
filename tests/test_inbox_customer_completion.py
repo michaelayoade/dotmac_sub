@@ -783,3 +783,84 @@ def test_macro_uses_customer_only_completion_gate(db_session, kind):
     else:
         assert outcome["actions_failed"] == 0
         assert conversation.status == "resolved"
+
+
+def _unlinked_conversation(db_session):
+    conversation = InboxConversation(
+        customer_completion_policy_version_id=_policy(db_session).id,
+        channel_type="email",
+        status="open",
+        is_active=True,
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    return conversation
+
+
+def test_bulk_spam_reason_keeps_identity_gate_and_skips_unlinked(db_session):
+    unlinked = _unlinked_conversation(db_session)
+    lead_conversation = _lead_conversation(db_session)
+
+    outcome = team_inbox_operations.bulk_update_status(
+        db_session,
+        conversation_ids=[unlinked.id, lead_conversation.id],
+        status_value="resolved",
+        actor_person_id=uuid4(),
+        resolution_reason=team_inbox_status.InboxResolutionReason.spam_irrelevant,
+    )
+
+    assert outcome["updated"] == [str(lead_conversation.id)]
+    assert outcome["skipped"] == [str(unlinked.id)]
+    assert unlinked.status == "open"
+    assert lead_conversation.status == "resolved"
+
+
+def test_bulk_skips_spam_resolution_not_allowed_without_aborting(
+    db_session, monkeypatch
+):
+    blocked = _unlinked_conversation(db_session)
+    lead_conversation = _lead_conversation(db_session)
+    real = team_inbox_status.apply_status_transition
+
+    def fake(db, *, conversation, **kwargs):
+        if conversation.id == blocked.id:
+            raise team_inbox_status.InboxResolutionError(
+                code="communications.team_inbox_status.spam_resolution_not_allowed",
+                message="not allowed",
+                details={"conversation_id": str(conversation.id)},
+            )
+        return real(db, conversation=conversation, **kwargs)
+
+    monkeypatch.setattr(team_inbox_status, "apply_status_transition", fake)
+    outcome = team_inbox_operations.bulk_update_status(
+        db_session,
+        conversation_ids=[blocked.id, lead_conversation.id],
+        status_value="resolved",
+        actor_person_id=uuid4(),
+    )
+
+    assert outcome["updated"] == [str(lead_conversation.id)]
+    assert outcome["skipped"] == [str(blocked.id)]
+    assert lead_conversation.status == "resolved"
+
+
+def test_macro_spam_reason_keeps_identity_gate(db_session):
+    conversation = _unlinked_conversation(db_session)
+    macro = InboxReplyMacro(
+        name="Resolve spam",
+        body_text="Done",
+        actions=[{"action_type": "set_status", "params": {"status": "resolved"}}],
+    )
+    db_session.add(macro)
+    db_session.flush()
+
+    outcome = team_inbox_operations.execute_macro_actions(
+        db_session,
+        conversation=conversation,
+        macro_id=macro.id,
+        actor_person_id=uuid4(),
+        resolution_reason=team_inbox_status.InboxResolutionReason.spam_irrelevant,
+    )
+
+    assert outcome["actions_failed"] == 1
+    assert conversation.status == "open"
