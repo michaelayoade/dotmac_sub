@@ -31,7 +31,11 @@ authoritative documents in the same change that updates the contract.
   `app.services.owner_commands.execute_owner_savepoint`; its callback remains
   flush-only, and the owner must record durable failure evidence after rollback.
   Direct `begin_nested()`, savepoint completion, commit, or rollback in a
-  participant is forbidden.
+  participant is forbidden. Released Kernel conflict helpers may isolate an
+  expected conflict on that same session under ADR 0002's engine-free, exact-root,
+  single-use claim protocol; this grants no participant completion authority.
+  Product optional executors still cannot nest, and root-only participant
+  admission still rejects every open savepoint.
 - New and migrated write owners enter
   `app.services.owner_commands.execute_owner_command` once on a
   transaction-free session. Adapters and nested helpers never call it.

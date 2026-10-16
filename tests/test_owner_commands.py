@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from dotmac_kernel.transactions import (
+    ConflictSavepointProtocolError,
+    conflict_savepoint,
+    current_conflict_savepoint,
+)
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction
@@ -414,3 +419,139 @@ def test_optional_failure_preserves_exception_identity_and_cause(
     assert set(db_session.scalars(select(DeviceProjection.source_id))) == {
         "retained-diagnostic-evidence"
     }
+
+
+@pytest.mark.parametrize("flush_in_body", [False, True])
+def test_kernel_conflict_savepoint_preserves_owner_after_unique_failure(
+    db_session: Session, flush_in_body: bool
+) -> None:
+    def operation() -> None:
+        root = current_owner_root_transaction(db_session)
+        db_session.add(_projection("kernel-conflict"))
+        db_session.flush()
+        with pytest.raises(IntegrityError):
+            with conflict_savepoint(db_session):
+                db_session.add(_projection("kernel-conflict"))
+                if flush_in_body:
+                    db_session.flush()
+        assert current_owner_root_transaction(db_session) is root
+        assert current_conflict_savepoint(db_session) is None
+        db_session.add(_projection("kernel-recovery"))
+
+    execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=operation
+    )
+    assert not db_session.in_transaction()
+    assert set(db_session.scalars(select(DeviceProjection.source_id))) == {
+        "kernel-conflict",
+        "kernel-recovery",
+    }
+
+
+def test_kernel_helper_inside_optional_step_restores_optional_child(
+    db_session: Session,
+) -> None:
+    def participant() -> None:
+        optional = db_session.get_nested_transaction()
+        assert optional is not None
+        with conflict_savepoint(db_session):
+            db_session.add(_projection("kernel-optional"))
+        assert db_session.get_nested_transaction() is optional
+        assert optional.is_active
+        assert current_conflict_savepoint(db_session) is None
+
+    execute_owner_command(
+        db_session,
+        definition=_DEFINITION,
+        context=_context(),
+        operation=lambda: execute_owner_savepoint(db_session, participant),
+    )
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 1
+
+
+def test_kernel_conflict_inside_optional_step_retains_failure_evidence(
+    db_session: Session,
+) -> None:
+    def participant() -> None:
+        optional = db_session.get_nested_transaction()
+        with pytest.raises(IntegrityError):
+            with conflict_savepoint(db_session):
+                db_session.add(_projection("kernel-duplicate"))
+                db_session.flush()
+        assert db_session.get_nested_transaction() is optional
+        raise ValueError("optional domain consequence refused")
+
+    def operation() -> None:
+        db_session.add(_projection("kernel-duplicate"))
+        db_session.flush()
+        with pytest.raises(ValueError, match="optional domain consequence refused"):
+            execute_owner_savepoint(db_session, participant)
+        db_session.add(_projection("kernel-failure-evidence"))
+
+    execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=operation
+    )
+    assert not db_session.in_transaction()
+    assert set(db_session.scalars(select(DeviceProjection.source_id))) == {
+        "kernel-duplicate",
+        "kernel-failure-evidence",
+    }
+
+
+def test_nested_kernel_helpers_restore_observation_without_granting_admission(
+    db_session: Session,
+) -> None:
+    def operation() -> None:
+        root = current_owner_root_transaction(db_session)
+        with conflict_savepoint(db_session):
+            outer = current_conflict_savepoint(db_session)
+            assert outer is not None and outer.root is root
+            with conflict_savepoint(db_session):
+                inner = current_conflict_savepoint(db_session)
+                assert inner is not None and inner.root is root
+                assert inner.savepoint is not outer.savepoint
+                with pytest.raises(OwnerCommandError):
+                    current_owner_root_transaction(db_session)
+                with pytest.raises(OwnerCommandError, match="cannot be nested"):
+                    execute_owner_savepoint(db_session, lambda: None)
+                db_session.add(_projection("kernel-nested"))
+            assert current_conflict_savepoint(db_session) is outer
+        assert current_owner_root_transaction(db_session) is root
+        assert current_conflict_savepoint(db_session) is None
+
+    execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=operation
+    )
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 1
+
+
+@pytest.mark.parametrize("completion", ["commit", "rollback"])
+def test_kernel_body_completion_violation_cannot_be_swallowed(
+    db_session: Session, completion: str
+) -> None:
+    def operation() -> None:
+        try:
+            with conflict_savepoint(db_session):
+                db_session.add(_projection("kernel-illegal"))
+                db_session.flush()
+                child = db_session.get_nested_transaction()
+                assert child is not None
+                try:
+                    if completion == "commit":
+                        child.commit()
+                    else:
+                        child.rollback()
+                except OwnerCommandError:
+                    pass
+        except (OwnerCommandError, ConflictSavepointProtocolError):
+            pass
+
+    with pytest.raises(OwnerCommandError):
+        execute_owner_command(
+            db_session, definition=_DEFINITION, context=_context(), operation=operation
+        )
+    assert not db_session.in_transaction()
+    assert not any(key.startswith("_dotmac_") for key in db_session.info)
+    assert _count(db_session) == 0
