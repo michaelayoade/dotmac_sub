@@ -29,9 +29,15 @@ DOMAIN = DomainSOT(
         SOTService(
             name="runtime.bandwidth_poller_health",
             module="app.services.poller_health",
-            implementation_modules=("app.poller.mikrotik_poller",),
-            owns=("bounded bandwidth poller loop liveness query",),
-            notes="Local component observation only; no deployment authorization or domain writes.",
+            implementation_modules=(
+                "app.poller.mikrotik_poller",
+                "app.services.platform_health_observations",
+            ),
+            owns=(
+                "bounded bandwidth poller loop liveness query",
+                "bounded Platform Health poller observation projection",
+            ),
+            notes="Local component observation and optional Platform Health document serialization only; no transport, persistence, deployment authorization or domain writes.",
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
@@ -40,6 +46,14 @@ DOMAIN = DomainSOT(
                         input_names=(
                             "component runtime observation",
                             "bounded probe freshness policy",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="bounded Platform Health poller observation projection",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=(
+                            "component runtime observation",
+                            "authenticated Platform Health source identity",
                         ),
                     ),
                 ),
@@ -55,6 +69,12 @@ DOMAIN = DomainSOT(
                         owner="runtime.bandwidth_poller_health",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="Typed query budgets and fail-closed malformed/missing/future/stale/unavailable handling described in PROCESS_HEALTH_PROBES.md.",
+                    ),
+                    AuthorityInput(
+                        name="authenticated Platform Health source identity",
+                        owner="external:dotmac_integrator",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Caller-supplied source_ref that the future authenticated Integrator transport must bind to the deployment identity; the local CLI does not authenticate it or persist/transport the serialized observation.",
                     ),
                 ),
                 transaction=TransactionContract(
@@ -88,9 +108,15 @@ DOMAIN = DomainSOT(
         SOTService(
             name="runtime.syslog_receiver_health",
             module="app.syslog.listener",
-            implementation_modules=("app.syslog.health",),
-            owns=("listener-owned UDP receiver readiness query",),
-            notes="Local component observation only; no deployment authorization or domain writes.",
+            implementation_modules=(
+                "app.syslog.health",
+                "app.services.platform_health_observations",
+            ),
+            owns=(
+                "listener-owned UDP receiver readiness query",
+                "bounded Platform Health syslog observation projection",
+            ),
+            notes="Local component observation and optional Platform Health document serialization only; no transport, persistence, deployment authorization or domain writes.",
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
@@ -99,6 +125,14 @@ DOMAIN = DomainSOT(
                         input_names=(
                             "component runtime observation",
                             "bounded probe freshness policy",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="bounded Platform Health syslog observation projection",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=(
+                            "component runtime observation",
+                            "authenticated Platform Health source identity",
                         ),
                     ),
                 ),
@@ -114,6 +148,12 @@ DOMAIN = DomainSOT(
                         owner="runtime.syslog_receiver_health",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="Typed query budgets and fail-closed malformed/missing/future/stale/unavailable handling described in PROCESS_HEALTH_PROBES.md.",
+                    ),
+                    AuthorityInput(
+                        name="authenticated Platform Health source identity",
+                        owner="external:dotmac_integrator",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Caller-supplied source_ref that the future authenticated Integrator transport must bind to the deployment identity; the local CLI does not authenticate it or persist/transport the serialized observation.",
                     ),
                 ),
                 transaction=TransactionContract(
