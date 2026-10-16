@@ -40,7 +40,9 @@
 #
 #
 #
-# --- app: 239 files ---
+# Michael approved PR #3642 at ff7678eb on 2026-10-15: one contract path
+# preserves the incumbent crm transport queue; no new CRM capability or rename.
+# --- app: 240 files ---
 app/api/campaigns.py
 app/api/crm.py
 app/api/crm_referrals.py
@@ -67,6 +69,7 @@ app/api/sales.py
 app/api/sales_orders.py
 app/api/search.py
 app/celery_app.py
+app/celery_queue_contract.py
 app/main.py
 app/migration_source/snapshot.py
 app/migration_source/surfaces.py

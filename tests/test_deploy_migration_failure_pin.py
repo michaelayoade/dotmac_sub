@@ -8,16 +8,22 @@ would start the new image on the un-migrated schema.
 
 These run the real bash for ``pin_and_migrate`` with the surrounding deploy
 stubbed, and assert on the resulting .env and on which paths were taken.
+Staging exercises the idle pin path; production refusal fixtures retain the
+real typed migration journal and invoke its fail-closed CLI boundary.
 """
 
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from scripts import production_deploy_migration as migration
+from tests.test_production_deploy_migration import _record
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SH = ROOT / "scripts/deploy.sh"
@@ -32,6 +38,14 @@ HARNESS = """
 set -uo pipefail
 log() { printf '\\n==> %s\\n' "$*"; }
 env_value() { grep "^$1=" .env | head -1 | cut -d= -f2-; }
+REPO_DIR=@@REPO_DIR@@
+PYTHON_BIN=@@PYTHON_BIN@@
+DEPLOY_DIR="$PWD"
+DEPLOYMENT_TARGET="${HARNESS_DEPLOYMENT_TARGET:-staging}"
+CUTOVER_PHASE="${HARNESS_CUTOVER_PHASE:-idle}"
+MIGRATION_INVOCATION_STARTED="${MIGRATION_INVOCATION_STARTED:-0}"
+MIGRATION_HEADS_BEFORE="${HEADS_BEFORE:-}"
+@@REPO_MODULE@@
 @@ENV_HELPERS@@
 @@REPIN@@
 @@PIN_AND_MIGRATE@@
@@ -45,17 +59,8 @@ previous_image_rollback_allowed() { echo guard >>"$CALLS"; return 1; }
 APP_CONTAINER=dotmac_sub_app
 docker() {
   echo "docker $*" >>"$CALLS"
-  if [[ "$1" == ps ]]; then
-    case "${PS_MODE-gone}" in
-      running) echo abc123 ;;
-      error) return 1 ;;
-    esac
-    return 0
-  fi
   printf '%s\\n' "${RUNNING_IMAGE-$OLD_IMAGE}"
 }
-MIGRATION_PS_POLL_ATTEMPTS=2
-MIGRATION_PS_POLL_SECONDS=0
 # Heads read #1 is before the migration, read #2 after it.
 database_heads() {
   local n; n="$(cat "$PWD/head-reads" 2>/dev/null || echo 0)"
@@ -69,7 +74,6 @@ database_heads() {
   fi
 }
 run_migrations() {
-  MIGRATION_RUN_PREFIX=dotmac_sub_migrate_test_
   echo "migrate image=$(env_value APP_IMAGE)" >>"$CALLS"
   if [[ -n "${INTERRUPT-}" ]]; then kill -INT $$; sleep 1; fi
   return "$MIGRATE_RC"
@@ -93,7 +97,16 @@ echo "RC=$?"
 """
 
 
-_SCRUBBED_PREFIXES = ("DATABASE_URL", "DB_", "DEPLOY_", "MIGRATION_", "PRODUCTION_")
+_SCRUBBED_PREFIXES = (
+    "DATABASE_URL",
+    "DB_",
+    "DEPLOY_",
+    "MIGRATION_",
+    "PRODUCTION_",
+    "CUTOVER_",
+    "DOTMAC_MAINTENANCE_",
+    "HARNESS_",
+)
 
 
 def _base_env() -> dict[str, str]:
@@ -105,30 +118,26 @@ def _slice(source: str, start: str, end: str) -> str:
     return source[source.index(start) : source.index(end)]
 
 
+def _shell_function(source: str, name: str) -> str:
+    """Load one real top-level function without adjacent deploy execution."""
+    start = source.index(f"\n{name}() {{") + 1
+    end = source.index("\n}\n", start) + len("\n}\n")
+    return source[start:end]
+
+
 def _resume_shell_functions_in_source_order(source: str) -> str:
     """Extract resume helpers in their real top-level definition order."""
-    starts = (
-        "database_name_from_url() {",
-        "database_heads() {",
-        "candidate_heads() {",
-        "verify_post_migration_resume() {",
+    names = (
+        "database_name_from_url",
+        "database_heads",
+        "candidate_heads",
+        "verify_post_migration_resume",
     )
-    end_markers = (*starts[1:], "read_alembic_heads() {")
-    definitions = []
-    for start in starts:
-        offset = source.index(start)
-        end_offsets = [
-            source.index(marker, offset + len(start))
-            for marker in end_markers
-            if source.find(marker, offset + len(start)) >= 0
-        ]
-        if start == starts[-1]:
-            end_offsets.append(source.index("# Deploy-integrity gate.", offset))
-        definitions.append((offset, min(end_offsets), start))
+    definitions = [(source.index(f"\n{name}() {{") + 1, name) for name in names]
     call_offset = source.index('if ! BACKUP_MODE="$(verify_post_migration_resume)"')
     return "".join(
-        source[start:end]
-        for start, end, _ in sorted(definitions)
+        _shell_function(source, name)
+        for start, name in sorted(definitions)
         if start < call_offset
     )
 
@@ -136,7 +145,13 @@ def _resume_shell_functions_in_source_order(source: str) -> str:
 def _script() -> str:
     src = DEPLOY_SH.read_text(encoding="utf-8")
     return (
-        HARNESS.replace(
+        HARNESS.replace("@@REPO_DIR@@", shlex.quote(str(ROOT)))
+        .replace("@@PYTHON_BIN@@", shlex.quote(sys.executable))
+        .replace(
+            "@@REPO_MODULE@@",
+            _shell_function(src, "run_repo_module"),
+        )
+        .replace(
             "@@ENV_HELPERS@@",
             _slice(src, "set_env_value() {", "pinned_image() {")
             + "pinned_image() { env_value APP_IMAGE; }\n"
@@ -148,11 +163,15 @@ def _script() -> str:
         )
         .replace(
             "@@PIN_AND_MIGRATE@@",
-            _slice(src, "database_name_from_url() {", "database_heads() {")
-            + _slice(
-                src,
-                "read_alembic_heads() {",
-                "# --- End pre-swap pin and migration",
+            "".join(
+                _shell_function(src, name)
+                for name in (
+                    "database_name_from_url",
+                    "read_alembic_heads",
+                    "migration_container_gone",
+                    "settle_failed_migration",
+                    "pin_and_migrate",
+                )
             ),
         )
     )
@@ -519,12 +538,21 @@ def test_deploy_exits_nonzero_and_does_not_enter_the_restore_trap() -> None:
     assert "restore_prev" not in block
 
 
-@pytest.mark.parametrize("ps_mode", ["running", "error"])
-def test_migration_container_still_running_or_unknown_keeps_the_pin(
-    tmp_path: Path, ps_mode: str
+@pytest.mark.parametrize(
+    "phase", [migration.MigrationPhase.RUNNING, migration.MigrationPhase.INDETERMINATE]
+)
+def test_unresolved_production_migration_journal_keeps_the_pin(
+    tmp_path: Path, phase: migration.MigrationPhase
 ) -> None:
+    record = _record(phase)
+    journal = migration._journal_path(tmp_path)
+    migration._write(journal, record)
     for kind in ("fail", "interrupt"):
-        extra = {"PS_MODE": ps_mode}
+        extra = {
+            "HARNESS_DEPLOYMENT_TARGET": "production",
+            "HARNESS_CUTOVER_PHASE": "captured",
+            "MIGRATION_INVOCATION_STARTED": "1",
+        }
         if kind == "interrupt":
             extra["INTERRUPT"] = "1"
         out, err, calls, env = _run(
@@ -536,14 +564,15 @@ def test_migration_container_still_running_or_unknown_keeps_the_pin(
         assert not any(
             c.startswith("docker kill") or c.startswith("docker stop") for c in calls
         )
-        assert any(
-            c.startswith("docker ps -q --filter name=dotmac_sub_migrate_test_")
-            for c in calls
+        assert not any(c.startswith("docker ps") for c in calls)
+        assert (
+            "restore_prev" not in calls and "guard" not in calls and "up" not in calls
         )
+        assert migration._load_journal(journal)[0] == record
 
 
-def test_migration_container_gone_allows_the_measured_repin(tmp_path: Path) -> None:
-    out, err, _, env = _run(tmp_path, migrate_rc=1, extra_env={"PS_MODE": "gone"})
+def test_staging_idle_migration_allows_the_measured_repin(tmp_path: Path) -> None:
+    out, err, _, env = _run(tmp_path, migrate_rc=1)
     assert "RC=1" in out
     assert env["APP_IMAGE"] == OLD_IMAGE
 
