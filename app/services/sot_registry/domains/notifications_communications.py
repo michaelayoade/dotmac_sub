@@ -26,6 +26,9 @@ from app.services.sot_manifest import (
     TransactionMode,
     owner_command_boundary_error_codes,
 )
+from app.services.sot_registry.customer_occasion_contracts import (
+    CUSTOMER_OCCASION_SERVICE,
+)
 from app.services.sot_registry.model import DomainSOT
 from app.services.sot_registry.payment_email_contracts import PAYMENT_EMAIL_SERVICES
 
@@ -202,6 +205,7 @@ DOMAIN = DomainSOT(
         "comms",
     ),
     services=(
+        CUSTOMER_OCCASION_SERVICE,
         *PAYMENT_EMAIL_SERVICES,
         SOTService(
             name="communications.customer_bulk_messages",

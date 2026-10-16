@@ -14,6 +14,14 @@ Projection order is account override, active service (including collections stat
 
 ### Communications
 
+- Annual birthday and original-service anniversary admission belongs to
+  `communications.customer_occasions`. Both configurations ship disabled.
+  Anniversary recipients are restricted to active and suspended customers;
+  the dedicated anniversary category permits suspended greetings while
+  retaining marketing consent, general preferences, and suppression checks.
+  See `docs/designs/CUSTOMER_OCCASION_AUTOMATIONS.md` for date authority,
+  annual idempotency, review, and rollout.
+
 - `communication_intents` records why communication is requested, its audience root, class, channels, schedule, content, sender context, and dedupe key.
 - `communication_eligibility` owns the existing `communication_suppressions`
   ledger and the single address/channel eligibility decision. Intent expansion

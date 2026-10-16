@@ -36,6 +36,7 @@ from app.tasks.channel_health import observe_channel_health
 from app.tasks.collections import prepaid_balance_sweep
 from app.tasks.cross_app_drift import run_cross_app_drift_detection
 from app.tasks.customer_impact_metrics import export_customer_impact_metrics
+from app.tasks.customer_occasions import process_due_occasions
 from app.tasks.device_projection import reconcile_device_projections
 from app.tasks.dotmac_erp_outbox import (
     deliver_erp_sync_events,
@@ -277,6 +278,7 @@ __all__ = [
     "deliver_meta_lead_conversion",
     "redrive_meta_capi_leads",
     "reclaim_stale_integration_inbox_claims",
+    "process_due_occasions",
     "process_due_campaigns",
     "process_due_campaign_steps",
     "send_campaign_batch",

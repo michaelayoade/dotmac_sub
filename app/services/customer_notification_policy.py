@@ -200,7 +200,12 @@ def _notification_preferences_allow(
         .lower()
     )
     preferences = get_subscriber_notification_preferences(subscriber)
-    category_key = f"{str(category or 'general').strip().lower()}_notifications"
+    preference_category = (
+        "general" if category in {"birthday", "anniversary"} else category
+    )
+    category_key = (
+        f"{str(preference_category or 'general').strip().lower()}_notifications"
+    )
     if category_key in preferences and not preferences[category_key]:
         return False
     if category == "billing" and not preferences["billing_notifications"]:

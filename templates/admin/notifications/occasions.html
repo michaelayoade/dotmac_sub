@@ -1,0 +1,71 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Customer greetings - Admin{% endblock %}
+{% block content %}
+<div class="space-y-6 text-slate-900 dark:text-slate-100">
+    <div>
+        <a href="/admin/notifications/setup" class="text-sm text-primary-600 dark:text-primary-400">Notifications</a>
+        <h1 class="mt-2 text-2xl font-bold">Birthday and service anniversary emails</h1>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Review messages and matching customers before enabling each automation. Emails use the configured system sender.</p>
+    </div>
+    {% if error %}<p role="alert" class="rounded-lg border border-rose-300 p-4 text-rose-700 dark:text-rose-300">{{ error }}</p>{% endif %}
+    {% if saved %}<p role="status" class="rounded-lg border border-emerald-300 p-4">Settings saved. The status below shows whether sending is enabled.</p>{% endif %}
+    {% if test_result %}<p role="status" class="rounded-lg border border-slate-300 p-4">{{ test_result }}</p>{% endif %}
+    <p class="text-sm text-slate-600 dark:text-slate-300">Both greetings require marketing opt-in and respect opt-outs. Anniversary emails apply only to active and suspended accounts. February 29 occasions are observed on February 28 in non-leap years.</p>
+    {% for item in review.automations %}
+    {% set settings = item.settings %}
+    <section class="space-y-4 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-lg font-semibold">{{ 'Birthday greeting' if settings.occasion.value == 'birthday' else 'Service anniversary greeting' }}</h2>
+            <span class="rounded border px-3 py-1 text-sm">{{ 'Enabled' if settings.enabled else 'Disabled' }}</span>
+        </div>
+        <p class="text-sm">{{ item.matched_count }} date matches for {{ item.local_date }} · {{ item.missing_date_count }} accounts missing {{ 'date of birth' if settings.occasion.value == 'birthday' else 'original account start date' }}.</p>
+        {% if settings.occasion.value == 'anniversary' %}<p class="text-sm text-slate-600 dark:text-slate-300">Uses the recorded account start date, beginning after one completed year. Missing dates are excluded. Verify imported start dates before enabling.</p>{% endif %}
+        <form method="post" action="/admin/notifications/occasions/{{ settings.occasion.value }}" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+            <input type="hidden" name="revision" value="{{ settings.revision }}">
+            <fieldset {% if not can_write %}disabled{% endif %} class="space-y-4">
+                <label class="block text-sm">Subject
+                    <input name="subject" value="{{ settings.subject }}" required maxlength="200" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-900">
+                </label>
+                <label class="block text-sm">Message
+                    <textarea name="body" rows="4" required maxlength="20000" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-900">{{ settings.body }}</textarea>
+                </label>
+                <p class="text-xs text-slate-600 dark:text-slate-300">Plain text. Available placeholders: {% raw %}{first_name}, {years}{% endraw %}. Preview updates after saving.</p>
+                <div class="flex flex-wrap gap-4">
+                    <label class="text-sm">Timezone<input name="timezone" value="{{ settings.timezone }}" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-900"></label>
+                    <label class="text-sm">Hour (24h)<input type="number" name="send_hour" min="0" max="23" value="{{ settings.send_hour }}" required class="mt-1 block w-24 rounded-lg border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-900"></label>
+                    <label class="text-sm">Minute<input type="number" name="send_minute" min="0" max="59" value="{{ settings.send_minute }}" required class="mt-1 block w-24 rounded-lg border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-900"></label>
+                </div>
+                <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="enabled" value="true" {% if settings.enabled %}checked{% endif %}>Enable this automation</label>
+                {% if can_write %}<button class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white" type="submit">Save {{ settings.occasion.value }} settings</button>{% endif %}
+            </fieldset>
+        </form>
+        {% if can_test %}
+        <form method="post" action="/admin/notifications/occasions/{{ settings.occasion.value }}/test" class="flex flex-wrap items-end gap-3">
+            <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+            <input type="hidden" name="command_id" value="{{ test_token }}">
+            <label class="text-sm">Test recipient<input type="email" name="recipient" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white p-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            <button type="submit" class="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-slate-600">Send saved message as test</button>
+            <p class="text-xs text-slate-600 dark:text-slate-300">Sends one test email without enabling the automation.</p>
+        </form>
+        {% endif %}
+        <details class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+            <summary class="cursor-pointer text-sm font-medium">Example email and today's matching customers</summary>
+            <p class="mt-3 font-medium">{{ item.subject_preview }}</p>
+            <div class="mt-2 text-sm">{{ item.body_preview | safe }}</div>
+            <div class="mt-4 overflow-x-auto"><table class="w-full text-left text-sm">
+                <thead><tr><th class="p-2">Customer</th><th class="p-2">Email</th><th class="p-2">Eligibility</th></tr></thead>
+                <tbody>{% for recipient in item.recipients %}<tr class="border-t border-slate-200 dark:border-slate-700"><td class="p-2">{{ recipient.name }}</td><td class="p-2">{{ recipient.email or 'Missing email' }}</td><td class="p-2">{{ recipient.reason or 'Eligible under current communication rules' }}</td></tr>{% else %}<tr><td colspan="3" class="p-2">No matching customers today.</td></tr>{% endfor %}</tbody>
+            </table></div>
+            <p class="mt-2 text-xs text-slate-600 dark:text-slate-300">Sample of up to 10 date matches. Disabled automations send nothing. Annual duplicate checks apply when processing.</p>
+        </details>
+    </section>
+    {% endfor %}
+    <section class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+        <h2 class="font-semibold">Recent greeting activity</h2>
+        <p class="mt-1 text-sm"><a class="text-primary-600 dark:text-primary-400" href="/admin/notifications/history">Open delivery history for provider outcomes</a></p>
+        <ul class="mt-3 space-y-2 text-sm">{% for item in review.activity %}<li>{{ item.created_at }} · {{ item.occasion.value }} · {{ item.status }}{% if item.suppressed %} · {{ item.suppressed | join(', ') }}{% endif %}</li>{% else %}<li>No greetings have been processed.</li>{% endfor %}</ul>
+        <p class="mt-3 text-xs text-slate-600 dark:text-slate-300">Evaluated {{ review.evaluated_at }}. Reload to refresh.</p>
+    </section>
+</div>
+{% endblock %}

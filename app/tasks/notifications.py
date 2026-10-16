@@ -627,8 +627,15 @@ def _deliver_notification_queue_stats(
         #
         # A marketing suppression stops marketing and nothing else: an
         # unsubscribe must never stop an invoice. `may_send` owns that rule.
+        from app.services.customer_occasion_contracts import OccasionDeliveryQuery
+        from app.services.customer_occasions import delivery_decision
+
+        occasion_decision = delivery_decision(
+            db=db, query=OccasionDeliveryQuery(notification_id=notification.id, now=now)
+        )
         if (
-            notification.status is NotificationStatus.canceled
+            not occasion_decision.allowed
+            or notification.status is NotificationStatus.canceled
             or not communication_eligibility.may_send(
                 db,
                 channel=notification.channel,
@@ -637,7 +644,7 @@ def _deliver_notification_queue_stats(
             )
         ):
             notification.status = NotificationStatus.canceled
-            notification.last_error = "suppressed"
+            notification.last_error = occasion_decision.reason or "suppressed"
             suppressed += 1
             logger.info(
                 "Notification %s suppressed (channel=%s category=%s)",

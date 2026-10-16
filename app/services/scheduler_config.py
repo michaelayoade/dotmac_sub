@@ -1087,6 +1087,13 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=60,
         )
+        _sync_scheduled_task(
+            session,
+            name="customer_occasion_admission",
+            task_name="app.tasks.customer_occasions.process_due_occasions",
+            enabled=True,
+            interval_seconds=300,
+        )
         notification_queue_interval_seconds = resolve_integer(
             session, SettingDomain.notification, "notification_queue_interval_seconds"
         )

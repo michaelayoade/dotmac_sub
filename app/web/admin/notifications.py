@@ -41,6 +41,10 @@ from app.timezone import APP_TIMEZONE_NAME
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/notifications", tags=["web-admin-notifications"])
 
+from app.web.admin.customer_occasions import router as customer_occasions_router
+
+router.include_router(customer_occasions_router)
+
 
 class PaymentEmailCutoverRequest(BaseModel):
     confirm: Literal["ACTIVATE_PAYMENT_EMAIL_CUTOVER"]

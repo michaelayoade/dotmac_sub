@@ -23,6 +23,7 @@ class EventType(enum.Enum):
     field_identity_changed = "field_identity.changed"
 
     customer_bulk_message_changed = "customer_bulk_message.changed"
+    customer_occasion_changed = "customer_occasion.changed"
 
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"

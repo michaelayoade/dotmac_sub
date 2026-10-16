@@ -59,7 +59,9 @@ logger = logging.getLogger(__name__)
 #: short and explicit: adding a category here makes it suppressible, and getting
 #: that wrong the other way (marking `billing` marketing) would silently stop
 #: sending invoices.
-MARKETING_CATEGORIES: frozenset[str] = frozenset({"marketing", "campaign", "promotion"})
+MARKETING_CATEGORIES: frozenset[str] = frozenset(
+    {"marketing", "campaign", "promotion", "birthday", "anniversary"}
+)
 
 _DIGITS = re.compile(r"\D+")
 

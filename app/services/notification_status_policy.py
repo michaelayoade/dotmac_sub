@@ -34,6 +34,9 @@ _WALLED_STATUSES = frozenset(
     }
 )
 _WALLED_ALLOWED_CATEGORIES = frozenset({"billing", "account", "service", "credentials"})
+ANNIVERSARY_ALLOWED_STATUSES = frozenset(
+    {SubscriberStatus.active, SubscriberStatus.suspended}
+)
 
 
 def status_allows_notification(
@@ -45,6 +48,9 @@ def status_allows_notification(
     known terminal/walled accounts and must not silently drop mail for states it
     can't classify.
     """
+    # Apply this narrower anniversary gate again when queued mail is delivered.
+    if category == "anniversary":
+        return status in ANNIVERSARY_ALLOWED_STATUSES
     if status is None:
         return True
     if status in _TERMINAL_STATUSES:
