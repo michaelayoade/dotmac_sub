@@ -91,6 +91,18 @@ class InboxResolutionReadiness:
     allowed_resolution_reasons: tuple[tuple[str, str], ...]
 
     @property
+    def can_resolve_as_spam(self) -> bool:
+        """Admit only missing-identity cleanup, never a pending Sales repair."""
+        return (
+            self.classification
+            is team_inbox_customer_completion.InboxIdentityClassification.unresolved
+            and all(
+                blocker.code == "inbox_identity_required"
+                for blocker in self.customer_readiness.readiness.blockers
+            )
+        )
+
+    @property
     def classification(
         self,
     ) -> team_inbox_customer_completion.InboxIdentityClassification:
@@ -179,6 +191,7 @@ def resolution_readiness(
         allowed_resolution_reasons=tuple(
             (reason.value, RESOLUTION_REASON_LABELS[reason])
             for reason in InboxResolutionReason
+            if reason is not InboxResolutionReason.spam_irrelevant
         ),
     )
 
@@ -217,6 +230,21 @@ def _apply_status_transition(
         resolution_policy = resolution_readiness(
             db, conversation, evaluated_at=effective_at
         )
+    spam_resolution = (
+        command.status is InboxConversationStatus.resolved
+        and command.resolution_reason is InboxResolutionReason.spam_irrelevant
+    )
+    if spam_resolution and (
+        resolution_policy is None or not resolution_policy.can_resolve_as_spam
+    ):
+        raise InboxResolutionError(
+            code=f"{OWNER}.spam_resolution_not_allowed",
+            message=(
+                "Only chats without a Lead or Customer link can be resolved as spam. "
+                "Resolve conflicting identity or pending Lead classification first."
+            ),
+            details={"conversation_id": str(conversation.id)},
+        )
     if (
         command.status is InboxConversationStatus.resolved
         and command.reason in _AGENT_RESOLUTION_REASONS
@@ -236,6 +264,7 @@ def _apply_status_transition(
         and command.reason in _AGENT_RESOLUTION_REASONS
         and resolution_policy is not None
         and not resolution_policy.requires_resolution_reason
+        and not spam_resolution
         and not (
             conversation.customer_completion_policy_version_id is None
             and db.get_bind().dialect.name == "sqlite"
@@ -370,7 +399,7 @@ def _apply_status_transition(
             service_team_id=conversation.primary_service_team_id,
         )
 
-        if not expired_whatsapp_resolution:
+        if not expired_whatsapp_resolution and not spam_resolution:
 
             def create_csat_request():
                 from app.services import support_csat
