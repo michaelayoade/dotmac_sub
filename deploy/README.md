@@ -45,33 +45,41 @@ activated by adding these files.
 1. **Image unbound.** `[image].reference` is the all-zero sentinel. Sub's live
    path resolves the tested digest at deploy time; no committed source records
    a production digest to bind, and inventing one would be false provenance.
-2. **Migration owner material is not consumed.** The descriptor declares
-   `MIGRATION_DATABASE_URL` (the name `scripts/deploy.sh` already uses for
-   prerequisite scripts), but `alembic/env.py` reads only
-   `settings.database_url` (`DATABASE_URL`, held by every runtime role).
-   A Foundation migration container holding only the owner material could
-   not run Alembic until the migration connection prefers the owner name.
-3. **Beat tick signal is file mtime.** `DbScheduler` entry `last_run_at`
+2. **Beat tick signal is file mtime.** `DbScheduler` entry `last_run_at`
    lives in memory; the declared tick command reads the `celerybeat-schedule`
    file mtime, which detects a dead scheduler, not a failing one.
-4. **Resources are placeholders.** Root Compose declares no CPU/memory
+3. **Resources are placeholders.** Root Compose declares no CPU/memory
    limits; descriptor values are conservative sizing to be confirmed against
    the production host, exactly as ERP's descriptor records.
-5. **Backup retention is a count, not days.** `retention_days = 5` carries
+4. **Backup retention is a count, not days.** `retention_days = 5` carries
    `DB_BACKUP_RETENTION_COUNT`'s default assuming a daily cadence; no restore
    rehearsal has ever been recorded (DB-BACKUP debt), and `encryption =
    "none"` describes today's scripts, not an approved end state.
-6. **Foundation pin/workflow deferred.** Sub does not yet pin
+5. **Foundation pin/workflow deferred.** Sub does not yet pin
    `dotmac-deployment-foundation==0.2.0a2` or run a conformance workflow;
    descriptor drift is guarded locally by
    `tests/architecture/test_deployment_descriptor.py` (manifest digest,
    inventory regeneration, role/Compose correspondence, migration-head
    parity) until the pin + workflow slice lands.
-7. **Excluded infrastructure has no descriptor home yet.** GenieACS host
+6. **Excluded infrastructure has no descriptor home yet.** GenieACS host
    networking, FreeRADIUS config binds, Nominatim datasets, and the
    promtail/vmagent observability pair need either managed-dependency
    declarations with real health probes or a separate host concern; the
    production monitor and systemd units are likewise not emitted.
+
+## Migration connection material
+
+Alembic now prefers `MIGRATION_DATABASE_URL` for both online migrations and
+offline SQL generation, through the centralized `app.config.Settings` owner.
+When that variable is absent, it retains the existing `DATABASE_URL` fallback
+for local/developer use. A supplied empty or whitespace-only owner value
+refuses migration setup with a sanitized error; it never falls back. Percent
+encoding is preserved through Alembic's ConfigParser boundary. Runtime database
+connections still use `DATABASE_URL` independently.
+
+This closes the descriptor's migration-owner consumption blocker in source.
+It does not provision owner credentials, activate a Foundation container,
+change live deployment wiring, or demonstrate deployed migration acceptance.
 
 ## Regeneration
 
