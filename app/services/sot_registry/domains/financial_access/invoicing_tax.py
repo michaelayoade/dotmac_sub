@@ -24,7 +24,10 @@ SERVICES: tuple[SOTService, ...] = (
         name="financial.invoices.opening_export",
         module="app.services.billing.opening_export",
         implementation_modules=("app.services.billing.opening_export_contracts",),
-        owns=("complete billing opening evidence census",),
+        owns=(
+            "complete billing opening evidence census",
+            "billing opening census lock inventory",
+        ),
         depends_on=(
             "financial.invoices",
             "financial.payments",
@@ -36,6 +39,11 @@ SERVICES: tuple[SOTService, ...] = (
         notes="Read-only invoice-domain evidence; incumbent owners retain every mutation and authority decision. V2 separately captures unqualified cash receipts. V3 adds current documentary/tax observations with explicit unavailable original-document and discharge/replay evidence; V1/V2 output remains unchanged. No import or activation command.",
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="billing opening census lock inventory",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("current financial source population",),
+                ),
                 ConcernContract(
                     name="complete billing opening evidence census",
                     role=OwnerRole.RESOLVER,
@@ -112,6 +120,8 @@ SERVICES: tuple[SOTService, ...] = (
                 "tests/test_billing_opening_export.py",
                 "tests/integration/test_billing_opening_export.py",
                 "tests/architecture/test_billing_opening_export_boundary.py",
+                "tests/integration/test_billing_locked_handoff_preparation_postgres.py",
+                "tests/architecture/test_billing_locked_handoff_preparation_boundary.py",
             ),
         ),
     ),

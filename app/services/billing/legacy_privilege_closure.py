@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import cast
+from typing import NewType, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, RowMapping
@@ -70,6 +70,25 @@ def _quote(identifier: str) -> str:
 
 
 _RELAY_TABLES = ("outbox_events", "platform_outbox_events")
+RelayRelation = NewType("RelayRelation", str)
+
+
+@dataclass(frozen=True)
+class RelayLockInventoryQuery:
+    """Exact relay attachments already covered by this component's policy."""
+
+
+@dataclass(frozen=True)
+class RelayLockInventory:
+    relations: tuple[RelayRelation, ...]
+
+
+def relay_lock_inventory(*, query: RelayLockInventoryQuery) -> RelayLockInventory:
+    if not isinstance(query, RelayLockInventoryQuery):
+        _refuse("Supply the typed relay inventory query.")
+    return RelayLockInventory(tuple(RelayRelation(name) for name in _RELAY_TABLES))
+
+
 _RUNTIME_ROLES = (
     "app_user",
     "platform_api",

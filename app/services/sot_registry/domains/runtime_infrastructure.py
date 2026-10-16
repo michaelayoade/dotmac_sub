@@ -35,12 +35,28 @@ DOMAIN = DomainSOT(
                 "app.services.billing.legacy_retained_columns_contracts",
                 "app.services.billing.legacy_retained_columns_fence",
                 "app.services.billing.legacy_privilege_closure",
+                "app.services.billing.legacy_handoff_preparation",
+                "app.services.billing.legacy_handoff_preparation_contracts",
             ),
-            owns=("private legacy monetary archive fencing",),
-            depends_on=("events.owner_outputs",),
-            notes="Private participant only. Future runtime.billing_ledger_handoff remains unregistered; no production caller, command, migration, startup or activation. Does not prove helper/view/FK/privileged closure or global handoff.",
+            owns=(
+                "private legacy monetary archive fencing",
+                "locked legacy handoff preparation",
+            ),
+            depends_on=("events.owner_outputs", "financial.invoices.opening_export"),
+            notes="Private participants only. Locked preparation composes actual census and fence effects inside the same final-owner root, without completing it. Future runtime.billing_ledger_handoff remains unregistered; no production entrypoint, command, migration, startup or activation. Does not prove helper/view/FK/privileged closure, complete economic watermark or global handoff.",
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="locked legacy handoff preparation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "locked archive catalog",
+                            "closed archive policy",
+                            "typed census lock inventory",
+                            "locked opening population",
+                        ),
+                        canonical_writer="runtime.billing_legacy_archive_fence",
+                    ),
                     ConcernContract(
                         name="private legacy monetary archive fencing",
                         role=OwnerRole.COMMAND_WRITER,
@@ -49,6 +65,18 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed census lock inventory",
+                        owner="financial.invoices.opening_export",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Public billing_opening_lock_inventory derives the explicit V3 collector's relation targets from its existing model inventory; names alone are not held-lock or catalog evidence.",
+                    ),
+                    AuthorityInput(
+                        name="locked opening population",
+                        owner="financial.invoices.opening_export",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Same-root fresh V3 capture before and after both real fence participants; semantic population, migration heads and cutoff inputs must match, excluding observation clock and snapshot labels. This bounded census is not the complete economic watermark or opening qualification.",
+                    ),
                     AuthorityInput(
                         name="locked archive catalog",
                         owner="external:postgresql_catalog",
@@ -65,7 +93,7 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.PARTICIPANT,
                     boundary="Only within the valid registered future handoff coordinator's clean same-connection root READ WRITE READ COMMITTED transaction. Whole owner forbids manual SQL savepoints. Flush only; caller alone commits or rolls back.",
-                    locking="Each component locks its exact protected population and both relay tables before mutation (46 archive/relay or four retained/relay tables). Final owner MUST prelock the global sorted 48-table union before final observation. Positive bounded lock and statement timeouts.",
+                    locking="Components protect 48 distinct archive, retained and relay relations. Locked preparation derives their union with the explicit V3 census inventory, currently 54 relations, and acquires one sorted ACCESS EXCLUSIVE lock statement before capture or fence effects. It rechecks actual public ordinary noninherited relation OIDs, routing, root and role identity. Positive bounded lock and statement timeouts.",
                     idempotency="Exact installed function/trigger identities, body, arguments, events, ALWAYS status and the component-specific ACL policy (no archive DML or retained TRUNCATE for nonowners) permit read-only replay without a second staged event. Collisions/partial installs/drift refuse; no repair or unfreeze.",
                     retries="Caller retries the entire fresh owner transaction after rollback; this participant neither catches catalog failures nor completes transactions.",
                 ),
@@ -74,6 +102,7 @@ DOMAIN = DomainSOT(
                         "billing_archive_fence.refused",
                         "billing_retained_columns.refused",
                         "billing_privilege_closure.refused",
+                        "billing_locked_handoff_preparation.refused",
                     ),
                     mapping_owner="Future maintenance adapter; raw database failures also abort its whole owner transaction.",
                     fail_closed_on=(
@@ -107,6 +136,8 @@ DOMAIN = DomainSOT(
                     "tests/architecture/test_billing_legacy_retained_columns_boundary.py",
                     "tests/integration/test_billing_legacy_retained_columns_postgres.py",
                     "tests/integration/test_billing_legacy_privilege_closure_postgres.py",
+                    "tests/integration/test_billing_locked_handoff_preparation_postgres.py",
+                    "tests/architecture/test_billing_locked_handoff_preparation_boundary.py",
                 ),
             ),
         ),

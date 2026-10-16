@@ -10,6 +10,81 @@ from app.services.sot_registry.registry import service_relationship
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "app/services/billing/legacy_archive_fence.py"
+PREPARATION = ROOT / "app/services/billing/legacy_handoff_preparation.py"
+
+
+def _assert_private_preparation_calls(tree: ast.Module, installer: str) -> None:
+    aliases = {installer}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            aliases.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == installer
+            )
+    participant = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_stage_locked_legacy_handoff"
+    )
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            isinstance(node.func, ast.Name)
+            and node.func.id in aliases
+            or isinstance(node.func, ast.Attribute)
+            and node.func.attr == installer
+        )
+    ]
+    assert calls and all(node in ast.walk(participant) for node in calls)
+    roots = [
+        node
+        for node in participant.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_root"
+    ]
+    assert len(roots) == 1
+    assert roots[0].lineno < min(node.lineno for node in calls)
+
+
+def test_private_preparation_exception_rejects_escaped_calls() -> None:
+    source = PREPARATION.read_text()
+    for installer in (
+        "_install_legacy_archive_fence",
+        "_install_legacy_retained_columns_fence",
+    ):
+        _assert_private_preparation_calls(ast.parse(source), installer)
+        module = installer.removeprefix("_install_")
+        for escaped in (
+            f"\n{installer}(db, request=request)\n",
+            f"\nfence.{installer}(db, request=request)\n",
+            f"\nfrom app.services.billing.{module} import "
+            f"{installer} as escaped_installer\n"
+            "escaped_installer(db, request=request)\n",
+        ):
+            try:
+                _assert_private_preparation_calls(
+                    ast.parse(source + escaped), installer
+                )
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("Private preparation call escaped its owner gate")
+        without_root = source.replace(
+            "connection = _root(db)", "connection = db.connection()", 1
+        )
+        assert without_root != source
+        try:
+            _assert_private_preparation_calls(ast.parse(without_root), installer)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("Private preparation lost its actual owner gate")
 
 
 def test_closed_inventory_is_exactly_the_44_archived_tables() -> None:
@@ -59,7 +134,10 @@ def test_private_participant_has_no_transaction_or_activation_authority() -> Non
     service = service_relationship("runtime.billing_legacy_archive_fence")
     assert service.contract is not None
     assert service.contract.transaction.mode is TransactionMode.PARTICIPANT
-    assert service.depends_on == ("events.owner_outputs",)
+    assert service.depends_on == (
+        "events.owner_outputs",
+        "financial.invoices.opening_export",
+    )
     assert service.contract.events is not None
     assert service.contract.events.event_types == (
         "billing.legacy_archive_fence.staged",
@@ -73,6 +151,9 @@ def test_no_production_caller_installs_or_exposes_private_fence() -> None:
             if path == MODULE:
                 continue
             tree = ast.parse(path.read_text())
+            if path == PREPARATION:
+                _assert_private_preparation_calls(tree, "_install_legacy_archive_fence")
+                continue
             assert not any(
                 isinstance(node, ast.Call)
                 and (

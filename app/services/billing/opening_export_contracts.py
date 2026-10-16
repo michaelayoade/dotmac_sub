@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import NewType
 from uuid import UUID
 
 from app.models.billing import (
@@ -532,6 +533,19 @@ class CaptureLockedBillingOpeningPopulationQuery:
     """Declarations only; actual transaction and locks are verified by the owner."""
 
     source: PreviewBillingOpeningExportQuery
+
+
+OpeningPopulationRelation = NewType("OpeningPopulationRelation", str)
+
+
+@dataclass(frozen=True)
+class BillingOpeningLockInventoryQuery:
+    """The complete v3 collector inventory, without reading its population."""
+
+
+@dataclass(frozen=True)
+class BillingOpeningLockInventory:
+    relations: tuple[OpeningPopulationRelation, ...]
 
 
 @dataclass(frozen=True)

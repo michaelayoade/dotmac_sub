@@ -5,9 +5,13 @@ from pathlib import Path
 
 from app.services.billing.legacy_retained_columns_contracts import RetainedRelation
 from app.services.sot_registry.registry import service_relationship
+from tests.architecture.test_billing_legacy_archive_fence_boundary import (
+    _assert_private_preparation_calls,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "app/services/billing/legacy_retained_columns_fence.py"
+PREPARATION = ROOT / "app/services/billing/legacy_handoff_preparation.py"
 
 
 def test_closed_policy_and_existing_owner() -> None:
@@ -63,6 +67,11 @@ def test_no_production_caller() -> None:
             if path == MODULE:
                 continue
             tree = ast.parse(path.read_text())
+            if path == PREPARATION:
+                _assert_private_preparation_calls(
+                    tree, "_install_legacy_retained_columns_fence"
+                )
+                continue
             assert not any(
                 isinstance(n, ast.Call)
                 and (

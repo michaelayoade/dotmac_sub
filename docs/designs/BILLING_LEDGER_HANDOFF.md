@@ -22,6 +22,25 @@ commands do not themselves require an opening seal. Installing the package,
 selecting a module plane or setting a process-local authority binding cannot
 replace this database privilege gate.
 
+## Overlap before the single switch
+
+Steps 1–3 advance concurrently. Package publication is not a prerequisite for
+source caller migration or opening-data preparation. Consumer runtime acceptance
+does require the exact published package set; source candidates must not be
+presented as installed or released packages.
+
+| Step | Work that proceeds now | Evidence needed to finish |
+| --- | --- | --- |
+| 1. Starter package set | Resolve candidate CI failures, review source and publish approved versions through the provenance workflow. | Exact published versions, artifact digests and truthful release records. |
+| 2. Sub callers | Migrate payment, prepaid, invoice, credit/WHT, rendering and ERP-fact callers against public contracts; remove their legacy write paths for the switch. | Hosted consumer acceptance on the exact published pins and a complete writer inventory. |
+| 3. Opening balances | Export the incumbent population, map accounts and independently qualified original documents and cash evidence, and rehearse the existing importer. | Per-account reconciliation and a manual queue for every blocked or unexplained item. |
+
+Rehearsals feed failures back to all three steps while work continues. Synthetic
+fixtures prove importer behavior; authentic opening evidence proves the proposed
+production balances. Once the three steps converge, execute the complete timed
+rehearsal, then the authorized freeze, drain, final import, permanent seal and
+single installation-wide handoff. Verification and retirement follow the switch.
+
 ## Bounded implementation surfaces
 
 - `app/services/billing/ledger_handoff.py` and typed contracts: final locked
@@ -253,9 +272,25 @@ acceptance is claimed.
 The same private fence owner contains `legacy_privilege_closure.py`. Its closed
 archive lock population is 44 archives plus `public.outbox_events` and
 `public.platform_outbox_events` (46); its retained lock population is both retained
-tables plus those relay tables (4). The future coordinator must prelock the sorted
-48-table union. One complete component lock statement precedes all ACL/DDL/audit
+tables plus those relay tables (4). These components have a 48-table union;
+the explicit V3 census additionally requires `alembic_version`, `integration_inbox`,
+`payment_provider_events`, `payment_proofs`, `payment_proof_corrections` and
+`topup_intents`. Locked preparation derives the complete union from the public
+typed census inventory and existing component policies, currently 54 relations.
+One sorted ACCESS EXCLUSIVE lock statement precedes capture and all ACL/DDL/audit
 mutation. The future coordinator is still absent and no activation is installed.
+
+The private `_stage_locked_legacy_handoff` belongs to the existing
+`runtime.billing_legacy_archive_fence` participant owner. It requires the actual
+active final-owner root, stages both real fence components, and compares fresh
+same-root V3 populations before and after their effects. Observation clocks and
+snapshot labels are excluded from semantic equality. Its frozen result records
+actual locks, census and staged component observations. The caller retains the
+whole transaction: failure rolls back guards, ACLs and audit outputs together.
+This participant has no standalone committing adapter or authority receipt and
+does not establish the complete economic watermark, helper closure, opening
+qualification, deployment identity or ledger admission. Hosted acceptance is
+pending; test-only final-owner registration proves component behavior only.
 
 The closure verifies the four exact claim/settle helper bodies from Sub migration
 557, their signatures, return/language/config/owner and exact EXECUTE ACLs. Helpers

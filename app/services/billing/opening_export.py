@@ -57,6 +57,8 @@ from app.services.billing.opening_export_contracts import (
     BillingOpeningExportPreview,
     BillingOpeningExportPreviewV2,
     BillingOpeningExportPreviewV3,
+    BillingOpeningLockInventory,
+    BillingOpeningLockInventoryQuery,
     BillingOpeningPopulation,
     CaptureEvidence,
     CaptureLockedBillingOpeningPopulationQuery,
@@ -85,6 +87,7 @@ from app.services.billing.opening_export_contracts import (
     OpeningControl,
     OpeningException,
     OpeningExclusion,
+    OpeningPopulationRelation,
     OriginalEvidenceRequirement,
     OriginalEvidenceUnavailableReason,
     PositionEffectEvidence,
@@ -350,6 +353,24 @@ def _locked_population_relations(db: Session, *, include_cash: bool) -> tuple[st
             )
         relations.append(table.name)
     return tuple(relations)
+
+
+def billing_opening_lock_inventory(
+    db: Session, *, query: BillingOpeningLockInventoryQuery
+) -> BillingOpeningLockInventory:
+    """Expose existing v3 collector tables and prove their single-root routing.
+
+    Reads no census and acquires no relation locks. The caller must qualify its
+    root before calling, then lock this inventory before collecting population.
+    """
+    if not isinstance(query, BillingOpeningLockInventoryQuery):
+        raise _fail("invalid_query", "Supply the typed v3 lock inventory query.")
+    return BillingOpeningLockInventory(
+        tuple(
+            OpeningPopulationRelation(name)
+            for name in sorted(set(_locked_population_relations(db, include_cash=True)))
+        )
+    )
 
 
 def capture_locked_billing_opening_population(

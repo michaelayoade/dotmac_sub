@@ -175,9 +175,20 @@ acceptance is claimed.
 The same private fence owner contains `legacy_privilege_closure.py`. Its closed
 archive lock population is 44 archives plus `public.outbox_events` and
 `public.platform_outbox_events` (46); its retained lock population is both retained
-tables plus those relay tables (4). The future coordinator must prelock the sorted
-48-table union. One complete component lock statement precedes all ACL/DDL/audit
+tables plus those relay tables (4). These components have a 48-table union;
+the explicit V3 census additionally requires `alembic_version`, `integration_inbox`,
+`payment_provider_events`, `payment_proofs`, `payment_proof_corrections` and
+`topup_intents`. Locked preparation derives the complete union from the public
+typed census inventory and existing component policies, currently 54 relations.
+One sorted ACCESS EXCLUSIVE lock statement precedes capture and all ACL/DDL/audit
 mutation. The future coordinator is still absent and no activation is installed.
+
+The same owner's private locked preparation participant captures the V3 population,
+stages both real fences, reobserves their actual catalog state and compares the
+semantic population in the same final-owner transaction. A failure rolls back all
+fence effects and audit outputs. Its staged observations grant no authority or
+complete-watermark claim. No standalone command or production caller is added;
+hosted PostgreSQL acceptance remains pending.
 
 The closure verifies the four exact claim/settle helper bodies from Sub migration
 557, their signatures, return/language/config/owner and exact EXECUTE ACLs. Helpers
