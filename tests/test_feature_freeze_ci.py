@@ -224,9 +224,9 @@ def test_exception_entry_covers_size_finding() -> None:
 
 def test_nonascii_template_path_is_parsed_and_counted() -> None:
     path = "templates/c\u00e4rd.html"
-    changes = freeze.parse_name_status_z(f"A\0{path}\0")
+    changes = freeze.parse_name_status_z(f"A\x00{path}\x00")
     assert changes == [("A", path)]
-    added = freeze.parse_numstat_z(f"500\t0\t{path}\0")
+    added = freeze.parse_numstat_z(f"500\t0\t{path}\x00")
     assert added == {path: 500}
     rules = [r for _, _, r in freeze.classify_detailed(changes, "fix: x", added)]
     assert "new-template" in rules
@@ -234,7 +234,7 @@ def test_nonascii_template_path_is_parsed_and_counted() -> None:
 
 def test_numstat_z_has_no_rename_form() -> None:
     # With --no-renames git emits a delete plus an add, never "{a => b}".
-    out = "0\t280\tscripts/tool.py\0280\t0\tapp/services/tool.py\0"
+    out = "0\t280\tscripts/tool.py\x00280\t0\tapp/services/tool.py\x00"
     assert freeze.parse_numstat_z(out)["app/services/tool.py"] == 280
 
 
@@ -293,7 +293,7 @@ def test_rename_into_templates_is_new_template(
 
 
 def test_uncountable_diff_is_a_finding() -> None:
-    added = freeze.parse_numstat_z("-\t-\tapp/services/hidden.py\0")
+    added = freeze.parse_numstat_z("-\t-\tapp/services/hidden.py\x00")
     findings = freeze.classify_detailed(
         [("M", "app/services/hidden.py")], "fix: x", added
     )
