@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from alembic.config import Config
-from dotmac_billing import create_billing_account
+from dotmac_billing.service import create_billing_account
 from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency, Money
 from dotmac_payments import OpenPaymentIntent, PaymentPurpose, open_payment_intent
