@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
             observation = poller_platform_health_observation(
                 snapshot=snapshot,
                 source_ref=args.platform_health_source_ref,
-                received_at=query.now,
+                received_at=datetime.now(UTC),
             )
         except ValueError:
             parser.error("--platform-health-source-ref is invalid")

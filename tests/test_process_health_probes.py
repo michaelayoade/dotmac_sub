@@ -849,6 +849,46 @@ def test_poller_cli_can_emit_platform_health_observation(
     assert error.value.code == 2
 
 
+def test_poller_cli_stamps_receipt_after_loading_snapshot(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received_at = NOW + timedelta(seconds=2)
+    snapshot = _snapshot(observed_at=NOW + timedelta(seconds=1))
+    loaded = False
+
+    class ProbeClock:
+        @staticmethod
+        def now(tz: object) -> datetime:
+            assert tz is UTC
+            return received_at if loaded else NOW
+
+    def load_snapshot() -> PollerSnapshot:
+        nonlocal loaded
+        loaded = True
+        return snapshot
+
+    monkeypatch.setattr(poller_health, "datetime", ProbeClock)
+    monkeypatch.setattr(poller_health, "load_poller_health", load_snapshot)
+
+    # Local liveness keeps its incumbent query-start timestamp and exit policy.
+    assert (
+        poller_health.main(
+            [
+                "--max-age-seconds",
+                "60",
+                "--platform-health-source-ref",
+                "deployment:sub:test",
+            ]
+        )
+        == 1
+    )
+    document = json.loads(capsys.readouterr().out)
+    assert document["state"] == "healthy"
+    assert document["labels"]["reason"] == "snapshot_available"
+    assert document["observed_at"] == snapshot.observed_at.isoformat()
+    assert document["received_at"] == received_at.isoformat()
+
+
 def test_syslog_cli_can_emit_platform_health_observation(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
