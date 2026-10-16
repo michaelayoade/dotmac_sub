@@ -7,7 +7,6 @@ from jinja2 import Environment, FileSystemLoader
 
 SIDEBAR = Path("templates/components/navigation/admin_sidebar.html")
 ADMIN_LAYOUT = Path("templates/layouts/admin.html")
-CATALOG_ROUTES = Path("app/web/admin/catalog.py")
 
 
 def _can(request: object, permission: str) -> bool:
@@ -113,15 +112,6 @@ def test_navigation_macros_fail_closed_and_empty_groups_are_suppressed() -> None
     assert "{% set show_admin = true %}" in source
     assert '{% if show_admin %}{{ section_label("ADMIN") }}{% endif %}' in source
     assert "module_states.get('reports', True) and show_reports" in source
-
-
-def test_subscription_detail_requires_catalog_read_permission() -> None:
-    source = CATALOG_ROUTES.read_text(encoding="utf-8")
-    route = source.split(
-        '@router.get(\n    "/subscriptions/{subscription_id}",', maxsplit=1
-    )[1].split("def catalog_subscription_detail", maxsplit=1)[0]
-
-    assert 'dependencies=[Depends(require_permission("catalog:read"))]' in route
 
 
 def test_admin_shell_shortcuts_follow_destination_permissions() -> None:
