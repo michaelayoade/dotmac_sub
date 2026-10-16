@@ -17,6 +17,13 @@ from uuid import UUID
 
 import redis
 
+from app.services.platform_health_observations import (
+    PlatformHealthObservation,
+    PlatformHealthState,
+    make_platform_health_observation,
+)
+
+POLLER_COMPONENT_CODE = "sub.bandwidth_poller"
 POLLER_HEALTH_KEY = os.getenv("BANDWIDTH_POLLER_HEALTH_KEY", "bandwidth:poller:health")
 _MAX_PAYLOAD_BYTES = 262144
 _redis_client: redis.Redis | None = None
@@ -211,9 +218,9 @@ class PollerLiveness:
         return self.reason is PollerHealthReason.LIVE
 
 
-def query_poller_liveness(*, query: PollerLivenessQuery) -> PollerLiveness:
-    """Fresh failed/idle cycles are live; successful-cycle provenance is absent."""
-    snapshot = load_poller_health()
+def _classify_poller_snapshot(
+    *, snapshot: PollerSnapshot | None, query: PollerLivenessQuery
+) -> PollerLiveness:
     if snapshot is None:
         return PollerLiveness(reason=PollerHealthReason.UNAVAILABLE)
     age = (query.now - snapshot.observed_at).total_seconds()
@@ -225,11 +232,84 @@ def query_poller_liveness(*, query: PollerLivenessQuery) -> PollerLiveness:
     return PollerLiveness(reason, snapshot.observed_at, age, snapshot.devices_failing)
 
 
+def query_poller_liveness(*, query: PollerLivenessQuery) -> PollerLiveness:
+    """Fresh failed/idle cycles are live; successful-cycle provenance is absent."""
+    return _classify_poller_snapshot(snapshot=load_poller_health(), query=query)
+
+
+def poller_platform_health_observation(
+    *,
+    snapshot: PollerSnapshot | None,
+    source_ref: str,
+    received_at: datetime,
+) -> PlatformHealthObservation:
+    """Project the incumbent poller snapshot without device identities.
+
+    Platform Health owns freshness classification from ``observed_at``. This
+    mapper only reports the source state in aggregate: a fresh or stale
+    snapshot's device outcome remains separate from local loop liveness.
+    """
+
+    if received_at.utcoffset() is None:
+        raise ValueError("received_at must be timezone-aware")
+    if snapshot is not None and snapshot.observed_at.utcoffset() is None:
+        raise ValueError("observed_at must be timezone-aware")
+    if snapshot is None:
+        return make_platform_health_observation(
+            source_ref=source_ref,
+            component_code=POLLER_COMPONENT_CODE,
+            state=PlatformHealthState.UNKNOWN,
+            observed_at=received_at,
+            received_at=received_at,
+            summary="Bandwidth poller health snapshot unavailable",
+            labels=(("probe", "loop_liveness"), ("reason", "unavailable")),
+            identity=f"unavailable:{received_at.isoformat()}",
+        )
+    if snapshot.observed_at > received_at:
+        return make_platform_health_observation(
+            source_ref=source_ref,
+            component_code=POLLER_COMPONENT_CODE,
+            state=PlatformHealthState.UNKNOWN,
+            observed_at=received_at,
+            received_at=received_at,
+            summary="Bandwidth poller health snapshot has a future timestamp",
+            labels=(("probe", "loop_liveness"), ("reason", "future_timestamp")),
+            identity=(
+                f"future:{snapshot.poll_count}:{snapshot.observed_at.isoformat()}"
+            ),
+        )
+    if snapshot.devices_total > 0 and snapshot.devices_ok == 0:
+        state = PlatformHealthState.UNHEALTHY
+    elif snapshot.devices_failing > 0:
+        state = PlatformHealthState.DEGRADED
+    else:
+        state = PlatformHealthState.HEALTHY
+    return make_platform_health_observation(
+        source_ref=source_ref,
+        component_code=POLLER_COMPONENT_CODE,
+        state=state,
+        observed_at=snapshot.observed_at,
+        received_at=received_at,
+        summary=(
+            "Bandwidth poller cycle observed with "
+            f"{snapshot.devices_failing} failing devices"
+        ),
+        labels=(
+            ("devices_failing", str(snapshot.devices_failing)),
+            ("devices_total", str(snapshot.devices_total)),
+            ("probe", "loop_liveness"),
+            ("reason", "snapshot_available"),
+        ),
+        identity=f"poll:{snapshot.poll_count}:{snapshot.observed_at.isoformat()}",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Bandwidth poller loop liveness (not readiness)"
     )
     parser.add_argument("--max-age-seconds", type=float, required=True)
+    parser.add_argument("--platform-health-source-ref")
     args = parser.parse_args(argv)
     try:
         query = PollerLivenessQuery(
@@ -237,17 +317,29 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError:
         parser.error("--max-age-seconds must be in (0, 3600]")
-    outcome = query_poller_liveness(query=query)
-    print(
-        json.dumps(
-            {
-                "kind": "liveness",
-                "reason": outcome.reason.value,
-                "live": outcome.live,
-                "devices_failing": outcome.devices_failing,
-            }
+    snapshot = load_poller_health()
+    outcome = _classify_poller_snapshot(snapshot=snapshot, query=query)
+    if args.platform_health_source_ref is not None:
+        try:
+            observation = poller_platform_health_observation(
+                snapshot=snapshot,
+                source_ref=args.platform_health_source_ref,
+                received_at=query.now,
+            )
+        except ValueError:
+            parser.error("--platform-health-source-ref is invalid")
+        print(json.dumps(observation.to_document()))
+    else:
+        print(
+            json.dumps(
+                {
+                    "kind": "liveness",
+                    "reason": outcome.reason.value,
+                    "live": outcome.live,
+                    "devices_failing": outcome.devices_failing,
+                }
+            )
         )
-    )
     return 0 if outcome.live else 1
 
 
