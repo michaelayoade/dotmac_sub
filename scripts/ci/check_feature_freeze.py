@@ -68,6 +68,11 @@ RULE_MIGRATION = "new-migration"
 RULE_NEW_MODULE = "new-python-module"
 RULE_NEW_TEMPLATE = "new-template"
 RULE_SIZE = "size-threshold"
+RULE_UNCOUNTABLE = "uncountable-diff"
+
+#: approved-growth entries may also cover findings from these rules (a
+#: genuine fix adding a partial need not invent a Starter contract).
+GROWTH_COVERABLE_RULES = (RULE_NEW_TEMPLATE, RULE_SIZE)
 
 FEAT_TITLE_RE = re.compile(r"^feat(\([^)]*\))?(!)?:", re.IGNORECASE)
 
@@ -104,6 +109,13 @@ def _matches(path: str, patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
+#: -z: raw NUL-separated paths (git quotes non-ASCII otherwise);
+#: --no-renames: a rename is a delete + add so path rules see the destination.
+_DIFF_FLAGS = ("diff", "-z", "--no-renames")
+#: numstat count for binary / ``-diff`` (undiffable) files.
+UNCOUNTABLE = -1
+
+
 def _git(*argv: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *argv], capture_output=True, text=True)
 
@@ -120,42 +132,56 @@ def _deepen_base(base: str) -> None:
 def _name_status(base: str, head: str) -> list[tuple[str, str]]:
     """(status, path) pairs this PR introduces (three-dot semantics)."""
 
-    result = _git("diff", "--name-status", f"{base}...{head}")
+    result = _git(*_DIFF_FLAGS, "--name-status", f"{base}...{head}")
     if result.returncode != 0:
         _deepen_base(base)
-        result = _git("diff", "--name-status", f"{base}...{head}")
+        result = _git(*_DIFF_FLAGS, "--name-status", f"{base}...{head}")
     if result.returncode != 0:
         print(
             "::warning::feature-freeze: merge-base unavailable for "
             f"'{base}...{head}'; falling back to two-dot diff"
         )
-        result = _git("diff", "--name-status", base, head)
+        result = _git(*_DIFF_FLAGS, "--name-status", base, head)
         result.check_returncode()
+    return parse_name_status_z(result.stdout)
+
+
+def parse_name_status_z(output: str) -> list[tuple[str, str]]:
+    """Parse ``git diff -z --name-status --no-renames`` (NUL separated)."""
+
+    fields = output.split("\0")
     pairs: list[tuple[str, str]] = []
-    for line in result.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 2:
-            continue
-        status = parts[0].strip()
-        # Renames carry two paths; the destination is what ships.
-        path = parts[-1].strip()
-        pairs.append((status, path))
+    i = 0
+    while i + 1 < len(fields):
+        status, path = fields[i].strip(), fields[i + 1]
+        i += 2
+        if status:
+            pairs.append((status, path))
     return pairs
 
 
 def _numstat(base: str, head: str) -> dict[str, int]:
-    """{path: added lines} this PR introduces (three-dot, binary skipped)."""
+    """{path: added lines}; UNCOUNTABLE (-1) when git reports ``-``."""
 
-    result = _git("diff", "--numstat", f"{base}...{head}")
+    result = _git(*_DIFF_FLAGS, "--numstat", f"{base}...{head}")
     if result.returncode != 0:
-        result = _git("diff", "--numstat", base, head)
+        result = _git(*_DIFF_FLAGS, "--numstat", base, head)
         result.check_returncode()
+    return parse_numstat_z(result.stdout)
+
+
+def parse_numstat_z(output: str) -> dict[str, int]:
+    """Parse ``git diff -z --numstat --no-renames`` (NUL separated)."""
+
     added: dict[str, int] = {}
-    for line in result.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3 or not parts[0].isdigit():
+    for record in output.split("\0"):
+        parts = record.lstrip("\n").split("\t", 2)
+        if len(parts) < 3:
             continue
-        added[parts[-1].strip()] = int(parts[0])
+        if parts[0].isdigit():
+            added[parts[2]] = int(parts[0])
+        elif parts[0] == "-":
+            added[parts[2]] = UNCOUNTABLE
     return added
 
 
@@ -213,6 +239,20 @@ def classify_detailed(
             and _matches(path, SIZE_COUNTED_PATTERNS)
             and not _matches(path, SIZE_EXCLUDED_PATTERNS)
         }
+        for path, n in sorted(added_lines.items()):
+            if (
+                n == UNCOUNTABLE
+                and _matches(path, SIZE_COUNTED_PATTERNS)
+                and not _matches(path, SIZE_EXCLUDED_PATTERNS)
+            ):
+                findings.append(
+                    (
+                        "feature-exception",
+                        path,
+                        f"{RULE_UNCOUNTABLE}: git cannot count lines "
+                        "(binary or -diff attribute)",
+                    )
+                )
         total = sum(counted.values())
         if total > size_threshold:
             already = {path for _, path, _ in findings}
@@ -255,9 +295,14 @@ def load_exceptions(root: Path) -> list[dict[str, object]]:
     return entries if isinstance(entries, list) else []
 
 
-def exception_covers(entries: list[dict[str, object]], kind: str, path: str) -> bool:
+def exception_covers(
+    entries: list[dict[str, object]], kind: str, path: str, rule: str = ""
+) -> bool:
+    growth_ok = kind == "feature-exception" and rule.startswith(GROWTH_COVERABLE_RULES)
     for entry in entries:
-        if entry.get("kind") != kind:
+        if entry.get("kind") != kind and not (
+            growth_ok and entry.get("kind") == "approved-growth"
+        ):
             continue
         if entry.get("approved_by") != "michaelayoade":
             continue
@@ -342,7 +387,7 @@ def main() -> int:
     uncovered = [
         (kind, path, rule)
         for kind, path, rule in findings
-        if not exception_covers(entries, kind, path)
+        if not exception_covers(entries, kind, path, rule)
     ]
     if not uncovered:
         print(

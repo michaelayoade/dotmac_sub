@@ -5,6 +5,7 @@
 
 # Guard machinery
 /CODEOWNERS @michaelayoade
+/.gitattributes @michaelayoade
 /.github/workflows/feature-freeze.yml @michaelayoade
 /scripts/ci/check_feature_freeze.py @michaelayoade
 /docs/FEATURE_FREEZE.md @michaelayoade

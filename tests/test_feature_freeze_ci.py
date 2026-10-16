@@ -198,7 +198,7 @@ def test_size_threshold_is_configurable() -> None:
 
 def test_pr_3662_shape_is_flagged_under_fix_title() -> None:
     changes = [
-        ("A", "app/services/ticket_sla_reports.py"),
+        ("M", "app/services/ticket_sla_reports.py"),
         ("M", "app/services/web_admin_dashboard.py"),
         ("M", "templates/admin/dashboard/index.html"),
         ("A", "tests/test_ticket_sla_reports.py"),
@@ -220,3 +220,101 @@ def test_pr_3662_shape_is_flagged_under_fix_title() -> None:
 def test_exception_entry_covers_size_finding() -> None:
     entry = _entry(paths=["app/services/a.py"])
     assert freeze.exception_covers([entry], "feature-exception", "app/services/a.py")
+
+
+def test_nonascii_template_path_is_parsed_and_counted() -> None:
+    path = "templates/c\u00e4rd.html"
+    changes = freeze.parse_name_status_z(f"A\0{path}\0")
+    assert changes == [("A", path)]
+    added = freeze.parse_numstat_z(f"500\t0\t{path}\0")
+    assert added == {path: 500}
+    rules = [r for _, _, r in freeze.classify_detailed(changes, "fix: x", added)]
+    assert "new-template" in rules
+
+
+def test_numstat_z_has_no_rename_form() -> None:
+    # With --no-renames git emits a delete plus an add, never "{a => b}".
+    out = "0\t280\tscripts/tool.py\0280\t0\tapp/services/tool.py\0"
+    assert freeze.parse_numstat_z(out)["app/services/tool.py"] == 280
+
+
+def test_diff_flags_disable_renames_and_quote() -> None:
+    assert "--no-renames" in freeze._DIFF_FLAGS and "-z" in freeze._DIFF_FLAGS
+
+
+def _git_repo_with_rename(tmp_path: Path, dest: str, lines: int) -> tuple[str, str]:
+    import subprocess
+
+    def g(*a: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *a],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    g("init", "-q", "-b", "main")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.py").write_text("x = 1\n" * lines)
+    g("add", "-A")
+    g("commit", "-qm", "base")
+    base = g("rev-parse", "HEAD").strip()
+    (tmp_path / dest).parent.mkdir(parents=True, exist_ok=True)
+    g("mv", "scripts/tool.py", dest)
+    g("commit", "-qm", "move")
+    return base, g("rev-parse", "HEAD").strip()
+
+
+def test_rename_into_app_services_counts_and_is_new_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base, head = _git_repo_with_rename(tmp_path, "app/services/tool.py", 450)
+    monkeypatch.chdir(tmp_path)
+    changes = freeze._name_status(base, head)
+    added = freeze._numstat(base, head)
+    assert ("A", "app/services/tool.py") in changes
+    assert added["app/services/tool.py"] == 450
+    rules = {
+        r.split(":")[0]
+        for _, _, r in freeze.classify_detailed(changes, "fix: x", added)
+    }
+    assert {"new-python-module"} <= rules
+
+
+def test_rename_into_templates_is_new_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base, head = _git_repo_with_rename(tmp_path, "templates/tool.html", 10)
+    monkeypatch.chdir(tmp_path)
+    changes = freeze._name_status(base, head)
+    rules = [r for _, _, r in freeze.classify_detailed(changes, "fix: x")]
+    assert "new-template" in rules
+
+
+def test_uncountable_diff_is_a_finding() -> None:
+    added = freeze.parse_numstat_z("-\t-\tapp/services/hidden.py\0")
+    findings = freeze.classify_detailed(
+        [("M", "app/services/hidden.py")], "fix: x", added
+    )
+    assert [(k, p) for k, p, _ in findings] == [
+        ("feature-exception", "app/services/hidden.py")
+    ]
+    assert findings[0][2].startswith("uncountable-diff")
+
+
+def test_approved_growth_covers_template_and_size_but_not_modules() -> None:
+    entry = _entry(
+        kind="approved-growth", paths=["templates/x.html", "app/services/a.py"]
+    )
+    for rule in ("new-template", "size-threshold: big"):
+        assert freeze.exception_covers(
+            [entry], "feature-exception", "templates/x.html", rule
+        )
+    assert not freeze.exception_covers(
+        [entry], "feature-exception", "app/services/a.py", "new-python-module"
+    )
+    assert not freeze.exception_covers(
+        [entry], "feature-exception", "app/services/a.py", "uncountable-diff"
+    )
+    assert not freeze.exception_covers([entry], "feature-exception", "templates/x.html")
