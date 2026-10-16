@@ -319,7 +319,7 @@ def test_invoice_binding_owner_uses_only_public_module_surfaces_and_one_root() -
         node
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
-        and node.name == "_create_invoice_gateway_topup_intent"
+        and node.name == "_create_customer_gateway_topup_intent"
     )
     calls = {
         node.func.id
