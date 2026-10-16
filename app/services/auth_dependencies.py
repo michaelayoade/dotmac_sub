@@ -554,7 +554,7 @@ def effective_permission_keys(auth: dict, db: Session) -> frozenset[str]:
     return _canonical_effective_permission_keys(_permission_principal(auth), db)
 
 
-def load_permission_keys(auth: dict, db: Session) -> frozenset[str]:
+def load_permission_keys(auth: dict[str, Any], db: Session) -> frozenset[str]:
     """Compute and memoize the effective permission-key set on the request's
     ``auth`` dict, so a later ``can`` check in a template needs no DB access."""
     cached = auth.get("permission_keys")
@@ -567,10 +567,10 @@ def load_permission_keys(auth: dict, db: Session) -> frozenset[str]:
 def can(request, permission_key: str) -> bool:
     """UI gate: may the current principal perform ``permission_key``?
 
-    Pure set logic over the keys cached by the route's permission guard on the
-    request auth — no DB — so a template can hide actions the principal lacks.
-    Denies when the set is absent (e.g. an ungated page); the route remains the
-    authority that actually enforces access.
+    Pure set logic over the keys cached on request auth by the admin web
+    boundary or a route permission guard — no DB — so a template can hide
+    actions the principal lacks. Denies when the set is absent; the route
+    remains the authority that actually enforces access.
     """
     auth = getattr(getattr(request, "state", None), "auth", None)
     if not isinstance(auth, dict):
