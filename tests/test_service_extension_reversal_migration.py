@@ -4,22 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
+from tests.migration_graph_helpers import composed_sub_graph
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "alembic/versions/472_service_extension_reversals.py"
 
 
 def test_service_extension_reversal_is_the_single_additive_head() -> None:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
-    script = ScriptDirectory.from_config(config)
+    script, heads = composed_sub_graph(ROOT)
 
     # Single-headed with this revision in the head's ancestry. Naming the exact
     # head made every later migration break this test for no defect.
-    heads = script.get_heads()
     assert len(heads) == 1
     assert "472_service_extension_reversals" in {
         item.revision

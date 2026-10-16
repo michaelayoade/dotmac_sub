@@ -93,6 +93,7 @@ class PaymentProviderEventCommand:
     financial_effect: PaymentProviderEventFinancialEffect | None = None
     payload: dict[str, Any] | None = None
     observed_payment_status: PaymentStatus | None = None
+    occurred_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +441,15 @@ def _normalize(
         "financial_effect": financial_effect.value,
         "payload": None if provider_verified and financial_observation else payload,
     }
+    if command.occurred_at is not None:
+        if (
+            command.occurred_at.tzinfo is None
+            or command.occurred_at.utcoffset() is None
+        ):
+            raise _error(
+                "occurrence_invalid", "Provider occurrence time must be timezone-aware"
+            )
+        digest_material["occurred_at"] = command.occurred_at.astimezone(UTC).isoformat()
     digest = hashlib.sha256(
         json.dumps(
             digest_material,
@@ -528,7 +538,10 @@ def _admit_event(
         exact = (
             existing.observation_digest == observation.digest
             if existing.observation_digest is not None
-            else _legacy_replay_matches(existing, observation)
+            else (
+                _legacy_replay_matches(existing, observation)
+                and existing.occurred_at == observation.command.occurred_at
+            )
         )
         if not exact:
             raise _error(
@@ -551,6 +564,7 @@ def _admit_event(
         existing.net_amount = observation.net_amount
         existing.provider_reference = observation.provider_reference
         existing.payload = observation.payload
+        existing.occurred_at = observation.command.occurred_at
         existing.error_code = None
         existing.error = None
         return existing, False
@@ -572,6 +586,7 @@ def _admit_event(
         currency=observation.currency,
         financial_effect=observation.financial_effect,
         payload=observation.payload,
+        occurred_at=observation.command.occurred_at,
     )
     db.add(event)
     db.flush()

@@ -14,6 +14,9 @@ from sqlalchemy.orm import Session
 
 from app.services.adapters import adapter_registry
 from app.services.integrations import payment_capability
+from app.services.payment_charge_contracts import (
+    PaymentGatewayProviderStatus as PaymentGatewayProviderStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -58,21 +61,6 @@ class PaymentGatewayVerificationOutcome(str, Enum):
     abandoned = "abandoned"
     unavailable = "unavailable"
     unknown = "unknown"
-
-
-class PaymentGatewayProviderStatus(str, Enum):
-    """Allowlisted transaction statuses emitted by supported provider adapters."""
-
-    success = "success"
-    successful = "successful"
-    succeeded = "succeeded"
-    failed = "failed"
-    abandoned = "abandoned"
-    ongoing = "ongoing"
-    pending = "pending"
-    processing = "processing"
-    queued = "queued"
-    reversed = "reversed"
 
 
 class PaymentGatewayVerificationReason(str, Enum):

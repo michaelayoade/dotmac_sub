@@ -2,20 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
+from tests.migration_graph_helpers import composed_sub_graph
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "alembic/versions/420_billing_run_launch_evidence.py"
 
 
-def test_billing_run_evidence_is_the_single_migration_head() -> None:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
-    script = ScriptDirectory.from_config(config)
+def test_billing_run_evidence_is_in_the_single_sub_migration_head() -> None:
+    script, heads = composed_sub_graph(ROOT)
 
-    # Single linear head: Quote acceptance conversion (462) sits on outage
+    # Sub's linear head: Quote acceptance conversion (462) sits on outage
     # incident ticket links (461), which chains through reviewed subledger
     # openings (457), the ONT WAN service intent owner (456), CPE RF signal
     # columns (455), and
@@ -40,7 +36,6 @@ def test_billing_run_evidence_is_the_single_migration_head() -> None:
     # Single-headed with the billing-run evidence revision in the head's
     # ancestry. Naming the exact head made every later migration break this
     # test for no defect.
-    heads = script.get_heads()
     assert len(heads) == 1
     assert "420_billing_run_launch_evidence" in {
         item.revision

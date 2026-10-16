@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from uuid import UUID
 
 from dotmac_template_studio import service as studio
@@ -41,28 +42,250 @@ _COMMAND = OwnerCommandDefinition(
 )
 
 
+class PaymentEmailSchemaState(StrEnum):
+    """Closed classification; unknown evidence grants no recovery capability."""
+
+    PREDECESSOR = "predecessor"
+    INSTALLED = "installed"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class RollbackCatalogObservation:
-    """Actual catalog shape, independent of cutover-row tenant visibility."""
+    """Transaction-local catalog facts, independent of mutable activation rows."""
 
     legacy_table: bool
     legacy_columns: int
     cutover_relation: bool
     seal_column: bool
+    episode_relation: bool
+    part_relation: bool
+    guard_triggers: int
+    guard_functions: int
+    installed_shape_complete: bool
+
+    @property
+    def legacy_shape_complete(self) -> bool:
+        return (
+            self.legacy_table is True
+            and type(self.legacy_columns) is int
+            and self.legacy_columns == 5
+        )
+
+
+def classify_payment_email_schema_floor(
+    observation: RollbackCatalogObservation,
+) -> PaymentEmailSchemaState:
+    artifacts = (
+        observation.cutover_relation,
+        observation.seal_column,
+        observation.episode_relation,
+        observation.part_relation,
+    )
+    counts = (observation.guard_triggers, observation.guard_functions)
+    if not observation.legacy_shape_complete or any(
+        type(v) is not bool for v in artifacts
+    ):
+        return PaymentEmailSchemaState.UNKNOWN
+    if any(type(v) is not int or v < 0 for v in counts):
+        return PaymentEmailSchemaState.UNKNOWN
+    if (
+        not any(artifacts)
+        and counts == (0, 0)
+        and observation.installed_shape_complete is False
+    ):
+        return PaymentEmailSchemaState.PREDECESSOR
+    if (
+        all(artifacts)
+        and counts == (1, 1)
+        and observation.installed_shape_complete is True
+    ):
+        return PaymentEmailSchemaState.INSTALLED
+    return PaymentEmailSchemaState.UNKNOWN
 
 
 def legacy_image_rollback_allowed(observation: RollbackCatalogObservation) -> bool:
-    """Only a complete pre-installation legacy catalog admits an old image."""
+    """Only complete predecessor evidence admits an old application image."""
     return (
-        observation.legacy_table
-        and observation.legacy_columns == 5
-        and not observation.cutover_relation
-        and not observation.seal_column
+        classify_payment_email_schema_floor(observation)
+        is PaymentEmailSchemaState.PREDECESSOR
     )
 
 
+# Pinned to released revision 638's SQL, including whitespace in its function body.
+_EMAIL_GUARD_DIGEST = "3fb1ea4f3fca6a78c845977fc31584fc"
+
+
+_EMAIL_CATALOG = r"""
+WITH relations AS (
+ SELECT c.* FROM pg_catalog.pg_class c
+ JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='public' AND c.relname IN (
+ 'notification_templates','payment_email_episodes','payment_email_parts','payment_email_cutovers')
+), columns AS (
+ SELECT r.relname, a.*, pg_catalog.pg_get_expr(d.adbin,d.adrelid) AS default_expr
+ FROM relations r JOIN pg_catalog.pg_attribute a ON a.attrelid=r.oid
+ LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+ WHERE a.attnum>0 AND NOT a.attisdropped
+), functions AS (
+ SELECT p.* FROM pg_catalog.pg_proc p
+ JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+ WHERE n.nspname='public' AND p.proname='prevent_sealed_payment_email_content'
+), triggers AS (
+ SELECT tr.* FROM pg_catalog.pg_trigger tr
+ WHERE NOT tr.tgisinternal AND
+ ((tr.tgname='guard_sealed_payment_email_content' AND tr.tgrelid IN (SELECT oid FROM relations))
+ OR tr.tgfoid IN (SELECT oid FROM functions))
+), expected_columns(table_name,column_name,type_name,required,default_expr) AS (
+ VALUES
+ ('payment_email_episodes','id','uuid',true,NULL),
+ ('payment_email_episodes','tenant_id','uuid',true,NULL),
+ ('payment_email_episodes','payment_id','uuid',true,NULL),
+ ('payment_email_episodes','invoice_id','uuid',true,NULL),
+ ('payment_email_episodes','subscriber_id','uuid',true,NULL),
+ ('payment_email_episodes','recipient','character varying(255)',true,NULL),
+ ('payment_email_episodes','notification_id','uuid',true,NULL),
+ ('payment_email_episodes','deadline_at','timestamp with time zone',true,NULL),
+ ('payment_email_episodes','created_at','timestamp with time zone',true,NULL),
+ ('payment_email_parts','id','uuid',true,NULL),
+ ('payment_email_parts','tenant_id','uuid',true,NULL),
+ ('payment_email_parts','episode_id','uuid',true,NULL),
+ ('payment_email_parts','source_event_id','uuid',true,NULL),
+ ('payment_email_parts','recipient','character varying(255)',true,NULL),
+ ('payment_email_parts','decision_id','uuid',true,NULL),
+ ('payment_email_parts','kind','character varying(24)',true,NULL),
+ ('payment_email_parts','content_template_id','uuid',true,NULL),
+ ('payment_email_parts','content_version','integer',true,NULL),
+ ('payment_email_parts','subject','character varying(200)',false,NULL),
+ ('payment_email_parts','body','text',true,NULL),
+ ('payment_email_parts','created_at','timestamp with time zone',true,NULL),
+ ('payment_email_cutovers','composition_enabled','boolean',true,'true'),
+ ('payment_email_cutovers','tenant_id','uuid',true,NULL),
+ ('payment_email_cutovers','receipt_legacy_id','uuid',true,NULL),
+ ('payment_email_cutovers','invoice_legacy_id','uuid',true,NULL),
+ ('payment_email_cutovers','receipt_content_id','uuid',true,NULL),
+ ('payment_email_cutovers','invoice_content_id','uuid',true,NULL),
+ ('payment_email_cutovers','activated_at','timestamp with time zone',true,NULL),
+ ('payment_email_cutovers','activated_by','character varying(200)',true,NULL)
+), expected_constraints(table_name,kind,keys,target,target_keys,delete_action,expression) AS (
+ VALUES
+ ('payment_email_episodes','p',ARRAY['id']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_episodes','f',ARRAY['payment_id']::text[],'public.payments',ARRAY['id']::text[],'r',NULL::text),
+ ('payment_email_episodes','f',ARRAY['invoice_id']::text[],'public.invoices',ARRAY['id']::text[],'r',NULL::text),
+ ('payment_email_episodes','f',ARRAY['subscriber_id']::text[],'public.subscribers',ARRAY['id']::text[],'r',NULL::text),
+ ('payment_email_episodes','f',ARRAY['notification_id']::text[],'public.notifications',ARRAY['id']::text[],'r',NULL::text),
+ ('payment_email_episodes','u',ARRAY['tenant_id','payment_id','invoice_id','recipient']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_episodes','u',ARRAY['tenant_id','id']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_episodes','u',ARRAY['notification_id']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_episodes','c',ARRAY[]::text[],NULL::text,NULL::text[],NULL::text,'((deadline_at <= (created_at + ''00:01:00''::interval)) AND (deadline_at >= created_at))'),
+ ('payment_email_episodes','f',ARRAY['tenant_id']::text[],'public.tenants',ARRAY['id']::text[],'c',NULL::text),
+ ('payment_email_parts','p',ARRAY['id']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_parts','f',ARRAY['tenant_id','episode_id']::text[],'public.payment_email_episodes',ARRAY['tenant_id','id']::text[],'c',NULL::text),
+ ('payment_email_parts','f',ARRAY['tenant_id','decision_id']::text[],'public.communication_intent_recipients',ARRAY['tenant_id','id']::text[],'r',NULL::text),
+ ('payment_email_parts','u',ARRAY['tenant_id','source_event_id','recipient']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_parts','u',ARRAY['episode_id','kind']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_parts','u',ARRAY['decision_id']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_parts','c',ARRAY[]::text[],NULL::text,NULL::text[],NULL::text,'((kind)::text = ANY ((ARRAY[''receipt''::character varying, ''invoice_paid''::character varying])::text[]))'),
+ ('payment_email_parts','c',ARRAY[]::text[],NULL::text,NULL::text[],NULL::text,'(length(TRIM(BOTH FROM body)) > 0)'),
+ ('payment_email_parts','c',ARRAY[]::text[],NULL::text,NULL::text[],NULL::text,'(content_version > 0)'),
+ ('payment_email_parts','f',ARRAY['tenant_id']::text[],'public.tenants',ARRAY['id']::text[],'c',NULL::text),
+ ('payment_email_cutovers','p',ARRAY['tenant_id']::text[],NULL::text,NULL::text[],NULL::text,NULL::text),
+ ('payment_email_cutovers','f',ARRAY['receipt_legacy_id']::text[],'public.notification_templates',ARRAY['id']::text[],'r',NULL::text),
+ ('payment_email_cutovers','f',ARRAY['invoice_legacy_id']::text[],'public.notification_templates',ARRAY['id']::text[],'r',NULL::text),
+ ('payment_email_cutovers','f',ARRAY['tenant_id']::text[],'public.tenants',ARRAY['id']::text[],'c',NULL::text)
+), actual_constraints AS (
+ SELECT r.relname AS table_name, c.*,
+ ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(num,ord)
+ JOIN pg_catalog.pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.num ORDER BY k.ord) AS keys,
+ ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(num,ord)
+ JOIN pg_catalog.pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.num ORDER BY k.ord) AS target_keys
+ FROM relations r JOIN pg_catalog.pg_constraint c ON c.conrelid=r.oid
+ WHERE r.relname <> 'notification_templates'
+), installed AS (
+ SELECT
+ (SELECT count(*) FROM relations WHERE relname <> 'notification_templates' AND relkind='r' AND NOT relispartition)=3
+ AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i
+ WHERE i.inhrelid IN (SELECT oid FROM relations) OR i.inhparent IN (SELECT oid FROM relations))
+ AND NOT EXISTS (
+ SELECT 1 FROM expected_columns e FULL JOIN
+ (SELECT * FROM columns WHERE relname <> 'notification_templates') a
+ ON a.relname=e.table_name AND a.attname=e.column_name
+ WHERE e.column_name IS NULL OR a.attname IS NULL
+ OR pg_catalog.format_type(a.atttypid,a.atttypmod) <> e.type_name
+ OR a.attnotnull <> e.required OR a.default_expr IS DISTINCT FROM e.default_expr
+ OR a.attidentity <> '' OR a.attgenerated <> '')
+ AND (SELECT count(*) FROM actual_constraints)=(SELECT count(*) FROM expected_constraints)
+ AND NOT EXISTS (
+ SELECT 1 FROM expected_constraints e WHERE NOT EXISTS (
+ SELECT 1 FROM actual_constraints c WHERE c.table_name=e.table_name AND c.contype::text=e.kind
+ AND c.convalidated AND NOT c.condeferrable AND NOT c.condeferred
+ AND c.conislocal AND c.coninhcount=0 AND c.conparentid=0
+ AND c.connoinherit=(e.kind<>'c')
+ AND (e.kind='c' OR c.keys=e.keys)
+ AND (e.kind NOT IN ('p','u') OR EXISTS (SELECT 1 FROM pg_catalog.pg_index i
+ WHERE i.indexrelid=c.conindid AND i.indisvalid AND i.indisready AND i.indisunique))
+ AND (e.kind<>'f' OR (c.confrelid=pg_catalog.to_regclass(e.target)
+ AND c.target_keys=e.target_keys AND c.confdeltype::text=e.delete_action
+ AND c.confupdtype='a' AND c.confmatchtype='s'
+ AND (SELECT count(*) FROM pg_catalog.pg_trigger tr WHERE tr.tgconstraint=c.oid)=4
+ AND (SELECT count(*) FROM pg_catalog.pg_trigger tr
+ JOIN pg_catalog.pg_proc f ON f.oid=tr.tgfoid
+ JOIN pg_catalog.pg_namespace n ON n.oid=f.pronamespace
+ WHERE tr.tgconstraint=c.oid AND tr.tgisinternal AND tr.tgenabled='O'
+ AND tr.tgnargs=0 AND octet_length(tr.tgargs)=0 AND tr.tgqual IS NULL
+ AND tr.tgattr=''::int2vector AND NOT tr.tgdeferrable AND NOT tr.tginitdeferred
+ AND n.nspname='pg_catalog' AND (
+ (tr.tgrelid=c.conrelid AND tr.tgconstrrelid=c.confrelid AND (
+   (tr.tgtype=5 AND f.proname='RI_FKey_check_ins') OR
+   (tr.tgtype=17 AND f.proname='RI_FKey_check_upd')))
+ OR (tr.tgrelid=c.confrelid AND tr.tgconstrrelid=c.conrelid AND (
+   (tr.tgtype=9 AND f.proname=CASE e.delete_action WHEN 'c' THEN 'RI_FKey_cascade_del' ELSE 'RI_FKey_restrict_del' END) OR
+   (tr.tgtype=17 AND f.proname='RI_FKey_noaction_upd')))))=4))
+ AND (e.kind<>'c' OR pg_catalog.pg_get_expr(c.conbin,c.conrelid)=e.expression)))
+ AND NOT EXISTS (SELECT 1 FROM relations r WHERE r.relname <> 'notification_templates'
+ AND (NOT r.relrowsecurity OR NOT r.relforcerowsecurity
+ OR (SELECT count(*) FROM pg_catalog.pg_policy p WHERE p.polrelid=r.oid)<>1
+ OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_policy p WHERE p.polrelid=r.oid
+ AND p.polname=r.relname || '_tenant_isolation'
+ AND p.polcmd='*' AND p.polpermissive AND p.polroles=ARRAY[0]::oid[]
+ AND pg_catalog.pg_get_expr(p.polqual,p.polrelid)='(tenant_id = app_current_tenant_id())'
+ AND pg_catalog.pg_get_expr(p.polwithcheck,p.polrelid)='(tenant_id = app_current_tenant_id())')))
+ AND EXISTS (SELECT 1 FROM columns WHERE relname='notification_templates'
+ AND attname='studio_content_sealed' AND atttypid='boolean'::regtype
+ AND attnotnull AND default_expr='false' AND attidentity='' AND attgenerated='')
+ AND (SELECT count(*) FROM functions)=1 AND (SELECT count(*) FROM triggers)=1
+ AND EXISTS (SELECT 1 FROM triggers tr JOIN functions f ON f.oid=tr.tgfoid
+ WHERE tr.tgrelid=pg_catalog.to_regclass('public.notification_templates')
+ AND tr.tgname='guard_sealed_payment_email_content' AND tr.tgtype=31 AND tr.tgenabled='O'
+ AND tr.tgnargs=0 AND octet_length(tr.tgargs)=0 AND tr.tgqual IS NULL
+ AND tr.tgattr=''::int2vector AND NOT tr.tgdeferrable AND NOT tr.tginitdeferred
+ AND f.pronargs=0 AND f.prorettype='trigger'::regtype AND NOT f.prosecdef
+ AND f.proconfig IS NULL AND f.prokind='f'
+ AND f.prolang=(SELECT oid FROM pg_catalog.pg_language WHERE lanname='plpgsql')
+ AND md5(f.prosrc)=:guard_digest) AS complete
+)
+SELECT
+ EXISTS (SELECT 1 FROM relations r WHERE relname='notification_templates' AND relkind='r' AND NOT relispartition
+ AND EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid=r.oid
+ AND c.contype='p' AND c.convalidated AND NOT c.condeferrable
+ AND c.conkey=ARRAY[(SELECT attnum FROM columns WHERE relname='notification_templates' AND attname='id')]::smallint[])),
+ (SELECT count(*) FROM columns WHERE relname='notification_templates' AND
+ ((attname='id' AND atttypid='uuid'::regtype AND attnotnull)
+ OR (attname='code' AND atttypid='varchar'::regtype AND atttypmod=124 AND attnotnull)
+ OR (attname='subject' AND atttypid='varchar'::regtype AND atttypmod=204 AND NOT attnotnull)
+ OR (attname='channel' AND atttypid=pg_catalog.to_regtype('public.notificationchannel') AND attnotnull)
+ OR (attname='body' AND atttypid='text'::regtype AND attnotnull))),
+ EXISTS (SELECT 1 FROM relations WHERE relname='payment_email_cutovers'),
+ EXISTS (SELECT 1 FROM columns WHERE relname='notification_templates' AND attname='studio_content_sealed'),
+ EXISTS (SELECT 1 FROM relations WHERE relname='payment_email_episodes'),
+ EXISTS (SELECT 1 FROM relations WHERE relname='payment_email_parts'),
+ (SELECT count(*) FROM triggers), (SELECT count(*) FROM functions),
+ (SELECT complete FROM installed)
+"""
+
+
 def read_legacy_image_rollback_floor(db: Session) -> RollbackCatalogObservation:
-    """Read the operational installation floor under the actual runtime login."""
+    """Read only catalog evidence under the actual nonprivileged runtime login."""
     refused = DomainError(
         code="payment_email_cutover.rollback_floor_unknown",
         message="Payment email rollback floor could not be proved",
@@ -77,7 +300,7 @@ def read_legacy_image_rollback_floor(db: Session) -> RollbackCatalogObservation:
                 "rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = session_user"
             )
         ).one_or_none()
-        if identity is None:
+        if identity is None or len(identity) != 5:
             raise refused
         session_user, current_user, can_login, is_superuser, bypass_rls = identity
         # The production runtime role is deployment-specific (currently
@@ -88,50 +311,26 @@ def read_legacy_image_rollback_floor(db: Session) -> RollbackCatalogObservation:
             or not isinstance(current_user, str)
             or not session_user
             or session_user != current_user
+            or any(
+                type(value) is not bool
+                for value in (can_login, is_superuser, bypass_rls)
+            )
             or (can_login, is_superuser, bypass_rls) != (True, False, False)
         ):
             raise refused
         catalog = db.execute(
-            text(
-                "WITH relations AS ("
-                " SELECT c.oid, c.relname, c.relkind"
-                " FROM pg_catalog.pg_class AS c"
-                " JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace"
-                " WHERE n.nspname = 'public'"
-                " AND c.relname IN ('notification_templates', 'payment_email_cutovers')"
-                "), legacy AS ("
-                " SELECT oid FROM relations"
-                " WHERE relname = 'notification_templates' AND relkind IN ('r', 'p')"
-                ") SELECT"
-                " EXISTS (SELECT 1 FROM legacy) AS legacy_table,"
-                " (SELECT count(*) FROM pg_catalog.pg_attribute AS a"
-                " JOIN legacy AS l ON l.oid = a.attrelid"
-                " WHERE a.attname IN ('id', 'code', 'channel', 'subject', 'body')"
-                " AND a.attnum > 0 AND NOT a.attisdropped) AS legacy_columns,"
-                " EXISTS (SELECT 1 FROM relations"
-                " WHERE relname = 'payment_email_cutovers') AS cutover_relation,"
-                " EXISTS (SELECT 1 FROM pg_catalog.pg_attribute AS a"
-                " JOIN relations AS r ON r.oid = a.attrelid"
-                " WHERE r.relname = 'notification_templates'"
-                " AND a.attname = 'studio_content_sealed'"
-                " AND a.attnum > 0 AND NOT a.attisdropped) AS seal_column"
-            )
+            text(_EMAIL_CATALOG), {"guard_digest": _EMAIL_GUARD_DIGEST}
         ).one_or_none()
     except SQLAlchemyError:
         raise refused from None
     if (
         catalog is None
-        or len(catalog) != 4
-        or any(type(catalog[index]) is not bool for index in (0, 2, 3))
-        or type(catalog[1]) is not int
+        or len(catalog) != 9
+        or any(type(catalog[i]) is not bool for i in (0, 2, 3, 4, 5, 8))
+        or any(type(catalog[i]) is not int or catalog[i] < 0 for i in (1, 6, 7))
     ):
         raise refused
-    return RollbackCatalogObservation(
-        legacy_table=catalog[0] is True,
-        legacy_columns=catalog[1],
-        cutover_relation=catalog[2] is True,
-        seal_column=catalog[3] is True,
-    )
+    return RollbackCatalogObservation(*catalog)
 
 
 def active_cutover(db: Session) -> PaymentEmailCutover | None:

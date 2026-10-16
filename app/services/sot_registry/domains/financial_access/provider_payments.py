@@ -20,6 +20,70 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="financial.provider_invoice_module_cash_source",
+        module="app.services.provider_payment_settlements",
+        owns=("persisted module invoice cash source validation",),
+        depends_on=("financial.payment_provider_events", "financial.topup_intents"),
+        notes=(
+            "Source candidate query only. Does not qualify the physical merchant "
+            "namespace, admit ledger authority, confirm cash or post a settlement."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="persisted module invoice cash source validation",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "persisted verified invoice cash facts",
+                        "frozen Payments invoice checkout",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="persisted verified invoice cash facts",
+                    owner="financial.payment_provider_events",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Persisted provider transaction ID, verification source, exact gross/fee/net, provider occurrence and first receipt time.",
+                ),
+                AuthorityInput(
+                    name="frozen Payments invoice checkout",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Public Payments a2 query, paired local intent link and original lifetime.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Caller Session and existing owner root; no transaction completion, flush or financial writes.",
+                locking="No query locks; future participant must serialize original intent before confirmation and account before posting.",
+                idempotency="Reads original persisted scalar facts; no current invoice balance, TTL or retry clock.",
+                retries="Missing or changed facts refuse; caller may retry only after authoritative missing evidence exists.",
+            ),
+            errors=ErrorContract(
+                domain_codes=("financial.provider_invoice_module_cash_source.invalid",),
+                mapping_owner="financial.payment_provider_events",
+                fail_closed_on=(
+                    "missing evidence",
+                    "tenant/provider/intent/money mismatch",
+                    "missing provider occurrence time",
+                    "outside original checkout lifetime",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.INVENTORIED,
+                new_owner="financial.provider_invoice_module_cash_source",
+                old_owner="financial.provider_payment_settlements",
+                verification="Hosted real migration-chain/source timestamp and binding canaries pending.",
+                cutover_gate="Published Billing account frozen query for target identity/currency/scale, independently qualified physical merchant namespace shared with opening, reviewed amount binding and RLS-independent source freeze, published Billing a8 exact pin, full installation handoff and hosted PostgreSQL acceptance.",
+                fallback_retirement="No runtime dispatch changed; final caller migration must remove every legacy money path.",
+            ),
+            steward="billing and finance operations",
+            design_refs=("docs/designs/BILLING_LEDGER_HANDOFF.md",),
+            test_refs=("tests/integration/test_provider_invoice_module_cash_pg.py",),
+        ),
+    ),
+    SOTService(
         name="financial.provider_payment_settlements",
         module="app.services.provider_payment_settlements",
         owns=(
@@ -225,6 +289,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_provider_events.invoice_not_found",
                     "financial.payment_provider_events.money_invalid",
                     "financial.payment_provider_events.observation_invalid",
+                    "financial.payment_provider_events.occurrence_invalid",
                     "financial.payment_provider_events.pagination_invalid",
                     "financial.payment_provider_events.payment_not_found",
                     "financial.payment_provider_events.provider_not_found",

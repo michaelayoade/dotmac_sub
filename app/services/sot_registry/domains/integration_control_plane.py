@@ -30,6 +30,80 @@ DOMAIN = DomainSOT(
     setting_domains=("imports",),
     services=(
         SOTService(
+            name="integration.payment_charge_transport",
+            module="app.services.integrations.payment_capability",
+            implementation_modules=(
+                "app.services.integrations.connectors.payment_gateway",
+                "app.services.payment_charge_contracts",
+            ),
+            owns=("typed saved authorization submission and reference observation",),
+            depends_on=("integration.installations", "integration.runtime"),
+            notes="Transport only. Financial callers own charge admission, reservation, retry and settlement; provider observations never qualify cash by themselves.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="typed saved authorization submission and reference observation",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=(
+                            "typed transport input contract",
+                            "enabled capability routing",
+                            "pinned connector execution",
+                            "provider charge or reference response",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed transport input contract",
+                        owner="integration.payment_charge_transport",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Immutable ChargeAuthorizationCommand or ObserveAuthorizationChargeReference schema and validation only; explicit integral subunits, ASCII currency, reference and UUID binding. Monetary values and charge admission remain with the invoking financial owner.",
+                    ),
+                    AuthorityInput(
+                        name="enabled capability routing",
+                        owner="integration.installations",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Enabled installation and capability binding resolved on caller Session; no credential values enter the contract or diagnostics.",
+                    ),
+                    AuthorityInput(
+                        name="pinned connector execution",
+                        owner="integration.runtime",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Version-pinned connector runner and bounded secret resolution; connector alone serializes requests and normalizes allowlisted provider facts.",
+                    ),
+                    AuthorityInput(
+                        name="provider charge or reference response",
+                        owner="external:payment_provider",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Allowlisted provider acceptance, transaction status, reference, optional money/fees and time facts parsed by the connector; no settlement or cash qualification decision.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Caller Session reads routing only; no session creation or transaction completion. External charge submission is irreversible transport and is not a database transaction.",
+                    locking="Financial caller owns reservation and row locks before submitting a charge; this transport acquires no financial locks.",
+                    idempotency="Transport forwards the caller's original reference unchanged; it does not decide whether a repeated charge is admissible.",
+                    retries="No hidden charge retries or settlement fallback; reference verification and financial recovery remain caller decisions.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="Integration adapter maps ChargeProtocolError to PaymentCapabilityError, preserving provider HTTP 400/404 classification for the existing recovery owner.",
+                    fail_closed_on=(
+                        "invalid command or provider observation",
+                        "missing or stale routing and connector pin",
+                        "missing reference or malformed provided money",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="integration.payment_charge_transport",
+                ),
+                steward="finance integrations",
+                design_refs=("docs/designs/PAYMENT_INVOICE_INTENT_MODULE_OWNER.md",),
+                test_refs=("tests/test_integration_payment_capability.py",),
+            ),
+        ),
+        SOTService(
             name="integration.registry",
             module="app.services.integrations.registry",
             owns=(
