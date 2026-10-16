@@ -354,13 +354,30 @@ The deploy adapter may restore a previous application image only while the
 actual PostgreSQL catalog proves the pre-installation legacy shape. The
 candidate image reads the catalog under its actual `app_user` login before any
 previous-image repin or recreation, using Sub's read-only snapshot seam before
-the transaction begins. A `payment_email_cutovers` relation **or**
-the `notification_templates.studio_content_sealed` column closes the automatic
-image rollback path, even with no activation row or after composition is paused.
-Both absent permits rollback only when the expected legacy template relation
-and columns are present. Missing, partial, unreadable, or failed catalog or role
-proof refuses; an old image must never interpret installed seals or create
-uncovered notifications. This installation floor does not claim adoption.
+the transaction begins. The cutover owner classifies the fresh catalog as
+`PREDECESSOR`, `INSTALLED`, or `UNKNOWN`; activation and `composition_enabled`
+rows never participate. Predecessor requires complete legacy template shape and
+zero 638 artifacts: episodes, parts, cutovers, seal column, guard triggers and
+functions. The default rollback CLI exits zero only for that predecessor.
+
+The separately fixed `payment-email-supported` and `payment-email-installed`
+inspect probes serialize bounded catalog evidence. Installed requires the exact
+released 638 ordinary public tables, columns, defaults, validated ordered
+constraints and foreign-key targets/actions with all four expected enabled RI
+triggers per FK, ordinary local constraint inheritance flags and no table
+inheritance or partitioning, enabled and forced tenant RLS with
+exact policies, and seal column. It also requires exactly the original enabled
+BEFORE ROW INSERT/UPDATE/DELETE guard covering every UPDATE column with no
+WHEN/arguments/deferral and its
+zero-argument SECURITY INVOKER plpgsql function, original body digest and NULL
+configuration. Missing, extra, partial, unreadable, or role-drift evidence is
+unknown and refuses. This catalog floor does not claim content adoption.
+
+A nonzero, non-OOM, never-restarted terminal migration with unchanged recorded
+start heads, installed Email, and complete Payments predecessor requires forward
+repair; it never admits an old image. Maintenance derives this start basis from
+fresh server evidence, rechecks it after broker drain and again before execution,
+and archives the failed invocation before creating a new UUID and runner.
 
 On floor refusal the deploy leaves the current pin and any healthy warm
 candidate in place instead of restarting the old image. If repinning,

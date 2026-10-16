@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
 from uuid import UUID
 
 import httpx
+from pydantic import JsonValue
 
 from app.services.integrations.manifest import ConnectorManifest
 from app.services.integrations.runtime import (
@@ -17,6 +19,19 @@ from app.services.integrations.runtime import (
     OperationResult,
     OperationStatus,
     ValidationResult,
+)
+from app.services.payment_charge_contracts import (
+    AutopayChargeMetadata,
+    ChargeAuthorizationCommand,
+    ChargeAuthorizationObservation,
+    ChargeMetadata,
+    ChargeProtocolError,
+    IntentChargeMetadata,
+    InvoiceGatewayRoutingEvidence,
+    ObserveAuthorizationChargeReference,
+    PaymentGatewayProviderStatus,
+    ProviderAcceptance,
+    ResellerChargeMetadata,
 )
 
 PAYMENT_INTENT_CAPABILITY = "payments.intent.v1"
@@ -39,6 +54,234 @@ _ACTIONS_BY_CAPABILITY = {
     },
     PAYMENT_REFUND_CAPABILITY: {"refund"},
 }
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _subunits(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ChargeProtocolError("charge_money_invalid")
+    return value
+
+
+def _observed_currency(value: object) -> str | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or len(value) != 3
+        or not value.isascii()
+        or not value.isalpha()
+        or value != value.upper()
+    ):
+        raise ChargeProtocolError("charge_currency_invalid")
+    return value
+
+
+def _provider_status(value: object) -> PaymentGatewayProviderStatus | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return PaymentGatewayProviderStatus(value.strip().lower())
+    except ValueError:
+        return None
+
+
+def _paid_at(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ChargeProtocolError("charge_timestamp_invalid")
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ChargeProtocolError("charge_timestamp_invalid") from exc
+    if moment.tzinfo is None:
+        raise ChargeProtocolError("charge_timestamp_invalid")
+    return moment.astimezone(UTC)
+
+
+def _charge_response(body: object) -> ChargeAuthorizationObservation:
+    if not isinstance(body, Mapping):
+        raise ChargeProtocolError("charge_response_invalid")
+    flag = body.get("status")
+    acceptance = (
+        ProviderAcceptance.accepted
+        if flag is True
+        else ProviderAcceptance.rejected
+        if flag is False
+        else ProviderAcceptance.unknown
+    )
+    data = body.get("data")
+    if not isinstance(data, Mapping):
+        data = {}
+    return ChargeAuthorizationObservation(
+        acceptance=acceptance,
+        provider_status=_provider_status(data.get("status")),
+        reference=_text(data.get("reference")),
+        gateway_response=_text(data.get("gateway_response")),
+        message=_text(data.get("message")) or _text(body.get("message")),
+        amount_subunits=_subunits(data.get("amount")),
+        currency=_observed_currency(data.get("currency")),
+        fee_subunits=_subunits(data.get("fees")),
+        paid_at=_paid_at(
+            data.get("paid_at")
+            if data.get("paid_at") is not None
+            else data.get("paidAt")
+        ),
+    )
+
+
+def _charge_output(body: object, *, expected_reference: str) -> dict[str, JsonValue]:
+    observation = _charge_response(body)
+    if observation.acceptance is not ProviderAcceptance.accepted:
+        raise ChargeProtocolError("charge_provider_not_accepted")
+    if observation.provider_status is None:
+        raise ChargeProtocolError("charge_provider_status_unknown")
+    if not expected_reference or observation.reference != expected_reference:
+        raise ChargeProtocolError("charge_reference_mismatch")
+    # Persist only allowlisted facts, never provider authorization objects,
+    # raw payloads, email or authorization-code material from the response.
+    return {
+        "charge_observation": {
+            "acceptance": observation.acceptance.value,
+            "provider_status": observation.provider_status.value
+            if observation.provider_status
+            else None,
+            "reference": observation.reference,
+            "gateway_response": observation.gateway_response,
+            "message": observation.message,
+            "amount_subunits": observation.amount_subunits,
+            "currency": observation.currency,
+            "fee_subunits": observation.fee_subunits,
+            "paid_at": observation.paid_at.isoformat() if observation.paid_at else None,
+        }
+    }
+
+
+def _charge_observation(
+    output: object, *, expected_reference: str
+) -> ChargeAuthorizationObservation:
+    if not isinstance(output, Mapping) or not isinstance(
+        output.get("charge_observation"), Mapping
+    ):
+        raise ChargeProtocolError("charge_observation_missing")
+    value = output["charge_observation"]
+    try:
+        acceptance = ProviderAcceptance(value.get("acceptance"))
+    except (TypeError, ValueError):
+        acceptance = ProviderAcceptance.unknown
+    observation = ChargeAuthorizationObservation(
+        acceptance=acceptance,
+        provider_status=_provider_status(value.get("provider_status")),
+        reference=_text(value.get("reference")),
+        gateway_response=_text(value.get("gateway_response")),
+        message=_text(value.get("message")),
+        amount_subunits=_subunits(value.get("amount_subunits")),
+        currency=_observed_currency(value.get("currency")),
+        fee_subunits=_subunits(value.get("fee_subunits")),
+        paid_at=_paid_at(value.get("paid_at")),
+    )
+    if observation.acceptance is not ProviderAcceptance.accepted:
+        raise ChargeProtocolError("charge_provider_not_accepted")
+    if observation.provider_status is None:
+        raise ChargeProtocolError("charge_provider_status_unknown")
+    if not expected_reference or observation.reference != expected_reference:
+        raise ChargeProtocolError("charge_reference_mismatch")
+    return observation
+
+
+def _charge_metadata(metadata: ChargeMetadata) -> dict[str, str | bool]:
+    if isinstance(metadata, InvoiceGatewayRoutingEvidence):
+        return dict(metadata.checkout_metadata())
+    if isinstance(metadata, IntentChargeMetadata):
+        return {"topup_intent_id": str(metadata.intent_id)}
+    if isinstance(metadata, AutopayChargeMetadata):
+        return {"invoice_id": str(metadata.invoice_id), "autopay": True}
+    if isinstance(metadata, ResellerChargeMetadata):
+        result: dict[str, str | bool] = {
+            "payment_flow": "reseller_consolidated",
+            "topup_intent_id": str(metadata.intent_id),
+            "billing_account_id": str(metadata.billing_account_id),
+            "reseller_id": str(metadata.reseller_id),
+        }
+        if metadata.payment_method_id is not None:
+            result["payment_method_id"] = str(metadata.payment_method_id)
+        return result
+    raise ChargeProtocolError("charge_metadata_variant_invalid")
+
+
+def execute_authorization_charge(
+    command: ChargeAuthorizationCommand,
+    execute: Callable[[str, dict[str, JsonValue]], OperationResult],
+) -> ChargeAuthorizationObservation:
+    params: dict[str, JsonValue] = {
+        "authorization_code": command.authorization_code,
+        "email": command.email,
+        "amount_kobo": command.amount_subunits,
+        "currency": command.currency,
+        "reference": command.reference,
+        "metadata": dict(_charge_metadata(command.metadata)),
+    }
+    result = execute("charge_authorization", params)
+    if result.status is not OperationStatus.succeeded:
+        raise ChargeProtocolError(result.error_code or "charge_transport_failed")
+    return _charge_observation(result.output, expected_reference=command.reference)
+
+
+def execute_authorization_observation(
+    query: ObserveAuthorizationChargeReference,
+    execute: Callable[[str, dict[str, JsonValue]], OperationResult],
+) -> ChargeAuthorizationObservation:
+    result = execute(
+        "verify", {"reference": query.reference, "observe_authorization_charge": True}
+    )
+    if result.status is not OperationStatus.succeeded:
+        raise ChargeProtocolError(result.error_code or "charge_observation_failed")
+    return _charge_observation(result.output, expected_reference=query.reference)
+
+
+def _required_charge_text(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise ChargeProtocolError("charge_request_invalid")
+    return value
+
+
+def _authorization_payload(params: Mapping[str, object]) -> dict[str, JsonValue]:
+    code = _required_charge_text(params.get("authorization_code"))
+    email = _required_charge_text(params.get("email"))
+    reference = _required_charge_text(params.get("reference"))
+    currency = _required_charge_text(params.get("currency"))
+    amount = params.get("amount_kobo")
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+        raise ChargeProtocolError("charge_amount_invalid")
+    if (
+        len(currency) != 3
+        or not currency.isascii()
+        or not currency.isalpha()
+        or currency != currency.upper()
+    ):
+        raise ChargeProtocolError("charge_currency_invalid")
+    metadata = params.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise ChargeProtocolError("charge_metadata_invalid")
+    serialized: dict[str, JsonValue] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not isinstance(value, (str, bool)):
+            raise ChargeProtocolError("charge_metadata_invalid")
+        serialized[key] = value
+    return {
+        "authorization_code": code,
+        "email": email,
+        "reference": reference,
+        "currency": currency,
+        "amount": amount,
+        "metadata": serialized,
+    }
 
 
 class PaymentGatewayRunner:
@@ -149,6 +392,8 @@ class PaymentGatewayRunner:
             return self._result(
                 envelope, OperationStatus.retryable, "provider_transport_error"
             )
+        except ChargeProtocolError as exc:
+            return self._result(envelope, OperationStatus.rejected, exc.message)
         except (KeyError, TypeError, ValueError):
             return self._result(
                 envelope, OperationStatus.rejected, "provider_operation_invalid"
@@ -198,25 +443,16 @@ class PaymentGatewayRunner:
         if action == "charge_authorization":
             if self.provider != "paystack":
                 raise ValueError("saved authorization charging is unsupported")
-            payload = {
-                "authorization_code": str(params["authorization_code"]),
-                "email": str(params["email"]),
-                "amount": int(params["amount_kobo"]),
-                "reference": str(params["reference"]),
-            }
-            if params.get("metadata"):
-                payload["metadata"] = params["metadata"]
-            return {
-                "item": self._provider_data(
-                    self._request(
-                        "POST",
-                        "/transaction/charge_authorization",
-                        config=config,
-                        secret_material=secret_material,
-                        json_data=payload,
-                    )
-                )
-            }
+            return _charge_output(
+                self._request(
+                    "POST",
+                    "/transaction/charge_authorization",
+                    config=config,
+                    secret_material=secret_material,
+                    json_data=_authorization_payload(params),
+                ),
+                expected_reference=_required_charge_text(params.get("reference")),
+            )
         if action == "verify":
             reference = quote(str(params["reference"]), safe="")
             if self.provider == "paystack":
@@ -233,6 +469,13 @@ class PaymentGatewayRunner:
                     config=config,
                     secret_material=secret_material,
                     params={"tx_ref": str(params["reference"])},
+                )
+            if params.get("observe_authorization_charge") is True:
+                if self.provider != "paystack":
+                    raise ChargeProtocolError("charge_observation_provider_invalid")
+                return _charge_output(
+                    body,
+                    expected_reference=_required_charge_text(params.get("reference")),
                 )
             return {"item": self._provider_data(body)}
         if action == "refund":

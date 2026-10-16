@@ -748,14 +748,9 @@ def test_migration_249_revision_chain():
 
 def test_single_alembic_head():
     # PR 3 (material-request ERP fields, revision 250) advances the head off 249.
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
+    from tests.migration_graph_helpers import composed_sub_graph
 
-    config = Config(str(REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
-    script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
+    _, heads = composed_sub_graph(REPO_ROOT)
     assert len(heads) == 1, (
         f"Expected exactly one Alembic head, found {len(heads)}: {heads}. "
         "Two branches almost certainly numbered their migrations off the same "

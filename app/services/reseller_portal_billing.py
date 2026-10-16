@@ -39,6 +39,10 @@ from app.services.customer_portal_flow_payments import (
 )
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
+from app.services.payment_charge_contracts import (
+    ChargeAuthorizationCommand,
+    ResellerChargeMetadata,
+)
 from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.payment_routing import provider_for_intent, select_checkout_provider
 from app.services.topup_intents import (
@@ -227,6 +231,12 @@ def start_consolidated_payment(
         ),
     }
 
+    charge_billing_account_id = intent_result.billing_account_id
+    if charge_billing_account_id is None:
+        raise gateway_topup_intents.GatewayTopupIntentError(
+            code="financial.gateway_topup_intent_commands.record_invalid",
+            message="Reseller checkout billing-account identity is incomplete",
+        )
     charged = False
     if selected_payment_token is not None:
         from app.services.integrations import payment_capability
@@ -234,18 +244,26 @@ def start_consolidated_payment(
         try:
             payment_capability.charge_authorization(
                 db,
-                authorization_code=selected_payment_token,
-                email=(
-                    _login_subscriber_email(db, login_subscriber_id)
+                command=ChargeAuthorizationCommand(
+                    authorization_code=selected_payment_token,
+                    email=_login_subscriber_email(db, login_subscriber_id)
                     if login_subscriber_id
-                    else _reseller_charge_email(db, reseller_id)
+                    else _reseller_charge_email(db, reseller_id),
+                    amount_subunits=payment_capability.amount_to_kobo(
+                        intent_result.requested_amount
+                    ),
+                    currency=intent_result.currency,
+                    reference=intent_result.reference,
+                    metadata=ResellerChargeMetadata(
+                        intent_id=intent_result.intent_id,
+                        billing_account_id=charge_billing_account_id,
+                        reseller_id=reseller_uuid,
+                        payment_method_id=coerce_uuid(selected_payment_method_id)
+                        if selected_payment_method_id
+                        else None,
+                    ),
+                    checkout_binding_id=route.capability_binding_id,
                 ),
-                amount_kobo=payment_capability.amount_to_kobo(
-                    intent_result.requested_amount
-                ),
-                reference=intent_result.reference,
-                metadata=checkout_metadata,
-                checkout_binding_id=route.capability_binding_id,
             )
         except Exception:
             db_session_adapter.release_read_transaction(db)
