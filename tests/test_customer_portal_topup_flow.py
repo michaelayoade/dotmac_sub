@@ -1926,6 +1926,16 @@ def test_verify_and_record_payment_allocates_invoice_and_credits_remainder(
         lambda *_args, **_kwargs: Decimal("2000.00"),
     )
 
+    # SQLite is a logic surface; the real released getter/RLS canary is PostgreSQL.
+    from app.services.payment_intent_module_shadow import (
+        IntentBindingParity,
+        IntentParityOutcome,
+    )
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.observe_invoice_intent_parity",
+        lambda _db, _binding: IntentBindingParity(IntentParityOutcome.MISSING),
+    )
     result = verify_and_record_payment(
         db_session,
         {"account_id": str(subscriber.id)},
@@ -2176,3 +2186,102 @@ def test_verify_and_record_topup_omits_available_balance_when_lookup_fails(
 
     assert result["already_recorded"] is False
     assert result["available_balance"] is None
+
+
+@pytest.mark.parametrize("parity_outcome", ("missing", "mismatch", "match"))
+def test_invoice_checkout_authorizes_before_module_query_and_provider(
+    monkeypatch: pytest.MonkeyPatch, db_session, subscriber, parity_outcome: str
+) -> None:
+    from app.services import customer_portal_flow_payments as flow
+    from app.services.payment_intent_module_shadow import (
+        AuthorizedInvoiceIntentBinding,
+        IntentBindingParity,
+        IntentParityOutcome,
+    )
+
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="ordering-checkout",
+        provider_type="paystack",
+        requested_amount=Decimal("100.00"),
+        currency="NGN",
+        channel="customer_selfcare",
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    calls: list[str] = []
+
+    def authorize(*_args) -> bool:
+        calls.append("authorize")
+        return False
+
+    def compare(_db, binding: AuthorizedInvoiceIntentBinding) -> IntentBindingParity:
+        calls.append("module")
+        assert binding.reference == intent.reference
+        assert binding.invoice_reference is None
+        return IntentBindingParity(IntentParityOutcome(parity_outcome))
+
+    class ProviderReached(Exception):
+        pass
+
+    def provider(*_args, **_kwargs):
+        calls.append("provider")
+        raise ProviderReached
+
+    monkeypatch.setattr(flow, "customer_can_access_account", authorize)
+    monkeypatch.setattr(flow, "observe_invoice_intent_parity", compare)
+    monkeypatch.setattr(flow, "_observe_gateway_for_customer", provider)
+    with pytest.raises(ValueError, match="does not belong"):
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+    assert calls == ["authorize"]
+    calls.clear()
+
+    def allow(*_args) -> bool:
+        calls.append("authorize")
+        return True
+
+    monkeypatch.setattr(flow, "customer_can_access_account", allow)
+    with pytest.raises(ProviderReached):
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+    assert calls == ["authorize", "module", "provider"]
+
+
+def test_invoice_checkout_module_database_error_stops_provider(
+    monkeypatch: pytest.MonkeyPatch, db_session, subscriber
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from app.services import customer_portal_flow_payments as flow
+    from app.services.payment_intent_module_shadow import AuthorizedInvoiceIntentBinding
+
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="module-database-refusal",
+        provider_type="paystack",
+        requested_amount=Decimal("100.00"),
+        currency="NGN",
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    error = DBAPIError("query", {}, RuntimeError("database failure"))
+
+    def refuse(_db, _binding: AuthorizedInvoiceIntentBinding):
+        raise error
+
+    def unexpected_provider(*_args, **_kwargs):
+        pytest.fail("provider must not run after a failed module database read")
+
+    monkeypatch.setattr(flow, "customer_can_access_account", lambda *_args: True)
+    monkeypatch.setattr(flow, "observe_invoice_intent_parity", refuse)
+    monkeypatch.setattr(flow, "_observe_gateway_for_customer", unexpected_provider)
+    with pytest.raises(DBAPIError) as caught:
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+    assert caught.value is error

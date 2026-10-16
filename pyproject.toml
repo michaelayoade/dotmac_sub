@@ -1,6 +1,6 @@
 [project]
 name = "dotmac_sm"
-version = "12.11.0"
+version = "12.12.0"
 description = "Subscriber management API and web UI"
 authors = [{name = "DotMac", email = "engineering@dotmac.local"}]
 requires-python = ">=3.11,<3.13"
@@ -51,12 +51,12 @@ dependencies = [
     "langgraph==0.6.6",
     "defusedxml==0.7.1",
     "dotmac-auth-oidc==0.1.0a2",
-    "dotmac-kernel==0.1.0a98",
+    "dotmac-kernel==0.1.0a105",
     "dotmac-billing==0.1.0a1",
     "dotmac-collections==0.1.0a1",
     "dotmac-inbox==0.1.0a1",
     "dotmac-numbering==0.1.0a2",
-    "dotmac-payments==0.1.0a1",
+    "dotmac-payments==0.1.0a2",
     "dotmac-service-orders==0.1.0a1",
     "dotmac-subscriptions==0.1.0a3",
     "dotmac-template-studio==0.2.0a5",
@@ -82,7 +82,7 @@ dotmac-integration-client = { git = "https://github.com/michaelayoade/dotmac-int
 # unrelated lock refresh must never move the code that decides which key
 # verified a field technician's assertion.
 dotmac-auth-oidc = { version = "0.1.0a2", source = "forgejo" }
-dotmac-kernel = { version = "0.1.0a98", source = "forgejo" }
+dotmac-kernel = { version = "0.1.0a105", source = "forgejo" }
 # Dual-plane commercial owners selected TENANT-only for migration and shadow
 # preparation. Sub's incumbent money and collections writers remain active.
 dotmac-billing = { version = "0.1.0a1", source = "forgejo" }
@@ -91,7 +91,7 @@ dotmac-collections = { version = "0.1.0a1", source = "forgejo" }
 dotmac-numbering = { version = "0.1.0a2", source = "forgejo" }
 # Tenant-only migration/shadow composition. Sub's incumbent payment writers
 # remain authoritative until a separate backfill, parity and sealed cutover.
-dotmac-payments = { version = "0.1.0a1", source = "forgejo" }
+dotmac-payments = { version = "0.1.0a2", source = "forgejo" }
 # First composed domain module. Its `so` lineage is registered in
 # alembic.ini and its prerequisites are bound in app/migration_bindings.py.
 dotmac-service-orders = { version = "0.1.0a1", source = "forgejo" }
@@ -125,7 +125,7 @@ dotmac-ui = { version = "0.1.0a7", source = "forgejo" }
 # Same-source enrichment for the dev-group `dotmac-kernel[testing]` entry in
 # [dependency-groups] below.
 [tool.poetry.group.dev.dependencies]
-dotmac-kernel = { version = "0.1.0a98", extras = ["testing"], source = "forgejo" }
+dotmac-kernel = { version = "0.1.0a105", extras = ["testing"], source = "forgejo" }
 
 # Private Dotmac package index (Forgejo). URL only — credentials live in
 # Poetry's auth store under this source name, never in Git.
@@ -395,7 +395,7 @@ dev = [
     # above; the [testing] extra adds only httpx (>=0.27,<0.28), which matches
     # Sub's own httpx==0.27.0. tests/-only per the adoption ledger — the S1
     # import guard keeps dotmac_kernel.testing out of app/.
-    "dotmac-kernel[testing]==0.1.0a98",
+    "dotmac-kernel[testing]==0.1.0a105",
 ]
 
 # ─── Import boundaries (DCP-1 network / subscription decoupling) ──────────
@@ -589,3 +589,20 @@ forbidden_modules = [
     "app.services.splynx_customer_sync",
     "app.tasks.splynx_sync",
 ]
+
+[[tool.mypy.overrides]]
+module = ["app.services.payment_intent_module_shadow"]
+# The strict preset mutates global options even inside mypy overrides.
+# List supported per-module strict checks so this boundary alone is enrolled.
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_unused_ignores = true
+warn_return_any = true
+implicit_reexport = false
+strict_equality = true
+extra_checks = true

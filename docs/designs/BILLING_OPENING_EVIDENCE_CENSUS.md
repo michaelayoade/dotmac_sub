@@ -85,6 +85,19 @@ items, refunds, exact controls, authority, stable snapshots, source drift and no
 writes. Architecture guards keep this query free of adapters and transaction
 completion and require reuse of the canonical settlement and lane resolvers.
 
+## Population traversal
+
+The census indexes invoice line and settlement references by invoice ID, and
+invoice/source occurrences by the exact account/currency pair. Buckets retain
+source order and duplicate occurrences, including unresolved account keys;
+they do not use identity maps that could collapse rows. Controls reuse these
+buckets, final exception counts and an eligible-ID lookup rather than scanning
+each complete population for every partition. The existing settlement and
+position resolvers, SQL populations, snapshot checks and wire fingerprints stay
+unchanged. Canonical per-invoice/per-account resolver calls remain; this is not
+evidence of a measured production export duration. Hosted parity and traversal
+canaries cover the indexing change before a separately authorized capture.
+
 ## Read-only operator entry point
 
 After an operator has an approved, explicitly named database target, the existing

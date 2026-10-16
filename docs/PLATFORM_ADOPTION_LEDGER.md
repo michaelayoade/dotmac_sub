@@ -9,7 +9,8 @@ to `dotmac-kernel==0.1.0a81` on 2026-08-20, to
 day, to `dotmac-kernel==0.1.0a94` on 2026-08-25, and to
 `dotmac-kernel==0.1.0a97` for the proposed Template Studio shadow composition
 on 2026-09-30, followed by the source-only `0.1.0a98` / Tax a4 candidate
-on 2026-10-13 — see "Pin history".
+on 2026-10-13, followed by the source-only `0.1.0a105` candidate
+on 2026-10-15 — see "Pin history".
 Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
@@ -1660,3 +1661,41 @@ retirement. This slice satisfies none of those gates.
 - Renaming or merging `Subscriber`/`Organization`/`Party` into kernel identity.
 - Any dual-write, second writer, second outbox/inbox, or writer replacement.
 - Shared database or ORM imports with dotmac_erp or the vendor control plane.
+
+
+**2026-10-15 — `0.1.0a98` → `0.1.0a105` (source candidate; not adopted or deployed).**
+The exact Sub pin is proposed for the published Kernel a105 artifact after review
+of the existing composed imports. The a105 source commit is
+`2f5abe9101c9aef48f23977cad81a3e499672287`; annotated tag object
+`bd5f252b936efb3ee61aeb871b915f2e41bab754` identifies that source, with publisher
+`38587531416` and verifier `38588148403`. The authoritative published wheel SHA256
+is `f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa`; the sdist
+SHA256 is `76a3ccb7d0344befe565681b710edfd3a563e64127b801e43bb239d5bc5b80d2`.
+Review evidence establishes unchanged direct dependencies, extras, Python bounds,
+and backend between a98 and a105. No dependency graph, extra selection, source, or
+other locked package is changed here. The ephemeral smoke rebuild is not registry
+publication authority and does not establish a registry reissue. This entry records
+a source candidate only; it makes no adoption, deployment, runtime acceptance, or
+ledger-switch claim.
+
+
+**2026-10-15 — released `dotmac-payments==0.1.0a2` read-only invoice
+intent consumer.** `verify_and_record_payment` observes the authorized original
+checkout binding through `get_payment_intent_v1` on its existing scoped Session,
+before provider observation. Missing/mismatched rows produce bounded PII-free
+telemetry; legacy settlement remains authoritative. The a2 universal wheel is
+pinned to verified SHA256
+`da2877bc5365fc0d6cf93868a6235a608413edbb809199cd5c919f78390cf8ed`;
+the lock intentionally admits only that verified wheel, not an unverified sdist.
+Release run `38765607117` succeeded; annotated tag object
+`94ebb4d4856fdd9c88f1c6adc58a06fa4c62a47e` targets
+`4fc0295da94ce62919966baaf1dd909f9af5dcbe`. The migration head is now
+`pm_0003_confirmation_immutable`. The earlier a1 entry is historical preparation;
+its no-live-import assertion no longer describes this consumer.
+
+Hosted CI must establish the new getter/application-hook/RLS and dirty-session
+canaries plus existing payment and architecture gates; no local runtime tests
+were executed. This is one genuine observation consumer, not fleet parity,
+backfill, a financial authority switch, or permission to merge/deploy during the
+active production freeze. See
+`docs/designs/PAYMENT_INTENT_MODULE_OBSERVATION.md`.
