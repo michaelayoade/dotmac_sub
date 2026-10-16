@@ -533,4 +533,3 @@ material = "GENIEACS_NBI_URL"
 [rollout]
 # scripts/deploy.sh BACKGROUND_STABILITY_SECONDS default.
 stability_window_seconds = 15
-
