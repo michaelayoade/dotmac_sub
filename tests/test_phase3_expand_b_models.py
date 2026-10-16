@@ -53,6 +53,7 @@ from app.models.sales import (
 from app.models.subscriber import Subscriber
 from app.models.work_link import WorkEntityType, WorkLink, WorkLinkType
 from app.models.work_order import WorkOrder
+from tests.migration_graph_helpers import composed_sub_graph
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -414,18 +415,12 @@ def test_migration_244_revision_chain():
 
 
 def test_migration_244_is_single_alembic_head():
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
 
-    config = Config(str(REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
-    script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
+    script, heads = composed_sub_graph(REPO_ROOT)
     # The chain keeps advancing as later PRs stack on; ONT confirmation added
     # asset inventory now extends the current migration chain.
     assert len(heads) == 1, (
-        f"Expected exactly one Alembic head, found {len(heads)}: {heads}. "
+        f"Expected exactly one Sub Alembic head, found {len(heads)}: {heads}. "
         "Two branches almost certainly numbered their migrations off the same "
         "parent -- renumber the later one onto the current head."
     )

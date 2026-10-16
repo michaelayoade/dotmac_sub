@@ -62,6 +62,7 @@ def _run_deploy(
     github_checks_ready: bool = True,
     background_runtime_ready: bool = True,
     rollback_gate_exit_code: int = 0,
+    payments_intent_rollback_gate_exit_code: int | None = None,
     declared_services: tuple[str, ...] = FULL_SERVICES,
     write_override: bool = False,
     image_selector: str = "sha-32eebc1",
@@ -193,12 +194,21 @@ if [[ "$*" == *"scripts.integrations.verify_manifest_pins"* ]]; then
 fi
 if [[ "$*" == *"scripts.verify_payment_email_rollback"* ]]; then
   printf 'rollback-gate image=%s sha=%s\\n' "$APP_IMAGE" "$GIT_SHA" >> "$DOCKER_LOG"
+  printf 'rollback-gate-command=%s\\n' "$*" >> "$DOCKER_LOG"
   exit {rollback_gate_exit_code}
+fi
+if [[ "$*" == *"scripts.verify_payments_intent_rollback"* ]]; then
+  printf 'rollback-gate image=%s sha=%s\\n' "$APP_IMAGE" "$GIT_SHA" >> "$DOCKER_LOG"
+  printf 'rollback-gate-command=%s\\n' "$*" >> "$DOCKER_LOG"
+  exit {rollback_gate_exit_code if payments_intent_rollback_gate_exit_code is None else payments_intent_rollback_gate_exit_code}
 fi
 if [[ "$*" == *" up -d "* ]]; then
   attempts="$(cat "$UP_ATTEMPTS")"
   printf '%s\\n' "$((attempts + 1))" > "$UP_ATTEMPTS"
-  if [[ "$attempts" == "1" && "{int(not rollback_recreate_success)}" == "1" ]]; then
+  # Worker and producer recreations add calls before rollback. Fail only the
+  # recreation that uses the restored previous-image pin.
+  if [[ "{int(not rollback_recreate_success)}" == "1" ]] && \\
+    grep -Fxq 'APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000' "$DEPLOY_DIR/.env"; then
     exit 1
   fi
 fi
@@ -442,9 +452,14 @@ def test_production_release_modules_run_from_the_authorized_checkout(
         tmp_path,
         image_selector=IMAGE_DIGEST,
         deployment_target="production",
+        extra_env={"PRODUCTION_DEPLOY_DEADLINE_EPOCH": ""},
     )
 
-    assert result.returncode == 0, result.stderr
+    # This fixture proves module selection, not trusted production admission.
+    # Both release gates must run before the missing trusted deadline refuses
+    # cutover; do not invent lock/maintenance FDs to make a full deploy pass.
+    assert result.returncode != 0
+    assert "trusted production job deadline is absent or malformed" in result.stderr
     repo_root = Path(__file__).resolve().parents[1]
     release_gate = next(
         command
@@ -460,6 +475,8 @@ def test_production_release_modules_run_from_the_authorized_checkout(
     )
     assert f"cwd={repo_root}" in backup_gate
     assert f"cwd={env_file.parent}" not in backup_gate
+    assert "GIT_SHA=old0000000000000000000000000000000000000" in env_file.read_text()
+    assert "alembic upgrade heads" not in docker_log.read_text()
 
 
 def test_deploy_rejects_digest_not_reported_by_pulled_image(tmp_path: Path) -> None:
@@ -582,9 +599,15 @@ def test_deploy_reports_candidate_before_health_failure_rollback(
         for i, command in enumerate(commands)
         if "scripts.verify_payment_email_rollback" in command
     )
+    intent_rollback_gate = next(
+        i
+        for i, command in enumerate(commands)
+        if "scripts.verify_payments_intent_rollback" in command
+    )
     assert "run --no-deps -d" in candidate_command
     assert "run --rm --no-deps -d" not in candidate_command
     assert diagnostic_logs < rollback_gate < rollback_cleanup
+    assert rollback_gate < intent_rollback_gate < rollback_cleanup
 
 
 def test_activated_or_unknown_floor_never_starts_old_image_after_health_failure(
@@ -605,12 +628,45 @@ def test_activated_or_unknown_floor_never_starts_old_image_after_health_failure(
         for i, item in enumerate(commands)
         if "scripts.verify_payment_email_rollback" in item
     )
+    assert not any(
+        "scripts.verify_payments_intent_rollback" in item for item in commands
+    )
     assert (
         f"rollback-gate image=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1 sha={REVISION}"
         in commands
     )
     assert not any(" up -d " in item for item in commands[gate:])
     assert "rm -f dotmac_sub_app_candidate" not in commands[gate:]
+
+
+def test_payments_intent_floor_refusal_keeps_candidate_after_email_floor_passes(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        health_success=False,
+        payments_intent_rollback_gate_exit_code=2,
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY ROLLBACK REFUSED" in result.stderr
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" in (
+        env_file.read_text()
+    )
+    commands = docker_log.read_text().splitlines()
+    email_gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payment_email_rollback" in item
+    )
+    intent_gate = next(
+        i
+        for i, item in enumerate(commands)
+        if "scripts.verify_payments_intent_rollback" in item
+    )
+    assert email_gate < intent_gate
+    assert not any(" up -d " in item for item in commands[intent_gate:])
+    assert "rm -f dotmac_sub_app_candidate" not in commands[intent_gate:]
 
 
 def test_paused_floor_keeps_healthy_candidate_on_worker_failure(tmp_path: Path) -> None:
@@ -734,7 +790,9 @@ def test_deploy_verifies_schema_then_warms_candidate_before_recreate(
     )
     candidate_command = commands[candidate]
     recreate = next(
-        index for index, command in enumerate(commands) if " up -d app" in command
+        index
+        for index, command in enumerate(commands)
+        if " up -d --force-recreate app" in command
     )
 
     assert migration < verification < manifest_pins < candidate < recreate
@@ -1183,7 +1241,7 @@ def test_web_gates_wait_for_readiness_not_just_liveness(tmp_path: Path) -> None:
     assert candidate_ready < urls.index("http://127.0.0.1:8001/health")
     assert urls.index("http://127.0.0.1:8001/health") < primary_ready
     assert "readiness at http://127.0.0.1:8001/api/v1/health/ready" in result.stdout
-    assert " up -d app" in docker_log.read_text()
+    assert " up -d --force-recreate app" in docker_log.read_text()
 
 
 def test_live_but_unready_candidate_fails_closed_before_replacement(

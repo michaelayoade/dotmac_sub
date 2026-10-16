@@ -116,8 +116,13 @@ def _candidate_graph() -> ScriptDirectory:
 def _ancestors(graph: ScriptDirectory, revisions: frozenset[str]) -> frozenset[str]:
     # Alembic traverses real lineage and depends_on edges, including composed
     # module planes. Revision prefixes are never treated as an ordering.
+    # Script heads can include a module head consumed by another head's
+    # depends_on edge. Traverse each real head independently, then union the
+    # ancestry; Alembic rejects those overlapping heads in one range request.
     return frozenset(
-        item.revision for item in graph.iterate_revisions(tuple(revisions), "base")
+        item.revision
+        for revision in sorted(revisions)
+        for item in graph.iterate_revisions(revision, "base")
     )
 
 

@@ -44,6 +44,12 @@ from app.services.customer_portal_flow_payments import (
     verify_and_record_topup,
 )
 from app.services.integrations.runtime_execution import RuntimeExecutionError
+from app.services.payment_charge_contracts import (
+    ChargeAuthorizationCommand,
+    ChargeAuthorizationObservation,
+    InvoiceGatewayRoutingEvidence,
+    ProviderAcceptance,
+)
 from app.services.payment_gateway_adapter import (
     PaymentGatewayProviderStatus,
     PaymentGatewayVerificationError,
@@ -53,6 +59,11 @@ from app.services.payment_gateway_adapter import (
 )
 from app.services.settings_cache import SettingsCache
 from tests.integration_platform_helpers import enable_payment_provider
+from tests.payment_invoice_intent_helpers import (
+    _invoice_module_stub_fixture,  # noqa: F401
+)
+
+pytestmark = pytest.mark.usefixtures("invoice_module_stub")
 
 
 def _run_async(coro):
@@ -907,11 +918,17 @@ def test_create_topup_intent_records_selected_payment_method(
             reference="topup-intent-ref-card",
         ),
     )
-    captured_charge = {}
+    captured_charge: list[ChargeAuthorizationCommand] = []
 
-    def fake_charge_authorization(_db, **kwargs):
-        captured_charge.update(kwargs)
-        return {"status": "success", "reference": kwargs["reference"]}
+    def fake_charge_authorization(
+        _db, command: ChargeAuthorizationCommand
+    ) -> ChargeAuthorizationObservation:
+        captured_charge.append(command)
+        return ChargeAuthorizationObservation(
+            ProviderAcceptance.accepted,
+            PaymentGatewayProviderStatus.success,
+            command.reference,
+        )
 
     monkeypatch.setattr(
         "app.services.integrations.payment_capability.charge_authorization",
@@ -933,9 +950,9 @@ def test_create_topup_intent_records_selected_payment_method(
     assert intent.metadata_["payment_method_id"] == str(card.id)
     assert payload["checkout_metadata"] == {"topup_intent_id": str(intent.id)}
     assert payload["charged"] is True
-    assert captured_charge["authorization_code"] == "AUTH_4081"
-    assert captured_charge["reference"] == "topup-intent-ref-card"
-    assert captured_charge["metadata"] == {"topup_intent_id": str(intent.id)}
+    assert captured_charge[0].authorization_code == "AUTH_4081"
+    assert captured_charge[0].reference == "topup-intent-ref-card"
+    assert captured_charge[0].metadata.intent_id == intent.id
 
 
 def test_create_topup_intent_initializes_flutterwave_checkout(
@@ -1150,17 +1167,41 @@ def test_create_invoice_payment_intent_charges_saved_card(
             provider_type="paystack", public_key="pk_test_pay", reference="pay-ref-card"
         ),
     )
-    captured = {}
+    captured: list[ChargeAuthorizationCommand] = []
 
-    def fake_charge(_db, **kwargs):
-        captured.update(kwargs)
-        return {"status": "success", "reference": kwargs["reference"]}
+    def fake_charge(
+        _db, command: ChargeAuthorizationCommand
+    ) -> ChargeAuthorizationObservation:
+        captured.append(command)
+        return ChargeAuthorizationObservation(
+            ProviderAcceptance.accepted,
+            PaymentGatewayProviderStatus.success,
+            command.reference,
+        )
 
     monkeypatch.setattr(
         "app.services.integrations.payment_capability.charge_authorization",
         fake_charge,
     )
 
+    from app.services import gateway_topup_intents
+
+    original_create = gateway_topup_intents.create_customer_gateway_topup_intent
+
+    def create_after_balance_change(db, command, *, context):
+        # Simulate the intervening authoritative change after adapter preview.
+        # The owner must reacquire and return the amount/currency actually bound.
+        current = db.get(Invoice, command.invoice_id)
+        current.balance_due = Decimal("2500.00")
+        current.currency = "USD"
+        db.commit()
+        return original_create(db, command, context=context)
+
+    monkeypatch.setattr(
+        gateway_topup_intents,
+        "create_customer_gateway_topup_intent",
+        create_after_balance_change,
+    )
     payload = create_invoice_payment_intent(
         db_session,
         _invoice_customer(subscriber),
@@ -1172,9 +1213,13 @@ def test_create_invoice_payment_intent_charges_saved_card(
 
     assert payload["charged"] is True
     assert payload["reference"] == "pay-ref-card"
-    assert captured["authorization_code"] == "AUTH_4081"
-    assert captured["amount_kobo"] == 300000
-    assert captured["metadata"]["invoice_id"] == str(invoice.id)
+    assert captured[0].authorization_code == "AUTH_4081"
+    assert captured[0].amount_subunits == 250000
+    assert captured[0].currency == "USD"
+    assert payload["amount"] == Decimal("2500.00")
+    assert payload["currency"] == "USD"
+    assert isinstance(captured[0].metadata, InvoiceGatewayRoutingEvidence)
+    assert captured[0].metadata.invoice_id == invoice.id
 
 
 def test_create_invoice_payment_intent_saved_card_idempotent_replay(
@@ -1202,10 +1247,17 @@ def test_create_invoice_payment_intent_saved_card_idempotent_replay(
             provider_type="paystack", public_key="pk", reference=next(refs)
         ),
     )
-    charges: list[dict] = []
+    charges: list[ChargeAuthorizationCommand] = []
     monkeypatch.setattr(
         "app.services.integrations.payment_capability.charge_authorization",
-        lambda _db, **kw: charges.append(kw) or {"status": "success"},
+        lambda _db, command: (
+            charges.append(command)
+            or ChargeAuthorizationObservation(
+                ProviderAcceptance.accepted,
+                PaymentGatewayProviderStatus.success,
+                command.reference,
+            )
+        ),
     )
     cust = _invoice_customer(subscriber)
 
@@ -1616,7 +1668,11 @@ def test_create_invoice_payment_intent_resolves_saved_card_to_paystack(
     )
     monkeypatch.setattr(
         "app.services.integrations.payment_capability.charge_authorization",
-        lambda *_args, **_kwargs: {"status": "success"},
+        lambda _db, command: ChargeAuthorizationObservation(
+            ProviderAcceptance.accepted,
+            PaymentGatewayProviderStatus.success,
+            command.reference,
+        ),
     )
 
     payload = create_invoice_payment_intent(
@@ -2285,3 +2341,65 @@ def test_invoice_checkout_module_database_error_stops_provider(
             db_session, {"account_id": str(subscriber.id)}, intent.reference
         )
     assert caught.value is error
+
+
+def test_saved_card_binding_replay_without_charge_receipt_requires_verification(
+    monkeypatch, db_session, subscriber
+):
+    from app.services import gateway_topup_intents
+
+    _patch_topup_settings(monkeypatch)
+    invoice = _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="3000.00",
+        invoice_number="INV-REPLAY-NO-RECHARGE",
+    )
+    card = billing_service.payment_methods.create(
+        db_session,
+        PaymentMethodCreate(
+            account_id=subscriber.id,
+            label="Saved card",
+            token="test-authorization",
+            last4="1111",
+            brand="visa",
+            is_default=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack", public_key="pk", reference="same-bound-reference"
+        ),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "app.services.integrations.payment_capability.charge_authorization",
+        lambda _db, command: (
+            calls.append(command.reference)
+            or ChargeAuthorizationObservation(
+                ProviderAcceptance.accepted,
+                PaymentGatewayProviderStatus.success,
+                command.reference,
+            )
+        ),
+    )
+    first = create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="paystack",
+        payment_method_id=str(card.id),
+    )
+    assert first["charged"] is True
+    with pytest.raises(gateway_topup_intents.GatewayTopupIntentError) as refusal:
+        create_invoice_payment_intent(
+            db_session,
+            _invoice_customer(subscriber),
+            str(invoice.id),
+            provider="paystack",
+            payment_method_id=str(card.id),
+        )
+    assert refusal.value.code.endswith("invoice_charge_verification_required")
+    assert refusal.value.details["reference"] == first["reference"]
+    assert calls == [first["reference"]]
