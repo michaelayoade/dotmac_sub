@@ -758,7 +758,11 @@ def test_production_deploy_requires_authorization_and_runs_no_test_suite() -> No
     )
     assert "run.head_repository?.full_name !== expectedRepository" in workflow
     assert "run.head_repository.full_name !== context.repo.repo" not in workflow
-    assert "bash scripts/deploy_production.sh" in workflow
+    controller = _read("scripts/production_trusted_deploy.py")
+    assert 'python "$control/scripts/production_trusted_deploy.py"' in workflow
+    assert "bash scripts/deploy_production.sh" not in workflow
+    assert 'repository / "scripts" / "deploy_production.sh"' in controller
+    assert "run_trusted_deployment" in controller
     for forbidden in ("pytest", "make test", "ruff", "mypy", "lint-imports", "bandit"):
         assert forbidden not in workflow
 

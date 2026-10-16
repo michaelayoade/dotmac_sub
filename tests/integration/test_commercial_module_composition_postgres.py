@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import sqlalchemy as sa
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from dotmac_billing.models import (
     PLATFORM_TABLES as BILLING_PLATFORM_TABLES,
 )
@@ -22,6 +23,10 @@ from sqlalchemy.engine import URL
 
 from alembic import command
 from app.services.operator_tenant import OPERATOR_TENANT_ID
+from scripts.ci.migrated_test_database import (
+    effective_heads,
+    install_migration_graph_environment,
+)
 from tests.integration import test_kernel_lineage_rehearsal as kernel_rehearsal
 
 isolated_database = kernel_rehearsal.isolated_database
@@ -39,6 +44,21 @@ def _config(database_url: URL) -> Config:
         "sqlalchemy.url", database_url.render_as_string(hide_password=False)
     )
     return config
+
+
+def _assert_composed_heads(config: Config, connection: sa.Connection) -> None:
+    install_migration_graph_environment()
+    script = ScriptDirectory.from_config(config)
+    expected = effective_heads(script)
+    assert _heads(connection) == set(expected)
+    ancestry = {
+        revision.revision
+        for revision in script.iterate_revisions(tuple(expected), "base")
+    }
+    assert {BILLING_HEAD, COLLECTIONS_HEAD, PROVIDER_HEAD} <= ancestry
+    assert BILLING_HEAD not in expected
+    assert COLLECTIONS_HEAD in expected
+    assert script.get_revision("692_module_invoice_cash").dependencies == BILLING_HEAD
 
 
 def _heads(connection: sa.Connection) -> set[str]:
@@ -173,8 +193,7 @@ def test_fresh_upgrade_selects_only_both_tenant_planes_with_effective_rls(
             platform_tables=COLLECTIONS_PLATFORM_TABLES,
         )
         with engine.begin() as connection:
-            heads = _heads(connection)
-            assert {BILLING_HEAD, COLLECTIONS_HEAD} <= heads
+            _assert_composed_heads(config, connection)
             _seed_canaries(connection)
 
         assert _visible_codes(isolated_database, str(OPERATOR_TENANT_ID)) == (
@@ -216,7 +235,7 @@ def test_upgrade_from_relay_provider_preserves_module_event_storage(
             )
         command.upgrade(config, "heads")
         with engine.connect() as connection:
-            assert {BILLING_HEAD, COLLECTIONS_HEAD} <= _heads(connection)
+            _assert_composed_heads(config, connection)
             assert (
                 connection.scalar(
                     sa.text("SELECT count(*) FROM public.outbox_events WHERE id = :id"),

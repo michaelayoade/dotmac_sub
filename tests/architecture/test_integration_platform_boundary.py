@@ -46,6 +46,7 @@ RETIRED_PATHS = (
 )
 
 CURRENT_INTEGRATION_SERVICES = (
+    "integration.payment_charge_transport",
     "integration.registry",
     "integration.oauth_tokens",
     "integration.installations",

@@ -337,7 +337,7 @@ def test_capture_reads_whole_populations_without_payloads_or_inner_join_loss() -
         (),
         (inbox,),
     ]
-    result = owner._cash_evidence(db, query=QUERY, report=report())
+    result = owner._cash_evidence(db)
     assert len(result.provider_events) == 2
     assert result.provider_events[1].payment_id is None
     assert result.inbox_receipts[0].consequence_provider_event_id == event().id

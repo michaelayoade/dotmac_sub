@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "repository": "ghcr.io/michaelayoade/dotmac_sub",
+  "source_revision": "b0bc01a656fbaa6023ffe0f0e97189b4e92ca4c8",
+  "source_tree": "10822ff0033f8e818e3ce39d3777fe32818ac987",
+  "image_digest": "sha256:e0eb5277e78c228cf01d7476506e56eb475a9cab150db2f259763c58255adeae",
+  "build_run_id": 38758207774,
+  "staging_acceptance_run_id": 38758935797,
+  "production_authorization_run_id": 38761622018,
+  "production_health": "UNVERIFIED"
+}

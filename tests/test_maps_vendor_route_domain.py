@@ -295,16 +295,28 @@ def test_migration_248_is_single_alembic_head():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
     script = ScriptDirectory.from_config(config)
     # 248 is a single link in the chain; the current head advances as later PRs
     # stack on top (Phase 5 asset inventory is the current head).
-    heads = script.get_heads()
+    # Keep installed module paths so host depends_on edges resolve; only
+    # Sub-owned physical heads count toward the host's single-head contract.
+    heads = [
+        head
+        for head in script.get_heads()
+        if Path(script.get_revision(head).path).parent.resolve()
+        == (REPO_ROOT / "alembic" / "versions").resolve()
+    ]
     assert len(heads) == 1, (
         f"Expected exactly one Alembic head, found {len(heads)}: {heads}. "
         "Two branches almost certainly numbered their migrations off the same "
         "parent -- renumber the later one onto the current head."
     )
+    assert "248_maps_vendor_route_domain" in {
+        revision.revision
+        for revision in script.iterate_revisions(
+            heads[0], "248_maps_vendor_route_domain", inclusive=True
+        )
+    }
 
 
 def test_migration_248_creates_geometry_gist_indexes():

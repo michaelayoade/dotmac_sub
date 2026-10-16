@@ -33,12 +33,18 @@ def test_portal_ui_migrations_extend_current_main_as_one_head():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option("version_locations", str(REPO_ROOT / "alembic" / "versions"))
     # The chain must stay single-headed with 367 in its ancestry; later
     # revisions (e.g. the legacy-153 bridge merge) may extend past it, so
     # asserting the exact head would break on every subsequent migration.
     script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
+    # Keep installed module paths so host depends_on edges resolve; only
+    # Sub-owned physical heads count toward the host's single-head contract.
+    heads = [
+        head
+        for head in script.get_heads()
+        if Path(script.get_revision(head).path).parent.resolve()
+        == (REPO_ROOT / "alembic" / "versions").resolve()
+    ]
     assert len(heads) == 1
     ancestry = {
         rev.revision for rev in script.walk_revisions(base="base", head=heads[0])

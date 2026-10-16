@@ -5,8 +5,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
+from tests.migration_graph_helpers import composed_sub_graph
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "alembic/versions/490_ont_reconcile_positive_admission.py"
@@ -24,16 +23,12 @@ def _module():
 
 def test_positive_admission_is_the_single_linear_head():
     module = _module()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
-    script = ScriptDirectory.from_config(config)
+    script, heads = composed_sub_graph(ROOT)
 
     assert module.revision == "490_ont_reconcile_positive_admission"
     assert module.down_revision == "489_unique_sellable_offer_name"
     # Single-headed with this revision in the head's ancestry. Naming the
     # exact head breaks the test on every later migration.
-    heads = script.get_heads()
     assert len(heads) == 1
     assert module.revision in {
         item.revision

@@ -5,11 +5,16 @@ from __future__ import annotations
 from dataclasses import fields
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from scripts.ci.migrated_test_database import (
+    ALEMBIC_CONFIG_PATH,
     DatabaseContractError,
     DatabaseRefusal,
+    effective_heads,
+    install_migration_graph_environment,
     migrated_schema_state,
     parse_test_database_target,
     repository_heads,
@@ -112,15 +117,24 @@ def test_revision_state_requires_exact_repository_heads() -> None:
 def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     # The local provider revisions are used through ``depends_on`` by the
     # composed module branches. Alembic applies them, then records only the
-    # effective branch heads in its version table.
-    assert repository_heads() == frozenset(
+    # effective branch heads in its version table. Migration 691 also consumes
+    # the released Payments pm_0003 head through its depends_on edge.
+    install_migration_graph_environment()
+    script = ScriptDirectory.from_config(Config(str(ALEMBIC_CONFIG_PATH)))
+    expected = effective_heads(script)
+    assert repository_heads() == expected
+    ancestry = {
+        revision.revision
+        for revision in script.iterate_revisions(tuple(expected), "base")
+    }
+    assert {"bi_0001_billing", "pm_0003_confirmation_immutable"} <= ancestry
+    assert not {"bi_0001_billing", "pm_0003_confirmation_immutable"} & expected
+    assert expected == frozenset(
         {
-            "690_backdated_invoice_permissions",
-            "bi_0001_billing",
+            "693_provider_source_facts",
             "cl_0001_collections",
             "ib_0001_conversations",
             "nu_0001_numbering",
-            "pm_0003_confirmation_immutable",
             "so_0001_service_delivery_orders",
             "su_0003_billing_treatments",
             "ts_0002_notify_identity",

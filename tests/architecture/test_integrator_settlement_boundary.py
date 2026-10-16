@@ -95,9 +95,15 @@ def test_integrator_provider_reference_migration_extends_the_current_chain() -> 
 
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("version_locations", str(ROOT / "alembic/versions"))
     script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
+    # Keep installed module paths so host depends_on edges resolve; only
+    # Sub-owned physical heads count toward the host's single-head contract.
+    heads = [
+        head
+        for head in script.get_heads()
+        if Path(script.get_revision(head).path).parent.resolve()
+        == (ROOT / "alembic" / "versions").resolve()
+    ]
     assert len(heads) == 1
     assert any(
         revision.revision == assignments["revision"]
