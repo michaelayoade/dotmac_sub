@@ -28,8 +28,10 @@ repos:
         exclude: ^static/(css/main\.css$|vendor/|js/vendor/)
       - id: end-of-file-fixer
         # Generated, minified Tailwind output; the build strips the trailing
-        # newline on every rebuild, so don't enforce it here.
-        exclude: ^static/(css/main\.css$|vendor/|js/vendor/)
+        # newline on every rebuild, so don't enforce it here. The product
+        # manifest is kernel-canonical digest bytes with no trailing newline;
+        # adding one would change the attested digest.
+        exclude: ^(static/(css/main\.css$|vendor/|js/vendor/)|deploy/product-manifest\.json$)
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
