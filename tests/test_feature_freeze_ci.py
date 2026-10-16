@@ -134,3 +134,89 @@ def test_feat_title_variants(title: str) -> None:
 def test_non_feat_titles_pass() -> None:
     for title in ["fix: x", "chore: feature flags cleanup", "docs: features"]:
         assert freeze.classify([], title) == [], title
+
+
+# --- disguised-feature rules (new template, size threshold) ---------------
+
+
+def test_new_template_is_feature_shaped_even_with_fix_title() -> None:
+    findings = freeze.classify_detailed(
+        [("A", "templates/admin/dashboard/_sla_card.html")], "fix(ui): card"
+    )
+    assert findings == [
+        (
+            "feature-exception",
+            "templates/admin/dashboard/_sla_card.html",
+            "new-template",
+        )
+    ]
+
+
+def test_modified_template_passes() -> None:
+    assert (
+        freeze.classify([("M", "templates/admin/dashboard/index.html")], "fix: x") == []
+    )
+
+
+def test_new_web_module_is_feature_shaped_under_fix_title() -> None:
+    findings = freeze.classify([("A", "app/web/admin/sla.py")], "refactor: tidy")
+    assert findings == [("feature-exception", "app/web/admin/sla.py")]
+
+
+def test_size_threshold_flags_files_and_names_rule() -> None:
+    changes = [("M", "app/services/a.py"), ("M", "templates/b.html")]
+    added = {"app/services/a.py": 300, "templates/b.html": 101}
+    findings = freeze.classify_detailed(changes, "fix: big", added)
+    assert [(k, p) for k, p, _ in findings] == [
+        ("feature-exception", "app/services/a.py"),
+        ("feature-exception", "templates/b.html"),
+    ]
+    assert all(r.startswith("size-threshold") for _, _, r in findings)
+
+
+def test_size_at_threshold_passes() -> None:
+    added = {"app/services/a.py": 250, "templates/b.html": 150}
+    assert freeze.classify([("M", "app/services/a.py")], "fix: x", added) == []
+
+
+def test_size_ignores_tests_migrations_lockfiles_docs() -> None:
+    added = {
+        "tests/test_big.py": 900,
+        "alembic/versions/1_x.py": 900,
+        "app/static/package-lock.json": 900,
+        "docs/big.md": 900,
+        "app/services/a.py": 10,
+    }
+    assert freeze.classify([("M", "app/services/a.py")], "fix: x", added) == []
+
+
+def test_size_threshold_is_configurable() -> None:
+    added = {"app/services/a.py": 50}
+    assert freeze.classify([], "fix: x", added, size_threshold=40)
+    assert not freeze.classify([], "fix: x", added, size_threshold=60)
+
+
+def test_pr_3662_shape_is_flagged_under_fix_title() -> None:
+    changes = [
+        ("A", "app/services/ticket_sla_reports.py"),
+        ("M", "app/services/web_admin_dashboard.py"),
+        ("M", "templates/admin/dashboard/index.html"),
+        ("A", "tests/test_ticket_sla_reports.py"),
+    ]
+    added = {
+        "app/services/ticket_sla_reports.py": 225,
+        "app/services/web_admin_dashboard.py": 300,
+        "templates/admin/dashboard/index.html": 188,
+        "tests/test_ticket_sla_reports.py": 200,
+    }
+    findings = freeze.classify(changes, "fix(ui): ticket SLA dashboard", added)
+    paths = {p for _, p in findings}
+    assert "app/services/ticket_sla_reports.py" in paths
+    assert "app/services/web_admin_dashboard.py" in paths
+    assert "templates/admin/dashboard/index.html" in paths
+    assert "tests/test_ticket_sla_reports.py" not in paths
+
+
+def test_exception_entry_covers_size_finding() -> None:
+    entry = _entry(paths=["app/services/a.py"])
+    assert freeze.exception_covers([entry], "feature-exception", "app/services/a.py")

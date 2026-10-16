@@ -18,7 +18,13 @@ Feature-shaped change (requires an approved exception entry in
 - a newly added transitional billing tool (must also be registered with a
   deletion trigger);
 - any modification of the pinned OpenAPI contract manifest (a changed
-  external surface is feature-shaped until proven corrective).
+  external surface is feature-shaped until proven corrective);
+- a newly added template file under ``templates/`` (rule ``new-template``);
+- a PR whose added lines in ``app/`` + ``templates/`` (tests, migrations,
+  lockfiles and minified assets excluded) exceed ``SIZE_THRESHOLD_LINES``
+  (rule ``size-threshold``). These rules apply whatever the PR title says: a
+  ``fix:`` / ``chore:`` / ``refactor:`` label does not make a feature-sized
+  change a correction.
 
 Modifications and deletions of existing files, and additions under
 ``tests/``, ``docs/`` or ``.github/``, are corrections-shaped and pass.
@@ -36,6 +42,32 @@ from pathlib import Path
 
 EXCEPTIONS_PATH = Path("docs/feature_freeze_exceptions.json")
 OPENAPI_MANIFEST = "tests/architecture/openapi_contract_surface.json"
+
+#: Added lines in SIZE_COUNTED_PATTERNS above this make a PR feature-sized
+#: regardless of its title. Override with FREEZE_SIZE_THRESHOLD or
+#: ``--size-threshold``.
+SIZE_THRESHOLD_LINES = 400
+SIZE_COUNTED_PATTERNS = ("app/**", "templates/**")
+SIZE_EXCLUDED_PATTERNS = (
+    "tests/**",
+    "alembic/**",
+    "**/tests/**",
+    "*.lock",
+    "**/*.lock",
+    "**/package-lock.json",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/*.md",
+)
+NEW_TEMPLATE_PATTERNS = ("templates/**",)
+
+RULE_FEAT_TITLE = "feat-title"
+RULE_OPENAPI = "openapi-manifest"
+RULE_TRANSITIONAL = "new-transitional-tool"
+RULE_MIGRATION = "new-migration"
+RULE_NEW_MODULE = "new-python-module"
+RULE_NEW_TEMPLATE = "new-template"
+RULE_SIZE = "size-threshold"
 
 FEAT_TITLE_RE = re.compile(r"^feat(\([^)]*\))?(!)?:", re.IGNORECASE)
 
@@ -111,6 +143,22 @@ def _name_status(base: str, head: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _numstat(base: str, head: str) -> dict[str, int]:
+    """{path: added lines} this PR introduces (three-dot, binary skipped)."""
+
+    result = _git("diff", "--numstat", f"{base}...{head}")
+    if result.returncode != 0:
+        result = _git("diff", "--numstat", base, head)
+        result.check_returncode()
+    added: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        added[parts[-1].strip()] = int(parts[0])
+    return added
+
+
 def _event_pull_request() -> dict[str, object]:
     event_path = os.getenv("GITHUB_EVENT_PATH")
     if not event_path:
@@ -123,27 +171,79 @@ def _event_pull_request() -> dict[str, object]:
     return pr if isinstance(pr, dict) else {}
 
 
-def classify(changes: list[tuple[str, str]], title: str) -> list[tuple[str, str]]:
-    """Return (kind, path) feature-shaped findings for a change set."""
+def classify_detailed(
+    changes: list[tuple[str, str]],
+    title: str,
+    added_lines: dict[str, int] | None = None,
+    size_threshold: int = SIZE_THRESHOLD_LINES,
+) -> list[tuple[str, str, str]]:
+    """Return (kind, path, rule) feature-shaped findings for a change set.
 
-    findings: list[tuple[str, str]] = []
+    ``added_lines`` maps path -> added line count; when omitted the size rule
+    is not evaluated. Rules apply independently of the PR title type.
+    """
+
+    findings: list[tuple[str, str, str]] = []
     if FEAT_TITLE_RE.match(title.strip()):
-        findings.append(("feature-exception", f"PR title: {title.strip()}"))
+        findings.append(
+            ("feature-exception", f"PR title: {title.strip()}", RULE_FEAT_TITLE)
+        )
     for status, path in changes:
         if path == OPENAPI_MANIFEST and status != "D":
-            findings.append(("feature-exception", path))
+            findings.append(("feature-exception", path, RULE_OPENAPI))
             continue
         if status != "A":
             continue
         if _matches(path, ALWAYS_ALLOWED_PATTERNS):
             continue
         if _matches(path, NEW_TRANSITIONAL_PATTERNS):
-            findings.append(("transitional-tool", path))
+            findings.append(("transitional-tool", path, RULE_TRANSITIONAL))
         elif _matches(path, NEW_MIGRATION_PATTERNS):
-            findings.append(("schema", path))
+            findings.append(("schema", path, RULE_MIGRATION))
         elif _matches(path, NEW_MODULE_PATTERNS):
-            findings.append(("feature-exception", path))
+            findings.append(("feature-exception", path, RULE_NEW_MODULE))
+        elif _matches(path, NEW_TEMPLATE_PATTERNS):
+            findings.append(("feature-exception", path, RULE_NEW_TEMPLATE))
+
+    if added_lines is not None:
+        counted = {
+            path: n
+            for path, n in added_lines.items()
+            if n > 0
+            and _matches(path, SIZE_COUNTED_PATTERNS)
+            and not _matches(path, SIZE_EXCLUDED_PATTERNS)
+        }
+        total = sum(counted.values())
+        if total > size_threshold:
+            already = {path for _, path, _ in findings}
+            for path, n in sorted(counted.items(), key=lambda kv: -kv[1]):
+                if path in already:
+                    continue
+                findings.append(
+                    (
+                        "feature-exception",
+                        path,
+                        f"{RULE_SIZE}: PR adds {total} lines in app/+templates/ "
+                        f"(limit {size_threshold}); this file +{n}",
+                    )
+                )
     return findings
+
+
+def classify(
+    changes: list[tuple[str, str]],
+    title: str,
+    added_lines: dict[str, int] | None = None,
+    size_threshold: int = SIZE_THRESHOLD_LINES,
+) -> list[tuple[str, str]]:
+    """Return (kind, path) feature-shaped findings for a change set."""
+
+    return [
+        (kind, path)
+        for kind, path, _ in classify_detailed(
+            changes, title, added_lines, size_threshold
+        )
+    ]
 
 
 def load_exceptions(root: Path) -> list[dict[str, object]]:
@@ -215,12 +315,21 @@ def main() -> int:
         default="",
         help="PR title (defaults to the GitHub event payload).",
     )
+    parser.add_argument(
+        "--size-threshold",
+        type=int,
+        default=int(os.getenv("FREEZE_SIZE_THRESHOLD", SIZE_THRESHOLD_LINES)),
+        help="Max added lines in app/ + templates/ before an exception is "
+        f"required (default {SIZE_THRESHOLD_LINES}).",
+    )
     args = parser.parse_args()
 
     pr = _event_pull_request()
     title = args.title or str(pr.get("title") or "")
     changes = _name_status(args.base, args.head)
-    findings = classify(changes, title)
+    findings = classify_detailed(
+        changes, title, _numstat(args.base, args.head), args.size_threshold
+    )
 
     root = Path.cwd()
     entries = load_exceptions(root)
@@ -231,8 +340,8 @@ def main() -> int:
         return 1
 
     uncovered = [
-        (kind, path)
-        for kind, path in findings
+        (kind, path, rule)
+        for kind, path, rule in findings
         if not exception_covers(entries, kind, path)
     ]
     if not uncovered:
@@ -248,8 +357,8 @@ def main() -> int:
         "These changes are feature-shaped and have no approved exception "
         "in docs/feature_freeze_exceptions.json:"
     )
-    for kind, path in uncovered:
-        print(f"- [{kind}] {path}")
+    for kind, path, rule in uncovered:
+        print(f"- [{kind}] rule={rule} file={path}")
     print(
         "Build new capability in Starter and consume it as a pinned "
         "package, or record Michael's exception (CODEOWNERS-reviewed)."

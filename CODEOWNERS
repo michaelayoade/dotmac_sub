@@ -9,6 +9,8 @@
 /scripts/ci/check_feature_freeze.py @michaelayoade
 /docs/FEATURE_FREEZE.md @michaelayoade
 /docs/feature_freeze_exceptions.json @michaelayoade
+/templates/admin/dashboard/ @michaelayoade
+/app/services/web_admin_dashboard.py @michaelayoade
 /tests/architecture/billing_thin_client_baseline.txt @michaelayoade
 /tests/architecture/billing_thin_client_inventory.py @michaelayoade
 /tests/architecture/billing_transitional_tools.json @michaelayoade
