@@ -67,6 +67,67 @@ def test_syslog_probe_imports_no_parser_or_domain_handlers() -> None:
     )
 
 
+def test_platform_health_adapter_is_stdlib_only_and_nonpersistent() -> None:
+    tree = ast.parse(
+        (ROOT / "app/services/platform_health_observations.py").read_text()
+    )
+    imported_roots = {
+        node.module.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    } | {
+        alias.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert imported_roots <= {
+        "__future__",
+        "dataclasses",
+        "datetime",
+        "enum",
+        "hashlib",
+        "json",
+        "re",
+    }
+    forbidden_calls = {"open", "write", "commit", "flush", "publish", "request", "send"}
+    assert not any(
+        isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id in forbidden_calls)
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr in forbidden_calls
+            )
+        )
+        for node in ast.walk(tree)
+    )
+
+
+def test_platform_health_projection_is_registered_to_existing_probe_owners() -> None:
+    services = {service.name: service for service in all_services()}
+    for owner, concern in (
+        (
+            "runtime.bandwidth_poller_health",
+            "bounded Platform Health poller observation projection",
+        ),
+        (
+            "runtime.syslog_receiver_health",
+            "bounded Platform Health syslog observation projection",
+        ),
+    ):
+        service = services[owner]
+        assert "app.services.platform_health_observations" in (
+            service.implementation_modules
+        )
+        assert service.contract is not None
+        projection = next(
+            item for item in service.contract.concerns if item.name == concern
+        )
+        assert projection.role.value == "transport"
+        assert "authenticated Platform Health source identity" in projection.input_names
+
+
 def test_syslog_socket_override_has_one_bootstrap_owner() -> None:
     config = ast.parse((ROOT / "app/config.py").read_text())
     settings = next(
