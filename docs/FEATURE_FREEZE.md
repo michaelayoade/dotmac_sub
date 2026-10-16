@@ -61,6 +61,16 @@ transitional tools must be registered in
 `tests/architecture/billing_transitional_tools.json` with a deletion
 trigger and must not grow.
 
+### The gate runs from the base branch
+
+The workflow extracts `scripts/ci/check_feature_freeze.py` and
+`docs/feature_freeze_exceptions.json` from `origin/<base>` and runs that
+script against the PR checkout with `--exceptions` pointing at the base copy.
+Consequences: an exception must merge to `main` in its own (code-owned) PR
+before the PR it exempts can pass, and changes to the gate itself take
+effect only after they merge. A PR cannot weaken the gate or approve its own
+exception.
+
 ## Legacy one-off repair CLI freeze
 
 `scripts/one_off/soft_delete_failed_payment_reversal_pairs.py`,

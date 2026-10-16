@@ -136,6 +136,19 @@ def test_non_feat_titles_pass() -> None:
         assert freeze.classify([], title) == [], title
 
 
+def test_workflow_uses_base_branch_gate_and_trusted_inputs() -> None:
+    wf = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/feature-freeze.yml"
+    ).read_text(encoding="utf-8")
+    assert "name: Feature Freeze Gate" in wf
+    assert "origin/${BASE_REF}:scripts/ci/check_feature_freeze.py" in wf
+    assert "--exceptions" in wf
+    assert "python3 -I" in wf
+    assert "python3 scripts/ci/check_feature_freeze.py" not in wf
+    assert "github.event.pull_request.title" not in wf
+    assert "run: git fetch --no-tags origin ${{ github.base_ref }}" in wf
+
+
 # --- disguised-feature rules (new template, size threshold) ---------------
 
 
