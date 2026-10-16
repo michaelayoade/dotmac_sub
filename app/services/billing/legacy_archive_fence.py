@@ -30,6 +30,14 @@ from app.services.billing.legacy_archive_fence_contracts import (
     TransactionId,
     TriggerOid,
 )
+from app.services.billing.legacy_privilege_closure import (
+    ClosurePopulation,
+    _close_attachment_privileges,
+    _lock_privilege_population,
+    _observe_privilege_closure,
+    _verify_attachment_denial,
+    _verify_replay_digest,
+)
 from app.services.domain_errors import DomainError
 from app.services.events.owner_outputs import OwnerOutputEnvelope, stage_owner_output
 from app.services.events.types import EventType
@@ -376,12 +384,7 @@ def _install_legacy_archive_fence(
     identity = _posture(connection)
     owner_oid = cast(int, identity["owner_oid"])
     before = _relations(connection, owner_oid)
-    # One deterministic lock statement locks all 44 before any DDL or ACL change.
-    connection.exec_driver_sql(
-        "LOCK TABLE "
-        + ", ".join("public." + _quote(r.value) for r in _RELATIONS)
-        + " IN ACCESS EXCLUSIVE MODE"
-    )
+    _lock_privilege_population(connection, population=ClosurePopulation.ARCHIVE)
     after = _relations(connection, owner_oid)
     if [r["oid"] for r in before] != [r["oid"] for r in after]:
         _refuse("Archive relation identity changed while acquiring locks.")
@@ -395,9 +398,15 @@ def _install_legacy_archive_fence(
     ):
         _refuse("Partial archive installation is not repairable by this component.")
     grants = [_grants(connection, cast(int, row["oid"]), owner_oid) for row in after]
+    closure_before = _observe_privilege_closure(
+        connection, population=ClosurePopulation.ARCHIVE, owner_oid=owner_oid
+    )
+    if replay:
+        _verify_attachment_denial(connection, observation=closure_before)
     if replay and any(grants):
         _refuse("Archive ACL drift refuses exact replay.")
     if not replay:
+        _close_attachment_privileges(connection, observation=closure_before)
         connection.exec_driver_sql(
             f"CREATE FUNCTION public.{_quote(_FUNCTION)}() RETURNS trigger "
             f"LANGUAGE plpgsql SECURITY INVOKER SET search_path TO pg_catalog AS $archive${_BODY}$archive$"
@@ -470,9 +479,19 @@ def _install_legacy_archive_fence(
         or _root(db) is not connection
     ):
         _refuse("Archive staging did not retain the exact owner root.")
+    closure_after = _observe_privilege_closure(
+        connection, population=ClosurePopulation.ARCHIVE, owner_oid=owner_oid
+    )
+    _verify_attachment_denial(connection, observation=closure_after)
+    if closure_after.catalog != closure_before.catalog:
+        # ACL changes are expected only on first installation. The final digest
+        # binds the observed post-closure catalog, never the emitted REVOKEs.
+        if replay:
+            _refuse("Privilege/helper catalog changed during exact replay.")
     db.flush()
     digest_payload = [
         request.revision.value,
+        closure_after.catalog,
         identity["database_oid"],
         owner_oid,
         identity["runtime_oid"],
@@ -487,6 +506,10 @@ def _install_legacy_archive_fence(
         b"dotmac.billing.archive-catalog.v1\0"
         + json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    if replay:
+        _verify_replay_digest(
+            connection, population=ClosurePopulation.ARCHIVE, digest=str(digest)
+        )
     context = current_command_context(db)
     if not replay:
         stage_owner_output(

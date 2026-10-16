@@ -168,3 +168,41 @@ installation receipt, activate, commit, grant module DML or unfreeze writers.
 There is no production caller, migration, CLI or startup wiring. Hosted migrated
 PostgreSQL canaries are authored; no local database/runtime execution or production
 acceptance is claimed.
+
+
+## Narrow relay attachment closure (source candidate)
+
+The same private fence owner contains `legacy_privilege_closure.py`. Its closed
+archive lock population is 44 archives plus `public.outbox_events` and
+`public.platform_outbox_events` (46); its retained lock population is both retained
+tables plus those relay tables (4). The future coordinator must prelock the sorted
+48-table union. One complete component lock statement precedes all ACL/DDL/audit
+mutation. The future coordinator is still absent and no activation is installed.
+
+The closure verifies the four exact claim/settle helper bodies from Sub migration
+557, their signatures, return/language/config/owner and exact EXECUTE ACLs. Helpers
+remain `app_admin` SECURITY DEFINER with empty search path. The definer must
+retain BYPASSRLS and effective SELECT and UPDATE on both relay tables; missing
+capability refuses without grants or repair. Validated return type OIDs and set
+semantics enter the digest, so TEMP shadowing cannot alter it through type-name
+deparsing. Relay tables must belong to the actual ordinary component/public-schema
+owner. It removes nonowner
+and PUBLIC table TRIGGER/REFERENCES and column REFERENCES, including grant options,
+with RESTRICT. SELECT, retained and relay DML and existing foreign keys are not
+revoked. Actual online roles are checked for unsafe attributes, ownership, direct
+and effective MEMBER/USAGE/SET paths, and CREATE on the `public` schema and
+current database. PUBLIC checks inspect those explicit/default ACL entries
+directly; no permanent probe role is created.
+TEMP alone is not a refusal because these helper relation references are qualified
+and attachment privileges are denied. No deployed-login claim is made.
+
+Post-closure privilege/helper observations enter the component digest. Replay
+compares the actual catalog with the original transactional component audit and
+refuses drift without repair or another audit event. This proves only the exact
+relay attachment path; broad helper/view/FK closure, watermarks, receipts and global
+handoff remain unresolved. Protected legacy FK/trigger inventory and grant-chain
+RESTRICT semantics still require review before this candidate is accepted. Hosted
+migration-chain canaries remain required; no local runtime validation was run.
+
+PostgreSQL 16 defines [TRIGGER and REFERENCES privileges](https://www.postgresql.org/docs/16/ddl-priv.html)
+and the [CREATE TRIGGER requirements](https://www.postgresql.org/docs/16/sql-createtrigger.html).

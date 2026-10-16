@@ -34,6 +34,7 @@ DOMAIN = DomainSOT(
                 "app.services.billing.legacy_archive_fence_contracts",
                 "app.services.billing.legacy_retained_columns_contracts",
                 "app.services.billing.legacy_retained_columns_fence",
+                "app.services.billing.legacy_privilege_closure",
             ),
             owns=("private legacy monetary archive fencing",),
             depends_on=("events.owner_outputs",),
@@ -64,7 +65,7 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.PARTICIPANT,
                     boundary="Only within the valid registered future handoff coordinator's clean same-connection root READ WRITE READ COMMITTED transaction. Whole owner forbids manual SQL savepoints. Flush only; caller alone commits or rolls back.",
-                    locking="Each component locks its exact closed population before mutation (44 archive tables or both retained tables). Final owner MUST prelock the global sorted union before final observation. Positive bounded lock and statement timeouts.",
+                    locking="Each component locks its exact protected population and both relay tables before mutation (46 archive/relay or four retained/relay tables). Final owner MUST prelock the global sorted 48-table union before final observation. Positive bounded lock and statement timeouts.",
                     idempotency="Exact installed function/trigger identities, body, arguments, events, ALWAYS status and the component-specific ACL policy (no archive DML or retained TRUNCATE for nonowners) permit read-only replay without a second staged event. Collisions/partial installs/drift refuse; no repair or unfreeze.",
                     retries="Caller retries the entire fresh owner transaction after rollback; this participant neither catches catalog failures nor completes transactions.",
                 ),
@@ -72,6 +73,7 @@ DOMAIN = DomainSOT(
                     domain_codes=(
                         "billing_archive_fence.refused",
                         "billing_retained_columns.refused",
+                        "billing_privilege_closure.refused",
                     ),
                     mapping_owner="Future maintenance adapter; raw database failures also abort its whole owner transaction.",
                     fail_closed_on=(
@@ -104,6 +106,7 @@ DOMAIN = DomainSOT(
                     "tests/architecture/test_billing_legacy_archive_fence_boundary.py",
                     "tests/architecture/test_billing_legacy_retained_columns_boundary.py",
                     "tests/integration/test_billing_legacy_retained_columns_postgres.py",
+                    "tests/integration/test_billing_legacy_privilege_closure_postgres.py",
                 ),
             ),
         ),

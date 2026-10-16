@@ -1,7 +1,7 @@
 """Private archive canaries on the migrated isolated hosted PostgreSQL service.
 
 The fixture supplies a test-only future owner contract and transfers ONLY its
-private clone's archive/schema ownership to an ephemeral non-superuser login.
+private clone's archive/relay/schema ownership to an ephemeral non-superuser login.
 This is component acceptance, never evidence of production role provisioning.
 RuntimeConnections authenticates app_user directly and restores its proven NULL
 password under the existing cluster-wide maintenance lock. No SET ROLE login.
@@ -146,10 +146,14 @@ def fence_connections(
         admin.execute(
             sql.SQL("ALTER SCHEMA public OWNER TO {}").format(sql.Identifier(role))
         )
-        for relation in ArchiveRelation:
+        for name in (
+            *[relation.value for relation in ArchiveRelation],
+            "outbox_events",
+            "platform_outbox_events",
+        ):
             admin.execute(
                 sql.SQL("ALTER TABLE public.{} OWNER TO {}").format(
-                    sql.Identifier(relation.value), sql.Identifier(role)
+                    sql.Identifier(name), sql.Identifier(role)
                 )
             )
         engine = create_engine(
@@ -228,7 +232,10 @@ def _excluded_catalog(admin: psycopg.Connection) -> list[tuple[object, ...]]:
            AND c.relkind IN ('r','p')
            AND NOT (n.nspname='public' AND c.relname = ANY(%s)) ORDER BY c.oid
     """,
-        ([relation.value for relation in ArchiveRelation],),
+        (
+            [relation.value for relation in ArchiveRelation]
+            + ["outbox_events", "platform_outbox_events"],
+        ),
     ).fetchall()
 
 
@@ -274,7 +281,7 @@ def test_all_44_operations_replay_and_excluded_catalog(
     # invoking guards. Grant TRUNCATE on the clone's public tables so archive
     # trigger assertions cannot succeed through unrelated cascade ACL denial.
     for (name,) in admin.execute(
-        "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p')"
+        "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relname NOT IN ('outbox_events','platform_outbox_events')"
     ).fetchall():
         admin.execute(
             sql.SQL("GRANT TRUNCATE ON public.{} TO app_user").format(
@@ -692,8 +699,12 @@ def test_function_and_trigger_drift_refuse_replay(
         _install(engine)
 
 
-def test_lock_wait_issues_no_mutation_before_all_44_locks_and_rolls_back(
+@pytest.mark.parametrize(
+    "blocked_relation", ("last", "outbox_events", "platform_outbox_events")
+)
+def test_lock_wait_issues_no_mutation_before_all_46_locks_and_rolls_back(
     fence_connections: FenceConnections,
+    blocked_relation: str,
 ) -> None:
     from queue import Queue
     from threading import Event, Lock, Thread
@@ -702,8 +713,11 @@ def test_lock_wait_issues_no_mutation_before_all_44_locks_and_rolls_back(
     from sqlalchemy.exc import DBAPIError
 
     admin, engine = fence_connections.admin, fence_connections.owner
-    last = sorted(ArchiveRelation, key=lambda relation: relation.value)[-1]
-    archive_names = [relation.value for relation in ArchiveRelation]
+    archive_names = sorted(
+        [relation.value for relation in ArchiveRelation]
+        + ["outbox_events", "platform_outbox_events"]
+    )
+    last = archive_names[-1] if blocked_relation == "last" else blocked_relation
     acl_sql = """SELECT c.oid, c.relacl::text,
         COALESCE((SELECT string_agg(a.attnum::text || ':' || a.attacl::text, ',' ORDER BY a.attnum)
                   FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attacl IS NOT NULL), '')
@@ -742,7 +756,7 @@ def test_lock_wait_issues_no_mutation_before_all_44_locks_and_rolls_back(
     with psycopg.connect(admin.info.dsn) as blocker:
         blocker.execute(
             sql.SQL("LOCK TABLE public.{} IN ACCESS SHARE MODE").format(
-                sql.Identifier(last.value)
+                sql.Identifier(last)
             )
         )
         event.listen(engine, "before_cursor_execute", capture)
@@ -768,10 +782,7 @@ def test_lock_wait_issues_no_mutation_before_all_44_locks_and_rolls_back(
                 while_blocked = tuple(statements)
             expected_lock = (
                 "LOCK TABLE "
-                + ", ".join(
-                    'public."' + relation.value + '"'
-                    for relation in sorted(ArchiveRelation, key=lambda item: item.value)
-                )
+                + ", ".join('public."' + name + '"' for name in archive_names)
                 + " IN ACCESS EXCLUSIVE MODE"
             )
             assert [

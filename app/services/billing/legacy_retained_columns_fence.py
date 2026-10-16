@@ -24,6 +24,14 @@ from app.services.billing.legacy_archive_fence_contracts import (
     TransactionId,
     TriggerOid,
 )
+from app.services.billing.legacy_privilege_closure import (
+    ClosurePopulation,
+    _close_attachment_privileges,
+    _lock_privilege_population,
+    _observe_privilege_closure,
+    _verify_attachment_denial,
+    _verify_replay_digest,
+)
 from app.services.billing.legacy_retained_columns_contracts import (
     RetainedColumnsAuditPayload,
     RetainedColumnsRequest,
@@ -247,11 +255,7 @@ def _install_legacy_retained_columns_fence(
     identity = _posture(connection)
     owner_oid = cast(int, identity["owner_oid"])
     before = _relations(connection, owner_oid)
-    connection.exec_driver_sql(
-        "LOCK TABLE "
-        + ", ".join("public." + _quote(r.value) for r in _RELATIONS)
-        + " IN ACCESS EXCLUSIVE MODE"
-    )
+    _lock_privilege_population(connection, population=ClosurePopulation.RETAINED)
     after = _relations(connection, owner_oid)
     if [row["oid"] for row in before] != [row["oid"] for row in after]:
         _refuse("Retained relation identity changed during lock acquisition.")
@@ -270,9 +274,15 @@ def _install_legacy_retained_columns_fence(
     grants = [
         _truncate_grants(connection, cast(int, row["oid"]), owner_oid) for row in after
     ]
+    closure_before = _observe_privilege_closure(
+        connection, population=ClosurePopulation.RETAINED, owner_oid=owner_oid
+    )
+    if replay:
+        _verify_attachment_denial(connection, observation=closure_before)
     if replay and any(grants):
         _refuse("Retained TRUNCATE ACL drift.")
     if not replay:
+        _close_attachment_privileges(connection, observation=closure_before)
         for relation, observed in zip(_RELATIONS, grants, strict=True):
             table, function = (
                 "public." + _quote(relation.value),
@@ -336,9 +346,19 @@ def _install_legacy_retained_columns_fence(
         or _root(db) is not connection
     ):
         _refuse("Retained component lost its exact owner root or identity.")
+    closure_after = _observe_privilege_closure(
+        connection, population=ClosurePopulation.RETAINED, owner_oid=owner_oid
+    )
+    _verify_attachment_denial(connection, observation=closure_after)
+    if closure_after.catalog != closure_before.catalog:
+        # ACL changes are expected only on first installation. The final digest
+        # binds the observed post-closure catalog, never the emitted REVOKEs.
+        if replay:
+            _refuse("Privilege/helper catalog changed during exact replay.")
     db.flush()
     digest_payload = [
         request.revision.value,
+        closure_after.catalog,
         identity["database_oid"],
         owner_oid,
         identity["runtime_oid"],
@@ -361,6 +381,10 @@ def _install_legacy_retained_columns_fence(
             + json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
     )
+    if replay:
+        _verify_replay_digest(
+            connection, population=ClosurePopulation.RETAINED, digest=str(digest)
+        )
     context = current_command_context(db)
     if not replay:
         stage_owner_output(

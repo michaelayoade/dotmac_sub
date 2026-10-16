@@ -275,7 +275,13 @@ def test_composed_owner_rollback_and_catalog_drift(
             )
 
             names = sorted(
-                [r.value for r in ArchiveRelation] + ["subscribers", "billing_accounts"]
+                [r.value for r in ArchiveRelation]
+                + [
+                    "subscribers",
+                    "billing_accounts",
+                    "outbox_events",
+                    "platform_outbox_events",
+                ]
             )
             db.execute(text("SET LOCAL lock_timeout='2s'"))
             db.execute(text("SET LOCAL statement_timeout='30s'"))
@@ -410,8 +416,12 @@ def test_retained_posture_refuses(
             )
 
 
-def test_both_locks_precede_any_ddl(
+@pytest.mark.parametrize(
+    "blocked_relation", ("last", "outbox_events", "platform_outbox_events")
+)
+def test_all_four_locks_precede_any_ddl(
     retained_connections: FenceConnections,
+    blocked_relation: str,
 ) -> None:
     from queue import Queue
     from threading import Event, Lock, Thread
@@ -420,8 +430,11 @@ def test_both_locks_precede_any_ddl(
     from sqlalchemy.exc import DBAPIError
 
     admin, engine = retained_connections.admin, retained_connections.owner
-    last = sorted(RetainedRelation, key=lambda relation: relation.value)[-1]
-    retained_names = [relation.value for relation in RetainedRelation]
+    retained_names = sorted(
+        [relation.value for relation in RetainedRelation]
+        + ["outbox_events", "platform_outbox_events"]
+    )
+    last = retained_names[-1] if blocked_relation == "last" else blocked_relation
     acl_sql = """SELECT c.oid, c.relacl::text,
         COALESCE((SELECT string_agg(a.attnum::text || ':' || a.attacl::text, ',' ORDER BY a.attnum)
                   FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attacl IS NOT NULL), '')
@@ -460,7 +473,7 @@ def test_both_locks_precede_any_ddl(
     with psycopg.connect(admin.info.dsn) as blocker:
         blocker.execute(
             sql.SQL("LOCK TABLE public.{} IN ACCESS SHARE MODE").format(
-                sql.Identifier(last.value)
+                sql.Identifier(last)
             )
         )
         event.listen(engine, "before_cursor_execute", capture)
@@ -486,12 +499,7 @@ def test_both_locks_precede_any_ddl(
                 while_blocked = tuple(statements)
             expected_lock = (
                 "LOCK TABLE "
-                + ", ".join(
-                    'public."' + relation.value + '"'
-                    for relation in sorted(
-                        RetainedRelation, key=lambda item: item.value
-                    )
-                )
+                + ", ".join('public."' + name + '"' for name in retained_names)
                 + " IN ACCESS EXCLUSIVE MODE"
             )
             assert [
@@ -579,3 +587,68 @@ def test_retained_exact_shape_refuses_before_install(
     assert admin.execute(
         "SELECT count(*) FROM pg_proc WHERE proname IN ('dotmac_retained_billing_accounts_v1','dotmac_retained_subscribers_v1')"
     ).fetchone() == (0,)
+
+
+def test_composed_install_and_exact_replay_share_one_owner_root(
+    retained_connections: FenceConnections,
+) -> None:
+    from app.services.billing.legacy_archive_fence_contracts import (
+        ArchiveFenceStagedObservation,
+        ArchiveRelation,
+    )
+
+    def install() -> tuple[
+        ArchiveFenceStagedObservation, RetainedColumnsStagedObservation
+    ]:
+        with Session(retained_connections.owner) as db:
+
+            def operation() -> tuple[
+                ArchiveFenceStagedObservation, RetainedColumnsStagedObservation
+            ]:
+                names = sorted(
+                    [relation.value for relation in ArchiveRelation]
+                    + [
+                        "billing_accounts",
+                        "subscribers",
+                        "outbox_events",
+                        "platform_outbox_events",
+                    ]
+                )
+                assert len(names) == 48
+                db.execute(text("SET LOCAL lock_timeout='2s'"))
+                db.execute(text("SET LOCAL statement_timeout='30s'"))
+                db.execute(
+                    text(
+                        "LOCK TABLE "
+                        + ", ".join('public."' + name + '"' for name in names)
+                        + " IN ACCESS EXCLUSIVE MODE"
+                    )
+                )
+                return _archive_stage(db), _stage(db)
+
+            return execute_owner_command(
+                db,
+                definition=_DEFINITION,
+                context=CommandContext.system(
+                    actor="canary",
+                    scope="clone",
+                    reason="composed archive and retained closure",
+                    idempotency_key="composed-closure-v1",
+                ),
+                operation=operation,
+            )
+
+    first = install()
+    replay = install()
+    assert not any(observation.replay_observed for observation in first)
+    assert all(observation.replay_observed for observation in replay)
+    assert first[0].transaction_id == first[1].transaction_id
+    assert replay[0].transaction_id == replay[1].transaction_id
+    assert first[0].catalog_digest == replay[0].catalog_digest
+    assert first[1].catalog_digest == replay[1].catalog_digest
+    assert retained_connections.admin.execute(
+        "SELECT event_type,count(*) FROM event_store WHERE event_type IN ('billing.legacy_archive_fence.staged','billing.legacy_retained_columns.staged') GROUP BY event_type ORDER BY event_type"
+    ).fetchall() == [
+        ("billing.legacy_archive_fence.staged", 1),
+        ("billing.legacy_retained_columns.staged", 1),
+    ]

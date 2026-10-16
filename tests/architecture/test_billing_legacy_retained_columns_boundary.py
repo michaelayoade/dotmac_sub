@@ -77,3 +77,44 @@ def test_no_production_caller() -> None:
                 )
                 for n in ast.walk(tree)
             ), path
+
+
+def test_retained_attachment_union_and_shared_closure_order() -> None:
+    from app.services.billing.legacy_privilege_closure import (
+        ClosurePopulation,
+        _population,
+    )
+
+    assert _population(ClosurePopulation.RETAINED) == (
+        "billing_accounts",
+        "outbox_events",
+        "platform_outbox_events",
+        "subscribers",
+    )
+    assert len(_population(ClosurePopulation.RETAINED)) == 4
+    tree = ast.parse(MODULE.read_text())
+    installer = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_install_legacy_retained_columns_fence"
+    )
+    positions = {
+        name: min(
+            node.lineno
+            for node in ast.walk(installer)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == name
+        )
+        for name in (
+            "_lock_privilege_population",
+            "_observe_privilege_closure",
+            "_close_attachment_privileges",
+        )
+    }
+    assert (
+        positions["_lock_privilege_population"]
+        < positions["_observe_privilege_closure"]
+        < positions["_close_attachment_privileges"]
+    )
