@@ -33,6 +33,26 @@ Gate** workflow on every pull request:
 - any change to the pinned OpenAPI contract manifest
   (`tests/architecture/openapi_contract_surface.json`).
 
+### Feature-sized "fixes" (any PR title)
+
+A `fix:` / `chore:` / `refactor:` label does not make a change a correction.
+The gate also requires an approved exception, whatever the title, when a PR:
+
+- adds a new template file under `templates/` (rule `new-template`; new
+  Python modules under `app/services/` and `app/web/` are already caught by
+  `new-python-module`); or
+- adds more than `SIZE_THRESHOLD_LINES` (default 400; override with
+  `--size-threshold` or `FREEZE_SIZE_THRESHOLD`) lines in `app/` and
+  `templates/` combined (rule `size-threshold`). Tests, `alembic/`, lockfiles,
+  minified assets and Markdown are not counted.
+
+Each finding names the rule and the file; an exception entry covers it by
+listing the file in `paths`. The dashboard templates and
+`web_admin_dashboard.py` are also CODEOWNERS-protected.
+
+`static/**/*.js` is counted toward the size threshold too (not CSS or
+images; `*.min.js` and the `static/vendor/` and `static/**/vendor/` dirs are excluded).
+
 Billing is additionally pinned by
 `tests/architecture/test_billing_thin_client_ratchet.py`: the billing file
 inventory is exact, the total line count is two-directional (shrinkage must
