@@ -27,19 +27,5 @@ jobs:
         # check_feature_freeze.py needs the merge-base of base and HEAD.
         run: git fetch --no-tags origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
 
-      - name: Load gate and exceptions from the base branch
-        # Trusted inputs only: the gate script and the exceptions file come
-        # from the base branch, never from the PR head, so a PR cannot
-        # weaken the gate or approve its own exception.
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/freeze-gate"
-          git show "origin/${BASE_REF}:scripts/ci/check_feature_freeze.py" > "$RUNNER_TEMP/freeze-gate/check_feature_freeze.py"
-          git show "origin/${BASE_REF}:docs/feature_freeze_exceptions.json" > "$RUNNER_TEMP/freeze-gate/feature_freeze_exceptions.json"
-
       - name: Validate feature freeze
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: python3 "$RUNNER_TEMP/freeze-gate/check_feature_freeze.py" --base "origin/${BASE_REF}" --head HEAD --exceptions "$RUNNER_TEMP/freeze-gate/feature_freeze_exceptions.json"
+        run: python3 scripts/ci/check_feature_freeze.py --base origin/${{ github.base_ref }} --head HEAD

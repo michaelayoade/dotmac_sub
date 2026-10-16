@@ -52,8 +52,8 @@ SIZE_THRESHOLD_LINES = 400
 SIZE_COUNTED_PATTERNS = (
     "app/**",
     "templates/**",
+    "static/*.js",
     "static/**/*.js",
-    "app/static/**/*.js",
 )
 SIZE_EXCLUDED_PATTERNS = (
     "tests/**",
@@ -67,8 +67,6 @@ SIZE_EXCLUDED_PATTERNS = (
     "**/*.md",
     "static/vendor/**",
     "static/**/vendor/**",
-    "**/node_modules/**",
-    "**/dist/**",
 )
 NEW_TEMPLATE_PATTERNS = ("templates/**",)
 
