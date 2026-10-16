@@ -13,6 +13,7 @@ from app.services.sot_manifest import (
     AuthorityMigrationState,
     ConcernContract,
     ErrorContract,
+    EventContract,
     MigrationContract,
     OwnerRole,
     ProjectionContract,
@@ -26,6 +27,307 @@ from app.services.sot_registry.model import DomainSOT
 DOMAIN = DomainSOT(
     domain="runtime_infrastructure",
     services=(
+        SOTService(
+            name="runtime.billing_legacy_archive_fence",
+            module="app.services.billing.legacy_archive_fence",
+            implementation_modules=(
+                "app.services.billing.legacy_archive_fence_contracts",
+                "app.services.billing.legacy_retained_columns_contracts",
+                "app.services.billing.legacy_retained_columns_fence",
+                "app.services.billing.legacy_privilege_closure",
+            ),
+            owns=("private legacy monetary archive fencing",),
+            depends_on=("events.owner_outputs",),
+            notes="Private participant only. Future runtime.billing_ledger_handoff remains unregistered; no production caller, command, migration, startup or activation. Does not prove helper/view/FK/privileged closure or global handoff.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="private legacy monetary archive fencing",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("locked archive catalog", "closed archive policy"),
+                        canonical_writer="runtime.billing_legacy_archive_fence",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="locked archive catalog",
+                        owner="external:postgresql_catalog",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Actual owner, namespace, role reachability, exact ordinary relations, grants and fixed function/trigger catalog under the component's complete ACCESS EXCLUSIVE lock set.",
+                    ),
+                    AuthorityInput(
+                        name="closed archive policy",
+                        owner="runtime.billing_legacy_archive_fence",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="ArchiveFenceRevision.V1 (44 archives) and RetainedColumnsRevision.V1 (billing_accounts.balance, subscribers.deposit); no caller role names or exemptions.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Only within the valid registered future handoff coordinator's clean same-connection root READ WRITE READ COMMITTED transaction. Whole owner forbids manual SQL savepoints. Flush only; caller alone commits or rolls back.",
+                    locking="Each component locks its exact protected population and both relay tables before mutation (46 archive/relay or four retained/relay tables). Final owner MUST prelock the global sorted 48-table union before final observation. Positive bounded lock and statement timeouts.",
+                    idempotency="Exact installed function/trigger identities, body, arguments, events, ALWAYS status and the component-specific ACL policy (no archive DML or retained TRUNCATE for nonowners) permit read-only replay without a second staged event. Collisions/partial installs/drift refuse; no repair or unfreeze.",
+                    retries="Caller retries the entire fresh owner transaction after rollback; this participant neither catches catalog failures nor completes transactions.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "billing_archive_fence.refused",
+                        "billing_retained_columns.refused",
+                        "billing_privilege_closure.refused",
+                    ),
+                    mapping_owner="Future maintenance adapter; raw database failures also abort its whole owner transaction.",
+                    fail_closed_on=(
+                        "unregistered owner or ambiguous transaction",
+                        "role/object/catalog/ACL drift",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "billing.legacy_archive_fence.staged",
+                        "billing.legacy_retained_columns.staged",
+                    ),
+                    schema_version=1,
+                    delivery_owner="events.owner_outputs",
+                    compatibility="Typed revision, closed component table count, catalog digest and existing operation identity. Component audit only; contingent on same-root commit, never a seal/receipt/activation event.",
+                    replay="Stage via existing transactional owner-output protocol only for a new installation. Exact catalog replay stages no duplicate event; aborted installation and event roll back together.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.billing_legacy_archive_fence",
+                    verification="Authored real Alembic PostgreSQL component canaries use isolated ephemeral actual owner and app_user logins. Hosted execution pending; no production role proof.",
+                ),
+                steward="runtime operations",
+                design_refs=(
+                    "docs/designs/BILLING_LEDGER_HANDOFF.md",
+                    "docs/designs/BILLING_LEGACY_FENCE_INVENTORY.md",
+                ),
+                test_refs=(
+                    "tests/integration/test_billing_legacy_archive_fence_postgres.py",
+                    "tests/architecture/test_billing_legacy_archive_fence_boundary.py",
+                    "tests/architecture/test_billing_legacy_retained_columns_boundary.py",
+                    "tests/integration/test_billing_legacy_retained_columns_postgres.py",
+                    "tests/integration/test_billing_legacy_privilege_closure_postgres.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="runtime.billing_runtime_login",
+            module="app.commercial_module_prereqs",
+            owns=("actual Billing runtime login diagnostics",),
+            notes="Diagnostic supplied-session boundary only; no complete Billing preflip, helper/ACL closure, root-transaction proof or activation authority.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="actual Billing runtime login diagnostics",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "actual PostgreSQL session",
+                            "runtime login policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="actual PostgreSQL session",
+                        owner="external:postgresql_catalog",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Supplied psycopg connection startup login, transaction status, PostgreSQL identity/OIDs, role posture, effective membership/USAGE/SET and application-object ownership. No password catalog is read.",
+                    ),
+                    AuthorityInput(
+                        name="runtime login policy",
+                        owner="runtime.billing_runtime_login",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Frozen BillingRuntimeLoginQuery fixes authenticated app_user on PostgreSQL 16+, active READ COMMITTED and no privileged posture, other reachable role or relation/schema/function/database ownership, including catalog and temporary namespaces without exemptions.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Read catalog through the caller's active connection and transaction; never connect, commit, roll back, switch role or create a transaction. Caller owns the root transaction; INTRANS cannot detect arbitrary SAVEPOINTs.",
+                    locking="No business locks or catalog mutation. Final admission owner must re-observe under its own locks; returned diagnostics are not proof tokens.",
+                    idempotency="Repeated calls observe current READ COMMITTED state without persisting evidence or activating Billing.",
+                    retries="No retries or transaction repair. Unsupported server, stale isolation, impersonation, unknown role paths and catalog failures refuse.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "billing_runtime_login.inactive_transaction",
+                        "billing_runtime_login.unsupported_postgres",
+                        "billing_runtime_login.isolation",
+                        "billing_runtime_login.identity",
+                        "billing_runtime_login.privileged_role",
+                        "billing_runtime_login.role_path",
+                        "billing_runtime_login.ownership",
+                        "billing_runtime_login.catalog_unavailable",
+                    ),
+                    mapping_owner="Calling maintenance adapter maps BillingRuntimeLoginRefused; no runtime enforcement is installed by this slice.",
+                    fail_closed_on=(
+                        "unavailable actual session evidence",
+                        "privileged identity, owner or membership drift",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.billing_runtime_login",
+                    verification="Authored migrated hosted PostgreSQL canaries require genuine app_user authentication and reject role/session impersonation. Runtime execution remains pending.",
+                ),
+                steward="runtime operations",
+                design_refs=("docs/designs/BILLING_LEDGER_HANDOFF.md",),
+                test_refs=("tests/integration/test_billing_runtime_login_postgres.py",),
+            ),
+        ),
+        SOTService(
+            name="runtime.writer_drain",
+            module="app.services.deployment_writer_drain",
+            implementation_modules=(
+                "app.services.deployment_writer_drain_transport",
+                "app.celery_queue_contract",
+            ),
+            owns=(
+                "incumbent writer drain observation",
+                "stable empty writer drain policy",
+            ),
+            notes="Count-only operational evidence. Deployment owns producer shutdown, captured container identity and migration admission; this query never switches ledger authority.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="incumbent writer drain observation",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("broker and worker observation", "drain contract"),
+                    ),
+                    ConcernContract(
+                        name="stable empty writer drain policy",
+                        role=OwnerRole.POLICY,
+                        input_names=("broker and worker observation", "drain contract"),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="broker and worker observation",
+                        owner="external:celery_redis",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Pinned Celery/Kombu/Redis count observations for every expected node's active, reserved and scheduled tasks, every declared priority queue, and both unacked hash and index; no customer task payload crosses the adapter.",
+                    ),
+                    AuthorityInput(
+                        name="drain contract",
+                        owner="runtime.writer_drain",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Frozen DrainRequest fixes exact queue inventory, node coverage, mode, deadline and two-zero stability interval. Broker-only mode is final evidence after deployment separately proves all writers stopped.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="No database Session or business writes. Redis observation reads queue/unacked counts; Celery inspection sends necessary transient control requests and receives replies only.",
+                    locking="No task or financial locks, purges, revokes, restores or visibility changes; deployment must stop producers independently.",
+                    idempotency="Repeated observations return current counts; no activation, admission, receipt or ledger state is persisted.",
+                    retries="Bounded observations until two complete zero observations separated by the stability interval. Missing, malformed, duplicate, unsupported or timed-out evidence refuses; no zero inference from arbitrary transport errors.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="observe_writer_drain CLI emits closed DrainRefusal codes and safe JSON/exit status; unexpected exceptions cannot authorize migration.",
+                    fail_closed_on=(
+                        "missing or duplicate worker coverage",
+                        "unknown broker configuration or runtime dependency",
+                        "malformed observation or exhausted deadline",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.writer_drain",
+                ),
+                steward="runtime operations",
+                design_refs=("docs/designs/DEPLOYMENT_WRITER_DRAIN_EVIDENCE.md",),
+                test_refs=(
+                    "tests/test_deployment_writer_drain.py",
+                    "tests/integration/writer_drain_acceptance.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="runtime.payments_intent_schema_floor",
+            module="app.services.payments_intent_schema_floor",
+            owns=(
+                "Payments invoice intent installed schema observation",
+                "normal Payments deployment support classification",
+                "legacy image recovery admission after Payments intent schema installation",
+            ),
+            notes="Operational catalog proof only; complete predecessor and complete installed shapes admit normal forward deployment, while legacy recovery requires predecessor only. No intent, settlement or ledger authority.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="Payments invoice intent installed schema observation",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("actual runtime catalog",),
+                    ),
+                    ConcernContract(
+                        name="normal Payments deployment support classification",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "actual runtime catalog",
+                            "installed schema observation",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="legacy image recovery admission after Payments intent schema installation",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "installed schema observation",
+                            "legacy recovery policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="actual runtime catalog",
+                        owner="external:postgresql",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Caller connection session/current login, non-superuser/non-bypass role flags, and exact pg_catalog column, constraint, trigger and function shape; no tenant-filtered business rows.",
+                    ),
+                    AuthorityInput(
+                        name="installed schema observation",
+                        owner="runtime.payments_intent_schema_floor",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Frozen PaymentsIntentSchemaObservation returned by read_payments_intent_schema_floor on the caller Session; never cached or inferred from intent counts.",
+                    ),
+                    AuthorityInput(
+                        name="Payments schema support classification",
+                        owner="runtime.payments_intent_schema_floor",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Closed classification of catalog facts: predecessor requires complete base and zero installation objects; installed requires complete base and exact installed object counts; all other shapes are unknown.",
+                    ),
+                    AuthorityInput(
+                        name="legacy recovery policy",
+                        owner="runtime.payments_intent_schema_floor",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Only a complete predecessor with zero correlation-installation evidence admits a legacy image; installed, partial, malformed or unknown evidence refuses recovery.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Caller Session; SELECT catalog/identity facts only, with no session creation, writes or transaction completion.",
+                    locking="No business locks; migration and deployment owners must establish quiescence before installing the permanent floor.",
+                    idempotency="The same catalog and runtime identity produce the same frozen observation and admission decision; no activation flag is stored.",
+                    retries="No hidden retries or repair; unknown evidence fails closed and a caller may retry a complete read.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("payments_intent_schema_floor.unknown",),
+                    mapping_owner="Calling deployment adapter; production integration remains held until its guard wiring is reviewed.",
+                    fail_closed_on=(
+                        "unproved runtime login or catalog",
+                        "installed or partial correlation schema",
+                        "malformed observation",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="runtime.payments_intent_schema_floor",
+                ),
+                steward="runtime operations",
+                design_refs=("docs/designs/PAYMENTS_INVOICE_INTENT_SCHEMA_FLOOR.md",),
+                test_refs=(
+                    "tests/test_payments_intent_schema_floor.py",
+                    "tests/integration/test_payments_intent_correlation_pg.py",
+                ),
+            ),
+        ),
         SOTService(
             name="runtime.bandwidth_poller_health",
             module="app.services.poller_health",

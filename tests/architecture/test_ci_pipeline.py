@@ -357,21 +357,31 @@ def test_tests_is_the_stable_aggregate_for_unit_and_architecture_results() -> No
     """Matrix children remain internal evidence behind one stable check name."""
 
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    aggregate = workflow[workflow.index("  test:\n") : workflow.index("  coverage:\n")]
+    aggregate = workflow[
+        workflow.index("  test:\n") : workflow.index("  writer-drain-acceptance:\n")
+    ]
 
     assert "    name: Tests\n" in aggregate
     assert (
-        "needs: [changes, python-environment, unit-shards, architecture, workflow-guidance]"
-        in aggregate
+        "needs: [changes, python-environment, unit-shards, architecture, "
+        "workflow-guidance, writer-drain-acceptance]" in aggregate
+    )
+    assert (
+        "PYTHON_ENVIRONMENT_RESULT: ${{ needs.python-environment.result }}" in aggregate
     )
     assert "UNIT_RESULT: ${{ needs.unit-shards.result }}" in aggregate
     assert "ARCHITECTURE_RESULT: ${{ needs.architecture.result }}" in aggregate
     assert (
         "WORKFLOW_GUIDANCE_RESULT: ${{ needs.workflow-guidance.result }}" in aggregate
     )
+    assert (
+        "WRITER_DRAIN_RESULT: ${{ needs.writer-drain-acceptance.result }}" in aggregate
+    )
+    assert 'test "$PYTHON_ENVIRONMENT_RESULT" = "success"' in aggregate
     assert 'test "$UNIT_RESULT" = "success"' in aggregate
     assert 'test "$ARCHITECTURE_RESULT" = "success"' in aggregate
     assert 'test "$WORKFLOW_GUIDANCE_RESULT" = "success"' in aggregate
+    assert 'test "$WRITER_DRAIN_RESULT" = "success"' in aggregate
 
 
 def test_ci_change_classifier_fetches_missing_comparison_base() -> None:

@@ -9,6 +9,19 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from uuid import UUID
 
+from dotmac_kernel.cache import TenantScope
+from dotmac_kernel.money import Currency, Money, MoneyError
+from dotmac_payments import (
+    Conflict as PaymentsConflict,
+)
+from dotmac_payments import (
+    GetPaymentIntentV1,
+    OpenPaymentIntent,
+    PaymentPurpose,
+    get_payment_intent_v1,
+    open_payment_intent,
+)
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -34,6 +47,7 @@ from app.services.billing._common import lock_account
 from app.services.common import round_money, to_decimal
 from app.services.domain_errors import DomainError
 from app.services.locking import lock_for_update
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -157,6 +171,7 @@ class GatewayTopupIntentResult:
     payment_flow: str
     preview_fingerprint: str | None
     replayed: bool
+    invoice_routing: topup_intents.InvoiceGatewayRoutingEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +251,7 @@ def _result(
     payment_flow: str,
     preview_fingerprint: str | None,
     replayed: bool,
+    invoice_routing: topup_intents.InvoiceGatewayRoutingEvidence | None = None,
 ) -> GatewayTopupIntentResult:
     if intent.expires_at is None:
         raise _error(
@@ -250,11 +266,12 @@ def _result(
         reference=intent.reference,
         provider_type=intent.provider_type,
         currency=intent.currency,
-        requested_amount=round_money(intent.requested_amount),
-        expires_at=intent.expires_at,
+        requested_amount=intent.requested_amount,
+        expires_at=_utc(intent.expires_at),
         payment_flow=payment_flow,
         preview_fingerprint=preview_fingerprint,
         replayed=replayed,
+        invoice_routing=invoice_routing,
     )
 
 
@@ -278,12 +295,192 @@ def create_customer_gateway_topup_intent(
     )
 
 
+def _exact_invoice_money(amount: Decimal, currency: str) -> Money:
+    """Refuse loss before constructing quantizing Money or the legacy projection."""
+    if (
+        not amount.is_finite()
+        or not Decimal(0) < amount < Decimal("10000000000")
+        or amount != amount.quantize(Decimal("0.01"))
+    ):
+        raise _error(
+            "amount_invalid",
+            "Invoice amount cannot be represented exactly at its storage scale",
+        )
+    try:
+        return Money(amount, Currency(currency, 2))
+    except MoneyError as exc:
+        raise _error("amount_invalid", "Invoice amount or currency is invalid") from exc
+
+
+def _create_invoice_gateway_topup_intent(
+    db: Session,
+    *,
+    command: CreateCustomerGatewayTopupIntentCommand,
+    context: CommandContext,
+) -> GatewayTopupIntentResult:
+    """Create module authority plus compatibility projection in the existing root."""
+    if (
+        command.invoice_id is None
+        or command.requested_amount is not None
+        or command.purchase_id is not None
+    ):
+        raise _error(
+            "flow_evidence_invalid",
+            "Invoice checkout requires an invoice and no caller amount",
+        )
+    created_by = command.created_by.strip()
+    reference = command.reference.strip()
+    provider_type = command.provider_type.strip().lower()
+    if not created_by:
+        raise _error("created_by_required", "Gateway checkout actor is required")
+    if not reference or not provider_type:
+        raise _error(
+            "flow_evidence_invalid",
+            "Invoice checkout reference and provider are required",
+        )
+    lock_account(db, str(command.account_id))
+    invoice = db.scalar(
+        select(Invoice)
+        .where(Invoice.id == command.invoice_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if invoice is None or invoice.account_id != command.account_id:
+        raise _error("invoice_not_found", "Invoice was not found for this account")
+    local = db.scalar(
+        select(TopupIntent)
+        .where(TopupIntent.reference == reference)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    scope = TenantScope(OPERATOR_TENANT_ID)
+    try:
+        bound = get_payment_intent_v1(
+            db, scope=scope, query=GetPaymentIntentV1(reference)
+        )
+        if (local is None) != (bound is None):
+            raise _error(
+                "invoice_binding_incomplete",
+                "Invoice reference has incomplete module/projection evidence; reconstruction is refused",
+            )
+        _require_checkout_binding(
+            db,
+            provider_type=provider_type,
+            capability_binding_id=command.capability_binding_id,
+        )
+        if local is not None:
+            number = (local.metadata_ or {}).get("invoice_number")
+            if not isinstance(number, str):
+                raise _error(
+                    "record_invalid",
+                    "Invoice checkout display provenance is incomplete",
+                )
+        else:
+            number = invoice.invoice_number or ""
+        routing = topup_intents.InvoiceGatewayRoutingEvidence(
+            account_id=command.account_id,
+            invoice_id=invoice.id,
+            invoice_number=number,
+            provider_type=provider_type,
+            provider_id=command.provider_id,
+            capability_binding_id=command.capability_binding_id,
+            payment_method_id=command.payment_method_id,
+            created_by=created_by,
+        )
+        if bound is None:
+            if invoice.is_proforma or invoice.status in {
+                InvoiceStatus.draft,
+                InvoiceStatus.paid,
+                InvoiceStatus.void,
+                InvoiceStatus.written_off,
+            }:
+                raise _error(
+                    "invoice_not_payable",
+                    "Invoice is no longer payable by gateway checkout",
+                )
+            requested = _exact_invoice_money(
+                invoice.balance_due
+                if invoice.balance_due is not None
+                else invoice.total,
+                invoice.currency,
+            )
+            opened_at = datetime.now(UTC)
+            module_command = OpenPaymentIntent(
+                reference=reference,
+                payer_reference=str(command.account_id),
+                target_reference=str(invoice.id),
+                purpose=PaymentPurpose.INVOICE_SETTLEMENT,
+                requested=requested,
+                provider_type=provider_type,
+                channel=topup_intents.TopupIntentChannel.customer_selfcare.value,
+                opened_at=opened_at,
+                expires_at=opened_at
+                + timedelta(minutes=_configured_integer(db, _TTL_SETTING)),
+            )
+        else:
+            # Validate before replaying. Terminal local lifecycle and later
+            # reconciliation metadata are retained, never reset or replaced.
+            topup_intents.stage_invoice_gateway_projection(
+                db, binding=bound, routing=routing, existing=local
+            )
+            module_command = OpenPaymentIntent(
+                reference=bound.reference,
+                payer_reference=bound.payer_reference,
+                target_reference=bound.target_reference,
+                purpose=bound.purpose,
+                requested=bound.requested,
+                provider_type=bound.provider_type,
+                channel=bound.channel,
+                opened_at=bound.opened_at,
+                expires_at=bound.expires_at,
+            )
+        # Do not expose the module ORM return across the owner boundary.
+        open_payment_intent(db, scope=scope, command=module_command)
+        frozen = get_payment_intent_v1(
+            db, scope=scope, query=GetPaymentIntentV1(reference)
+        )
+        if frozen is None:
+            raise _error(
+                "invoice_binding_conflict",
+                "Module did not retain the invoice checkout binding",
+            )
+        staged = topup_intents.stage_invoice_gateway_projection(
+            db, binding=frozen, routing=routing, existing=local
+        )
+        if not staged.replayed:
+            topup_intents.stage_gateway_topup_intent_created_event(
+                db, intent=staged.intent, context=context
+            )
+        return _result(
+            intent=staged.intent,
+            payment_flow=command.flow.value,
+            preview_fingerprint=None,
+            replayed=staged.replayed,
+            invoice_routing=routing,
+        )
+    except (PaymentsConflict, topup_intents.TopupIntentError) as exc:
+        raise _error(
+            "invoice_binding_conflict",
+            "Invoice reference is linked to different binding or routing evidence",
+        ) from exc
+    except IntegrityError as exc:
+        # No recovery or further statements on an aborted transaction. The
+        # existing root executor rolls back module/projection/event together.
+        raise _error(
+            "intent_conflict", "Invoice reference is already being created"
+        ) from exc
+
+
 def _create_customer_gateway_topup_intent(
     db: Session,
     *,
     command: CreateCustomerGatewayTopupIntentCommand,
     context: CommandContext,
 ) -> GatewayTopupIntentResult:
+    if command.flow is CustomerGatewayTopupFlow.invoice_payment:
+        return _create_invoice_gateway_topup_intent(
+            db, command=command, context=context
+        )
     _require_checkout_binding(
         db,
         provider_type=command.provider_type,
@@ -296,62 +493,7 @@ def _create_customer_gateway_topup_intent(
         minutes=_configured_integer(db, _TTL_SETTING)
     )
 
-    if command.flow is CustomerGatewayTopupFlow.invoice_payment:
-        if command.invoice_id is None or command.requested_amount is not None:
-            raise _error(
-                "flow_evidence_invalid",
-                "Invoice checkout requires an invoice and no caller amount",
-            )
-        lock_account(db, str(command.account_id))
-        invoice = lock_for_update(db, Invoice, command.invoice_id)
-        if invoice is None or invoice.account_id != command.account_id:
-            raise _error(
-                "invoice_not_found",
-                "Invoice was not found for this account",
-                invoice_id=str(command.invoice_id),
-            )
-        if invoice.is_proforma or invoice.status in {
-            InvoiceStatus.draft,
-            InvoiceStatus.paid,
-            InvoiceStatus.void,
-            InvoiceStatus.written_off,
-        }:
-            raise _error(
-                "invoice_not_payable",
-                "Invoice is no longer payable by gateway checkout",
-                invoice_id=str(invoice.id),
-                status=invoice.status.value,
-            )
-        amount = _amount(invoice.balance_due or invoice.total)
-        currency = str(invoice.currency or "").strip().upper()
-        try:
-            staged = topup_intents.stage_gateway_topup_intent(
-                db,
-                topup_intents.StageGatewayTopupIntentCommand(
-                    flow=topup_intents.GatewayTopupIntentFlow.invoice_payment,
-                    account_id=command.account_id,
-                    invoice_id=invoice.id,
-                    invoice_number=invoice.invoice_number,
-                    reference=command.reference,
-                    provider_type=command.provider_type,
-                    provider_id=command.provider_id,
-                    capability_binding_id=command.capability_binding_id,
-                    currency=currency,
-                    requested_amount=amount,
-                    expires_at=expires_at,
-                    payment_method_id=command.payment_method_id,
-                    channel=topup_intents.TopupIntentChannel.customer_selfcare,
-                    created_by=created_by,
-                ),
-                context=context,
-            )
-        except IntegrityError as exc:
-            raise _error(
-                "intent_conflict",
-                "Invoice gateway intent is already being created",
-            ) from exc
-        preview_fingerprint = None
-    elif command.flow is CustomerGatewayTopupFlow.account_credit_deposit:
+    if command.flow is CustomerGatewayTopupFlow.account_credit_deposit:
         if command.invoice_id is not None:
             raise _error(
                 "flow_evidence_invalid",

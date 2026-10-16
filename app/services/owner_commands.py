@@ -446,6 +446,39 @@ def owner_command_active(db: Session, *, owner: str | None = None) -> bool:
     return owner is None or definition.owner == owner
 
 
+def current_owner_root_transaction(db: Session) -> SessionTransaction:
+    """Observe the exact active executor root for a flush-only participant.
+
+    This follows the executor's trusted in-process context model. The returned
+    object is not independent admission evidence and grants no completion right.
+    Participants must separately reject external Connection savepoints and
+    enforce their own binding and database isolation requirements.
+    """
+    definition = current_command_definition(db)
+    context = current_command_context(db)
+    if not isinstance(context, CommandContext):
+        raise _error(
+            definition, "invalid_command_context", "Active owner context is invalid."
+        )
+    _validate_context(definition, context)
+    _validate_manifest(definition)
+    root = db.info.get(_OWNER_ROOT_KEY)
+    if (
+        not isinstance(root, SessionTransaction)
+        or root is not db.get_transaction()
+        or not root.is_active
+        or root.parent is not None
+        or root.nested
+        or db.in_nested_transaction()
+    ):
+        raise _error(
+            definition,
+            "nested_transaction_completion",
+            "Participant requires the exact active owner root without a savepoint.",
+        )
+    return root
+
+
 def execute_owner_command(
     db: Session,
     *,

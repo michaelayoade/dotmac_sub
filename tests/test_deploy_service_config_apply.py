@@ -20,6 +20,7 @@ deployment directory.
 
 from __future__ import annotations
 
+import shlex
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -182,6 +183,7 @@ def _deploy(
     result, env_file, docker_log = _run_deploy(
         tmp_path,
         declared_services=SERVICES_WITH_CONFIG,
+        deployment_target="staging",
         extra_env={**FAST_GATES, **(gates or {})},
         docker_prelude=_docker_prelude(
             tmp_path,
@@ -216,6 +218,20 @@ def _index(commands: list[str], needle: str) -> int:
     return next(index for index, command in enumerate(commands) if needle in command)
 
 
+def _app_recreate_index(commands: list[str]) -> int:
+    """Locate the app's Compose up despite additional safety flags."""
+    for index, command in enumerate(commands):
+        args = shlex.split(command)
+        if args and args[0] == "compose" and "up" in args:
+            up_args = args[args.index("up") + 1 :]
+            if "-d" in up_args and "app" in up_args:
+                assert "--force-recreate" in up_args, (
+                    "application replacement must explicitly recreate the service"
+                )
+                return index
+    raise AssertionError("deploy never recreated the application service")
+
+
 def test_unchanged_config_restarts_nothing(tmp_path: Path) -> None:
     result, _env, commands = _deploy(
         tmp_path,
@@ -243,7 +259,7 @@ def test_changed_agent_config_restarts_only_that_agent_after_the_release(
     assert result.returncode == 0, result.stderr
     assert _restarts(commands) == ["vmagent"]
     assert _validations(commands) == []
-    recreate = _index(commands, " up -d app ")
+    recreate = _app_recreate_index(commands)
     assert _index(commands, " restart vmagent") > recreate
     assert "vmagent: changed " in result.stdout
 
@@ -301,7 +317,7 @@ def test_changed_freeradius_config_is_validated_before_database_work_and_restart
     # And the restart itself is guarded by a fresh validation, after the
     # application release was accepted.
     restart = _index(commands, " restart freeradius")
-    assert _index(commands, " up -d app ") < before_restart < restart
+    assert _app_recreate_index(commands) < before_restart < restart
     assert "freeradius is running; probe accept." in result.stdout
     assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" in (
         env_file.read_text()
