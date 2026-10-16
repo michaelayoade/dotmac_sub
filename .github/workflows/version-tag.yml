@@ -20,19 +20,55 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
-      - name: Read app version
+      - name: Determine app version transition
         id: version
+        env:
+          EVENT_COMMIT: ${{ github.sha }}
         run: |
-          VERSION="$(tr -d '[:space:]' < VERSION)"
+          set -euo pipefail
+          if ! current_commit="$(git rev-parse --verify "$EVENT_COMMIT^{commit}")"; then
+            echo "::error::The exact event commit is unavailable."
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$current_commit" ]; then
+            echo "::error::The checkout does not match the exact event commit."
+            exit 1
+          fi
+          if ! parent_commit="$(git rev-parse --verify "$current_commit^1^{commit}")"; then
+            echo "::error::The exact first-parent commit is unavailable."
+            exit 1
+          fi
+          if ! current_version="$(git show "$current_commit:VERSION")"; then
+            echo "::error::The event commit has no readable VERSION."
+            exit 1
+          fi
+          if ! parent_version="$(git show "$parent_commit:VERSION")"; then
+            echo "::error::The first-parent commit has no readable VERSION."
+            exit 1
+          fi
+          VERSION="$(printf '%s' "$current_version" | tr -d '[:space:]')"
+          parent_version="$(printf '%s' "$parent_version" | tr -d '[:space:]')"
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::VERSION must be semantic version X.Y.Z, got '$VERSION'"
             exit 1
           fi
+          if ! printf '%s' "$parent_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::First-parent VERSION must be semantic version X.Y.Z."
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$VERSION" = "$parent_version" ]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "No version transition; no tag will be created."
+            exit 0
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Create version tag
+        if: steps.version.outputs.eligible == 'true'
         env:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}

@@ -21,6 +21,11 @@ What was removed is the merge, not the proof.
    `version:major`, `version:minor`, `version:patch`, or `version:none` label.
    Do not edit `VERSION` in the source pull request; the version-bump workflow
    owns the separate rolling bump pull request after merge.
+   Version Tag compares `VERSION` in the exact pushed commit with its first
+   parent using Git objects. An unchanged version reports an explicit no-tag
+   outcome; missing ancestry or missing/invalid version evidence fails closed.
+   An eligible transition keeps same-commit tag retries idempotent and refuses
+   an existing tag pointing at any different commit; never move that tag.
 2. Require CI, Mobile CI, and Version Impact to pass, then squash-merge into
    `main`.
 3. Select the exact `origin/main` SHA intended for deployment and require CI and
