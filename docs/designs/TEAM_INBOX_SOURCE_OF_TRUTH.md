@@ -7,6 +7,12 @@ fiber-website inquiry channels
 
 ## Decision
 
+The status owner exposes **Resolve as spam** only for chats with unresolved
+identity and no Customer/Lead link or pending required Lead materialization.
+It validates the same typed eligibility again during the locked transition and
+records `spam_irrelevant` in status evidence without requesting CSAT. See
+`INBOX_CUSTOMER_COMPLETION_GATE.md` for the resolution contract.
+
 Team Inbox is the operational communications workspace. It owns conversation
 identity, message chronology, operator collaboration, and the projections used
 by its list and detail screens. Providers are transports. They do not decide

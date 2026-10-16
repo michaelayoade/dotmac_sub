@@ -44,3 +44,18 @@ def test_agent_resolution_gate_has_one_central_enforcement_caller():
             callers.append(path.relative_to(ROOT).as_posix())
 
     assert callers == ["app/services/team_inbox_status.py"]
+
+
+def test_spam_action_consumes_the_status_owners_typed_eligibility() -> None:
+    template = (ROOT / "templates/admin/inbox/_conversation.html").read_text()
+    assert "resolution_readiness.can_resolve_as_spam" in template
+    tree = ast.parse((APP / "services/team_inbox_status.py").read_text())
+    transition = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_apply_status_transition"
+    )
+    assert any(
+        isinstance(node, ast.Attribute) and node.attr == "can_resolve_as_spam"
+        for node in ast.walk(transition)
+    )
