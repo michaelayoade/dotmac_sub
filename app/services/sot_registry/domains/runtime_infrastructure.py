@@ -72,8 +72,8 @@ DOMAIN = DomainSOT(
                     ),
                     AuthorityInput(
                         name="authenticated Platform Health source identity",
-                        owner="external:integrator",
-                        kind=AuthorityKind.CONTROL_INPUT,
+                        owner="external:dotmac_integrator",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
                         source="Caller-supplied source_ref that the future authenticated Integrator transport must bind to the deployment identity; the local CLI does not authenticate it or persist/transport the serialized observation.",
                     ),
                 ),
@@ -151,8 +151,8 @@ DOMAIN = DomainSOT(
                     ),
                     AuthorityInput(
                         name="authenticated Platform Health source identity",
-                        owner="external:integrator",
-                        kind=AuthorityKind.CONTROL_INPUT,
+                        owner="external:dotmac_integrator",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
                         source="Caller-supplied source_ref that the future authenticated Integrator transport must bind to the deployment identity; the local CLI does not authenticate it or persist/transport the serialized observation.",
                     ),
                 ),
