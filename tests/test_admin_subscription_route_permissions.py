@@ -58,6 +58,19 @@ def client_for(db_session, monkeypatch):
         wf, "handle_subscription_update_form", lambda *a, **k: {"redirect_url": "/x"}
     )
 
+    from app.models.rbac import Permission
+
+    for key in (
+        "subscription:read",
+        "subscription:create",
+        "subscription:update",
+        "subscription:additional_ip:write",
+        "catalog:read",
+        "catalog:write",
+    ):
+        db_session.add(Permission(key=key, is_active=True))
+    db_session.commit()
+
     def build(scopes: list[str]) -> TestClient:
         app = FastAPI()
         app.include_router(admin_catalog.router, prefix="/admin")
@@ -85,6 +98,7 @@ def test_route_forbidden_without_permission(client_for, method, path, permission
     client = client_for(sorted(others))
     response = client.request(method, path, follow_redirects=False)
     assert response.status_code == 403
+    assert response.json()["detail"] == "Forbidden"
 
 
 @pytest.mark.parametrize(("method", "path", "permission"), ROUTES)
@@ -98,6 +112,15 @@ def test_edit_get_still_open_to_additional_ip_writers(client_for):
     client = client_for(["subscription:additional_ip:write"])
     response = client.get(f"/admin/catalog/subscriptions/{SUB_ID}/edit")
     assert response.status_code == 200
+
+
+def test_additional_ip_writer_cannot_post_generic_edit(client_for):
+    client = client_for(["subscription:additional_ip:write"])
+    response = client.post(
+        f"/admin/catalog/subscriptions/{SUB_ID}/edit", follow_redirects=False
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Forbidden"
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +190,9 @@ def test_list_and_detail_action_buttons_gated():
     listing = Path("templates/admin/catalog/subscriptions.html").read_text()
     detail = Path("templates/admin/catalog/subscription_detail.html").read_text()
     assert "{% if can(request, 'subscription:create') %}" in listing
-    assert "{% if can(request, 'subscription:update') %}" in listing
+    both = "can(request, 'subscription:update') or can(request, 'subscription:additional_ip:write')"
+    assert both in listing
     assert (
-        "{% if can(request, 'subscription:update') %}"
+        "{% if " + both + " %}"
         '<a href="/admin/catalog/subscriptions/{{ subscription.id }}/edit"' in detail
     )
