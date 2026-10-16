@@ -27,6 +27,7 @@ from enum import Enum
 from typing import TypedDict
 from uuid import UUID
 
+from dotmac_payments import PaymentIntentObservationV1, PaymentPurpose
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -44,7 +45,11 @@ from app.services.common import round_money, to_decimal
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.locking import lock_for_update
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import CommandContext
+from app.services.payment_charge_contracts import (
+    InvoiceGatewayRoutingEvidence as InvoiceGatewayRoutingEvidence,
+)
 from app.services.payment_gateway_adapter import (
     PaymentGatewayVerificationObservation,
     PaymentGatewayVerificationOutcome,
@@ -843,22 +848,7 @@ def _gateway_intent_metadata(
         metadata["provider_id"] = str(command.provider_id)
     if command.capability_binding_id is not None:
         metadata["capability_binding_id"] = str(command.capability_binding_id)
-    if command.flow is GatewayTopupIntentFlow.invoice_payment:
-        if command.account_id is None or command.invoice_id is None:
-            raise _error(
-                "gateway_scope_invalid",
-                "Invoice gateway intent requires account and invoice identities",
-            )
-        metadata.update(
-            {
-                "invoice_id": str(command.invoice_id),
-                "invoice_number": str(command.invoice_number or ""),
-                "account_id": str(command.account_id),
-            }
-        )
-        if command.payment_method_id is not None:
-            metadata["payment_method_id"] = str(command.payment_method_id)
-    elif command.flow is GatewayTopupIntentFlow.prepaid_period_purchase:
+    if command.flow is GatewayTopupIntentFlow.prepaid_period_purchase:
         if command.account_id is None or command.purchase_id is None:
             raise _error(
                 "gateway_scope_invalid",
@@ -889,14 +879,112 @@ def _gateway_intent_metadata(
     return metadata
 
 
+def stage_invoice_gateway_projection(
+    db: Session,
+    *,
+    binding: PaymentIntentObservationV1,
+    routing: InvoiceGatewayRoutingEvidence,
+    existing: TopupIntent | None,
+) -> StagedGatewayTopupIntent:
+    """Project a frozen module binding; retain Sub lifecycle on exact replay.
+
+    The root has already locked account, invoice and existing local reference,
+    and refused either one-sided existence state. No module ORM crosses here.
+    """
+    if (
+        binding.scope.tenant_id != OPERATOR_TENANT_ID
+        or binding.payer_reference != str(routing.account_id)
+        or binding.target_reference != str(routing.invoice_id)
+        or binding.purpose is not PaymentPurpose.INVOICE_SETTLEMENT
+        or binding.provider_type != routing.provider_type.upper()
+        or binding.channel != TopupIntentChannel.customer_selfcare.value.upper()
+        or binding.requested.currency.minor_units != 2
+        or binding.expires_at is None
+    ):
+        raise _error(
+            "gateway_reference_conflict",
+            "Module invoice binding conflicts with checkout evidence",
+        )
+    metadata = routing.checkout_metadata()
+    if existing is not None:
+        if not all(
+            (
+                existing.id == binding.intent_id,
+                existing.module_intent_id == binding.intent_id,
+                existing.module_intent_tenant_id == binding.scope.tenant_id,
+                existing.reference == binding.reference,
+                existing.account_id == routing.account_id,
+                existing.billing_account_id is None,
+                existing.invoice_id == routing.invoice_id,
+                existing.provider_id == routing.provider_id,
+                existing.capability_binding_id == routing.capability_binding_id,
+                existing.provider_type == binding.provider_type.lower(),
+                existing.channel == binding.channel.lower(),
+                existing.currency == binding.requested.currency.code,
+                existing.requested_amount == binding.requested.amount,
+                existing.created_by == routing.created_by,
+                _as_utc(existing.created_at) == binding.opened_at,
+                _as_utc(existing.expires_at) == binding.expires_at,
+                all(
+                    (existing.metadata_ or {}).get(key) == value
+                    for key, value in metadata.items()
+                ),
+                (existing.metadata_ or {}).get("payment_method_id")
+                == (
+                    str(routing.payment_method_id)
+                    if routing.payment_method_id is not None
+                    else None
+                ),
+                (existing.metadata_ or {}).get("provider_id")
+                == (
+                    str(routing.provider_id)
+                    if routing.provider_id is not None
+                    else None
+                ),
+            )
+        ):
+            raise _error(
+                "gateway_reference_conflict",
+                "Invoice compatibility projection conflicts with module binding",
+            )
+        return StagedGatewayTopupIntent(intent=existing, replayed=True)
+    intent = TopupIntent(
+        id=binding.intent_id,
+        module_intent_id=binding.intent_id,
+        module_intent_tenant_id=binding.scope.tenant_id,
+        account_id=routing.account_id,
+        invoice_id=routing.invoice_id,
+        provider_id=routing.provider_id,
+        capability_binding_id=routing.capability_binding_id,
+        reference=binding.reference,
+        provider_type=binding.provider_type.lower(),
+        channel=binding.channel.lower(),
+        currency=binding.requested.currency.code,
+        requested_amount=binding.requested.amount,
+        created_at=binding.opened_at,
+        expires_at=binding.expires_at,
+        created_by=routing.created_by,
+        status=TopupIntentStatus.pending.value,
+        metadata_=metadata,
+    )
+    db.add(intent)
+    db.flush()
+    return StagedGatewayTopupIntent(intent=intent, replayed=False)
+
+
 def stage_gateway_topup_intent(
     db: Session,
     command: StageGatewayTopupIntentCommand,
     *,
     context: CommandContext,
 ) -> StagedGatewayTopupIntent:
-    """Create or replay one locked invoice/reseller gateway checkout trace."""
+    """Create or replay a reseller/prepaid trace; invoice binding creation retired."""
 
+    if command.flow is GatewayTopupIntentFlow.invoice_payment:
+        raise _error(
+            "gateway_invoice_binding_retired",
+            "Invoice gateway bindings must be created by the Payments module coordinator",
+        )
     del context  # The root coordinator records correlation on the creation event.
     has_account = command.account_id is not None
     has_billing_account = command.billing_account_id is not None

@@ -16,6 +16,7 @@ from celery.signals import (
 )
 from kombu import Queue
 
+from app.celery_queue_contract import DEPLOYMENT_QUEUE_NAMES
 from app.logging import configure_logging
 from app.services.scheduler_config import (
     build_beat_schedule,
@@ -190,19 +191,7 @@ celery_app.conf.task_routes = {
     "app.tasks.radius.audit_ip_consistency": {"queue": "billing"},
 }
 
-celery_app.conf.task_queues = (
-    Queue("celery"),  # Default queue
-    Queue("notifications_immediate"),  # Exact post-commit customer delivery
-    Queue("notifications"),  # Periodic recovery customer delivery
-    Queue("nin"),  # Dedicated identity verification queue
-    Queue("tr069"),  # Dedicated OLT/TR-069 operations queue
-    Queue("acs"),  # Dedicated GenieACS/TR-069 queue
-    Queue("bandwidth"),  # High-volume bandwidth processing
-    Queue("monitoring"),  # Reserved device reachability/status processing
-    Queue("ingestion"),  # High-volume data ingestion (usage, topology)
-    Queue("crm"),  # ERP outbox delivery (external API paced)
-    Queue("billing"),  # Daily business runners (billing/dunning/expiry/FUP)
-)
+celery_app.conf.task_queues = tuple(Queue(name) for name in DEPLOYMENT_QUEUE_NAMES)
 
 
 def _release_metadata() -> dict[str, str | None]:

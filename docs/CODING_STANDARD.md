@@ -126,7 +126,10 @@ Session lifecycle and business transaction ownership are separate:
    only through `app.services.owner_commands.execute_owner_savepoint`. The
    callback stays flush-only; the coordinator handles its domain failure and
    records the resulting reconciliation or failure evidence. Direct participant
-   savepoints and nested savepoints are forbidden.
+   savepoints and nested product optional executors are forbidden. Released
+   Kernel conflict helpers may nest on the same session under the narrow
+   engine-free composition protocol below; they do not own optional business
+   consequence policy.
 5. Routes, API handlers, tasks, event handlers, and CLI commands never call ORM
    mutation or transaction methods for business state.
 6. A cross-domain coordinator may own one transaction only when its SOT
@@ -134,8 +137,9 @@ Session lifecycle and business transaction ownership are separate:
 
 The standard executor rejects an active caller transaction, nested public
 command, helper commit or rollback, direct or unclosed savepoint, uncontracted
-owner, or manifest role/mode mismatch. Its savepoint API is the sole nested
-transaction-completion authority inside an active owner command. It commits
+owner, or manifest role/mode mismatch. Its savepoint API owns product optional
+transaction completion; released Kernel conflict helpers complete only their
+own exact child under a consumed single-use claim. The executor commits
 before returning success and rolls back before propagating failure. Use
 `db_session_adapter.owner_command_session()` in task adapters that need only
 session lifecycle. The auto-committing session context and `UnitOfWork` are
@@ -153,7 +157,31 @@ retains the first exception and cause and records static secondary failure
 notes with exception types, without database-bound values;
 the optional executor closes only its exact child and leaves root rollback to
 the command owner. See ADR 0002 and the migrated PostgreSQL optional-savepoint
-canaries for this existing product boundary; this adds no Kernel facility.
+canaries for this product boundary.
+
+The owner boundary imports only `ConflictSavepointPhase`,
+`claim_conflict_savepoint_commit`, `current_conflict_savepoint`, and
+`conflict_savepoint_requires_rollback` from the public, engine-free
+`dotmac_kernel.transactions` surface in released Kernel `0.1.0a105`.
+Lifecycle observation never grants completion permission: after checking its
+stored active root and both rollback signals, the guard must consume the
+Kernel helper's exact-child release claim. It never imports private
+`_transactions`, `dotmac_kernel.db`, or `session_runtime`, creates another
+Session or engine, or duplicates Kernel's protocol state.
+
+Rollback classification admits only the observed helper's exact child in
+ROLLBACK, or the failed-flush internal subtransaction of its inactive,
+still-current child in BODY/RELEASE, on the same active stored root. Every
+other helper rollback poisons the owner. Kernel's exact-root rollback latch
+survives helper exit and outer optional cleanup; Sub never clears it, and only
+Kernel clears it when that root ends. A helper inside an optional callback
+must restore the optional child. Product optional executors remain non-nestable,
+and `current_owner_root_transaction` retains its root-only/no-savepoint
+admission contract. Architecture sensitivity tests enforce the import
+allowlist. Hosted migrated PostgreSQL canaries must prove released Numbering
+composition, conflicts, listener attacks, rollback-latch survival, publication
+timing and clean reuse before acceptance. This source prerequisite activates
+no numbering writer, series, counter, or production cutover.
 
 Do not catch an exception merely to roll back and re-raise it at multiple
 layers. The transaction owner performs rollback. Adapters map the resulting

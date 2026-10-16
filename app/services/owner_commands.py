@@ -14,6 +14,12 @@ from functools import cache
 from typing import TypeVar
 from uuid import UUID, uuid4
 
+from dotmac_kernel.transactions import (
+    ConflictSavepointPhase,
+    claim_conflict_savepoint_commit,
+    conflict_savepoint_requires_rollback,
+    current_conflict_savepoint,
+)
 from sqlalchemy import event
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, SessionTransaction
@@ -253,6 +259,7 @@ def _reject_helper_commit(session: Session) -> None:
         or session.get_transaction() is not root
         or not root.is_active
         or session.info.get(_HELPER_ROLLBACK_KEY)
+        or conflict_savepoint_requires_rollback(session, expected_root=root)
     ):
         session.info[_HELPER_ROLLBACK_KEY] = True
         raise _error(
@@ -276,6 +283,8 @@ def _reject_helper_commit(session: Session) -> None:
         and release.is_active
     ):
         return
+    if claim_conflict_savepoint_commit(session, expected_root=root):
+        return
     session.info[_HELPER_ROLLBACK_KEY] = True
     raise _error(
         definition,
@@ -285,7 +294,39 @@ def _reject_helper_commit(session: Session) -> None:
 
 
 @event.listens_for(Session, "after_soft_rollback")
-def _record_helper_rollback(session: Session, previous_transaction: object) -> None:
+def _record_helper_rollback(
+    session: Session, previous_transaction: SessionTransaction
+) -> None:
+    if session.info.get(_ACTIVE_COMMAND_KEY) is None:
+        return
+    root = session.info.get(_OWNER_ROOT_KEY)
+    if (
+        not isinstance(root, SessionTransaction)
+        or session.get_transaction() is not root
+        or not root.is_active
+    ):
+        session.info[_HELPER_ROLLBACK_KEY] = True
+        return
+    state = current_conflict_savepoint(session)
+    if state is not None and state.root is root:
+        if (
+            state.phase is ConflictSavepointPhase.ROLLBACK
+            and previous_transaction is state.savepoint
+        ):
+            # The helper keeps this exact observation through rollback events,
+            # even after SQLAlchemy has detached its child.
+            return
+        if (
+            state.phase in (ConflictSavepointPhase.BODY, ConflictSavepointPhase.RELEASE)
+            and previous_transaction.parent is state.savepoint
+            and not previous_transaction.nested
+            and not state.savepoint.is_active
+            and session.get_nested_transaction() is state.savepoint
+        ):
+            # A failed flush's internal subtransaction rolls back before the
+            # helper can switch BODY/RELEASE to ROLLBACK. Only this exact
+            # inactive, still-current child can absorb that event.
+            return
     if session.info.get(_AUTHORIZED_SAVEPOINT_KEY) is previous_transaction:
         return
     active_savepoint = session.info.get(_ACTIVE_SAVEPOINT_KEY)
@@ -324,6 +365,7 @@ def execute_owner_savepoint(
         or db.get_transaction() is not root
         or not root.is_active
         or db.info.get(_HELPER_ROLLBACK_KEY)
+        or conflict_savepoint_requires_rollback(db, expected_root=root)
     ):
         db.info[_HELPER_ROLLBACK_KEY] = True
         raise _error(
@@ -346,6 +388,7 @@ def execute_owner_savepoint(
             db.get_transaction() is not root
             or not root.is_active
             or db.info.get(_HELPER_ROLLBACK_KEY)
+            or conflict_savepoint_requires_rollback(db, expected_root=root)
             or db.get_nested_transaction() is not savepoint
             or not savepoint.is_active
         ):
@@ -361,6 +404,7 @@ def execute_owner_savepoint(
             or not root.is_active
             or db.in_nested_transaction()
             or db.info.get(_HELPER_ROLLBACK_KEY)
+            or conflict_savepoint_requires_rollback(db, expected_root=root)
         ):
             raise _error(
                 definition,
@@ -446,6 +490,39 @@ def owner_command_active(db: Session, *, owner: str | None = None) -> bool:
     return owner is None or definition.owner == owner
 
 
+def current_owner_root_transaction(db: Session) -> SessionTransaction:
+    """Observe the exact active executor root for a flush-only participant.
+
+    This follows the executor's trusted in-process context model. The returned
+    object is not independent admission evidence and grants no completion right.
+    Participants must separately reject external Connection savepoints and
+    enforce their own binding and database isolation requirements.
+    """
+    definition = current_command_definition(db)
+    context = current_command_context(db)
+    if not isinstance(context, CommandContext):
+        raise _error(
+            definition, "invalid_command_context", "Active owner context is invalid."
+        )
+    _validate_context(definition, context)
+    _validate_manifest(definition)
+    root = db.info.get(_OWNER_ROOT_KEY)
+    if (
+        not isinstance(root, SessionTransaction)
+        or root is not db.get_transaction()
+        or not root.is_active
+        or root.parent is not None
+        or root.nested
+        or db.in_nested_transaction()
+    ):
+        raise _error(
+            definition,
+            "nested_transaction_completion",
+            "Participant requires the exact active owner root without a savepoint.",
+        )
+    return root
+
+
 def execute_owner_command(
     db: Session,
     *,
@@ -496,7 +573,9 @@ def execute_owner_command(
     db.info[_OWNER_ROOT_KEY] = transaction
     try:
         result = operation()
-        if db.info.get(_HELPER_ROLLBACK_KEY):
+        if db.info.get(_HELPER_ROLLBACK_KEY) or conflict_savepoint_requires_rollback(
+            db, expected_root=transaction
+        ):
             raise _error(
                 definition,
                 "nested_transaction_completion",
