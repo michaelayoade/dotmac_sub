@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import cast
+from typing import NoReturn, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, RowMapping
@@ -54,7 +54,7 @@ class RetainedColumnsRefused(DomainError):
     """Must escape and roll back the complete calling owner transaction."""
 
 
-def _refuse(message: str) -> None:
+def _refuse(message: str) -> NoReturn:
     raise RetainedColumnsRefused(
         code="billing_retained_columns.refused", message=message
     )
@@ -319,10 +319,10 @@ def _install_legacy_retained_columns_fence(
     observations: list[RetainedRelationObservation] = []
     for relation, row in zip(_RELATIONS, verified, strict=True):
         oid = cast(int, row["oid"])
-        function = _function(connection, relation, owner_oid)
-        guard = _guards(connection, oid, function)
+        function_oid = _function(connection, relation, owner_oid)
+        guard = _guards(connection, oid, function_oid)
         if (
-            function is None
+            function_oid is None
             or guard is None
             or _truncate_grants(connection, oid, owner_oid)
         ):
@@ -331,7 +331,7 @@ def _install_legacy_retained_columns_fence(
             RetainedRelationObservation(
                 relation,
                 RelationOid(oid),
-                FunctionOid(function),
+                FunctionOid(function_oid),
                 TriggerOid(guard[0]),
                 TriggerOid(guard[1]),
                 TriggerOid(guard[2]),

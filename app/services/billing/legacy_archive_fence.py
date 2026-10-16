@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import cast
+from typing import NoReturn, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine, RowMapping
@@ -67,7 +67,7 @@ class ArchiveFenceRefused(DomainError):
     """The entire calling owner transaction must roll back on refusal."""
 
 
-def _refuse(message: str) -> None:
+def _refuse(message: str) -> NoReturn:
     raise ArchiveFenceRefused(code="billing_archive_fence.refused", message=message)
 
 
@@ -188,8 +188,10 @@ def _posture(connection: Connection) -> RowMapping:
     if len(row) != 1:
         _refuse("Missing database, public namespace or actual role identity.")
     identity = row[0]
+    server_version_info = connection.dialect.server_version_info
     if (
-        connection.dialect.server_version_info < (16,)
+        server_version_info is None
+        or server_version_info < (16,)
         or identity["isolation"] != "read committed"
         or identity["read_only"] != "off"
         or not all(

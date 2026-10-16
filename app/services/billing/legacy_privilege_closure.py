@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NewType, cast
+from typing import NewType, NoReturn, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, RowMapping
@@ -59,7 +59,7 @@ class PrivilegeClosureRefused(DomainError):
     """The complete owning transaction must roll back."""
 
 
-def _refuse(message: str) -> None:
+def _refuse(message: str) -> NoReturn:
     raise PrivilegeClosureRefused(
         code="billing_privilege_closure.refused", message=message
     )
@@ -472,7 +472,9 @@ def _relay_topology(connection: Connection, name: str, oid: int) -> tuple[str, .
     """,
         {"oid": oid},
     )
-    expected_columns = (("tenant_id", "uuid", True),) if name == "outbox_events" else ()
+    expected_columns: tuple[tuple[str, str, bool], ...] = (
+        (("tenant_id", "uuid", True),) if name == "outbox_events" else ()
+    )
     expected_columns += (
         ("id", "uuid", True),
         ("event_type", "character varying(120)", True),
