@@ -147,3 +147,215 @@ def test_workflow_uses_base_branch_gate_and_trusted_inputs() -> None:
     assert "python3 scripts/ci/check_feature_freeze.py" not in wf
     assert "github.event.pull_request.title" not in wf
     assert "run: git fetch --no-tags origin ${{ github.base_ref }}" in wf
+
+
+# --- disguised-feature rules (new template, size threshold) ---------------
+
+
+def test_new_template_is_feature_shaped_even_with_fix_title() -> None:
+    findings = freeze.classify_detailed(
+        [("A", "templates/admin/dashboard/_sla_card.html")], "fix(ui): card"
+    )
+    assert findings == [
+        (
+            "feature-exception",
+            "templates/admin/dashboard/_sla_card.html",
+            "new-template",
+        )
+    ]
+
+
+def test_modified_template_passes() -> None:
+    assert (
+        freeze.classify([("M", "templates/admin/dashboard/index.html")], "fix: x") == []
+    )
+
+
+def test_new_web_module_is_feature_shaped_under_fix_title() -> None:
+    findings = freeze.classify([("A", "app/web/admin/sla.py")], "refactor: tidy")
+    assert findings == [("feature-exception", "app/web/admin/sla.py")]
+
+
+def test_size_threshold_flags_files_and_names_rule() -> None:
+    changes = [("M", "app/services/a.py"), ("M", "templates/b.html")]
+    added = {"app/services/a.py": 300, "templates/b.html": 101}
+    findings = freeze.classify_detailed(changes, "fix: big", added)
+    assert [(k, p) for k, p, _ in findings] == [
+        ("feature-exception", "app/services/a.py"),
+        ("feature-exception", "templates/b.html"),
+    ]
+    assert all(r.startswith("size-threshold") for _, _, r in findings)
+
+
+def test_size_at_threshold_passes() -> None:
+    added = {"app/services/a.py": 250, "templates/b.html": 150}
+    assert freeze.classify([("M", "app/services/a.py")], "fix: x", added) == []
+
+
+def test_size_ignores_tests_migrations_lockfiles_docs() -> None:
+    added = {
+        "tests/test_big.py": 900,
+        "alembic/versions/1_x.py": 900,
+        "app/static/package-lock.json": 900,
+        "docs/big.md": 900,
+        "app/services/a.py": 10,
+    }
+    assert freeze.classify([("M", "app/services/a.py")], "fix: x", added) == []
+
+
+def test_size_threshold_is_configurable() -> None:
+    added = {"app/services/a.py": 50}
+    assert freeze.classify([], "fix: x", added, size_threshold=40)
+    assert not freeze.classify([], "fix: x", added, size_threshold=60)
+
+
+def test_pr_3662_shape_is_flagged_under_fix_title() -> None:
+    changes = [
+        ("M", "app/services/ticket_sla_reports.py"),
+        ("M", "app/services/web_admin_dashboard.py"),
+        ("M", "templates/admin/dashboard/index.html"),
+        ("A", "tests/test_ticket_sla_reports.py"),
+    ]
+    added = {
+        "app/services/ticket_sla_reports.py": 225,
+        "app/services/web_admin_dashboard.py": 300,
+        "templates/admin/dashboard/index.html": 188,
+        "tests/test_ticket_sla_reports.py": 200,
+    }
+    findings = freeze.classify(changes, "fix(ui): ticket SLA dashboard", added)
+    paths = {p for _, p in findings}
+    assert "app/services/ticket_sla_reports.py" in paths
+    assert "app/services/web_admin_dashboard.py" in paths
+    assert "templates/admin/dashboard/index.html" in paths
+    assert "tests/test_ticket_sla_reports.py" not in paths
+
+
+def test_exception_entry_covers_size_finding() -> None:
+    entry = _entry(paths=["app/services/a.py"])
+    assert freeze.exception_covers([entry], "feature-exception", "app/services/a.py")
+
+
+def test_nonascii_template_path_is_parsed_and_counted() -> None:
+    path = "templates/c\u00e4rd.html"
+    changes = freeze.parse_name_status_z(f"A\x00{path}\x00")
+    assert changes == [("A", path)]
+    added = freeze.parse_numstat_z(f"500\t0\t{path}\x00")
+    assert added == {path: 500}
+    rules = [r for _, _, r in freeze.classify_detailed(changes, "fix: x", added)]
+    assert "new-template" in rules
+
+
+def test_numstat_z_has_no_rename_form() -> None:
+    # With --no-renames git emits a delete plus an add, never "{a => b}".
+    out = "0\t280\tscripts/tool.py\x00280\t0\tapp/services/tool.py\x00"
+    assert freeze.parse_numstat_z(out)["app/services/tool.py"] == 280
+
+
+def test_diff_flags_disable_renames_and_quote() -> None:
+    assert "--no-renames" in freeze._DIFF_FLAGS and "-z" in freeze._DIFF_FLAGS
+
+
+def _git_repo_with_rename(tmp_path: Path, dest: str, lines: int) -> tuple[str, str]:
+    import subprocess
+
+    def g(*a: str) -> str:
+        return subprocess.run(
+            ["git", "-c", "user.email=a@b.c", "-c", "user.name=t", *a],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    g("init", "-q", "-b", "main")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/tool.py").write_text("x = 1\n" * lines)
+    g("add", "-A")
+    g("commit", "-qm", "base")
+    base = g("rev-parse", "HEAD").strip()
+    (tmp_path / dest).parent.mkdir(parents=True, exist_ok=True)
+    g("mv", "scripts/tool.py", dest)
+    g("commit", "-qm", "move")
+    return base, g("rev-parse", "HEAD").strip()
+
+
+def test_rename_into_app_services_counts_and_is_new_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base, head = _git_repo_with_rename(tmp_path, "app/services/tool.py", 450)
+    monkeypatch.chdir(tmp_path)
+    changes = freeze._name_status(base, head)
+    added = freeze._numstat(base, head)
+    assert ("A", "app/services/tool.py") in changes
+    assert added["app/services/tool.py"] == 450
+    rules = {
+        r.split(":")[0]
+        for _, _, r in freeze.classify_detailed(changes, "fix: x", added)
+    }
+    assert {"new-python-module"} <= rules
+
+
+def test_rename_into_templates_is_new_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base, head = _git_repo_with_rename(tmp_path, "templates/tool.html", 10)
+    monkeypatch.chdir(tmp_path)
+    changes = freeze._name_status(base, head)
+    rules = [r for _, _, r in freeze.classify_detailed(changes, "fix: x")]
+    assert "new-template" in rules
+
+
+def test_uncountable_diff_is_a_finding() -> None:
+    added = freeze.parse_numstat_z("-\t-\tapp/services/hidden.py\x00")
+    findings = freeze.classify_detailed(
+        [("M", "app/services/hidden.py")], "fix: x", added
+    )
+    assert [(k, p) for k, p, _ in findings] == [
+        ("feature-exception", "app/services/hidden.py")
+    ]
+    assert findings[0][2].startswith("uncountable-diff")
+
+
+def test_approved_growth_covers_template_and_size_but_not_modules() -> None:
+    entry = _entry(
+        kind="approved-growth", paths=["templates/x.html", "app/services/a.py"]
+    )
+    for rule in ("new-template", "size-threshold: big"):
+        assert freeze.exception_covers(
+            [entry], "feature-exception", "templates/x.html", rule
+        )
+    assert not freeze.exception_covers(
+        [entry], "feature-exception", "app/services/a.py", "new-python-module"
+    )
+    assert not freeze.exception_covers(
+        [entry], "feature-exception", "app/services/a.py", "uncountable-diff"
+    )
+    assert not freeze.exception_covers([entry], "feature-exception", "templates/x.html")
+
+
+def test_static_js_counts_toward_size_but_css_images_vendor_min_do_not() -> None:
+    added = {
+        "static/js/admin/big.js": 401,
+        "static/css/app.css": 900,
+        "static/avatars/a.svg": 900,
+        "static/js/vendor/lib.js": 900,
+        "static/vendor/leaflet/l.js": 900,
+        "static/js/app.min.js": 900,
+    }
+    findings = freeze.classify_detailed([], "fix: x", added)
+    assert [p for _, p, _ in findings] == ["static/js/admin/big.js"]
+    only_noise = {k: v for k, v in added.items() if k != "static/js/admin/big.js"}
+    assert freeze.classify([], "fix: x", only_noise) == []
+
+
+def test_load_exceptions_uses_explicit_file(tmp_path: Path) -> None:
+    f = tmp_path / "ex.json"
+    f.write_text('{"exceptions": [{"id": "X"}]}', encoding="utf-8")
+    assert freeze.load_exceptions(tmp_path / "elsewhere", f) == [{"id": "X"}]
+    assert freeze.load_exceptions(tmp_path / "elsewhere") == []
+
+
+def test_static_js_pattern_matches_top_level_and_nested() -> None:
+    for path in ("static/x.js", "static/js/x.js", "static/js/admin/x.js"):
+        assert freeze._matches(path, freeze.SIZE_COUNTED_PATTERNS), path
+    assert not freeze._matches("static/css/x.css", freeze.SIZE_COUNTED_PATTERNS)
