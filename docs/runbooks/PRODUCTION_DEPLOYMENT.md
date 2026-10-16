@@ -39,6 +39,35 @@ rollback boundary in one operation.
   production runner. An existing `dotmac_sub_app` container carries a valid
   full-SHA `org.opencontainers.image.revision` label.
 
+The production probe preserves noncritical `extra_hosts` from the trusted,
+effective Compose service configuration. It records separate canonical ASCII
+hostname-to-literal-IP maps for the app and every captured writer. At capture
+and each identity recheck, the actual Docker maps must equal the captured maps
+and the newly rendered trusted service maps. Hostnames normalize case and one
+trailing dot; IP literals normalize with `ipaddress`. Gateway tokens, duplicate
+normalized hosts, malformed mappings, custom DNS/search/options and links refuse.
+Mappings may never replace either database/broker URL hostname or any endpoint
+alias, container name, network membership name or Docker DNS name. Existing
+Docker endpoint identity checks remain mandatory. Full Compose JSON and service
+environment remain private process memory; artifacts retain only host maps and
+the existing nonsecret identity evidence.
+
+Old binding/journal artifacts with omitted map fields mean **empty maps only**,
+because their producer admitted only empty ExtraHosts. They cannot adopt a
+nonempty observed map during recovery. Fresh capture is required after an
+approved mapping change. Migration/probe containers retain their existing fixed
+DB/broker `--add-host` addresses derived from captured Docker endpoint IPs; the
+app's observability mappings are not copied into those containers.
+
+Hosted contract canaries cover app/writer map attestation, critical alternate
+aliases/names, drift, unsupported gateway/DNS forms, private rendering and journal
+compatibility. A real Docker canary on the dedicated test server remains required
+before release: render the actual trusted Compose profile privately, capture and
+recheck existing observability maps for app/all writers, then prove map drift,
+critical-alias overrides and custom DNS refuse while DB/broker endpoint identity
+and retained migration/probe fixed-host inspection remain enforced. Do not run
+this acceptance against a local Docker daemon or treat mocked tests as that proof.
+
 The deployment refuses to start if the running Nginx configuration does not
 contain the warm candidate upstream.
 

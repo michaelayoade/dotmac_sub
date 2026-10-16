@@ -21,6 +21,11 @@ from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from tests.integration_platform_helpers import enable_payment_provider
+from tests.payment_invoice_intent_helpers import (
+    _invoice_module_stub_fixture,  # noqa: F401
+)
+
+pytestmark = pytest.mark.usefixtures("invoice_module_stub")
 
 
 def _patch_policy(monkeypatch) -> None:
@@ -432,3 +437,280 @@ def test_customer_creation_rejects_missing_checkout_binding(
         )
 
     assert exc_info.value.code.endswith("checkout_binding_unavailable")
+
+
+@pytest.fixture
+def invoice_command(
+    monkeypatch, db_session, subscriber
+) -> svc.CreateCustomerGatewayTopupIntentCommand:
+    _patch_policy(monkeypatch)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-MODULE-BINDING",
+        currency="NGN",
+        subtotal=Decimal("3750.00"),
+        total=Decimal("3750.00"),
+        balance_due=Decimal("3750.00"),
+        status=InvoiceStatus.issued,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    binding = _checkout_binding(db_session)
+    return svc.CreateCustomerGatewayTopupIntentCommand(
+        flow=svc.CustomerGatewayTopupFlow.invoice_payment,
+        account_id=subscriber.id,
+        invoice_id=invoice.id,
+        reference="prospective-module-binding",
+        provider_type="paystack",
+        provider_id=None,
+        created_by="pytest",
+        capability_binding_id=binding.id,
+    )
+
+
+def _create_invoice(
+    db_session, command: svc.CreateCustomerGatewayTopupIntentCommand
+) -> svc.GatewayTopupIntentResult:
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.create_customer_gateway_topup_intent(
+        db_session, command, context=_context(svc.CREATE_CUSTOMER_SCOPE)
+    )
+
+
+def test_invoice_four_existence_states(
+    db_session, invoice_command, invoice_module_stub
+):
+    from dataclasses import replace
+    from uuid import uuid4
+
+    first = _create_invoice(db_session, invoice_command)
+    assert first.replayed is False
+    assert first.intent_id == invoice_module_stub[first.reference].intent_id
+    local = db_session.get(TopupIntent, first.intent_id)
+    assert local.module_intent_id == first.intent_id
+    assert local.module_intent_tenant_id == svc.OPERATOR_TENANT_ID
+    assert _create_invoice(db_session, invoice_command).replayed is True
+    # Module-only references cannot reconstruct routing/lifecycle evidence.
+    module_only = replace(invoice_command, reference="module-only-reference")
+    invoice_module_stub[module_only.reference] = replace(
+        invoice_module_stub[first.reference],
+        reference=module_only.reference,
+        intent_id=uuid4(),
+    )
+    with pytest.raises(svc.GatewayTopupIntentError, match="reconstruction is refused"):
+        _create_invoice(db_session, module_only)
+    # A legacy-only reference cannot silently acquire new module authority.
+    del invoice_module_stub[first.reference]
+    with pytest.raises(svc.GatewayTopupIntentError, match="reconstruction is refused"):
+        _create_invoice(db_session, invoice_command)
+
+
+def test_invoice_replay_retains_original_money_times_terminal_and_metadata(
+    monkeypatch, db_session, invoice_command, invoice_module_stub
+):
+    first = _create_invoice(db_session, invoice_command)
+    original = invoice_module_stub[first.reference]
+    local = db_session.get(TopupIntent, first.intent_id)
+    local.status = "expired"
+    local.metadata_ = {**local.metadata_, "gateway_reconciliation": "later-observation"}
+    invoice = db_session.get(Invoice, invoice_command.invoice_id)
+    invoice.balance_due = Decimal("1.00")
+    invoice.status = InvoiceStatus.paid
+    invoice.invoice_number = "RENAMED-DISPLAY"
+    db_session.commit()
+    monkeypatch.setattr(
+        svc,
+        "_configured_integer",
+        lambda *_args: pytest.fail("Replay must not read current TTL"),
+    )
+    second = _create_invoice(db_session, invoice_command)
+    assert second.replayed is True
+    assert second.requested_amount == first.requested_amount
+    assert second.expires_at == first.expires_at
+    assert second.invoice_routing.invoice_number == "INV-MODULE-BINDING"
+    assert invoice_module_stub[first.reference] == original
+    db_session.refresh(local)
+    assert local.status == "expired"
+    assert local.metadata_["gateway_reconciliation"] == "later-observation"
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "payer",
+        "target",
+        "purpose",
+        "amount",
+        "currency",
+        "scale",
+        "provider",
+        "channel",
+        "opened",
+        "expiry",
+        "reference",
+        "identity",
+        "tenant",
+    ),
+)
+def test_invoice_replay_refuses_each_binding_drift(
+    db_session, invoice_command, invoice_module_stub, field: str
+):
+    from dataclasses import replace
+    from uuid import uuid4
+
+    from dotmac_kernel.cache import TenantScope
+    from dotmac_kernel.money import Currency, Money
+    from dotmac_payments import PaymentPurpose
+
+    first = _create_invoice(db_session, invoice_command)
+    bound = invoice_module_stub[first.reference]
+    match field:
+        case "payer":
+            bound = replace(bound, payer_reference=str(uuid4()))
+        case "target":
+            bound = replace(bound, target_reference=None)
+        case "purpose":
+            bound = replace(bound, purpose=PaymentPurpose.ACCOUNT_CREDIT_DEPOSIT)
+        case "amount":
+            bound = replace(
+                bound, requested=Money(Decimal("3750.01"), Currency("NGN", 2))
+            )
+        case "currency":
+            bound = replace(
+                bound, requested=Money(Decimal("3750.00"), Currency("USD", 2))
+            )
+        case "scale":
+            bound = replace(
+                bound, requested=Money(Decimal("3750.00"), Currency("NGN", 3))
+            )
+        case "provider":
+            bound = replace(bound, provider_type="FLUTTERWAVE")
+        case "channel":
+            bound = replace(bound, channel="RESELLER_SELFCARE")
+        case "opened":
+            bound = replace(bound, opened_at=bound.opened_at + timedelta(seconds=1))
+        case "expiry":
+            bound = replace(bound, expires_at=None)
+        case "reference":
+            bound = replace(bound, reference="another-reference")
+        case "identity":
+            bound = replace(bound, intent_id=uuid4())
+        case "tenant":
+            bound = replace(bound, scope=TenantScope(uuid4()))
+    invoice_module_stub[first.reference] = bound
+    with pytest.raises(svc.GatewayTopupIntentError) as refusal:
+        _create_invoice(db_session, invoice_command)
+    assert refusal.value.code.endswith("invoice_binding_conflict")
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "provider_id",
+        "capability_binding_id",
+        "payment_method_id",
+        "created_by",
+        "invoice_id",
+        "metadata_target",
+        "module_link",
+        "module_tenant",
+    ),
+)
+def test_invoice_replay_refuses_projection_routing_drift(
+    db_session, invoice_command, invoice_module_stub, field: str
+):
+    from uuid import uuid4
+
+    first = _create_invoice(db_session, invoice_command)
+    local = db_session.get(TopupIntent, first.intent_id)
+    match field:
+        case "provider_id":
+            local.provider_id = uuid4()
+        case "capability_binding_id":
+            local.capability_binding_id = uuid4()
+        case "payment_method_id":
+            local.metadata_ = {**local.metadata_, "payment_method_id": str(uuid4())}
+        case "created_by":
+            local.created_by = "different-actor"
+        case "invoice_id":
+            local.invoice_id = uuid4()
+        case "metadata_target":
+            local.metadata_ = {**local.metadata_, "invoice_id": str(uuid4())}
+        case "module_link":
+            local.module_intent_id = uuid4()
+        case "module_tenant":
+            local.module_intent_tenant_id = uuid4()
+    # Impossible persisted FK drift is exercised at the typed projection seam,
+    # before any SQL; migrated PG separately proves the structural constraints.
+    from unittest.mock import Mock
+
+    from app.services import topup_intents
+
+    with pytest.raises(topup_intents.TopupIntentError) as refusal:
+        topup_intents.stage_invoice_gateway_projection(
+            Mock(),
+            binding=invoice_module_stub[first.reference],
+            routing=first.invoice_routing,
+            existing=local,
+        )
+    assert refusal.value.code.endswith("gateway_reference_conflict")
+    db_session.rollback()
+
+
+@pytest.mark.parametrize(
+    "amount",
+    (
+        Decimal("0"),
+        Decimal("1.001"),
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Decimal("10000000000"),
+    ),
+)
+def test_invoice_money_refuses_loss_before_money_construction(amount: Decimal):
+    with pytest.raises(svc.GatewayTopupIntentError) as refusal:
+        svc._exact_invoice_money(amount, "NGN")
+    assert refusal.value.code.endswith("amount_invalid")
+
+
+def test_retired_invoice_staging_refuses_before_any_database_access():
+    from unittest.mock import Mock
+
+    from app.services import topup_intents
+
+    db = Mock()
+    with pytest.raises(topup_intents.TopupIntentError) as refusal:
+        topup_intents.stage_gateway_topup_intent(
+            db,
+            topup_intents.StageGatewayTopupIntentCommand(
+                flow=topup_intents.GatewayTopupIntentFlow.invoice_payment,
+                reference="retired",
+                provider_type="paystack",
+                currency="NGN",
+                requested_amount=Decimal("1.00"),
+                expires_at=datetime.now(UTC) + timedelta(minutes=1),
+            ),
+            context=_context(svc.CREATE_CUSTOMER_SCOPE),
+        )
+    assert refusal.value.code.endswith("gateway_invoice_binding_retired")
+    assert db.mock_calls == []
+
+
+def test_invoice_without_display_number_creates_and_replays(
+    db_session, invoice_command
+):
+    invoice = db_session.get(Invoice, invoice_command.invoice_id)
+    invoice.invoice_number = None
+    db_session.commit()
+    first = _create_invoice(db_session, invoice_command)
+    second = _create_invoice(db_session, invoice_command)
+    assert first.intent_id == second.intent_id
+    assert (
+        first.invoice_routing.invoice_number
+        == second.invoice_routing.invoice_number
+        == ""
+    )
+    assert second.replayed
+    local = db_session.get(TopupIntent, first.intent_id)
+    assert local.invoice_id == invoice_command.invoice_id
+    assert local.metadata_["invoice_number"] == ""

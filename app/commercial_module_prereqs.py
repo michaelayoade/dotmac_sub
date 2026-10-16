@@ -28,11 +28,15 @@ import configparser
 import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from functools import cache
 from pathlib import Path
 from typing import Final
 
 from dotmac_kernel.namespaces import module_schema
+from psycopg import Connection, Error
+from psycopg.pq import TransactionStatus
+from psycopg.rows import tuple_row
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 ALEMBIC_INI: Final[Path] = REPO_ROOT / "alembic.ini"
@@ -52,6 +56,195 @@ SCHEMA_BOOTSTRAP_ROLE: Final[str] = "dotmac_schema_bootstrap"
 #: ``USAGE``: a PUBLIC ``CREATE`` grant lets any role plant objects in a module
 #: schema even when it cannot read the ones already there.
 PROBED_SCHEMA_PRIVILEGES: Final[tuple[str, ...]] = ("USAGE", "CREATE")
+
+
+class BillingRuntimeLoginRefusal(str, Enum):
+    """Closed refusals for the actual-session diagnostic boundary."""
+
+    INACTIVE_TRANSACTION = "billing_runtime_login.inactive_transaction"
+    UNSUPPORTED_POSTGRES = "billing_runtime_login.unsupported_postgres"
+    ISOLATION = "billing_runtime_login.isolation"
+    IDENTITY = "billing_runtime_login.identity"
+    PRIVILEGED_ROLE = "billing_runtime_login.privileged_role"
+    ROLE_PATH = "billing_runtime_login.role_path"
+    OWNERSHIP = "billing_runtime_login.ownership"
+    CATALOG_UNAVAILABLE = "billing_runtime_login.catalog_unavailable"
+
+
+@dataclass(frozen=True)
+class BillingRuntimeLoginQuery:
+    """Fixed policy: an authenticated, unprivileged standalone app_user login.
+
+    No caller-selected role, owner exemption or trusted identity is accepted.
+    """
+
+
+@dataclass(frozen=True)
+class BillingRuntimeLoginObservation:
+    """Transient identity diagnostics, never an admission or reusable proof.
+
+    The caller owns the root transaction. INTRANS cannot prove the absence of
+    manually issued SAVEPOINTs. This observation proves neither Billing ACL,
+    PUBLIC/helper closure, nor the complete preflip prerequisite contract.
+    """
+
+    database_name: str
+    database_oid: int
+    backend_pid: int
+    session_role_oid: int
+    current_role_oid: int
+    transaction_id: str | None
+    server_version: int
+
+
+class BillingRuntimeLoginRefused(RuntimeError):
+    """Safe refusal without credentials, connection strings or catalog payloads."""
+
+    def __init__(self, code: BillingRuntimeLoginRefusal) -> None:
+        self.code = code
+        super().__init__(code.value)
+
+
+def require_billing_runtime_login(
+    conn: Connection,
+    *,
+    query: BillingRuntimeLoginQuery = BillingRuntimeLoginQuery(),
+) -> BillingRuntimeLoginObservation:
+    """Observe the actual supplied login without connecting or changing roles.
+
+    Requires an already active READ COMMITTED transaction on PostgreSQL 16+,
+    where effective SET reachability and membership options are available.
+    Conservatively refuses every direct membership, including all-false dormant
+    grants, and every other effective MEMBER/USAGE/SET path. No opening/admin/owner
+    role-name allowlist is guessed here.
+    Refuses relation/schema/function ownership anywhere in the current database,
+    including catalog and temporary namespaces; no owner exemption is trusted.
+    The final owner must re-observe; this is not a ledger activation gate.
+    """
+
+    if type(query) is not BillingRuntimeLoginQuery:
+        raise BillingRuntimeLoginRefused(BillingRuntimeLoginRefusal.IDENTITY)
+    if conn.closed or conn.info.transaction_status != TransactionStatus.INTRANS:
+        raise BillingRuntimeLoginRefused(
+            BillingRuntimeLoginRefusal.INACTIVE_TRANSACTION
+        )
+    if conn.info.server_version < 160000:
+        raise BillingRuntimeLoginRefused(
+            BillingRuntimeLoginRefusal.UNSUPPORTED_POSTGRES
+        )
+    # libpq retains the startup login even after SET SESSION AUTHORIZATION.
+    # SQL session_user/current_user alone cannot distinguish that impersonation.
+    if conn.info.user != "app_user":
+        raise BillingRuntimeLoginRefused(BillingRuntimeLoginRefusal.IDENTITY)
+    try:
+        with conn.cursor(row_factory=tuple_row) as cursor:
+            # Anchor identities independently of pg_roles view-provided OIDs;
+            # the view must match both those anchors and the actual role names.
+            cursor.execute(
+                """
+                SELECT pg_catalog.current_database(), d.oid, pg_catalog.pg_backend_pid(),
+                       session_user::pg_catalog.regrole::pg_catalog.oid,
+                       current_user::pg_catalog.regrole::pg_catalog.oid,
+                       pg_catalog.pg_current_xact_id_if_assigned()::pg_catalog.text,
+                       pg_catalog.current_setting('transaction_isolation'),
+                       session_user OPERATOR(pg_catalog.=) 'app_user'
+                           AND current_user OPERATOR(pg_catalog.=) 'app_user'
+                           AND s.oid OPERATOR(pg_catalog.=) r.oid,
+                       r.rolcanlogin AND NOT (r.rolsuper OR r.rolbypassrls
+                           OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication)
+                  FROM pg_catalog.pg_database AS d
+                  JOIN pg_catalog.pg_roles AS s
+                    ON s.oid OPERATOR(pg_catalog.=) session_user::pg_catalog.regrole::pg_catalog.oid
+                   AND s.rolname OPERATOR(pg_catalog.=) session_user
+                  JOIN pg_catalog.pg_roles AS r
+                    ON r.oid OPERATOR(pg_catalog.=) current_user::pg_catalog.regrole::pg_catalog.oid
+                   AND r.rolname OPERATOR(pg_catalog.=) current_user
+                 WHERE d.datname OPERATOR(pg_catalog.=) pg_catalog.current_database()
+                """
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise BillingRuntimeLoginRefused(
+                    BillingRuntimeLoginRefusal.CATALOG_UNAVAILABLE
+                )
+            if row[6] != "read committed":
+                raise BillingRuntimeLoginRefused(BillingRuntimeLoginRefusal.ISOLATION)
+            if row[7] is not True:
+                raise BillingRuntimeLoginRefused(BillingRuntimeLoginRefusal.IDENTITY)
+            if row[8] is not True:
+                raise BillingRuntimeLoginRefused(
+                    BillingRuntimeLoginRefusal.PRIVILEGED_ROLE
+                )
+            observation = BillingRuntimeLoginObservation(
+                database_name=str(row[0]),
+                database_oid=int(row[1]),
+                backend_pid=int(row[2]),
+                session_role_oid=int(row[3]),
+                current_role_oid=int(row[4]),
+                transaction_id=None if row[5] is None else str(row[5]),
+                server_version=conn.info.server_version,
+            )
+            cursor.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_roles AS r
+                     WHERE r.oid OPERATOR(pg_catalog.<>) %s AND (
+                         pg_catalog.pg_has_role(%s, r.oid, 'MEMBER')
+                         OR pg_catalog.pg_has_role(%s, r.oid, 'USAGE')
+                         OR pg_catalog.pg_has_role(%s, r.oid, 'SET'))
+                ) OR EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_auth_members AS m
+                     WHERE m.member OPERATOR(pg_catalog.=) %s
+                )
+                """,
+                (observation.session_role_oid,) * 5,
+            )
+            role_paths = cursor.fetchone()
+            if role_paths is None:
+                raise BillingRuntimeLoginRefused(
+                    BillingRuntimeLoginRefusal.CATALOG_UNAVAILABLE
+                )
+            if role_paths[0] is not False:
+                raise BillingRuntimeLoginRefused(BillingRuntimeLoginRefusal.ROLE_PATH)
+            cursor.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_class AS c
+                     WHERE c.relowner OPERATOR(pg_catalog.=) %s
+                ) OR EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_namespace AS n
+                     WHERE n.nspowner OPERATOR(pg_catalog.=) %s
+                ) OR EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_proc AS p
+                     WHERE p.proowner OPERATOR(pg_catalog.=) %s
+                ) OR EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_database AS d
+                     WHERE d.oid OPERATOR(pg_catalog.=) %s
+                       AND d.datdba OPERATOR(pg_catalog.=) %s
+                )
+                """,
+                (
+                    observation.session_role_oid,
+                    observation.session_role_oid,
+                    observation.session_role_oid,
+                    observation.database_oid,
+                    observation.session_role_oid,
+                ),
+            )
+            owners = cursor.fetchone()
+            if owners is None:
+                raise BillingRuntimeLoginRefused(
+                    BillingRuntimeLoginRefusal.CATALOG_UNAVAILABLE
+                )
+            if owners[0] is not False:
+                raise BillingRuntimeLoginRefused(BillingRuntimeLoginRefusal.OWNERSHIP)
+            return observation
+    except Error:
+        # Do not complete or repair the caller's transaction, or expose a DSN.
+        raise BillingRuntimeLoginRefused(
+            BillingRuntimeLoginRefusal.CATALOG_UNAVAILABLE
+        ) from None
+
 
 RolePosture = tuple[bool, bool, bool]
 
@@ -297,6 +490,10 @@ __all__ = [
     "PROBED_SCHEMA_PRIVILEGES",
     "PUBLIC_PROBE_ROLE",
     "SCHEMA_BOOTSTRAP_ROLE",
+    "BillingRuntimeLoginObservation",
+    "BillingRuntimeLoginQuery",
+    "BillingRuntimeLoginRefusal",
+    "BillingRuntimeLoginRefused",
     "DatabaseRoleContract",
     "ModuleSchemaContract",
     "ModuleSchemaObservation",
@@ -308,4 +505,5 @@ __all__ = [
     "module_schema_contract",
     "module_schemas",
     "role_posture_violations",
+    "require_billing_runtime_login",
 ]

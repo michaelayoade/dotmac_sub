@@ -76,6 +76,29 @@
       "reason": "Michael directed the thin-client health goal on 2026-10-16: keep the existing poller/syslog probes and product semantics Sub-local, serialize Starter Platform Health observations at the source edge, and create no Sub health subsystem or deployment authority. He approved commit, push and draft PR #3655 for hosted CI. This entry covers only the listed bounded serialization module; modifications to the existing probe owners need no exception. CODEOWNERS review of this file remains required before merge.",
       "starter_contract": "Starter dotmac-platform-health HealthObservationInput: source_ref, observation_key, component_code, healthy/degraded/unhealthy/unknown state, observed_at, received_at, summary and bounded labels; Platform Health remains the future sole durable observation/evidence owner and Integrator remains the authenticated transport boundary.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "WRITER-DRAIN-3642",
+      "kind": "feature-exception",
+      "paths": [
+        "app/celery_queue_contract.py",
+        "app/services/deployment_writer_drain.py",
+        "app/services/deployment_writer_drain_transport.py"
+      ],
+      "reason": "Michael explicitly approved the scoped exceptions for Sub PR #3642 at ff7678eb3b5d414392134249831f424aee6cde65 on 2026-10-15. This covers only the read-only drain observer: 675 net app lines across the queue contract, observer, transport, existing Celery wiring and SOT declaration. The existing queue identifier is preserved exactly; its single new contract path is separately recorded in the vocabulary baseline (239 -> 240 app paths). No financial writer, new product capability, queue rename, baseline cap relaxation or ledger activation is authorized. Source merge requires green current CI and separate billing-owner approval.",
+      "starter_contract": "Starter Billing single-writer ledger cutover prerequisite (M1, M8, ADR 0020): Sub-owned count-only drain evidence before migration admission; no Starter API or financial command is copied or activated.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "BILLING-ATTACHMENT-CLOSURE-3652",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/legacy_privilege_closure.py"
+      ],
+      "reason": "Michael explicitly approved this scoped source exception for Sub PR #3652 at c678e1013e2533fcf0fd788e88fe51c08d97d7a3 on 2026-10-16. The independently reviewed component adds 753 net app lines including the existing runtime.billing_legacy_archive_fence declaration. It closes trigger and foreign-key construction privileges and verifies the existing relay execution path. This approval covers source scope only; source merge, production fencing and ledger activation remain separate. Hosted runtime acceptance remains required. No surface cap or baseline is relaxed and no further growth is authorized.",
+      "starter_contract": "Starter Billing sole-ledger handoff prerequisite (M1, M8, ADR 0020): Sub owns denial of legacy and relay attachment capabilities before the module's sealed opening and single authority switch. No Starter financial implementation is copied or activated.",
+      "deletion_trigger": "Retire the private installer and this exception after the completed global handoff and archived acceptance evidence permit its removal; preserve installed database guards and the read-only legacy archive.",
+      "approved_by": "michaelayoade"
     }
   ]
 }

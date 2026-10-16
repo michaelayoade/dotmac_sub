@@ -112,7 +112,8 @@ SERVICES: tuple[SOTService, ...] = (
             "invoice direct-transfer intent record creation and replacement",
             "direct-transfer top-up intent proof submission transition",
             "direct-transfer reviewed-proof resolution projection",
-            "gateway invoice and reseller checkout intent record creation",
+            "gateway reseller and prepaid checkout intent record creation",
+            "module-owned invoice checkout compatibility projection",
             "saved-card top-up intent failure projection",
             "top-up intent completed-payment projection",
             "gateway observation lifecycle and blocker projection",
@@ -128,6 +129,8 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.payments",
         ),
         notes=(
+            "Prospective gateway invoice bindings are module-owned; this participant "
+            "projects the frozen getter and refuses retired legacy invoice staging. "
             "The participant derives direct-transfer availability from canonical "
             "active collection-account destinations and customer "
             "instructions. It is the canonical invoice-intent, proof-link, "
@@ -186,12 +189,21 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 ConcernContract(
                     name=(
-                        "gateway invoice and reseller checkout intent record creation"
+                        "gateway reseller and prepaid checkout intent record creation"
                     ),
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "canonical gateway checkout creation evidence",
                         "top-up intent transition protocol",
+                    ),
+                    canonical_writer="financial.topup_intents",
+                ),
+                ConcernContract(
+                    name="module-owned invoice checkout compatibility projection",
+                    role=OwnerRole.PROJECTION_WRITER,
+                    input_names=(
+                        "frozen Payments invoice binding",
+                        "typed invoice gateway routing evidence",
                     ),
                     canonical_writer="financial.topup_intents",
                 ),
@@ -281,10 +293,22 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="financial.gateway_topup_intent_commands",
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
-                        "typed invoice or reseller scope, provider, reference, "
+                        "typed reseller or prepaid scope, provider, reference, "
                         "amount, currency, lifetime, actor, structural Invoice "
                         "identity, and flow evidence"
                     ),
+                ),
+                AuthorityInput(
+                    name="frozen Payments invoice binding",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="Released tenant-scoped PaymentIntentObservationV1; Payments is the sole prospective invoice binding owner",
+                ),
+                AuthorityInput(
+                    name="typed invoice gateway routing evidence",
+                    owner="financial.gateway_topup_intent_commands",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Typed provider/binding/payment-method/actor and original invoice display provenance; no binding reconstruction",
                 ),
                 AuthorityInput(
                     name="typed saved-card failure evidence",
@@ -476,6 +500,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.topup_intents.gateway_currency_invalid",
                     "financial.topup_intents.gateway_expiry_invalid",
                     "financial.topup_intents.gateway_reference_conflict",
+                    "financial.topup_intents.gateway_invoice_binding_retired",
                     "financial.topup_intents.observation_time_invalid",
                     "financial.topup_intents.observation_success_forbidden",
                     "financial.topup_intents.observation_transaction_forbidden",
@@ -534,6 +559,19 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             projections=(
+                ProjectionContract(
+                    name="module-owned invoice checkout compatibility projection",
+                    input_names=(
+                        "frozen Payments invoice binding",
+                        "typed invoice gateway routing evidence",
+                    ),
+                    writer="financial.topup_intents",
+                    freshness="Atomic with module creation and creation event in the existing root",
+                    stale_behavior="Both rows must exist and agree for replay; one-sided references refuse reconstruction",
+                    drift_signal="Stable invoice_binding_conflict or invoice_binding_incomplete; existing read parity telemetry",
+                    rebuild_operation="Exact replay validates only; no mutable binding repair or backfill is admitted",
+                    repair_owner="financial.gateway_topup_intent_commands",
+                ),
                 ProjectionContract(
                     name="gateway intent lifecycle and blocker projection",
                     input_names=(
@@ -626,10 +664,13 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             steward="finance operations",
             design_refs=(
+                "docs/designs/PAYMENT_INVOICE_INTENT_MODULE_OWNER.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
             ),
             test_refs=(
+                "tests/test_gateway_topup_intents.py",
+                "tests/integration/test_payment_invoice_intent_owner_pg.py",
                 "tests/test_payment_proofs.py",
                 "tests/test_direct_transfer_intents.py",
                 "tests/test_topup_intent_projection.py",
@@ -1356,11 +1397,16 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.invoices",
             "financial.topup_intents",
             "integration.installations",
+            "tenancy.operator_tenant",
         ),
         notes=(
             "This coordinator admits typed customer or reseller gateway "
             "creation commands, resolves canonical amount/lifetime policy, and "
-            "commits one intent participant. A failed saved-card transport call "
+            "commits one intent participant. Prospective invoice bindings are opened "
+            "by released Payments on that same root, then projected from its frozen "
+            "getter. Deployment is held until structural correlation, legacy INSERT "
+            "fencing, a persistent schema rollback floor and actual writer drain are "
+            "implemented and approved. A failed saved-card transport call "
             "re-enters a separate command that atomically fails the intent and "
             "releases any unused retry reservation."
         ),
@@ -1372,6 +1418,8 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "authenticated customer gateway creation command",
                         "canonical payable invoice",
+                        "released Payments invoice binding protocol",
+                        "operator tenant scope",
                         "canonical gateway lifetime and amount policy",
                         "canonical deposit intent protocol",
                         "canonical gateway intent protocol",
@@ -1433,8 +1481,20 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "locked invoice account, lifecycle status, currency, and "
-                        "current outstanding balance"
+                        "current outstanding balance for first creation only; replay retains original module binding"
                     ),
+                ),
+                AuthorityInput(
+                    name="released Payments invoice binding protocol",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="Released OpenPaymentIntent and frozen getter on caller Session; sole prospective reference/payer/target/purpose/money/provider/channel/time authority",
+                ),
+                AuthorityInput(
+                    name="operator tenant scope",
+                    owner="tenancy.operator_tenant",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="OPERATOR_TENANT_ID installed by the application root Session tenant hook",
                 ),
                 AuthorityInput(
                     name="canonical reseller billing account",
@@ -1497,7 +1557,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "Each execute_owner_command call admits a transaction-free "
                     "session and commits or rolls back one creation or failure "
                     "operation exactly once. External gateway transport is outside "
-                    "the database command."
+                    "the database command. Module binding, correlated compatibility projection and "
+                    "creation event commit or roll back together; no savepoint recovery."
                 ),
                 locking=(
                     "Customer creation locks account then invoice/intent; reseller "
@@ -1506,7 +1567,10 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 idempotency=(
                     "Deposit creation derives a stable account-scoped digest; "
-                    "invoice/reseller references replay only identical evidence. "
+                    "invoice replay retains original module money and times without resetting "
+                    "terminal lifecycle or reconciliation metadata; one-sided or mismatched "
+                    "bindings refuse creation/reconstruction. Reseller references replay "
+                    "only identical evidence. Binding replay never proves a provider charge. "
                     "A repeated failure is a no-op and an already-removed retry "
                     "reservation remains released."
                 ),
@@ -1527,6 +1591,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.gateway_topup_intent_commands.checkout_binding_unavailable",
                     "financial.gateway_topup_intent_commands.deposit_rejected",
                     "financial.gateway_topup_intent_commands.intent_conflict",
+                    "financial.gateway_topup_intent_commands.invoice_binding_conflict",
+                    "financial.gateway_topup_intent_commands.invoice_binding_incomplete",
+                    "financial.gateway_topup_intent_commands.invoice_charge_verification_required",
                     "financial.gateway_topup_intent_commands.record_invalid",
                     "financial.gateway_topup_intent_commands.billing_account_unavailable",
                     "financial.gateway_topup_intent_commands.reservation_mismatch",
@@ -1589,10 +1656,12 @@ SERVICES: tuple[SOTService, ...] = (
             design_refs=(
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/designs/PAYMENT_GATEWAY_CONTROL_PLANE_SOT.md",
+                "docs/designs/PAYMENT_INVOICE_INTENT_MODULE_OWNER.md",
                 "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
             ),
             test_refs=(
                 "tests/test_gateway_topup_intents.py",
+                "tests/integration/test_payment_invoice_intent_owner_pg.py",
                 "tests/test_customer_portal_topup_flow.py",
                 "tests/architecture/test_topup_intent_ownership.py",
             ),

@@ -591,7 +591,14 @@ forbidden_modules = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["app.services.payment_intent_module_shadow"]
+module = [
+    "app.services.payment_intent_module_shadow",
+    "app.services.payment_charge_contracts",
+    "app.services.payments_intent_schema_floor",
+    "app.services.deployment_writer_drain",
+    "app.services.deployment_writer_drain_transport",
+    "scripts.observe_writer_drain",
+]
 # The strict preset mutates global options even inside mypy overrides.
 # List supported per-module strict checks so this boundary alone is enrolled.
 disallow_any_generics = true

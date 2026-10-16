@@ -582,3 +582,36 @@ owned by `dotmac_app` and nothing else, so `--repair-schemas` is the
 deployment's mode and the elevated `--repair` remains one-off operator
 provisioning. A missing cluster role is reported as `blocked`, never worked
 around.
+
+
+## Amendment — 2026-10-15: Sub is the first Billing authority cutover
+
+Michael's 2026-10-13 M1/M6/M8 decisions supersede the earlier Vendor-first
+ordering for Billing. Sub is Billing cutover 1 on its tenant plane, as recorded
+in Starter ADR 0020's 2026-10-15 sequencing amendment. This amendment applies
+to Billing; each other module retains its own adoption gates.
+
+Sub consumes provenance-published, exactly pinned Starter packages. Financial
+caller source can migrate incrementally behind those contracts, but invoice,
+settlement, allocation and credit authority changes once globally. No caller,
+provider or account cohort may start posting to a parallel ledger, and no
+dual-writing transition is permitted. The current `commercial_provider="none"`
+profile and the local customer-subledger activation are not that global switch.
+
+M6 retains pay-then-record prepaid funding, with the final service period known
+when the funded obligation is created. M8 migrates open items and independently
+evidenced opening lanes; closed history stays a provenance-labelled read-only
+Sub archive. Missing evidence belongs in manual exceptions, not repair writers.
+
+The global switch requires complete caller migration, a production-shaped
+rehearsal, stopped legacy producers and final drain proof, an enforceable legacy
+financial DML fence, one migration-role opening import, permanent opening seal,
+and an immutable handoff receipt binding the reviewed image, source inventory
+and coupled watermark. Rollback must not reopen legacy financial writes.
+Source composition, package publication, a drain observation or a local
+subledger latch alone satisfies none of those combined activation requirements.
+
+ERP keeps GL and statutory accounting authority. Its existing feed must consume
+committed Billing facts or safely queue them; a new ERP receiver is outside the
+Sub switch's critical path. This records the approved sequencing and gates,
+without claiming deployment, rehearsal, import, seal or authority activation.

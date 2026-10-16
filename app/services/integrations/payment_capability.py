@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from pydantic import JsonValue
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -27,11 +28,23 @@ from app.services.integrations.connectors.payment_gateway import (
     PAYMENT_RECONCILE_CAPABILITY,
     PAYMENT_REFUND_CAPABILITY,
     PAYMENT_WEBHOOK_CAPABILITY,
+    execute_authorization_charge,
+    execute_authorization_observation,
 )
-from app.services.integrations.runtime import OperationStatus, OperationTrigger
+from app.services.integrations.runtime import (
+    OperationResult,
+    OperationStatus,
+    OperationTrigger,
+)
 from app.services.integrations.runtime_execution import (
     build_execution_context,
     make_operation_executor,
+)
+from app.services.payment_charge_contracts import (
+    ChargeAuthorizationCommand,
+    ChargeAuthorizationObservation,
+    ChargeProtocolError,
+    ObserveAuthorizationChargeReference,
 )
 from app.services.secrets import resolve_secret
 
@@ -346,35 +359,61 @@ def initialize_transaction(
     )
 
 
-def charge_authorization(
+def _authorization_executor(
     db: Session,
     *,
-    authorization_code: str,
-    email: str,
-    amount_kobo: int,
     reference: str,
-    metadata: dict[str, Any] | None = None,
-    checkout_binding_id: str | uuid.UUID | None = None,
-) -> dict[str, Any]:
-    return dict(
-        _execute(
-            db,
-            provider_type="paystack",
-            capability_id=PAYMENT_INTENT_CAPABILITY,
-            action="charge_authorization",
-            params={
-                "authorization_code": authorization_code,
-                "email": email,
-                "amount_kobo": amount_kobo,
-                "reference": reference,
-                "metadata": metadata or {},
-            },
-            trigger=OperationTrigger.event,
-            correlation_id=f"payment-charge-authorization:{reference}",
-            checkout_binding_id=checkout_binding_id,
-        ).get("item")
-        or {}
+    binding_id: uuid.UUID | None,
+    capability_id: str,
+) -> Callable[[str, dict[str, JsonValue]], OperationResult]:
+    binding = _binding(db, "paystack", capability_id, checkout_binding_id=binding_id)
+    context = build_execution_context(db, capability_binding_id=binding.id)
+    return make_operation_executor(
+        context,
+        correlation_id=(
+            f"payment-verify:paystack:{reference}"
+            if capability_id == PAYMENT_RECONCILE_CAPABILITY
+            else f"payment-charge-authorization:{reference}"
+        )[:160],
+        trigger=OperationTrigger.interactive
+        if capability_id == PAYMENT_RECONCILE_CAPABILITY
+        else OperationTrigger.event,
+        actor="integration.payments",
     )
+
+
+def charge_authorization(
+    db: Session,
+    command: ChargeAuthorizationCommand,
+) -> ChargeAuthorizationObservation:
+    """Submit typed transport facts; observation conveys no settlement authority."""
+    execute = _authorization_executor(
+        db,
+        reference=command.reference,
+        binding_id=command.checkout_binding_id,
+        capability_id=PAYMENT_INTENT_CAPABILITY,
+    )
+    try:
+        return execute_authorization_charge(command, execute)
+    except ChargeProtocolError as exc:
+        raise PaymentCapabilityError(str(exc)) from exc
+
+
+def observe_authorization_charge_reference(
+    db: Session,
+    query: ObserveAuthorizationChargeReference,
+) -> ChargeAuthorizationObservation:
+    """Observe the existing verification transport with a typed reference query."""
+    execute = _authorization_executor(
+        db,
+        reference=query.reference,
+        binding_id=query.checkout_binding_id,
+        capability_id=PAYMENT_RECONCILE_CAPABILITY,
+    )
+    try:
+        return execute_authorization_observation(query, execute)
+    except ChargeProtocolError as exc:
+        raise PaymentCapabilityError(str(exc)) from exc
 
 
 def verify_transaction(
