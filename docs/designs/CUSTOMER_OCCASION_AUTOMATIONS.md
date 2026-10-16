@@ -107,3 +107,32 @@ acceptance must use `make test-integration` with an explicit disposable
 `TEST_DATABASE_URL`, migrated through the real chain. Fresh-baseline and real
 690-to-691 migration rehearsals are required before release. Migration 691 is
 additive and refuses destructive downgrade; retirement requires a forward fix.
+
+
+## Starter extraction contract
+
+Michael approved the narrowly scoped Sub-first exception for PR #3658 on
+2026-10-16 after the feature freeze was explained: "Yes, keep them in Selfcare."
+The exception and the additive configuration migration are recorded in
+`docs/feature_freeze_exceptions.json`; CODEOWNERS review remains required.
+Both automations remain disabled for review. No other capability is exempted.
+
+The extraction target is **Starter Communications annual-greetings/v1**, a
+proposed contract rather than an existing published package. It comprises:
+
+- Immutable occasion configuration: occasion enum, enabled admission state,
+  schedule/timezone, plain-text content, and optimistic revision.
+- Immutable recipient facts supplied by Sub: customer UUID, authoritative
+  birth/original-start date, account status, primary email, consent and
+  preference evidence, with source and observation time.
+- Typed local-calendar evaluation and outcomes: eligible/suppressed reason,
+  completed years, and the stable occasion/customer/calendar-year identity.
+- Typed requests to the incumbent communication-intent participant; provider
+  credentials, direct sending, billing decisions and guessed joining dates
+  are outside this contract.
+
+A future published, pinned package consumes these facts through a Sub adapter.
+Cutover requires preservation of configuration revisions and annual intent keys,
+parity of status/consent/date behavior, and removal of the Sub implementation in
+the same ownership slice. Sub remains authoritative until that separate,
+reviewed migration; there is no shadow writer or automatic future enablement.

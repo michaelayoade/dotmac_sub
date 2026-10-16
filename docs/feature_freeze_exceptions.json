@@ -66,6 +66,31 @@
       "starter_contract": "Published dotmac-payments 0.1.0a2 GetPaymentIntentV1 / get_payment_intent_v1: caller-owned tenant-scoped Session, persisted immutable intent binding observation, no autoflush or settlement authority.",
       "deletion_trigger": "Delete the adapter, caller hook, metric, SOT entry and this exception when approved Payments ownership and complete backfill/parity permit retirement of legacy checkout bindings.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "CUSTOMER-OCCASIONS-3658",
+      "kind": "feature-exception",
+      "paths": [
+        "app/models/customer_occasion.py",
+        "app/services/customer_occasion_contracts.py",
+        "app/services/customer_occasion_values.py",
+        "app/services/customer_occasions.py",
+        "app/services/sot_registry/customer_occasion_contracts.py",
+        "app/tasks/customer_occasions.py",
+        "app/web/admin/customer_occasions.py"
+      ],
+      "reason": "Michael explicitly approved this one-time exception for Sub PR #3658 on 2026-10-16 in the implementation conversation: 'Yes, keep them in Selfcare', after the current main feature freeze and shared-platform alternative were explained. Scope is birthday and original-service anniversary emails using the incumbent Sub customer facts and communication-intent delivery owner, with both automations disabled for review. Anniversary recipients are exactly active or suspended. This is a bounded operator-requested customer communication slice; it creates no billing authority or alternative transport, and does not authorize unrelated growth. CODEOWNERS review of this file remains required before merge.",
+      "starter_contract": "Proposed Starter Communications annual-greetings/v1 extraction target, not a claim of an existing package: immutable occasion configuration and recipient-fact contracts, local-calendar evaluation, annual idempotency, and typed communication-intent requests. Sub retains customer date/status/consent authority and its incumbent delivery owner until a separately reviewed pinned-package cutover. See docs/designs/CUSTOMER_OCCASION_AUTOMATIONS.md#starter-extraction-contract.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "CUSTOMER-OCCASIONS-3658-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/691_customer_occasion_automations.py"
+      ],
+      "reason": "Michael's explicit 2026-10-16 approval for PR #3658 covers the new birthday/anniversary modules and their configuration migration, both disabled for review. Migration 691 closes the approved feature's durable fail-closed configuration gap: two disabled versioned rows, bounded schedule constraints, and separate read/update/test permissions. It is additive, does not infer or backfill joining dates, and does not change financial or customer lifecycle state. This scoped schema exception is part of the approved new capability, not a claim that the feature is an existing-code bug fix.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
