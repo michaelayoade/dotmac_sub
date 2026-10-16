@@ -85,7 +85,7 @@ def test_staff_gate_hydrates_restricted_staff_navigation_permissions(monkeypatch
         return auth_values["permission_keys"]
 
     monkeypatch.setattr(
-        "app.web.auth.dependencies.load_permission_keys", hydrate_permission_keys
+        "app.services.auth_dependencies.load_permission_keys", hydrate_permission_keys
     )
 
     result = _require(auth, request=request)
@@ -147,3 +147,34 @@ def test_staff_gate_rejects_non_staff_system_user(user_type: UserType):
     with pytest.raises(HTTPException) as exc:
         _require(auth)
     assert exc.value.status_code == 403
+
+
+def test_staff_gate_permission_load_db_error_falls_back_to_empty_set(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    request = _request()
+    auth = {
+        "principal_type": "system_user",
+        "principal_id": str(uuid4()),
+        "roles": ["support"],
+        "scopes": [],
+        "subscriber": SystemUser(
+            first_name="Support",
+            last_name="User",
+            email="support@example.test",
+            user_type=UserType.system_user,
+            is_active=True,
+        ),
+    }
+
+    def failing_load(_auth, _db):
+        raise OperationalError("select", {}, Exception("db down"))
+
+    monkeypatch.setattr(
+        "app.services.auth_dependencies.load_permission_keys", failing_load
+    )
+
+    result = _require(auth, request=request)
+
+    assert result is auth
+    assert auth["permission_keys"] == frozenset()
