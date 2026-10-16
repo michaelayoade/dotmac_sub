@@ -154,6 +154,9 @@ def test_unresolved_migration_interlock_never_invokes_staged_wrapper(
     monkeypatch.setattr(trusted_deploy, "_acquire_canonical_lock", lambda: lock_fd)
     monkeypatch.setattr(trusted_deploy, "_require_trusted_control", lambda *_: None)
     monkeypatch.setattr(
+        trusted_deploy, "_require_clean_target", lambda *_: (tmp_path, tmp_path)
+    )
+    monkeypatch.setattr(
         trusted_deploy,
         "guard_migration_interlock",
         lambda *_: (_ for _ in ()).throw(
@@ -322,7 +325,7 @@ def test_canonical_lock_is_inherited_until_target_recovery_finishes(
     lock_path = tmp_path / "trusted.lock"
     marker = tmp_path / "lock-observation.txt"
     repository = Path(__file__).resolve().parents[1]
-    isolated_code = """
+    isolated_code = r"""
 import fcntl, os, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[3])

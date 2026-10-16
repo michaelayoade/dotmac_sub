@@ -4,6 +4,7 @@ No create_all, stamped schema, fabricated module tables, or injected grants.
 The unique ephemeral login inherits only migration-supplied app_user grants.
 """
 
+import importlib.util
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,10 +15,11 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from dotmac_kernel.models import Tenant
 from psycopg import sql
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
@@ -30,6 +32,13 @@ from app.services.payments_intent_schema_floor import (
     legacy_image_rollback_allowed,
     read_payments_intent_schema_floor,
 )
+from scripts.ci.migrated_test_database import (
+    effective_heads,
+    install_migration_graph_environment,
+)
+from tests.integration import test_kernel_lineage_rehearsal as kernel_rehearsal
+
+isolated_database = kernel_rehearsal.isolated_database
 
 
 @dataclass(frozen=True)
@@ -555,9 +564,18 @@ def test_installed_floor_refuses_downgrade_before_first_linked_row(
             )
             == 0
         )
-    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    # Exercise the actual 691 refusal directly: a real downgrade from current
+    # heads correctly stops at the later forward-only 693 revision first.
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "alembic/versions/691_payments_intent_correlation.py"
+    )
+    spec = importlib.util.spec_from_file_location("intent_floor_downgrade", path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
     with pytest.raises(RuntimeError, match="floor is permanent"):
-        command.downgrade(config, "690_backdated_invoice_permissions")
+        migration.downgrade()
     with Session(migrated_intents.runtime) as db:
         observed = read_payments_intent_schema_floor(db)
         assert observed.installed_shape_complete
@@ -593,3 +611,51 @@ def test_module_rls_hides_foreign_tenant_and_fk_cannot_alias_it(
         )
         with pytest.raises(DBAPIError):
             db.execute(text(_LOCAL_INSERT), _parameters(migrated_intents, identity))
+
+
+def test_fresh_chain_installs_payments_intent_floor_and_replays(
+    isolated_database: URL,
+) -> None:
+    """Prove floor/catalog installation by executing real Alembic from empty."""
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    config.set_main_option(
+        "sqlalchemy.url", isolated_database.render_as_string(hide_password=False)
+    )
+    install_migration_graph_environment()
+    script = ScriptDirectory.from_config(config)
+    expected = effective_heads(script)
+    assert {
+        "691_payments_intent_correlation",
+        "pm_0003_confirmation_immutable",
+    } <= {
+        revision.revision
+        for revision in script.iterate_revisions(tuple(expected), "base")
+    }
+    command.upgrade(config, "heads")
+    admin = create_engine(isolated_database)
+    try:
+        with admin.connect() as connection:
+            assert (
+                frozenset(
+                    connection.execute(
+                        text("SELECT version_num FROM alembic_version")
+                    ).scalars()
+                )
+                == expected
+            )
+        with _actual_runtime_login(admin) as runtime, Session(runtime) as db:
+            observed = read_payments_intent_schema_floor(db)
+            assert observed.installed_shape_complete
+            assert not legacy_image_rollback_allowed(observed)
+        command.upgrade(config, "heads")
+        with admin.connect() as connection:
+            assert (
+                frozenset(
+                    connection.execute(
+                        text("SELECT version_num FROM alembic_version")
+                    ).scalars()
+                )
+                == expected
+            )
+    finally:
+        admin.dispose()

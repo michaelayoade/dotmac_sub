@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from dotmac_billing.service import create_billing_account
 from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency, Money
@@ -41,7 +42,7 @@ from app.models.billing import (
     PaymentStatus,
     TopupIntent,
 )
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Reseller, Subscriber
 from app.services import session_hooks
 from app.services.events import dispatcher
 from app.services.operator_tenant import OPERATOR_TENANT_ID
@@ -59,8 +60,15 @@ from app.services.provider_payment_settlements import (
     ModuleInvoiceCashSourceQuery,
     get_module_invoice_cash_source,
 )
+from scripts.ci.migrated_test_database import (
+    effective_heads,
+    install_migration_graph_environment,
+)
 from tests.integration import (
     test_billing_runtime_login_postgres as hosted_runtime_login,
+)
+from tests.integration import (
+    test_kernel_lineage_rehearsal as kernel_rehearsal,
 )
 from tests.integration.test_billing_runtime_login_postgres import (
     RuntimeConnections,
@@ -68,6 +76,59 @@ from tests.integration.test_billing_runtime_login_postgres import (
 
 # Explicit fixture re-export: shared owner retains authentication/cleanup custody.
 runtime_connections = hosted_runtime_login.runtime_connections
+isolated_database = kernel_rehearsal.isolated_database
+
+
+def test_fresh_chain_installs_provider_source_guards(isolated_database: URL) -> None:
+    """Replay the real installed chain from an empty database, then replay head."""
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    config.set_main_option(
+        "sqlalchemy.url", isolated_database.render_as_string(hide_password=False)
+    )
+    install_migration_graph_environment()
+    expected_heads = effective_heads(ScriptDirectory.from_config(config))
+    engine = create_engine(isolated_database)
+    try:
+        for _ in range(2):
+            alembic_command.upgrade(config, "heads")
+            with engine.connect() as connection:
+                assert (
+                    frozenset(
+                        connection.execute(
+                            text("SELECT version_num FROM public.alembic_version")
+                        ).scalars()
+                    )
+                    == expected_heads
+                )
+                guards = connection.execute(
+                    text("""
+                    SELECT t.tgname, t.tgenabled, t.tgtype, f.prosecdef, f.proconfig
+                    FROM pg_catalog.pg_trigger t
+                    JOIN pg_catalog.pg_proc f ON f.oid=t.tgfoid
+                    WHERE t.tgrelid='public.payment_provider_events'::regclass
+                      AND NOT t.tgisinternal
+                      AND f.oid='public.guard_verified_provider_source_facts()'::regprocedure
+                    ORDER BY t.tgname
+                """)
+                ).all()
+                assert [tuple(row) for row in guards] == [
+                    (
+                        "provider_source_facts_no_truncate",
+                        "A",
+                        34,
+                        False,
+                        ["search_path=pg_catalog"],
+                    ),
+                    (
+                        "verified_provider_source_facts_immutable",
+                        "A",
+                        25,
+                        False,
+                        ["search_path=pg_catalog"],
+                    ),
+                ]
+    finally:
+        engine.dispose()
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +183,10 @@ def source_case(
         reference = f"cash-source-{uuid4()}"
         with Session(admin) as db:
             account = Subscriber(
-                first_name="Cash", last_name="Canary", email=f"{uuid4()}@example.test"
+                first_name="Cash",
+                last_name="Canary",
+                email=f"{uuid4()}@example.test",
+                reseller=Reseller(name=f"Cash source fixture {uuid4()}"),
             )
             provider = PaymentProvider(
                 name=f"cash-source-{uuid4()}",

@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 import sqlalchemy as sa
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from dotmac_kernel.cache import TenantScope
 from dotmac_payments import GetPaymentIntentV1, get_payment_intent_v1
 from sqlalchemy.engine import URL
@@ -31,6 +32,10 @@ from app.services.payment_intent_module_shadow import (
     IntentParityOutcome,
     authorized_invoice_binding,
     observe_invoice_intent_parity,
+)
+from scripts.ci.migrated_test_database import (
+    effective_heads,
+    install_migration_graph_environment,
 )
 from tests.integration import test_kernel_lineage_rehearsal as kernel_rehearsal
 
@@ -54,6 +59,23 @@ def _config(database_url: URL) -> Config:
     config.set_main_option("script_location", "alembic")
     config.set_main_option("sqlalchemy.url", _render(database_url))
     return config
+
+
+def _assert_composed_heads(config: Config, connection: sa.Connection) -> None:
+    install_migration_graph_environment()
+    script = ScriptDirectory.from_config(config)
+    expected = effective_heads(script)
+    assert _heads(connection) == set(expected)
+    ancestry = {
+        revision.revision
+        for revision in script.iterate_revisions(tuple(expected), "base")
+    }
+    assert PAYMENTS_HEAD in ancestry
+    assert PAYMENTS_HEAD not in expected
+    assert (
+        script.get_revision("691_payments_intent_correlation").dependencies
+        == PAYMENTS_HEAD
+    )
 
 
 def _heads(connection: sa.Connection) -> set[str]:
@@ -128,7 +150,7 @@ def test_payments_lineage_catalog_effective_rls_and_replay(
 
         with engine.connect() as connection:
             before_heads = _heads(connection)
-            assert PAYMENTS_HEAD in before_heads
+            _assert_composed_heads(config, connection)
             posture = {
                 row.table_name: (row.rls_enabled, row.rls_forced)
                 for row in connection.execute(

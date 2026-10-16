@@ -51,8 +51,8 @@ SERVICES: tuple[SOTService, ...] = (
                 AuthorityInput(
                     name="frozen Payments invoice checkout",
                     owner="external:dotmac_payments",
-                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                    source="Public Payments a2 query, paired local intent link and original lifetime.",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="Public Payments a2 query, paired local intent link and original lifetime; checkout observations confer no cash authority.",
                 ),
             ),
             transaction=TransactionContract(
@@ -82,7 +82,10 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             steward="billing and finance operations",
             design_refs=("docs/designs/BILLING_LEDGER_HANDOFF.md",),
-            test_refs=("tests/integration/test_provider_invoice_module_cash_pg.py",),
+            test_refs=(
+                "tests/integration/test_provider_invoice_module_cash_pg.py",
+                "tests/architecture/test_sot_registry_liveness.py",
+            ),
         ),
     ),
     SOTService(

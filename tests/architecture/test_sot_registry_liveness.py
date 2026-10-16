@@ -176,9 +176,17 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
             "customer.work_order_tracking",
             "customer.work_order_selfcare",
         },
+        # Preparatory source reads and incumbent cash orchestration have
+        # distinct concerns. Retire this exact split with the old money path.
+        "app.services.provider_payment_settlements": {
+            "financial.provider_invoice_module_cash_source",
+            "financial.provider_payment_settlements",
+        },
     }
     for module, expected_names in split_boundaries.items():
-        assert set(duplicates.get(module, ())) == expected_names
+        assert set(duplicates.get(module, ())) == expected_names, (
+            f"{module} exact owner split changed"
+        )
     unexpected = {
         module: names
         for module, names in duplicates.items()
@@ -196,6 +204,65 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
             for module, names in sorted(unexpected.items())
         )
     )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["add_third_owner", "remove_query_owner", "remove_settlement_owner"]
+)
+def test_provider_settlement_module_split_rejects_changed_owners(
+    monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    from dataclasses import replace
+
+    query_owner = "financial.provider_invoice_module_cash_source"
+    settlement_owner = "financial.provider_payment_settlements"
+    domains = sot_relationships.DOMAIN_SOT_RELATIONSHIPS
+    changed = []
+    for domain in domains:
+        services = domain.services
+        if any(service.name == query_owner for service in services):
+            if mutation == "add_third_owner":
+                query = next(
+                    service for service in services if service.name == query_owner
+                )
+                services = (
+                    *services,
+                    replace(query, name="planted.third_provider_owner"),
+                )
+            else:
+                removed = (
+                    query_owner
+                    if mutation == "remove_query_owner"
+                    else settlement_owner
+                )
+                services = tuple(
+                    service for service in services if service.name != removed
+                )
+        changed.append(replace(domain, services=services))
+    monkeypatch.setattr(sot_relationships, "DOMAIN_SOT_RELATIONSHIPS", tuple(changed))
+    with pytest.raises(
+        AssertionError, match="provider_payment_settlements exact owner split changed"
+    ):
+        test_no_module_is_declared_under_unexpected_owner_names()
+
+
+def test_provider_invoice_cash_source_remains_an_observation_only_query() -> None:
+    from app.services.sot_manifest import AuthorityKind, OwnerRole, TransactionMode
+
+    service = sot_relationships.service_relationship(
+        "financial.provider_invoice_module_cash_source"
+    )
+    assert service.contract is not None
+    assert service.contract.transaction.mode is TransactionMode.READ_ONLY
+    assert len(service.contract.concerns) == 1
+    assert service.contract.concerns[0].role is OwnerRole.RESOLVER
+    checkout = next(
+        item
+        for item in service.contract.authoritative_inputs
+        if item.name == "frozen Payments invoice checkout"
+    )
+    assert checkout.owner == "external:dotmac_payments"
+    assert checkout.kind is AuthorityKind.EXTERNAL_OBSERVATION
 
 
 def test_additional_implementation_is_part_of_writer_coverage() -> None:

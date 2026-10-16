@@ -195,6 +195,13 @@ query as validated financial identity. It does not read current invoice
 eligibility or substitute today's TTL.
 It returns observations, not a caller-constructed permission to move money.
 
+The source query and incumbent `financial.provider_payment_settlements`
+orchestration share an implementation module but own distinct concerns. The
+architecture guard pins exactly these two owners; it admits no third owner.
+Legacy cash, allocation and outbox authority stays with the incumbent while the
+query remains read-only. Remove this exact module split when all callers have
+migrated to the sole Starter ledger and the incumbent orchestration is retired.
+
 Revision `692_module_invoice_cash` expands the schema after 691. Its Billing
 dependency is the already released `bi_0001_billing`: that migration declares both referenced composite
 account and settlement/account keys. It does not depend on or claim release of

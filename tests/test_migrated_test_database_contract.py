@@ -5,11 +5,16 @@ from __future__ import annotations
 from dataclasses import fields
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from scripts.ci.migrated_test_database import (
+    ALEMBIC_CONFIG_PATH,
     DatabaseContractError,
     DatabaseRefusal,
+    effective_heads,
+    install_migration_graph_environment,
     migrated_schema_state,
     parse_test_database_target,
     repository_heads,
@@ -114,10 +119,19 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     # composed module branches. Alembic applies them, then records only the
     # effective branch heads in its version table. Migration 691 also consumes
     # the released Payments pm_0003 head through its depends_on edge.
-    assert repository_heads() == frozenset(
+    install_migration_graph_environment()
+    script = ScriptDirectory.from_config(Config(str(ALEMBIC_CONFIG_PATH)))
+    expected = effective_heads(script)
+    assert repository_heads() == expected
+    ancestry = {
+        revision.revision
+        for revision in script.iterate_revisions(tuple(expected), "base")
+    }
+    assert {"bi_0001_billing", "pm_0003_confirmation_immutable"} <= ancestry
+    assert not {"bi_0001_billing", "pm_0003_confirmation_immutable"} & expected
+    assert expected == frozenset(
         {
-            "691_payments_intent_correlation",
-            "bi_0001_billing",
+            "693_provider_source_facts",
             "cl_0001_collections",
             "ib_0001_conversations",
             "nu_0001_numbering",

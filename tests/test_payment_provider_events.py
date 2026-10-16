@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC
 from decimal import Decimal
 from uuid import uuid4
 
@@ -347,7 +348,14 @@ def test_pending_verified_replay_preserves_first_source_and_facts(
     assert not second.replayed
     assert second.source is first.source
     assert second.observation_digest == first.observation_digest
-    assert second.received_at == first.received_at
+    # SQLite drops the UTC timezone marker when reloading a persisted timestamp.
+    first_received_at = first.received_at
+    second_received_at = second.received_at
+    if first_received_at.tzinfo is None:
+        first_received_at = first_received_at.replace(tzinfo=UTC)
+    if second_received_at.tzinfo is None:
+        second_received_at = second_received_at.replace(tzinfo=UTC)
+    assert second_received_at == first_received_at
     assert persisted.payload == {"delivery": "retry"}
     assert persisted.status is PaymentProviderEventStatus.failed
     assert persisted.error_code == "payment_not_found"
