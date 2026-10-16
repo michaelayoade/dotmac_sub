@@ -2030,6 +2030,12 @@ class TopupIntent(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    # Composite cross-module FK is migration-owned: public metadata does not
+    # import the released Payments model/persistence implementation.
+    module_intent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    module_intent_tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
+    )
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )

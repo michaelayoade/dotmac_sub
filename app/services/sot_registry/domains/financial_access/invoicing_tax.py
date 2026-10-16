@@ -75,8 +75,8 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.READ_ONLY,
-                boundary="Caller supplies clean PostgreSQL READ ONLY REPEATABLE READ/SERIALIZABLE transaction; no begin, commit, rollback, savepoint or flush; autoflush restored.",
-                locking="No write locks. Snapshot captures current mutable rows; timestamps cannot reconstruct historical values.",
+                boundary="Preview requires clean PostgreSQL READ ONLY REPEATABLE READ/SERIALIZABLE. Same-owner locked population query requires clean active READ WRITE READ COMMITTED root transaction; census only, no begin, commit, rollback, savepoint or flush; autoflush restored.",
+                locking="Preview acquires no write locks. Locked population query acquires none and verifies actual current-backend granted SHARE ROW EXCLUSIVE or stronger locks on its exact census relations, public name resolution and non-inherited ordinary tables before fresh READ COMMITTED observations. This is not a complete legacy fence; the future handoff owner retains its complete final-strength locks through seal and commit. Timestamps never reconstruct historical values.",
                 idempotency="No persistence. Canonically ordered evidence produces a content fingerprint excluding capture clock/snapshot label.",
                 retries="Caller retries entire read snapshot on failure; never partial capture.",
             ),
@@ -86,6 +86,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.invoices.opening_export.snapshot_required",
                     "financial.invoices.opening_export.schema_evidence_missing",
                     "financial.invoices.opening_export.nonfinite_source",
+                    "financial.invoices.opening_export.locked_capture_required",
+                    "financial.invoices.opening_export.population_lock_required",
                 ),
                 mapping_owner="future source evidence adapter",
                 fail_closed_on=(
@@ -102,7 +104,10 @@ SERVICES: tuple[SOTService, ...] = (
                 fallback_retirement="No parallel settlement or lane resolver introduced.",
             ),
             steward="billing operations",
-            design_refs=("docs/designs/BILLING_OPENING_EVIDENCE_CENSUS.md",),
+            design_refs=(
+                "docs/designs/BILLING_OPENING_EVIDENCE_CENSUS.md",
+                "docs/designs/BILLING_LOCKED_OPENING_POPULATION.md",
+            ),
             test_refs=(
                 "tests/test_billing_opening_export.py",
                 "tests/integration/test_billing_opening_export.py",

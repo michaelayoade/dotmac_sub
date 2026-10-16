@@ -699,7 +699,7 @@ def test_v3_current_tax_observations_preserve_null_and_zero_without_qualificatio
             )
         ],
     ]
-    observations = owner._documentary_observations(db, report=base)
+    observations = owner._documentary_observations(db, invoices=base.invoices)
     assert observations.current_invoices[0].subtotal == Decimal("95")
     assert observations.current_lines[0].tax_rate_percent_snapshot == percent
     assert observations.current_lines[0].tax_rate_id == tax_id
@@ -768,7 +768,7 @@ def test_v3_nonfinite_current_document_observation_fails_without_substitution(
         [],
     ]
     with pytest.raises(owner.BillingOpeningExportError) as error:
-        owner._documentary_observations(db, report=base)
+        owner._documentary_observations(db, invoices=base.invoices)
     assert error.value.code.endswith("nonfinite_source")
 
 

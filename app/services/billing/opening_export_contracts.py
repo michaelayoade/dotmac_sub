@@ -525,3 +525,37 @@ class DocumentaryObservationPopulation:
 @dataclass(frozen=True)
 class BillingOpeningExportPreviewV3(BillingOpeningExportPreviewV2):
     documentary_observations: DocumentaryObservationPopulation
+
+
+@dataclass(frozen=True)
+class CaptureLockedBillingOpeningPopulationQuery:
+    """Declarations only; actual transaction and locks are verified by the owner."""
+
+    source: PreviewBillingOpeningExportQuery
+
+
+@dataclass(frozen=True)
+class BillingOpeningPopulation:
+    """Raw typed census with canonical settlement observations, no eligibility."""
+
+    subscriber_ids: tuple[UUID, ...]
+    invoices: tuple[InvoiceOpeningEvidence, ...]
+    lines: tuple[InvoiceLineEvidence, ...]
+    settlements: tuple[SettlementEvidence, ...]
+    financial_sources: tuple[FinancialSourceEvidence, ...]
+    effects: tuple[PositionEffectEvidence, ...]
+
+
+@dataclass(frozen=True)
+class LockedBillingOpeningPopulation:
+    """Bounded census observation, never a complete legacy fence certificate.
+
+    snapshot_id labels the post-lock observation, not a repeatable-read snapshot.
+    Locks remain the caller transaction's responsibility throughout final seal.
+    """
+
+    capture: CaptureEvidence
+    locked_population_relations: tuple[str, ...]
+    population: BillingOpeningPopulation
+    cash_evidence: CashEvidencePopulation | None
+    documentary_observations: DocumentaryObservationPopulation | None
