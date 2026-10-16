@@ -1,5 +1,11 @@
 # Single Source of Truth Relationship Map
 
+Inbox spam resolution remains owned by `communications.team_inbox_status`.
+Its typed readiness exposes the explicit action only for unresolved identity
+without a required pending Lead link; the locked transition rechecks eligibility,
+records immutable resolution evidence, and omits CSAT. Ordinary Customer/Lead
+completion and identity gates remain owned by their existing services.
+
 This document names the service layers that should own decisions. Web/API
 routes and Celery tasks should be thin wrappers around these services.
 
