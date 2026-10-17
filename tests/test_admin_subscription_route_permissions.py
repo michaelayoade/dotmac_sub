@@ -176,7 +176,11 @@ MUTATION_ROUTES = [
     ("POST", f"{_S}/register-radio-mac", ("subscription:update",)),
     ("POST", f"{_S}/force-reauth", ("subscription:update",)),
     ("POST", f"{_S}/send-credentials", ("subscription:update",)),
-    ("POST", f"{_S}/correction/execute", ("subscription:update",)),
+    (
+        "GET",
+        "/admin/catalog/subscriptions/ipam/ipv4-available?selector=x",
+        ("subscription:read",),
+    ),
     ("POST", f"{_S}/lifecycle/schedules/sched-1/cancel", ("subscription:update",)),
     ("POST", f"{_S}/lifecycle/schedules/sched-1/cancel-view", ("subscription:update",)),
     ("POST", f"{_S}/pending-change/req-1/cancel", ("subscription:update",)),
@@ -242,12 +246,12 @@ LIFECYCLE_EXPECTED = {
     "suspend": "subscription:suspend",
     "pause": "subscription:suspend",
     "cancel": "subscription:cancel",
-    "disable": "subscription:update",
+    "disable": "subscription:suspend",
     "renew": "subscription:update",
-    "expire": "subscription:update",
+    "expire": "subscription:cancel",
     "change_plan": "subscription:update",
-    "vacation_hold": "subscription:update",
-    "vacation_resume": "subscription:update",
+    "vacation_hold": "subscription:suspend",
+    "vacation_resume": "subscription:activate",
 }
 
 
@@ -275,6 +279,104 @@ def test_lifecycle_execute_enforces_the_requested_action(client_for, kind, requi
     allowed = _execute(client_for([required]), kind)
     assert allowed.status_code != 403
     assert allowed.status_code != 401
+
+
+@pytest.mark.parametrize("kind", ["Cancel", "CANCEL", "obliterate", ""])
+def test_lifecycle_execute_rejects_case_variant_or_unknown_kind(client_for, kind):
+    response = _execute(client_for(sorted(ALL_KEYS)), kind)
+    assert response.status_code == 422
+
+
+def test_denied_lifecycle_execute_never_reaches_the_service(client_for, monkeypatch):
+    calls: list = []
+    wf = admin_catalog.web_catalog_subscription_workflows_service
+    monkeypatch.setattr(
+        wf, "execute_lifecycle_command_response", lambda *a, **k: calls.append(1)
+    )
+    response = _execute(
+        client_for(sorted(ALL_KEYS - {"subscription:cancel"})), "cancel"
+    )
+    assert response.status_code == 403
+    assert calls == []
+
+
+def test_denied_bulk_cancel_never_reaches_the_service(client_for, monkeypatch):
+    calls: list = []
+    wf = admin_catalog.web_catalog_subscription_workflows_service
+    monkeypatch.setattr(wf, "bulk_cancel_response", lambda *a, **k: calls.append(1))
+    client = client_for(["catalog:write", "subscription:update"])
+    response = client.post(f"{_B}/cancel", data={"subscription_ids": "x"})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Forbidden"
+    assert calls == []
+
+
+CORRECTION_KEYS = (
+    "subscription:update",
+    "subscription:cancel",
+    "subscription:activate",
+)
+
+
+def _correct(client):
+    return client.post(
+        f"{_S}/correction/execute",
+        data={
+            "target_subscription_id": SUB_ID,
+            "preview_fingerprint": "f",
+            "idempotency_key": "k",
+            "confirmed": "no",
+        },
+        follow_redirects=False,
+    )
+
+
+@pytest.mark.parametrize("missing", CORRECTION_KEYS)
+def test_correction_execute_needs_all_three_keys(client_for, monkeypatch, missing):
+    calls: list = []
+    wf = admin_catalog.web_catalog_subscription_workflows_service
+    monkeypatch.setattr(
+        wf, "execute_subscription_correction_response", lambda *a, **k: calls.append(1)
+    )
+    held = sorted((set(CORRECTION_KEYS) | {"catalog:write"}) - {missing})
+    response = _correct(client_for(held))
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Forbidden"
+    assert calls == []
+
+
+def test_correction_execute_allowed_with_all_three_keys(client_for):
+    response = _correct(client_for(list(CORRECTION_KEYS)))
+    assert response.status_code == 303  # unconfirmed -> redirect with error
+
+
+def test_edit_post_rerender_keeps_update_controls(client_for, monkeypatch):
+    captured: dict = {}
+
+    class _Recorder:
+        @staticmethod
+        def TemplateResponse(_name, context, **_kwargs):  # noqa: N802
+            captured.update(context)
+            return HTMLResponse("ok")
+
+    monkeypatch.setattr(admin_catalog, "templates", _Recorder)
+    wf = admin_catalog.web_catalog_subscription_workflows_service
+    monkeypatch.setattr(
+        wf,
+        "handle_subscription_update_form",
+        lambda *a, **k: {
+            "form_context": {
+                "current_service_password": "pw",
+                "subscription": {"id": SUB_ID, "service_password": "pw"},
+                "error": "bad",
+            }
+        },
+    )
+    response = client_for(["subscription:update"]).post(f"{_S}/edit")
+    assert response.status_code == 200
+    assert captured["can_manage_subscription_catalog"] is True
+    assert captured["can_manage_additional_ip"] is False
+    assert captured["current_service_password"] == "pw"
 
 
 def test_lifecycle_execute_catalog_write_is_not_enough(client_for):

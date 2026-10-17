@@ -113,9 +113,14 @@ LIFECYCLE_KIND_PERMISSION: dict[SubscriptionCommandKind, str] = {
     SubscriptionCommandKind.suspend: "subscription:suspend",
     SubscriptionCommandKind.pause: "subscription:suspend",
     SubscriptionCommandKind.cancel: "subscription:cancel",
+    # expire deprovisions and stops collection, as cancel does.
+    SubscriptionCommandKind.expire: "subscription:cancel",
+    SubscriptionCommandKind.disable: "subscription:suspend",
+    SubscriptionCommandKind.vacation_hold: "subscription:suspend",
+    SubscriptionCommandKind.vacation_resume: "subscription:activate",
 }
-# Every other lifecycle kind (renew, expire, disable, change_plan, vacation_*)
-# is a modification of the subscription and needs subscription:update.
+# Every other lifecycle kind (renew, change_plan) is an edit of the
+# subscription and needs subscription:update.
 LIFECYCLE_DEFAULT_PERMISSION = "subscription:update"
 LIFECYCLE_EXECUTE_PERMISSIONS = (
     "subscription:update",
@@ -123,6 +128,26 @@ LIFECYCLE_EXECUTE_PERMISSIONS = (
     "subscription:suspend",
     "subscription:cancel",
 )
+
+
+def _apply_edit_form_permissions(
+    context: dict[str, Any], auth: dict, db: Session
+) -> None:
+    """Set the edit-form permission flags and withhold credentials without update."""
+    context["can_manage_subscription_catalog"] = has_permission(
+        auth, db, "subscription:update"
+    )
+    context["can_manage_additional_ip"] = has_permission(
+        auth, db, ADDITIONAL_IP_WRITE_PERMISSION
+    )
+    if not context["can_manage_subscription_catalog"]:
+        # Credentials are shown only to operators who may update the service.
+        context["current_service_password"] = ""
+        if isinstance(context.get("subscription"), dict):
+            context["subscription"] = {
+                **context["subscription"],
+                "service_password": "",
+            }
 
 
 def _assert_lifecycle_command_permission(
@@ -665,7 +690,7 @@ def catalog_subscription_create(
 
 @router.get(
     "/subscriptions/ipam/ipv4-available",
-    dependencies=[Depends(require_permission("catalog:read"))],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def catalog_subscription_ipv4_available(
     selector: str = Query(...),
@@ -752,20 +777,7 @@ def catalog_subscription_edit(
 
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(form_context)
-    context["can_manage_subscription_catalog"] = has_permission(
-        auth, db, "subscription:update"
-    )
-    context["can_manage_additional_ip"] = has_permission(
-        auth, db, ADDITIONAL_IP_WRITE_PERMISSION
-    )
-    if not context["can_manage_subscription_catalog"]:
-        # Credentials are shown only to operators who may update the service.
-        context["current_service_password"] = ""
-        if isinstance(context.get("subscription"), dict):
-            context["subscription"] = {
-                **context["subscription"],
-                "service_password": "",
-            }
+    _apply_edit_form_permissions(context, auth, db)
     context["notice"] = request.query_params.get("notice")
     context["error"] = request.query_params.get("error") or context.get("error")
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
@@ -1413,6 +1425,9 @@ def catalog_subscription_update(
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(cast(dict[str, Any], result["form_context"]))
+    _apply_edit_form_permissions(
+        context, getattr(request.state, "auth", None) or {}, db
+    )
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
@@ -1450,7 +1465,13 @@ def catalog_subscription_preview_lifecycle_command(
 
 @router.post(
     "/subscriptions/{subscription_id}/correction/execute",
-    dependencies=[Depends(require_permission("subscription:update"))],
+    # The correction cancels the mistaken active subscription and restores the
+    # prior one, so it needs every one of these.
+    dependencies=[
+        Depends(require_permission("subscription:update")),
+        Depends(require_permission("subscription:cancel")),
+        Depends(require_permission("subscription:activate")),
+    ],
 )
 def catalog_subscription_execute_correction(
     request: Request,
