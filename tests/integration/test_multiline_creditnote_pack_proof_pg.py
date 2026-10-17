@@ -162,7 +162,7 @@ def _obligation(account_id: UUID, *, suffix: str) -> AcceptRatedObligationV1:
         price_version_id="price:v1",
         tax_snapshots=(_tax_snapshot("100.00", "20.00"),),
         fx_snapshot=AppliedFxSnapshotV1(
-            observation_id=f"fx-{suffix}",
+            observation_id="fx-proof",
             observation_version="1",
             base_currency="NGN",
             quote_currency="NGN",
