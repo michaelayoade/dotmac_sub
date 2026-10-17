@@ -89,6 +89,36 @@ Both CLIs emit a small JSON outcome, exit 1 for nonhealthy/unavailable evidence,
 and exit 2 for invalid CLI arguments. The syslog probe imports no parser/ORM
 modules; the poller command imports no RouterOS polling runtime.
 
+## Native observation coordinates
+
+The existing source owners expose frozen coordinate values for later thin
+adapter preparation. `PollerSnapshot.observation_identity` returns only the
+source `poll_count` and verbatim timezone-aware `observed_at`.
+`poller_observation_identity(snapshot=...)` returns `None` when the existing
+reader/decoder has no snapshot (including malformed or unavailable input).
+Device counts, failure details, receive time and freshness classification do
+not contribute coordinates. A stale/future snapshot still identifies its
+source event; identity does not grant freshness or healthy standing.
+
+`ListenerReadiness.observation_identity` returns only the existing listener
+`generation` and `observed_monotonic`. The query's challenge, same-UID endpoint
+and bounded request interval continue to qualify the reply. Readiness reason
+is independent of these coordinates. The existing zero-generation synthetic
+unavailable/malformed results return `None`, even though they carry a local
+monotonic failure time. That time cannot substitute for a listener reply.
+A new challenge/read is a new measurement; retain the original source value
+when referring to the same measurement again.
+
+These are product-native facts, not a shared health DTO, observation key,
+serializer, remote authentication or deployment credential assignment. No
+coordinate is added to CLI output, health labels or serialized evidence. The
+legacy optional Platform Health projection below is unchanged, including its
+payload/receive-time dependent key debt. Its future replacement must use the
+verified Starter contract and preserve the entire first-collected observation
+on retries. Export treatment for absent native identity remains a separate
+adapter contract decision; this preparation manufactures no observation or
+fallback identity for that case.
+
 ## Platform Health observation documents
 
 Both probe CLIs can alternatively serialize one bounded Starter Platform
