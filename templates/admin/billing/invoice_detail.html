@@ -233,7 +233,7 @@
                     {% endcall %}
                     {% if invoice.subscription_id %}
                     {% call info_row("Subscription") %}
-                        <a href="/admin/catalog/subscriptions/{{ invoice.subscription_id }}" class="font-mono text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.subscription_id | string | truncate(8, True, '') }}</a>
+                        {% if can(request, 'subscription:read') %}<a href="/admin/catalog/subscriptions/{{ invoice.subscription_id }}" class="font-mono text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.subscription_id | string | truncate(8, True, '') }}</a>{% else %}{{ invoice.subscription_id | string | truncate(8, True, '') }}{% endif %}
                     {% endcall %}
                     {% endif %}
                     {% call info_row("Dates") %}
