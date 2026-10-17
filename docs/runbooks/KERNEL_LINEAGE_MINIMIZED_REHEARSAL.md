@@ -28,6 +28,14 @@ complete-row digests before and after the kernel attempt.
 This replaces the proposed full `pg_dump`/restore. A full customer-data copy is
 not an accepted input to this runbook.
 
+The separate [entry-only source prototype](../designs/KERNEL_LINEAGE_ENTRY_PROTOTYPE.md)
+exercises a fixed collision/dependency escrow and the complete unchanged
+installed Kernel a105 chain on a caller-owned, rollback-only disposable fixture
+transaction. It has no operational CLI and is not an additional execution step
+in this runbook. Its separately named hosted tests do not satisfy the full
+handoff or Sub tenant-plane/RLS reference gate; the direct-overlay 0001
+expected-failure diagnostic below remains unchanged.
+
 ## Preconditions
 
 1. Michael names both the source and scratch hosts for the execution. Do not
