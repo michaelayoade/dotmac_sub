@@ -9,6 +9,14 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from uuid import UUID
 
+from dotmac_kernel.cache import TenantScope
+from dotmac_kernel.money import Currency, Money
+from dotmac_payments import (
+    OpenPaymentIntent,
+    PaymentError,
+    PaymentPurpose,
+    open_payment_intent,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -34,11 +42,13 @@ from app.services.billing._common import lock_account
 from app.services.common import round_money, to_decimal
 from app.services.domain_errors import DomainError
 from app.services.locking import lock_for_update
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
 )
+from app.services.payment_intent_module_shadow import authorized_invoice_binding
 from app.services.settings_spec import resolve_value
 
 CREATE_CUSTOMER_SCOPE = "gateway-topup-intent:create-customer"
@@ -278,6 +288,53 @@ def create_customer_gateway_topup_intent(
     )
 
 
+def _open_module_invoice_intent(db: Session, intent: TopupIntent) -> None:
+    """Open the Starter payments intent for one invoice checkout.
+
+    Thin-client migration (ADR 0020): the ``dotmac-payments`` intent is the
+    durable payment intent of record, opened in the same root transaction
+    as the legacy ``TopupIntent`` projection with the exact authorized
+    binding (reference, payer, invoice target, amount, provider, channel,
+    opened/expires) so the two can never diverge. Opening is replay-safe:
+    a staged-intent replay re-presents identical fields. Settlement still
+    records against the legacy intent until the invoice itself is
+    Starter-issued; this step moves intent creation only.
+    """
+
+    binding = authorized_invoice_binding(intent)
+    if binding.account_id is None or binding.invoice_reference is None:
+        raise _error(
+            "module_intent_rejected",
+            "Invoice checkout binding is incomplete for the payments module",
+            reference=binding.reference,
+        )
+    try:
+        requested = Money(
+            binding.requested_amount, Currency(binding.currency.upper(), 2)
+        )
+        open_payment_intent(
+            db,
+            scope=TenantScope(OPERATOR_TENANT_ID),
+            command=OpenPaymentIntent(
+                reference=binding.reference,
+                payer_reference=str(binding.account_id),
+                purpose=PaymentPurpose.INVOICE_SETTLEMENT,
+                target_reference=binding.invoice_reference,
+                requested=requested,
+                provider_type=binding.provider_type,
+                channel=binding.channel or "customer_selfcare",
+                opened_at=binding.opened_at,
+                expires_at=binding.expires_at,
+            ),
+        )
+    except (PaymentError, ValueError) as exc:
+        raise _error(
+            "module_intent_rejected",
+            "Payments module refused the invoice payment intent",
+            reference=binding.reference,
+        ) from exc
+
+
 def _create_customer_gateway_topup_intent(
     db: Session,
     *,
@@ -350,6 +407,7 @@ def _create_customer_gateway_topup_intent(
                 "intent_conflict",
                 "Invoice gateway intent is already being created",
             ) from exc
+        _open_module_invoice_intent(db, staged.intent)
         preview_fingerprint = None
     elif command.flow is CustomerGatewayTopupFlow.account_credit_deposit:
         if command.invoice_id is not None:

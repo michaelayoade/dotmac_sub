@@ -22,6 +22,23 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from tests.integration_platform_helpers import enable_payment_provider
 
+_REAL_MODULE_INTENT_OPEN = svc._open_module_invoice_intent
+
+
+@pytest.fixture(autouse=True)
+def _stub_module_intent_open(monkeypatch) -> list:
+    """Unit lane has no mod_payments schema; record module-intent opens.
+
+    The real cross-module behavior is proven on migrated PostgreSQL in
+    tests/integration/test_gateway_invoice_intent_module_pg.py.
+    """
+
+    calls: list = []
+    monkeypatch.setattr(
+        svc, "_open_module_invoice_intent", lambda _db, intent: calls.append(intent)
+    )
+    return calls
+
 
 def _patch_policy(monkeypatch) -> None:
     monkeypatch.setattr(
@@ -432,3 +449,79 @@ def test_customer_creation_rejects_missing_checkout_binding(
         )
 
     assert exc_info.value.code.endswith("checkout_binding_unavailable")
+
+
+def test_invoice_creation_opens_module_intent_once(
+    monkeypatch, db_session, subscriber, _stub_module_intent_open
+):
+    _patch_policy(monkeypatch)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-MODULE-INTENT",
+        currency="NGN",
+        subtotal=Decimal("1200.00"),
+        total=Decimal("1200.00"),
+        balance_due=Decimal("1200.00"),
+        status=InvoiceStatus.issued,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    binding_id = _checkout_binding(db_session).id
+
+    db_session_adapter.release_read_transaction(db_session)
+    result = svc.create_customer_gateway_topup_intent(
+        db_session,
+        svc.CreateCustomerGatewayTopupIntentCommand(
+            flow=svc.CustomerGatewayTopupFlow.invoice_payment,
+            account_id=subscriber.id,
+            invoice_id=invoice.id,
+            reference="gateway-module-intent-ref",
+            provider_type="paystack",
+            provider_id=None,
+            created_by="pytest",
+            capability_binding_id=binding_id,
+        ),
+        context=_context(svc.CREATE_CUSTOMER_SCOPE),
+    )
+
+    assert [intent.id for intent in _stub_module_intent_open] == [result.intent_id]
+
+
+def test_module_intent_open_maps_authorized_binding(monkeypatch):
+    """The real helper presents the exact authorized binding to payments."""
+
+    from dotmac_payments import PaymentPurpose
+
+    captured = {}
+
+    def _capture(_db, *, scope, command):
+        captured["scope"] = scope
+        captured["command"] = command
+
+    monkeypatch.setattr(svc, "open_payment_intent", _capture)
+    opened = datetime(2026, 10, 17, 12, tzinfo=UTC)
+    intent = TopupIntent(
+        account_id=UUID(int=7),
+        invoice_id=UUID(int=9),
+        reference="module-open-ref",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("120.00"),
+        channel="customer_selfcare",
+        created_at=opened,
+        expires_at=opened + timedelta(minutes=30),
+    )
+    _REAL_MODULE_INTENT_OPEN(None, intent)
+
+    command = captured["command"]
+    assert command.reference == "module-open-ref"
+    assert command.payer_reference == str(UUID(int=7))
+    assert command.purpose is PaymentPurpose.INVOICE_SETTLEMENT
+    assert command.target_reference == str(UUID(int=9))
+    assert command.requested.amount == Decimal("120.00")
+    assert command.requested.currency.code == "NGN"
+    assert command.requested.currency.minor_units == 2
+    assert command.provider_type == "paystack"
+    assert command.channel == "customer_selfcare"
+    assert command.opened_at == opened
+    assert command.expires_at == opened + timedelta(minutes=30)
