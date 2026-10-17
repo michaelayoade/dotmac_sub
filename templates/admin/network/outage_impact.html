@@ -99,7 +99,7 @@
             {% for row in impact_rows %}
                 <tr class="border-t border-slate-100 align-top dark:border-slate-700">
                     <td class="py-2 pr-4">
-                        <a class="font-medium text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.subscription_id }}">{{ row.subscriber_name or row.subscriber_number or row.subscription_id | string | truncate(8, True, '') }}</a>
+                        {% if can(request, 'subscription:read') %}<a class="font-medium text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.subscription_id }}">{{ row.subscriber_name or row.subscriber_number or row.subscription_id | string | truncate(8, True, '') }}</a>{% else %}{{ row.subscriber_name or row.subscriber_number or row.subscription_id | string | truncate(8, True, '') }}{% endif %}
                         <div class="text-xs text-slate-500">{{ row.email or '-' }}</div>
                     </td>
                     <td class="pr-4 text-slate-700 dark:text-slate-200">{{ row.phone or '-' }}</td>
@@ -143,7 +143,7 @@
             <tbody>
             {% for row in impact_rows %}
                 <tr class="border-t border-slate-100 dark:border-slate-700">
-                    <td class="py-2"><a class="font-mono text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.subscription_id }}">{{ row.subscription_id | string | truncate(8, True, '') }}</a></td>
+                    <td class="py-2">{% if can(request, 'subscription:read') %}<a class="font-mono text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.subscription_id }}">{{ row.subscription_id | string | truncate(8, True, '') }}</a>{% else %}{{ row.subscription_id | string | truncate(8, True, '') }}{% endif %}</td>
                     <td class="text-slate-700 dark:text-slate-200">{{ row.subscriber_name }}</td>
                     <td class="text-slate-500">{{ row.email }}</td>
                 </tr>

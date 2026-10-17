@@ -346,6 +346,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review before saving, then confirm subscription, billing, and access state.",
         notes=(
             "A subscription is the service record, not an invoice or an access move.",
+            "Creating a subscription requires the subscription:create permission.",
         ),
         route_templates=("/admin/catalog/subscriptions/new",),
     ),
@@ -379,6 +380,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
         notes=(
             "Do not use a second subscription to hide an accidental activation; use the correction workflow.",
+            "Viewing the list and detail requires subscription:read; opening or saving the edit form requires subscription:update.",
             "A plan change replaces the plan; it does not move network access.",
         ),
     ),

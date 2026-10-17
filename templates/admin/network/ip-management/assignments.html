@@ -156,9 +156,13 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                             {% if assignment.subscription %}
+                                {% if can(request, 'subscription:read') %}
                                 <a href="/admin/catalog/subscriptions/{{ assignment.subscription.id }}" class="text-teal-600 hover:text-teal-700 dark:text-teal-400">
                                     {{ assignment.subscription.service_id or 'Subscription' }}
                                 </a>
+                                {% else %}
+                                {{ assignment.subscription.service_id or 'Subscription' }}
+                                {% endif %}
                             {% else %}
                                 -
                             {% endif %}

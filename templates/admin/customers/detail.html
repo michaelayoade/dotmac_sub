@@ -62,10 +62,10 @@
     {% endif %}
     {% if subscriber_summary %}
     {% call subscriber_hero(subscriber_summary, customer_status_presentation) %}
-        <a href="{{ subscription_link }}" class="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-700">
+        {% if can(request, 'subscription:create') %}<a href="{{ subscription_link }}" class="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-700">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             New Subscription
-        </a>
+        </a>{% endif %}
         <div class="relative" x-data="{ openQuickActions: false }" @keydown.escape.window="openQuickActions = false">
             <button type="button" @click="openQuickActions = !openQuickActions" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
                 Quick Actions
@@ -1372,10 +1372,10 @@
                         Repair Access State
                     </button>
                     {% endif %}
-                    <a href="{{ subscription_link }}" class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
+                    {% if can(request, 'subscription:create') %}<a href="{{ subscription_link }}" class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
                         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                         New Subscription
-                    </a>
+                    </a>{% endif %}
                 </div>
             </div>
             {% set subscription_visibility = namespace(has_non_active=false) %}
@@ -1407,7 +1407,7 @@
                             </div>
                             <div>
                                 <div class="flex items-center gap-2">
-                                    <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
+                                    {% if can(request, 'subscription:read') %}<a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>{% else %}{{ subscription.offer.name if subscription.offer else 'Subscription' }}{% endif %}
                                     {{ status_presentation_badge(subscription_status_presentations.get(subscription.id|string), pulse=(sub_status == 'active'), size="sm") }}
                                     {% if service_health and service_health.pending_change %}
                                     <span class="inline-flex items-center rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-900 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-100"
@@ -1516,7 +1516,7 @@
                                 {% else %}
                                 <p class="text-xs text-slate-400 dark:text-slate-500">Price not set</p>
                                 {% endif %}
-                                <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="mt-2 inline-flex text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">View details</a>
+                                {% if can(request, 'subscription:read') %}<a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="mt-2 inline-flex text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">View details</a>{% else %}View details{% endif %}
                             </div>
                             <div class="flex flex-col items-end gap-2">
                                 {% if can_activate_subscriptions and subscription.id|string in restorable_subscription_ids %}
@@ -1572,10 +1572,10 @@
                 </div>
                 <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No subscriptions</p>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This customer doesn't have any subscriptions yet.</p>
-                <a href="{{ subscription_link }}" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600">
+                {% if can(request, 'subscription:create') %}<a href="{{ subscription_link }}" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                     Create Subscription
-                </a>
+                </a>{% endif %}
             </div>
             {% endif %}
         </div>

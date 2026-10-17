@@ -83,7 +83,7 @@
             <div>
                 <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscription</p>
                 {% if order.subscription %}
-                <a href="/admin/catalog/subscriptions/{{ order.subscription.id }}" class="mt-1 block text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 font-mono transition-colors">{{ order.subscription.id|string|truncate(8, True, '') }}</a>
+                {% if can(request, 'subscription:read') %}<a href="/admin/catalog/subscriptions/{{ order.subscription.id }}" class="mt-1 block text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 font-mono transition-colors">{{ order.subscription.id|string|truncate(8, True, '') }}</a>{% else %}{{ order.subscription.id|string|truncate(8, True, '') }}{% endif %}
                 {% else %}
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">-</p>
                 {% endif %}

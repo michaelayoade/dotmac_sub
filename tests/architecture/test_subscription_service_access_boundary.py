@@ -83,5 +83,5 @@ def test_additional_ip_permission_does_not_open_generic_subscription_update() ->
     generic_update = routes[routes.index(marker) :]
     generic_update = generic_update[: generic_update.index("\n\n@router.post", 1)]
 
-    assert 'require_permission("catalog:write")' in generic_update
+    assert 'require_permission("subscription:update")' in generic_update
     assert "ADDITIONAL_IP_WRITE_PERMISSION" not in generic_update
