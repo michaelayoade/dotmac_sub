@@ -7,7 +7,7 @@ import re
 from base64 import b64encode
 from datetime import UTC, datetime
 from io import BytesIO
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
 
@@ -3503,8 +3503,17 @@ def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db))
 def audit_log(
     request: Request,
     actor_id: str | None = None,
+    actor_type: str | None = None,
     action: str | None = None,
     entity_type: str | None = None,
+    result: str | None = None,
+    period: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    entity_id: str | None = None,
+    entity_id_missing: bool = False,
+    request_id: str | None = None,
+    request_id_missing: bool = False,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     page: int = Query(1, ge=1),
@@ -3515,17 +3524,37 @@ def audit_log(
     try:
         list_query = web_system_audit_service.build_audit_list_query(
             actor_id=actor_id,
+            actor_type=actor_type,
             action=action,
             entity_type=entity_type,
+            result=result,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            entity_id=entity_id,
+            entity_id_missing=entity_id_missing,
+            request_id=request_id,
+            request_id_missing=request_id_missing,
             sort_by=sort_by,
             sort_dir=sort_dir,
             page=page,
             per_page=per_page,
         )
-    except ValueError:
-        # Out-of-contract sort/page params (e.g. hand-edited URL) fall back to
-        # the contract defaults rather than erroring the page.
-        list_query = web_system_audit_service.build_audit_list_query(page=page)
+    except web_system_audit_service.AuditFilterValidationError as exc:
+        if request.headers.get("HX-Request"):
+            response = templates.TemplateResponse(
+                "admin/system/_audit_filter_error.html",
+                {"request": request, "filter_error": str(exc)},
+            )
+            response.headers["HX-Retarget"] = "#audit-filter-feedback"
+            response.headers["HX-Reswap"] = "innerHTML"
+            return response
+        # Keep the page usable on a hand-edited invalid URL while making the
+        # reason visible instead of silently pretending the filters applied.
+        list_query = web_system_audit_service.build_audit_list_query()
+        filter_error = str(exc)
+    else:
+        filter_error = None
 
     page_data = web_system_audit_service.get_audit_page_data(db, list_query)
 
@@ -3534,25 +3563,88 @@ def audit_log(
             "admin/system/_audit_table.html",
             {
                 "request": request,
+                "clear_filter_error": True,
                 **page_data,
             },
         )
 
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    filter_options = web_system_audit_service.get_audit_filter_options(
+        db,
+        selected_entity_type=list_query.filter_value("entity_type"),
+        selected_action=list_query.filter_value("action"),
+    )
     return templates.TemplateResponse(
         "admin/system/audit.html",
         {
             "request": request,
+            "filter_error": filter_error,
             **page_data,
-            "actor_id": actor_id,
-            "action": action,
-            "entity_type": entity_type,
+            **filter_options,
             "active_page": "audit",
             "active_menu": "system",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
+    )
+
+
+@router.get(
+    "/audit/export/{export_format}",
+    dependencies=[Depends(require_permission("audit:read"))],
+)
+def export_audit_log(
+    export_format: Literal["csv", "json"],
+    actor_id: str | None = None,
+    actor_type: str | None = None,
+    action: str | None = None,
+    entity_type: str | None = None,
+    result: str | None = None,
+    period: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    entity_id: str | None = None,
+    entity_id_missing: bool = False,
+    request_id: str | None = None,
+    request_id_missing: bool = False,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download the redacted audit rows matching the current filters."""
+
+    try:
+        query = web_system_audit_service.build_audit_list_query(
+            actor_id=actor_id,
+            actor_type=actor_type,
+            action=action,
+            entity_type=entity_type,
+            result=result,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            entity_id=entity_id,
+            entity_id_missing=entity_id_missing,
+            request_id=request_id,
+            request_id_missing=request_id_missing,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
+        document = web_system_audit_service.build_audit_export(
+            db,
+            query=query,
+            export_format=export_format,
+        )
+    except (
+        web_system_audit_service.AuditFilterValidationError,
+        web_system_audit_service.AuditExportTooLargeError,
+    ) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=document.content,
+        media_type=document.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{document.filename}"'},
     )
 
 

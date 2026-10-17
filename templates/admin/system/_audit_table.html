@@ -1,15 +1,19 @@
+{% if clear_filter_error %}
+<div id="audit-filter-feedback" hx-swap-oob="innerHTML"></div>
+{% endif %}
 <div class="overflow-hidden">
     <table class="w-full table-fixed divide-y divide-slate-200 dark:divide-slate-700">
         <colgroup>
-            <col class="w-[15%]">
-            <col class="w-[20%]">
-            <col class="w-[15%]">
-            <col class="w-[40%]">
-            <col class="w-[10%]">
+            <col class="w-[14%]">
+            <col class="w-[18%]">
+            <col class="w-[16%]">
+            <col class="w-[16%]">
+            <col class="w-[28%]">
+            <col class="w-[8%]">
         </colgroup>
         <thead class="bg-slate-50 dark:bg-slate-800/50">
             <tr>
-                {% for label in ["Time", "Actor", "Entity", "Details", "Status"] %}
+                {% for label in ["Time", "Actor", "Action", "Module", "Details", "Status"] %}
                 <th class="break-words px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ label }}</th>
                 {% endfor %}
             </tr>
@@ -24,14 +28,33 @@
                     <div class="font-medium text-slate-700 dark:text-slate-200">{{ event.action_label | default(event.action | default('Unknown')) }}</div>
                 </td>
                 <td class="break-words px-3 py-3 align-top text-sm text-slate-600 dark:text-slate-300">
+                    <div class="font-medium text-slate-700 dark:text-slate-200">{{ event.module_label | default('Unknown module', true) }}</div>
+                    <div class="break-all text-xs text-slate-500 dark:text-slate-400">Record ID: {{ event.entity_id | default('Not recorded', true) }}</div>
+                </td>
+                <td class="break-words px-3 py-3 align-top text-sm text-slate-600 dark:text-slate-300">
                     {% if event.action_detail %}
                     <div class="font-medium text-slate-700 dark:text-slate-200">{{ event.action_detail }}</div>
                     {% else %}
                     <div class="text-xs text-slate-500 dark:text-slate-400">{{ event.entity_label | default(event.entity_type | default('N/A')) }}</div>
                     {% endif %}
-                    {% if event.entity_id %}
-                    <div class="break-all text-xs text-slate-500 dark:text-slate-400">ID {{ event.entity_id }}</div>
-                    {% endif %}
+                    <details class="mt-2 text-xs">
+                        <summary class="cursor-pointer font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View event</summary>
+                        <dl class="mt-2 space-y-1 rounded-lg bg-slate-50 p-3 dark:bg-slate-900/50">
+                            <div><dt class="inline font-medium">Request ID:</dt> <dd class="inline break-all">{{ event.request_id | default('Not recorded', true) }}</dd></div>
+                            <div><dt class="inline font-medium">Record ID:</dt> <dd class="inline break-all">{{ event.entity_id | default('Not recorded', true) }}</dd></div>
+                            <div><dt class="inline font-medium">Status code:</dt> <dd class="inline">{{ event.status_code | default('Not recorded', true) }}</dd></div>
+                            <div><dt class="inline font-medium">Actor type:</dt> <dd class="inline">{{ event.actor_type | replace('_', ' ') | title }}</dd></div>
+                            <div><dt class="inline font-medium">IP address:</dt> <dd class="inline break-all">{{ event.ip_address | default('Not recorded', true) }}</dd></div>
+                            <div class="pt-1">
+                                <dt class="font-medium">Event details:</dt>
+                                {% if event.safe_details %}
+                                <dd><pre class="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-white p-2 text-[11px] dark:bg-slate-800">{{ event.safe_details | tojson(indent=2) }}</pre></dd>
+                                {% else %}
+                                <dd>Not recorded</dd>
+                                {% endif %}
+                            </div>
+                        </dl>
+                    </details>
                 </td>
                 <td class="break-words px-2 py-3 align-top">
                     {% if event.is_success is defined and event.is_success is not none %}
@@ -48,7 +71,7 @@
             {% endfor %}
             {% else %}
             <tr>
-                <td colspan="5" class="px-6 py-12">
+                <td colspan="6" class="px-6 py-12">
                     {% set title = "No audit events" %}
                             {% set message = "System activity will appear here as it occurs." %}
                             {% include "components/data/empty_state.html" %}
@@ -59,22 +82,47 @@
     </table>
 </div>
 
-{% if total_pages and total_pages > 1 %}
+{% if page_meta.total_items > 0 %}
 <div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
-    <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</p>
-    <div class="flex items-center gap-2">
-        {% if page > 1 %}
-        <button hx-get="/admin/system/audit?page={{ page - 1 }}&per_page={{ per_page }}"
+    <p class="text-sm text-slate-500 dark:text-slate-400">
+        Showing <span class="font-medium text-slate-700 dark:text-slate-200">{{ page_meta.start_item }}</span>
+        to <span class="font-medium text-slate-700 dark:text-slate-200">{{ page_meta.end_item }}</span>
+        of <span class="font-medium text-slate-700 dark:text-slate-200">{{ page_meta.total_items }}</span> events
+    </p>
+    {% if page_meta.total_pages > 1 %}
+    <nav class="flex items-center gap-1" aria-label="Audit log pagination">
+        <button type="button"
+                hx-get="/admin/system/audit?page={{ page_meta.page - 1 }}"
                 hx-target="#audit-table"
                 hx-include="#audit-filters [name]"
-                class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</button>
-        {% endif %}
-        {% if page < total_pages %}
-        <button hx-get="/admin/system/audit?page={{ page + 1 }}&per_page={{ per_page }}"
+                hx-push-url="true"
+                {% if not page_meta.has_previous %}disabled{% endif %}
+                class="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Previous</button>
+
+        {% for page_number in page_meta.navigation %}
+            {% if page_number is none %}
+            <span class="inline-flex h-9 min-w-9 items-center justify-center px-1 text-sm text-slate-400" aria-hidden="true">&hellip;</span>
+            {% elif page_number == page_meta.page %}
+            <span class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg bg-primary-600 px-2 text-sm font-semibold text-white" aria-current="page">{{ page_number }}</span>
+            {% else %}
+            <button type="button"
+                    hx-get="/admin/system/audit?page={{ page_number }}"
+                    hx-target="#audit-table"
+                    hx-include="#audit-filters [name]"
+                    hx-push-url="true"
+                    aria-label="Go to page {{ page_number }}"
+                    class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">{{ page_number }}</button>
+            {% endif %}
+        {% endfor %}
+
+        <button type="button"
+                hx-get="/admin/system/audit?page={{ page_meta.page + 1 }}"
                 hx-target="#audit-table"
                 hx-include="#audit-filters [name]"
-                class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</button>
-        {% endif %}
-    </div>
+                hx-push-url="true"
+                {% if not page_meta.has_next %}disabled{% endif %}
+                class="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Next</button>
+    </nav>
+    {% endif %}
 </div>
 {% endif %}

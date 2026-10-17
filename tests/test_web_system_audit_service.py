@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -5,6 +6,7 @@ import pytest
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.system_user import SystemUser, SystemUserType
+from app.services import audit as audit_service
 from app.services import audit_helpers, web_system_audit
 
 
@@ -143,7 +145,20 @@ def test_log_audit_event_derives_system_user_actor_name_when_id_missing(db_sessi
 
 def test_audit_list_definition_declares_expected_capabilities():
     definition = web_system_audit.AUDIT_EVENTS_LIST_DEFINITION
-    assert definition.filterable_keys == ("actor_id", "action", "entity_type")
+    assert definition.filterable_keys == (
+        "actor_id",
+        "actor_type",
+        "action",
+        "entity_type",
+        "result",
+        "period",
+        "date_from",
+        "date_to",
+        "entity_id",
+        "entity_id_missing",
+        "request_id",
+        "request_id_missing",
+    )
     assert definition.sortable_keys == ("occurred_at",)
     assert definition.default_sort == "occurred_at"
     assert definition.default_sort_dir == "desc"
@@ -161,13 +176,85 @@ def test_audit_results_do_not_scroll_horizontally():
     assert "whitespace-nowrap" not in source
 
 
+def test_audit_table_labels_action_and_module_columns_correctly():
+    source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    headings = '["Time", "Actor", "Action", "Module", "Details", "Status"]'
+    assert headings in source
+    assert "event.action_label" in source
+    assert "event.entity_type" in source
+    assert 'colspan="6"' in source
+
+
+def test_audit_table_always_shows_module_and_record_id():
+    source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "event.module_label" in source
+    assert "Unknown module" in source
+    assert "Record ID:" in source
+    assert "Not recorded" in source
+    assert "{% if event.entity_id %}" not in source
+
+
+def test_missing_audit_identifiers_are_labelled_not_recorded():
+    source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "event.entity_id | default('Not recorded', true)" in source
+    assert "event.request_id | default('Not recorded', true)" in source
+
+
+def test_audit_event_details_are_expandable_and_redacted():
+    source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    detail_labels = (
+        "Request ID:",
+        "Record ID:",
+        "Status code:",
+        "Actor type:",
+        "IP address:",
+    )
+    for label in detail_labels:
+        assert label in source
+    assert "event.safe_details | tojson" in source
+
+    safe = audit_service.redact_audit_details(
+        {
+            "operation": "updated invoice",
+            "nested": {"access_token": "must-not-render"},
+            "database_password": "must-not-render",
+        }
+    )
+
+    assert safe["operation"] == "updated invoice"
+    assert safe["nested"] == {"access_token": "<redacted>"}
+    assert safe["database_password"] == "<redacted>"
+
+
 def test_build_audit_list_query_normalizes_and_defaults():
     query = web_system_audit.build_audit_list_query(
-        actor_id=" ", action="update", entity_type=None, page=2
+        actor_id=" ",
+        actor_type="service",
+        action="update",
+        entity_type="invoice",
+        result="failed",
+        period="last_7_days",
+        page=2,
     )
     # Blank filters dropped; supplied ones kept.
     assert query.filter_value("actor_id") is None
     assert query.filter_value("action") == "update"
+    assert query.filter_value("actor_type") == "service"
+    assert query.filter_value("entity_type") == "invoice"
+    assert query.filter_value("result") == "failed"
+    assert query.filter_value("period") == "last_7_days"
     assert query.sort_by == "occurred_at"
     assert query.sort_dir == "desc"
     assert query.page == 2
@@ -179,6 +266,72 @@ def test_build_audit_list_query_rejects_out_of_contract_params():
         web_system_audit.build_audit_list_query(sort_by="actor_id")
     with pytest.raises(ValueError):
         web_system_audit.build_audit_list_query(per_page=20)
+    with pytest.raises(ValueError):
+        web_system_audit.build_audit_list_query(result="unknown")
+    with pytest.raises(ValueError):
+        web_system_audit.build_audit_list_query(
+            entity_id="invoice-1", entity_id_missing=True
+        )
+
+
+def test_invalid_audit_filters_return_clear_messages():
+    invalid_filters = (
+        (
+            {"date_from": "not-a-date"},
+            "Enter dates in YYYY-MM-DD format.",
+        ),
+        (
+            {"date_from": "2026-10-15", "date_to": "2026-10-14"},
+            "The From date cannot be later than the To date.",
+        ),
+        (
+            {"entity_id": "invoice-1", "entity_id_missing": True},
+            "Use either a Record ID or Missing record ID, not both.",
+        ),
+        (
+            {"request_id": "request-1", "request_id_missing": True},
+            "Use either a Request ID or Missing request ID, not both.",
+        ),
+    )
+
+    for filters, message in invalid_filters:
+        with pytest.raises(web_system_audit.AuditFilterValidationError, match=message):
+            web_system_audit.build_audit_list_query(**filters)
+
+
+def test_preset_audit_period_discards_stale_custom_dates():
+    query = web_system_audit.build_audit_list_query(
+        period="last_7_days",
+        date_from="not-a-date",
+        date_to="2020-01-01",
+    )
+
+    assert query.filter_value("period") == "last_7_days"
+    assert query.filter_value("date_from") is None
+    assert query.filter_value("date_to") is None
+
+
+def test_custom_audit_dates_only_show_for_custom_period():
+    source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+
+    assert "x-show=\"period === 'custom'\"" in source
+    assert 'x-ref="dateFrom"' in source
+    assert 'x-ref="dateTo"' in source
+    assert "$refs.dateFrom.value = ''" in source
+    assert "$refs.dateTo.value = ''" in source
+
+
+def test_audit_filter_errors_are_visible_without_replacing_current_results():
+    page_source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+    table_source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+    route_source = Path("app/web/admin/system.py").read_text(encoding="utf-8")
+
+    assert 'id="audit-filter-feedback"' in page_source
+    assert 'hx-swap-oob="innerHTML"' in table_source
+    assert '"HX-Retarget"] = "#audit-filter-feedback"' in route_source
+    assert '"HX-Reswap"] = "innerHTML"' in route_source
 
 
 def test_get_audit_page_data_filters_through_the_query(db_session):
@@ -209,3 +362,247 @@ def test_get_audit_page_data_filters_through_the_query(db_session):
 
     assert page["total"] == 1
     assert page["events"][0]["action"] == "update"
+
+
+def test_audit_owner_returns_rows_and_total_from_the_same_filter_scope(db_session):
+    for action, success in (("create", True), ("update", False), ("update", True)):
+        db_session.add(
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action=action,
+                entity_type="invoice",
+                entity_id=f"invoice-{action}-{success}",
+                is_success=success,
+            )
+        )
+    db_session.commit()
+
+    result = audit_service.audit_events.query_page(
+        db_session,
+        audit_service.AuditEventPageQuery(
+            action="update",
+            is_success=False,
+            limit=1,
+        ),
+    )
+
+    assert result.total == 1
+    assert len(result.events) == 1
+    assert result.events[0].action == "update"
+    assert result.events[0].is_success is False
+
+
+def test_audit_filter_options_come_from_recorded_values(db_session):
+    db_session.add_all(
+        (
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="invoice.issue",
+                entity_type="invoice",
+                is_success=True,
+            ),
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="ticket.close",
+                entity_type="support_ticket",
+                is_success=True,
+            ),
+        )
+    )
+    db_session.commit()
+
+    options = audit_service.audit_events.filter_options(
+        db_session, audit_service.AuditEventFilterOptionsQuery()
+    )
+
+    assert "invoice.issue" in options.actions
+    assert "ticket.close" in options.actions
+    assert "invoice" in options.entity_types
+    assert "support_ticket" in options.entity_types
+
+    display_options = web_system_audit.get_audit_filter_options(
+        db_session,
+        selected_action="invoice.issue",
+    )
+    selected = next(
+        option
+        for option in display_options["action_options"]
+        if option["value"] == "invoice.issue"
+    )
+    assert selected == {
+        "value": "invoice.issue",
+        "label": "Invoice.Issue",
+        "display": "Invoice.Issue - invoice.issue",
+    }
+    assert display_options["selected_action_display"] == selected["display"]
+
+
+def test_audit_owner_filters_missing_identifiers(db_session):
+    db_session.add_all(
+        (
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="create",
+                entity_type="invoice",
+                entity_id=None,
+                request_id=None,
+                is_success=True,
+            ),
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="create",
+                entity_type="invoice",
+                entity_id="invoice-1",
+                request_id="request-1",
+                is_success=True,
+            ),
+        )
+    )
+    db_session.commit()
+
+    result = audit_service.audit_events.query_page(
+        db_session,
+        audit_service.AuditEventPageQuery(
+            entity_id_missing=True,
+            request_id_missing=True,
+        ),
+    )
+
+    assert result.total == 1
+    assert result.events[0].entity_id is None
+    assert result.events[0].request_id is None
+
+
+def test_audit_page_projection_does_not_query_audit_rows_directly():
+    source = Path("app/services/web_system_audit.py").read_text(encoding="utf-8")
+
+    assert "from app.models.audit import AuditEvent" not in source
+    assert "select(func.count())" not in source
+    assert "audit_events.query_page" in source
+
+
+def test_audit_filter_ui_uses_recorded_options_and_pushes_filter_urls():
+    page_source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+    table_source = Path("templates/admin/system/_audit_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'name="entity_type"' in page_source
+    assert ">Module</label>" in page_source
+    assert "{% for option in module_options %}" in page_source
+    assert "{% for option in action_options %}" in page_source
+    assert 'hx-push-url="true"' in page_source
+    assert 'hx-include="#audit-filters [name]"' in table_source
+    assert 'hx-push-url="true"' in table_source
+    assert "page_meta.navigation" in table_source
+    assert "page_meta.start_item" in table_source
+    assert "page_meta.end_item" in table_source
+    assert 'name="per_page"' in page_source
+    assert 'type="search" list="audit-action-options"' in page_source
+    assert 'type="hidden" name="action"' in page_source
+    assert "option.display" in page_source
+    assert "option.value" in page_source
+
+    picker_source = Path("static/js/admin-audit.js").read_text(encoding="utf-8")
+    assert "storedInput.value = matches[0].stored" in picker_source
+    assert "Choose a recorded action from the list." in picker_source
+
+
+def test_audit_filtering_shows_loading_and_recoverable_failure_feedback():
+    page_source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+    script_source = Path("static/js/admin-audit.js").read_text(encoding="utf-8")
+
+    assert 'id="audit-loading"' in page_source
+    assert "Loading…" in page_source
+    assert 'id="audit-request-error"' in page_source
+    assert "Your current results are still shown." in page_source
+    assert ">Retry</button>" in page_source
+    assert 'hx-indicator="#audit-loading"' in page_source
+    assert 'workspace.addEventListener("htmx:sendError"' in script_source
+    assert 'workspace.addEventListener("htmx:responseError"' in script_source
+
+
+def test_audit_exports_reuse_filters_and_redacted_event_projection(db_session):
+    db_session.add_all(
+        (
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="invoice.issue",
+                entity_type="invoice",
+                entity_id="invoice-1",
+                request_id="request-1",
+                details={
+                    "operation": "issued",
+                    "credentials": {"api_token": "must-not-export"},
+                },
+                is_success=True,
+            ),
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="invoice.cancel",
+                entity_type="invoice",
+                entity_id="invoice-2",
+                is_success=True,
+            ),
+        )
+    )
+    db_session.commit()
+    query = web_system_audit.build_audit_list_query(action="invoice.issue")
+
+    document = web_system_audit.build_audit_export(
+        db_session,
+        query=query,
+        export_format="json",
+    )
+    payload = json.loads(document.content)
+
+    assert document.media_type == "application/json"
+    assert document.row_count == 1
+    assert payload["filters"]["action"] == "invoice.issue"
+    assert payload["events"][0]["action"] == "invoice.issue"
+    assert payload["events"][0]["details"]["credentials"] == {"api_token": "<redacted>"}
+    assert "must-not-export" not in document.content.decode("utf-8")
+
+
+def test_audit_export_controls_use_current_filters_and_existing_permission():
+    page_source = Path("templates/admin/system/audit.html").read_text(encoding="utf-8")
+    script_source = Path("static/js/admin-audit.js").read_text(encoding="utf-8")
+    route_source = Path("app/web/admin/system.py").read_text(encoding="utf-8")
+
+    assert 'data-audit-export-format="csv"' in page_source
+    assert 'data-audit-export-format="json"' in page_source
+    assert "new URLSearchParams(new FormData(form))" in script_source
+    assert "/admin/system/audit/export/${format}" in script_source
+    assert '"/audit/export/{export_format}"' in route_source
+    assert 'require_permission("audit:read")' in route_source
+
+
+def test_audit_page_data_returns_canonical_numbered_pagination(db_session):
+    for index in range(11):
+        db_session.add(
+            AuditEvent(
+                actor_type=AuditActorType.system,
+                action="pagination.test",
+                entity_type="audit_pagination_test",
+                entity_id=str(index),
+                is_success=True,
+            )
+        )
+    db_session.commit()
+
+    page = web_system_audit.get_audit_page_data(
+        db_session,
+        web_system_audit.build_audit_list_query(
+            entity_type="audit_pagination_test",
+            page=2,
+            per_page=10,
+        ),
+    )
+
+    page_meta = page["page_meta"]
+    assert page_meta.page == 2
+    assert page_meta.start_item == 11
+    assert page_meta.end_item == 11
+    assert page_meta.total_items == 11
+    assert page_meta.navigation == (1, 2)
+    assert len(page["events"]) == 1
