@@ -15,6 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = ROOT / "VERSION"
 COMPOSITION_OBSERVATION_FILE = ROOT / "docs/kernel-runtime-composition.json"
+PRODUCT_MANIFEST_FILE = ROOT / "deploy/product-manifest.json"
+PRODUCT_DESCRIPTOR_FILE = ROOT / "deploy/product.toml"
 
 DEPENDENCY_MANIFEST_OBSERVATION_ID = "dependency-manifest"
 DEPENDENCY_MANIFEST_SOURCE_PATH = "pyproject.toml"
@@ -183,6 +185,28 @@ def refresh_dependency_manifest_observation() -> None:
     )
 
 
+def refresh_product_manifest() -> None:
+    """Regenerate the release-bound product manifest and its descriptor digest.
+
+    The manifest embeds the product version, so every VERSION change must
+    re-emit it with the repo's own generator (never by hand) and rebind the
+    digest recorded in deploy/product.toml. Requires the project environment
+    (dotmac-kernel and the app composition) to be importable.
+    """
+
+    from scripts.product_manifest import emit_product_manifest
+
+    snapshot = emit_product_manifest(
+        output=PRODUCT_MANIFEST_FILE,
+        version_file=VERSION_FILE,
+    )
+    replace_once(
+        PRODUCT_DESCRIPTOR_FILE,
+        r'^manifest_digest = "[^"]*"',
+        f'manifest_digest = "{snapshot.digest}"',
+    )
+
+
 def update_files(version: str) -> None:
     VERSION_FILE.write_text(version + "\n", encoding="utf-8")
     update_json_version(ROOT / "package.json", version)
@@ -206,6 +230,7 @@ def update_files(version: str) -> None:
     )
     update_changelog(version)
     refresh_dependency_manifest_observation()
+    refresh_product_manifest()
 
 
 def run_git(args: list[str]) -> None:
@@ -242,7 +267,8 @@ def main() -> int:
     print(f"Bumped version: {current} -> {version}")
     print("Updated VERSION, package.json, package-lock.json, pyproject.toml,")
     print("mobile/pubspec.yaml, mobile Dart version defaults, CHANGELOG.md, and")
-    print("the dependency-manifest Kernel composition observation.")
+    print("the dependency-manifest Kernel composition observation, and regenerated")
+    print("deploy/product-manifest.json with its deploy/product.toml digest.")
 
     if args.tag:
         run_git(["tag", "-a", f"v{version}", "-m", f"Release v{version}"])

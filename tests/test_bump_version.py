@@ -20,6 +20,8 @@ def test_update_files_refreshes_dependency_manifest_observation(
 ) -> None:
     monkeypatch.setattr(bump_version, "ROOT", tmp_path)
     monkeypatch.setattr(bump_version, "VERSION_FILE", tmp_path / "VERSION")
+    # Manifest regeneration is covered by its own test below.
+    monkeypatch.setattr(bump_version, "refresh_product_manifest", lambda: None)
     monkeypatch.setattr(
         bump_version,
         "COMPOSITION_OBSERVATION_FILE",
@@ -99,3 +101,32 @@ def test_refresh_dependency_manifest_observation_fails_closed_when_missing(
 
     with pytest.raises(RuntimeError, match="exactly one dependency-manifest"):
         bump_version.refresh_dependency_manifest_observation()
+
+
+def test_refresh_product_manifest_regenerates_manifest_and_descriptor_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.product_manifest import verify_product_manifest
+
+    version_file = tmp_path / "VERSION"
+    manifest = tmp_path / "deploy/product-manifest.json"
+    descriptor = tmp_path / "deploy/product.toml"
+    monkeypatch.setattr(bump_version, "ROOT", tmp_path)
+    monkeypatch.setattr(bump_version, "VERSION_FILE", version_file)
+    monkeypatch.setattr(bump_version, "PRODUCT_MANIFEST_FILE", manifest)
+    monkeypatch.setattr(bump_version, "PRODUCT_DESCRIPTOR_FILE", descriptor)
+    _write(version_file, "1.2.4\n")
+    _write(manifest, "stale\n")
+    _write(
+        descriptor,
+        '[assembly]\nmanifest_path = "deploy/product-manifest.json"\n'
+        'manifest_digest = "sha256:stale"\n',
+    )
+
+    bump_version.refresh_product_manifest()
+
+    snapshot = verify_product_manifest(path=manifest, version_file=version_file)
+    assert f'manifest_digest = "{snapshot.digest}"' in descriptor.read_text(
+        encoding="utf-8"
+    )

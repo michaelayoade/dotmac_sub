@@ -9,6 +9,10 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  PYTHON_VERSION: "3.12.13"
+  POETRY_VERSION: "2.4.1"
+
 concurrency:
   group: version-bump-${{ github.event.pull_request.base.ref }}
   cancel-in-progress: false
@@ -53,6 +57,30 @@ jobs:
               output.write(f"bump={bump}\n")
           PY
 
+      # The bump regenerates deploy/product-manifest.json with the repo's own
+      # generator, which imports the app composition and the private-index
+      # dotmac-kernel. The read token is scoped to the install step only.
+      - name: Install Python
+        if: steps.impact.outputs.bump != 'none'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        if: steps.impact.outputs.bump != 'none'
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Install dependencies
+        if: steps.impact.outputs.bump != 'none'
+        env:
+          POETRY_HTTP_BASIC_FORGEJO_USERNAME: ci-reader
+          POETRY_HTTP_BASIC_FORGEJO_PASSWORD: ${{ secrets.FORGEJO_READ_TOKEN }}
+        run: poetry install --only main --no-interaction
+
       - name: Apply version bump
         if: steps.impact.outputs.bump != 'none'
         env:
@@ -84,7 +112,7 @@ jobs:
           except ValueError:
               pass
 
-          subprocess.run([sys.executable, "scripts/bump_version.py", bump], check=True)
+          subprocess.run(["poetry", "run", "python", "-m", "scripts.bump_version", bump], check=True)
           PY
 
       - name: Read bumped version
