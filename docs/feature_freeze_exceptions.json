@@ -76,6 +76,20 @@
       "reason": "Michael directed the thin-client health goal on 2026-10-16: keep the existing poller/syslog probes and product semantics Sub-local, serialize Starter Platform Health observations at the source edge, and create no Sub health subsystem or deployment authority. He approved commit, push and draft PR #3655 for hosted CI. This entry covers only the listed bounded serialization module; modifications to the existing probe owners need no exception. CODEOWNERS review of this file remains required before merge.",
       "starter_contract": "Starter dotmac-platform-health HealthObservationInput: source_ref, observation_key, component_code, healthy/degraded/unhealthy/unknown state, observed_at, received_at, summary and bounded labels; Platform Health remains the future sole durable observation/evidence owner and Integrator remains the authenticated transport boundary.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "LEARNING-KERNEL-ENTRY-3674",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/operator_tenant_kernel_import.py",
+        "app/services/party_kernel_import.py",
+        "app/services/sot_registry/domains/party_identity.py",
+        "app/services/sot_registry/domains/tenancy.py"
+      ],
+      "reason": "Michael set the Academy learning extraction/adoption goal on 2026-10-16, including preservation of Kernel tenancy/identity boundaries, genuine migration lineage, one authoritative writer and rollback safety. This scope records the necessary Sub-owned, rollback-only identity-entry preparation in PR #3674: two exact historical-import participants and their existing-owner declarations, currently +429 app lines. It creates no runtime caller, CLI, credential/provider conversion, reference transfer or writer activation. It does not authorize another Sub capability or further growth. CODEOWNERS review of this exception remains required before merge; this entry is not a record of that review.",
+      "starter_contract": "Published dotmac-kernel 0.1.0a105: genuine unchanged 28-revision Kernel chain through 0028_machine_attribution, independent Kernel migration history, public Tenant/Party identity storage and tenant-scoped composite Party references. The product-specific historical lifecycle/JSON context remains Sub-owned; no new Kernel API is introduced.",
+      "deletion_trigger": "Remove this scoped exception and retire the rollback-only prototype participants when the qualified canonical Sub Kernel-identity adoption path replaces them and preserves their rollback, losslessness and lineage regression evidence.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
