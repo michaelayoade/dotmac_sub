@@ -217,18 +217,27 @@ def test_exact_roots_context_and_independent_history_roll_back(
             )
         finally:
             root.rollback()
-        assert entry.observe_fixture_plan(connection) == before
-        assert _rows(connection, "public") == rows
-        assert (
-            connection.scalar(text("SELECT to_regclass('public.sub_party_context')"))
-            is None
-        )
-        assert (
-            connection.scalar(
-                text(f"SELECT to_regclass('public.{adoption.ADOPTION_VERSION_TABLE}')")
+        assert not root.is_active
+        assert connection.get_transaction() is None
+        with connection.begin() as verification:
+            assert verification is not root
+            assert connection.get_transaction() is verification
+            assert entry.observe_fixture_plan(connection) == before
+            assert _rows(connection, "public") == rows
+            assert (
+                connection.scalar(
+                    text("SELECT to_regclass('public.sub_party_context')")
+                )
+                is None
             )
-            is None
-        )
+            assert (
+                connection.scalar(
+                    text(
+                        f"SELECT to_regclass('public.{adoption.ADOPTION_VERSION_TABLE}')"
+                    )
+                )
+                is None
+            )
 
 
 @pytest.mark.parametrize("phase", tuple(adoption.PartyImportPhase))
@@ -249,8 +258,13 @@ def test_each_import_phase_rolls_back_every_catalog_and_row(
                 )
         finally:
             root.rollback()
-        assert entry.observe_fixture_plan(connection) == before
-        assert _rows(connection, "public") == rows
+        assert not root.is_active
+        assert connection.get_transaction() is None
+        with connection.begin() as verification:
+            assert verification is not root
+            assert connection.get_transaction() is verification
+            assert entry.observe_fixture_plan(connection) == before
+            assert _rows(connection, "public") == rows
 
 
 @pytest.mark.parametrize(
@@ -627,16 +641,21 @@ def test_insert_trigger_corruption_refuses_and_whole_root_rolls_back(
             assert root.is_active
         finally:
             root.rollback()
-        assert entry.observe_fixture_plan(connection) == before
-        assert _rows(connection, "public") == rows
-        assert (
-            connection.scalar(
-                text(
-                    "SELECT to_regprocedure('public.party_import_corruption_fixture()')"
+        assert not root.is_active
+        assert connection.get_transaction() is None
+        with connection.begin() as verification:
+            assert verification is not root
+            assert connection.get_transaction() is verification
+            assert entry.observe_fixture_plan(connection) == before
+            assert _rows(connection, "public") == rows
+            assert (
+                connection.scalar(
+                    text(
+                        "SELECT to_regprocedure('public.party_import_corruption_fixture()')"
+                    )
                 )
+                is None
             )
-            is None
-        )
 
 
 @pytest.mark.parametrize("denied_scope", ("other", "unset"))
@@ -743,12 +762,17 @@ def test_context_rls_under_temporary_nonprivileged_role(
         finally:
             # Restores role, grants, function privileges, histories and all rows.
             root.rollback()
-        assert (
-            connection.scalar(
-                text("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=:role)"),
-                {"role": role},
+        assert not root.is_active
+        assert connection.get_transaction() is None
+        with connection.begin() as verification:
+            assert verification is not root
+            assert connection.get_transaction() is verification
+            assert (
+                connection.scalar(
+                    text("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=:role)"),
+                    {"role": role},
+                )
+                is False
             )
-            is False
-        )
-        assert entry.observe_fixture_plan(connection) == before
-        assert _rows(connection, "public") == rows
+            assert entry.observe_fixture_plan(connection) == before
+            assert _rows(connection, "public") == rows
