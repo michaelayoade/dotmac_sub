@@ -1924,7 +1924,7 @@ def pricing_calculator(request: Request, db: Session = Depends(get_db)) -> HTMLR
 @router.get(
     "/bulk-tariff-change",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("subscription:update"))],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def bulk_tariff_change_page(
     request: Request, db: Session = Depends(get_db)
@@ -1938,7 +1938,7 @@ def bulk_tariff_change_page(
 @router.post(
     "/bulk-tariff-change/preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("subscription:update"))],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def bulk_tariff_change_preview(
     request: Request,
@@ -1954,7 +1954,7 @@ def bulk_tariff_change_preview(
 @router.post(
     "/bulk-tariff-change/execute",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("subscription:update"))],
+    dependencies=[Depends(require_permission("catalog:write"))],
 )
 def bulk_tariff_change_execute(
     request: Request,

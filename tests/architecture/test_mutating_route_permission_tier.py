@@ -217,6 +217,10 @@ _POST_SHAPED_READS: dict[str, str] = {
     "POST /admin/catalog/subscriptions/bulk/lifecycle/preview": (
         "Batch counterpart of the lifecycle preview; no item is mutated."
     ),
+    "POST /admin/catalog/bulk-tariff-change/preview": (
+        "Computes the bulk tariff change preview and fingerprint from posted "
+        "offer ids; persists nothing. The execute route stays on catalog:write."
+    ),
     "POST /admin/provisioning/bulk-activate/preview": (
         "Builds the bulk-activation preview from posted filters/mapping. The "
         "apply route is separately write-guarded."

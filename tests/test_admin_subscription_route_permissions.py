@@ -186,9 +186,8 @@ MUTATION_ROUTES = [
     ("POST", f"{_S}/pending-change/req-1/cancel", ("subscription:update",)),
     ("POST", f"{_S}/scheduled-change/req-1/cancel", ("subscription:update",)),
     ("POST", f"{_B}/change-plan", ("subscription:update",)),
-    ("GET", "/admin/catalog/bulk-tariff-change", ("subscription:update",)),
-    ("POST", "/admin/catalog/bulk-tariff-change/preview", ("subscription:update",)),
-    ("POST", "/admin/catalog/bulk-tariff-change/execute", ("subscription:update",)),
+    ("GET", "/admin/catalog/bulk-tariff-change", ("subscription:read",)),
+    ("POST", "/admin/catalog/bulk-tariff-change/preview", ("subscription:read",)),
     ("POST", f"{_B}/activate", ("subscription:activate",)),
     ("POST", f"{_B}/restore", ("subscription:activate",)),
     ("POST", f"{_S}/resume-vacation-hold", ("subscription:activate",)),
@@ -309,6 +308,20 @@ def test_denied_bulk_cancel_never_reaches_the_service(client_for, monkeypatch):
     assert response.status_code == 403
     assert response.json()["detail"] == "Forbidden"
     assert calls == []
+
+
+def test_bulk_tariff_change_execute_stays_on_catalog_write(client_for, monkeypatch):
+    calls: list = []
+    svc = admin_catalog.web_bulk_tariff_change_service
+    monkeypatch.setattr(svc, "execute_context", lambda *a, **k: calls.append(1) or {})
+    url = "/admin/catalog/bulk-tariff-change/execute"
+    denied = client_for(sorted(ALL_KEYS - {"catalog:write"})).post(url)
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Forbidden"
+    assert calls == []
+    allowed = client_for(["catalog:write"]).post(url)
+    assert allowed.status_code == 200
+    assert calls == [1]
 
 
 CORRECTION_KEYS = (
