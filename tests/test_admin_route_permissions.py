@@ -86,7 +86,7 @@ def test_catalog_routes_require_catalog_permissions():
             admin_catalog.router,
             path,
             method,
-            "catalog:write",
+            "subscription:update",
         )
 
 
