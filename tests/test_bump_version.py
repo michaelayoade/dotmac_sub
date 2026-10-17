@@ -184,3 +184,11 @@ def test_failed_manifest_refresh_leaves_version_unchanged(
     after = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     assert after == before
     assert (tmp_path / "VERSION").read_text(encoding="utf-8") == "1.2.3\n"
+
+
+def test_replace_once_preserves_crlf_lines_elsewhere(tmp_path: Path) -> None:
+    target = tmp_path / "product.toml"
+    target.write_bytes(b'digest = "old"\nkeep = 1\r\nmore = 2\n')
+    # replace_once reports paths relative to ROOT only on error.
+    bump_version.replace_once(target, r'^digest = "[^"]*"', 'digest = "new"')
+    assert target.read_bytes() == b'digest = "new"\nkeep = 1\r\nmore = 2\n'

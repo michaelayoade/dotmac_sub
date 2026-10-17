@@ -45,22 +45,37 @@ def test_all_checkouts_do_not_persist_credentials() -> None:
             assert step["with"]["persist-credentials"] is False
 
 
-def test_open_pr_job_runs_no_dependency_installs_or_repo_code() -> None:
+def test_open_pr_job_installs_nothing_and_runs_only_the_validator() -> None:
     text = yaml.safe_dump(_workflow()["jobs"]["open-pr"])
-    for forbidden in ("poetry", "pip ", "setup-python", "scripts.", "python"):
+    for forbidden in ("poetry", "pip ", "setup-python", "scripts.", "npm"):
         assert forbidden not in text
+    assert "scripts/ci/validate_bump_patch.py" in text
 
 
-def test_open_pr_applies_patch_only_through_an_explicit_path_allowlist() -> None:
-    text = WORKFLOW.read_text(encoding="utf-8")
-    for path in (
-        "VERSION",
-        "deploy/product-manifest.json",
-        "deploy/product.toml",
-        "pyproject.toml",
-        "CHANGELOG.md",
-    ):
-        assert path in text
-    assert "ALLOWED=" in text
-    assert "git apply --check" in text
-    assert "git apply --summary" in text
+def test_open_pr_validates_then_applies_patch_with_pipefail() -> None:
+    steps = _steps("open-pr")
+    step = next(s for s in steps if s.get("name") == "Validate and apply bump patch")
+    run = step["run"]
+    assert "set -euo pipefail" in run
+    assert (
+        run.index("validate_bump_patch.py")
+        < run.index("git apply --check")
+        < run.index('git apply "$PATCH_FILE"')
+    )
+    names = [s.get("name") for s in steps]
+    assert names.index("Validate and apply bump patch") < next(
+        i for i, s in enumerate(steps) if "create-pull-request" in str(s.get("uses"))
+    )
+
+
+def test_seed_step_carries_no_token() -> None:
+    step = next(s for s in _steps("bump") if s.get("name") == "Seed pending version")
+    assert "TOKEN" not in yaml.safe_dump(step).upper()
+
+
+def test_validator_allowlist_matches_bump_script_outputs() -> None:
+    from scripts.ci.validate_bump_patch import ALLOWED_PATHS
+
+    assert "VERSION" in ALLOWED_PATHS
+    assert "deploy/product-manifest.json" in ALLOWED_PATHS
+    assert "deploy/product.toml" in ALLOWED_PATHS

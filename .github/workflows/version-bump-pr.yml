@@ -71,18 +71,16 @@ jobs:
 
       # Seed from the rolling bump branch (if it has a newer pending version)
       # so an unmerged bump isn't lost or downgraded when the branch is
-      # recreated from the base ref. Runs before any third-party code is
-      # installed; the read-only GITHUB_TOKEN lives only in this step's env.
+      # recreated from the base ref. The repository is public, so this fetch is
+      # anonymous: no token is present in this step.
       - name: Seed pending version
         if: steps.impact.outputs.bump != 'none'
         env:
-          GH_READ_TOKEN: ${{ github.token }}
           BUMP_BRANCH: automation/version-bump-${{ github.event.pull_request.base.ref }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           PENDING=""
-          AUTH="$(printf 'x-access-token:%s' "$GH_READ_TOKEN" | base64 | tr -d '\n')"
-          if git -c "http.extraheader=AUTHORIZATION: basic $AUTH" fetch "$REPO_URL" "$BUMP_BRANCH" 2>/dev/null; then
+          if git fetch "$REPO_URL" "$BUMP_BRANCH" 2>/dev/null; then
             PENDING="$(git show FETCH_HEAD:VERSION 2>/dev/null | tr -d '[:space:]')" || PENDING=""
           fi
           python3 - "$PENDING" <<'PY'
@@ -146,7 +144,7 @@ jobs:
 
       - name: Export bump patch
         if: steps.impact.outputs.bump != 'none'
-        run: git diff --binary > "$RUNNER_TEMP/bump.patch"
+        run: git diff --no-color --no-ext-diff > "$RUNNER_TEMP/bump.patch"
 
       - name: Upload bump patch
         if: steps.impact.outputs.bump != 'none'
@@ -179,29 +177,23 @@ jobs:
           name: version-bump-patch
           path: ${{ runner.temp }}/patch
 
+      # scripts/ci/validate_bump_patch.py is base-branch code (stdlib only,
+      # nothing installed). It treats the patch as untrusted: exact-path
+      # allowlist, no binary/new/renamed/mode-changed files, and every changed
+      # line must be a version or digest line.
       - name: Validate and apply bump patch
         env:
           PATCH_FILE: ${{ runner.temp }}/patch/bump.patch
           BUMP_VERSION: ${{ needs.bump.outputs.version }}
         run: |
+          set -euo pipefail
           printf '%s' "$BUMP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
             || { echo "::error::Refusing malformed version"; exit 1; }
-          test -s "$PATCH_FILE" || { echo "::error::Empty bump patch"; exit 1; }
-          # Allowlist: exactly the files scripts/bump_version.py writes.
-          ALLOWED='VERSION package.json package-lock.json pyproject.toml mobile/pubspec.yaml mobile/lib/src/config/env.dart mobile/lib/main.dart CHANGELOG.md docs/kernel-runtime-composition.json deploy/product-manifest.json deploy/product.toml'
-          # No creates, deletes, renames or mode changes: --summary is empty.
-          if [ -n "$(git apply --summary "$PATCH_FILE")" ]; then
-            echo "::error::Patch creates, deletes, renames or changes modes"
-            exit 1
-          fi
-          git apply --numstat -z "$PATCH_FILE" | tr '\0' '\n' | cut -f3 | while IFS= read -r path; do
-            case " $ALLOWED " in
-              *" $path "*) ;;
-              *) echo "::error::Patch touches non-allowlisted path: $path"; exit 1 ;;
-            esac
-          done
+          python3 scripts/ci/validate_bump_patch.py \
+            --patch "$PATCH_FILE" --version "$BUMP_VERSION" --root .
           git apply --check "$PATCH_FILE"
           git apply "$PATCH_FILE"
+          test "$(cat VERSION)" = "$BUMP_VERSION"
 
       # GitHub does not trigger workflow runs for events raised with GITHUB_TOKEN --
       # a deliberate guard against workflows recursing into themselves. So when we

@@ -53,12 +53,16 @@ def next_version(current: str, bump: str | None, explicit: str | None) -> str:
 
 
 def replace_once(path: Path, pattern: str, replacement: str) -> None:
-    text = path.read_text(encoding="utf-8")
+    # newline="" preserves CRLF/LF bytes elsewhere in the file (deploy/product.toml
+    # carries a CRLF line that universal-newline mode would silently rewrite).
+    with path.open(encoding="utf-8", newline="") as handle:
+        text = handle.read()
     new_text, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
     if count != 1:
         rel = path.relative_to(ROOT)
         raise RuntimeError(f"Expected exactly one match in {rel} for {pattern!r}")
-    path.write_text(new_text, encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(new_text)
 
 
 def update_json_version(path: Path, version: str) -> None:
