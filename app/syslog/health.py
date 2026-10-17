@@ -13,11 +13,19 @@ import stat
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from app.config import settings
+from app.services.platform_health_observations import (
+    PlatformHealthObservation,
+    PlatformHealthState,
+    make_platform_health_observation,
+)
+
+SYSLOG_COMPONENT_CODE = "sub.syslog_receiver"
 
 
 class ListenerHealthReason(StrEnum):
@@ -230,12 +238,62 @@ async def query_listener_readiness(*, query: ListenerProbeQuery) -> ListenerRead
             # Do not wait indefinitely for an untrusted/failed local peer.
 
 
+_SYSLOG_PLATFORM_STATES = {
+    ListenerHealthReason.READY: PlatformHealthState.HEALTHY,
+    ListenerHealthReason.STARTING: PlatformHealthState.UNKNOWN,
+    ListenerHealthReason.STOPPED: PlatformHealthState.UNHEALTHY,
+    ListenerHealthReason.CLOSED: PlatformHealthState.UNHEALTHY,
+    ListenerHealthReason.STALE: PlatformHealthState.UNHEALTHY,
+    ListenerHealthReason.UNAVAILABLE: PlatformHealthState.UNKNOWN,
+    ListenerHealthReason.MALFORMED: PlatformHealthState.UNKNOWN,
+}
+
+
+def syslog_platform_health_observation(
+    *,
+    readiness: ListenerReadiness,
+    source_ref: str,
+    received_at: datetime,
+) -> PlatformHealthObservation:
+    """Project receiver readiness without exposing generation or raw payloads.
+
+    The monotonic listener reading and process generation are key-derivation
+    identity only. ``received_at`` is also the wall-clock observation time for
+    this bounded local challenge; Platform Health owns later freshness
+    classification from that timestamp.
+    """
+
+    if (
+        isinstance(readiness.observed_monotonic, bool)
+        or not isinstance(readiness.observed_monotonic, int | float)
+        or not 0 <= readiness.observed_monotonic <= 9_223_372_036_854_775_807
+    ):
+        raise ValueError("invalid observed_monotonic")
+    return make_platform_health_observation(
+        source_ref=source_ref,
+        component_code=SYSLOG_COMPONENT_CODE,
+        state=_SYSLOG_PLATFORM_STATES[readiness.reason],
+        observed_at=received_at,
+        received_at=received_at,
+        summary=f"Syslog receiver readiness: {readiness.reason.value}",
+        labels=(
+            ("probe", "receiver_readiness"),
+            ("reason", readiness.reason.value),
+        ),
+        identity=(
+            f"{readiness.generation}:{readiness.observed_monotonic!r}:"
+            f"{readiness.reason.value}"
+        ),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Syslog UDP receiver readiness (local, same UID)"
     )
     parser.add_argument("--socket", type=Path, default=default_socket_path())
     parser.add_argument("--timeout-seconds", type=float, default=2.0)
+    parser.add_argument("--platform-health-source-ref")
     args = parser.parse_args(argv)
     try:
         query = ListenerProbeQuery(
@@ -244,15 +302,26 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError:
         parser.error("--timeout-seconds must be in (0, 5]")
     outcome = asyncio.run(query_listener_readiness(query=query))
-    print(
-        json.dumps(
-            {
-                "kind": "receiver_readiness",
-                "reason": outcome.reason.value,
-                "ready": outcome.ready,
-            }
+    if args.platform_health_source_ref is not None:
+        try:
+            observation = syslog_platform_health_observation(
+                readiness=outcome,
+                source_ref=args.platform_health_source_ref,
+                received_at=datetime.now(UTC),
+            )
+        except ValueError:
+            parser.error("--platform-health-source-ref is invalid")
+        print(json.dumps(observation.to_document()))
+    else:
+        print(
+            json.dumps(
+                {
+                    "kind": "receiver_readiness",
+                    "reason": outcome.reason.value,
+                    "ready": outcome.ready,
+                }
+            )
         )
-    )
     return 0 if outcome.ready else 1
 
 

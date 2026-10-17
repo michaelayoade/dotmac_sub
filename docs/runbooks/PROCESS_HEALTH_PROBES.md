@@ -89,6 +89,41 @@ Both CLIs emit a small JSON outcome, exit 1 for nonhealthy/unavailable evidence,
 and exit 2 for invalid CLI arguments. The syslog probe imports no parser/ORM
 modules; the poller command imports no RouterOS polling runtime.
 
+## Platform Health observation documents
+
+Both probe CLIs can alternatively serialize one bounded Starter Platform
+Health observation document when the caller supplies an explicit source
+reference:
+
+```
+python -m app.services.poller_health --max-age-seconds 60 --platform-health-source-ref <authenticated-source-ref>
+python -m app.syslog.health --timeout-seconds 2 --platform-health-source-ref <authenticated-source-ref>
+```
+
+The document uses the Starter `HealthObservationInput` field names and state
+vocabulary (`healthy`, `degraded`, `unhealthy`, `unknown`) for component codes
+`sub.bandwidth_poller` and `sub.syslog_receiver`. It is a source-edge
+serialization only: Sub does not authenticate the source reference, transport
+or persist the document, sign deployment-health evidence, or decide a
+deployment from it. A future authenticated Integrator transport must bind
+`source_ref` to the deployment identity before Platform Health accepts the
+observation; an operator-typed local value is not authenticated evidence.
+
+Local exit semantics remain separate from Platform Health freshness. The
+poller command still exits nonzero when its bounded local liveness budget
+fails, even though a stale snapshot may serialize its last observed device
+state for Platform Health to classify as stale from `observed_at`. A missing
+or future poller snapshot serializes as `unknown` at receipt time. Poller
+documents contain only aggregate device counts, never device identifiers,
+names, hosts or failure-row details. Syslog documents contain only the fixed
+readiness reason; the challenge, process generation and monotonic reading are
+key-derivation identity and are never serialized as labels or evidence fields.
+
+Default CLI output and exit behavior are unchanged when
+`--platform-health-source-ref` is omitted. Invalid source references exit 2.
+No descriptor, Compose healthcheck, deployment roster or production transport
+is activated by this optional output.
+
 ## Validation boundary
 
 Focused tests cover malformed/missing/stale/future evidence, Redis failure,
