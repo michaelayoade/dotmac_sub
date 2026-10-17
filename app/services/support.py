@@ -16,6 +16,8 @@ from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import false, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.models.domain_settings import SettingDomain
@@ -2174,8 +2176,37 @@ class Tickets:
     def _ensure_assignee(db: Session, ticket: Ticket, person_id: UUID) -> bool:
         if person_id in Tickets._assignee_person_ids_in_unit_of_work(db, ticket):
             return False
-        db.add(TicketAssignee(ticket_id=ticket.id, person_id=person_id))
-        return True
+
+        values = {"ticket_id": ticket.id, "person_id": person_id}
+        dialect_name = db.get_bind().dialect.name
+        if dialect_name == "postgresql":
+            statement = (
+                postgresql_insert(TicketAssignee)
+                .values(**values)
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        TicketAssignee.ticket_id,
+                        TicketAssignee.person_id,
+                    ]
+                )
+            )
+        elif dialect_name == "sqlite":
+            statement = (
+                sqlite_insert(TicketAssignee)
+                .values(**values)
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        TicketAssignee.ticket_id,
+                        TicketAssignee.person_id,
+                    ]
+                )
+            )
+        else:
+            db.add(TicketAssignee(**values))
+            return True
+
+        result = db.execute(statement)
+        return bool(result.rowcount)
 
     @staticmethod
     def _auto_assignment_enabled(db: Session) -> bool:

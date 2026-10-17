@@ -10,6 +10,7 @@ from uuid import UUID
 
 import httpx
 from sqlalchemy import func, or_
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Query, Session
 
 from app.celery_app import celery_app
@@ -1726,7 +1727,14 @@ def dispatch_customer_bulk_messages() -> dict[str, int]:
     return {"due": len(request_ids), "dispatched": dispatched}
 
 
-@celery_app.task(name="app.tasks.notifications.deliver_notification_queue")
+@celery_app.task(
+    name="app.tasks.notifications.deliver_notification_queue",
+    autoretry_for=(OperationalError,),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": 3},
+)
 def deliver_notification_queue() -> dict[str, int]:
     """Process queued notifications and retry failed ones."""
     started = time.monotonic()
