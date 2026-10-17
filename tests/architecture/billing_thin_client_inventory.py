@@ -13,6 +13,7 @@ module cannot slip in uncounted under a creative name inside these trees.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 #: Path shapes that count as Sub-owned billing surface. `*billing*` service
@@ -41,6 +42,51 @@ TRANSITIONAL_TOOL_GLOBS: tuple[str, ...] = (
 
 BASELINE_PATH = Path("tests/architecture/billing_thin_client_baseline.txt")
 TRANSITIONAL_REGISTRY_PATH = Path("tests/architecture/billing_transitional_tools.json")
+MONEY_WRITER_BASELINE_PATH = Path(
+    "tests/architecture/money_writer_surface_baseline.txt"
+)
+
+#: Money-state model classes whose direct instantiation marks a module as a
+#: money writer. The path-shaped billing surface above misses writers whose
+#: names lack "billing" (topup intents, payment proofs, prepaid funding);
+#: the money-writer sweep below detects them by construction so the
+#: thin-client migration cannot understate the writer surface it must
+#: retire. Names are the Sub ORM classes in ``app/models`` that carry
+#: invoice/payment/settlement/credit state.
+MONEY_MODEL_NAMES: frozenset[str] = frozenset(
+    {
+        "AccountAdjustment",
+        "AutopayMandate",
+        "BillingAccount",
+        "BillingAccountLedgerEntry",
+        "BillingContract",
+        "BillingContractLine",
+        "BillingContractVersion",
+        "BillingLedgerEntry",
+        "BillingObligation",
+        "CreditNote",
+        "CreditNoteApplication",
+        "CreditNoteLine",
+        "CustomerPositionEffect",
+        "CustomerPostingGroup",
+        "CustomerSubledgerOpeningPosition",
+        "Invoice",
+        "InvoiceClosure",
+        "InvoiceLine",
+        "LedgerEntry",
+        "Payment",
+        "PaymentAllocation",
+        "PaymentArrangement",
+        "PaymentProof",
+        "PaymentRefund",
+        "PaymentReversal",
+        "PaymentSettlement",
+        "PrepaidOpeningFundingConsumption",
+        "PrepaidPeriodPurchase",
+        "ServiceEntitlement",
+        "TopupIntent",
+    }
+)
 
 
 def _collect(root: Path, globs: tuple[str, ...]) -> tuple[str, ...]:
@@ -72,6 +118,73 @@ def line_count(root: Path, relative_path: str) -> int:
 
 def total_billing_lines(root: Path) -> int:
     return sum(line_count(root, rel) for rel in billing_surface_files(root))
+
+
+def _instantiates_money_model(path: Path) -> bool:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            else ""
+        )
+        if name in MONEY_MODEL_NAMES:
+            return True
+    return False
+
+
+def money_writer_files_outside_surface(root: Path) -> tuple[str, ...]:
+    """Return app modules outside the billing surface that write money state.
+
+    Detection is by direct instantiation of a ``MONEY_MODEL_NAMES`` class,
+    so a new writer cannot hide behind a non-billing filename. Callers that
+    merely invoke writer services are product logic and stay unpinned.
+    """
+
+    surface = set(billing_surface_files(root))
+    writers: list[str] = []
+    for path in sorted((root / "app").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        rel = path.relative_to(root).as_posix()
+        if rel not in surface and _instantiates_money_model(path):
+            writers.append(rel)
+    return tuple(writers)
+
+
+def total_money_writer_lines(root: Path) -> int:
+    return sum(
+        line_count(root, rel) for rel in money_writer_files_outside_surface(root)
+    )
+
+
+def render_money_writer_baseline(root: Path) -> str:
+    """Render the exact money-writer baseline text for the current tree."""
+
+    files = money_writer_files_outside_surface(root)
+    total = sum(line_count(root, rel) for rel in files)
+    lines = [
+        "# Money-writer surface outside the billing paths (ADR 0020).",
+        "# These modules instantiate money-state models despite living",
+        "# outside the path-shaped billing surface; the thin-client",
+        "# migration must retire every one. The inventory is exact and",
+        "# the total is two-directional — shrink the code and lower this",
+        "# baseline in the same change; a new or growing writer requires",
+        "# Michael's explicit exception in docs/feature_freeze_exceptions.json.",
+        "# Regenerate with tests.architecture.billing_thin_client_inventory",
+        "# .render_money_writer_baseline(<repo root>).",
+        f"TOTAL {total}",
+        *files,
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def render_baseline(root: Path) -> str:
