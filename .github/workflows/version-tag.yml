@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.sha }}
 
-      - name: Determine app version transition
+      - name: Determine release commit for the app version
         id: version
         env:
           EVENT_COMMIT: ${{ github.sha }}
@@ -36,55 +36,48 @@ jobs:
             echo "::error::The checkout does not match the exact event commit."
             exit 1
           fi
-          if ! parent_commit="$(git rev-parse --verify "$current_commit^1^{commit}")"; then
-            echo "::error::The exact first-parent commit is unavailable."
+          if [ "$(git rev-parse --is-shallow-repository)" != "false" ]; then
+            echo "::error::Full history is required to find the last VERSION change."
             exit 1
           fi
           if ! current_version="$(git show "$current_commit:VERSION")"; then
             echo "::error::The event commit has no readable VERSION."
             exit 1
           fi
-          if ! parent_version="$(git show "$parent_commit:VERSION")"; then
-            echo "::error::The first-parent commit has no readable VERSION."
-            exit 1
-          fi
           VERSION="$(printf '%s' "$current_version" | tr -d '[:space:]')"
-          parent_version="$(printf '%s' "$parent_version" | tr -d '[:space:]')"
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::VERSION must be semantic version X.Y.Z, got '$VERSION'"
             exit 1
           fi
-          if ! printf '%s' "$parent_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::First-parent VERSION must be semantic version X.Y.Z."
+          # A cancelled or coalesced run must not lose a release, so the
+          # release commit is the last first-parent commit that changed
+          # VERSION, not necessarily the pushed commit.
+          release_commit="$(git log -1 --first-parent --format=%H "$current_commit" -- VERSION)"
+          if ! printf '%s' "$release_commit" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::No first-parent commit that changed VERSION was found."
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          if [ "$VERSION" = "$parent_version" ]; then
-            echo "eligible=false" >> "$GITHUB_OUTPUT"
-            echo "No version transition; no tag will be created."
-            exit 0
-          fi
-          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
 
       - name: Create version tag
-        if: steps.version.outputs.eligible == 'true'
         env:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.version.outputs.release_commit }}
         run: |
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             existing_commit="$(git rev-parse "$TAG^{commit}")"
-            current_commit="$(git rev-parse HEAD)"
-            if [ "$existing_commit" = "$current_commit" ]; then
-              echo "Tag $TAG already exists and points at the current commit ($current_commit); nothing to do."
+            if [ "$existing_commit" = "$RELEASE_COMMIT" ]; then
+              echo "Tag $TAG already exists and points at the release commit ($RELEASE_COMMIT); nothing to do."
               exit 0
             fi
-            echo "::error::Tag $TAG already exists but its peeled commit is $existing_commit, not the current commit $current_commit. Refusing to silently accept a version tag that names the wrong release."
+            echo "::error::Tag $TAG already exists but its peeled commit is $existing_commit, not the release commit $RELEASE_COMMIT. Refusing to silently accept a version tag that names the wrong release."
             exit 1
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG"
+          git tag -a "$TAG" -m "Release $TAG" "$RELEASE_COMMIT"
           git push origin "$TAG"
