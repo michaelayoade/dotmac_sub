@@ -9,7 +9,8 @@ The participant deliberately has no command-line entrypoint, runtime caller,
 engine, connection factory, transaction completion or ordinary deployment
 composition. A fixture database name is a defensive boundary, never operational
 approval. The caller supplies an already active PostgreSQL root transaction,
-without a savepoint, and must rollback even after successful entry.
+without a savepoint, and must rollback even after successful entry. This is a
+caller-owned transaction; the participant never completes it.
 
 ## Bound source and artifact
 
