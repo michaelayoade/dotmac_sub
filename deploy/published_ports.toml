@@ -52,7 +52,8 @@
 #                     take the default: check-listeners refuses an
 #                     environment it has no declaration for.
 #   recreated_by_deploy
-#                     true when the service is in deploy.sh's APP_SERVICES,
+#                     true when the service runs the release app image, so deploy.sh
+#                     recreates it (its APP_SERVICES set is derived from Compose),
 #                     so an ordinary deploy applies a change to this line.
 #                     false means only the reconcile operation applies it.
 #
@@ -213,4 +214,4 @@ protocol = "tcp"
 bind_env = "TEAM_INBOX_SMTP_BIND"
 default_bind = "127.0.0.1:"
 reach = "loopback"
-recreated_by_deploy = false
+recreated_by_deploy = true

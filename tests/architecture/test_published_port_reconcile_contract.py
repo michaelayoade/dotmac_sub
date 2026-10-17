@@ -184,13 +184,20 @@ def test_the_reconcile_never_reads_the_container_environment_block() -> None:
 
 
 def _app_services() -> set[str]:
-    """The exact service names deploy.sh recreates."""
+    """The service names deploy.sh recreates.
+
+    deploy.sh derives its recreate set from the resolved Compose config: every
+    service whose image is the release ``${APP_IMAGE}`` (see
+    scripts/deploy_app_image_services.py), so read the same fact from the file.
+    """
     deploy = DEPLOY.read_text(encoding="utf-8")
-    block = deploy[
-        deploy.index("APP_SERVICES=(") : deploy.index("CELERY_WORKER_SERVICES=(")
-    ]
-    inner = block[block.index("(") + 1 : block.rindex(")")]
-    return set(re.findall(r"[a-z0-9][a-z0-9-]*", inner.replace("\\\n", " ")))
+    assert "scripts.deploy_app_image_services" in deploy
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    return {
+        name
+        for name, service in compose["services"].items()
+        if str(service.get("image", "")).startswith("${APP_IMAGE")
+    }
 
 
 def test_the_app_services_list_is_still_parseable() -> None:
