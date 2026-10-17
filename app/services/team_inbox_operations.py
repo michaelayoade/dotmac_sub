@@ -711,7 +711,7 @@ _OVERRIDE_SKIPPABLE_CODES = frozenset(
         "override_not_required",
         "override_requires_customer_identity",
     )
-)
+) | frozenset({"communications.team_inbox_status.spam_resolution_not_allowed"})
 
 
 def bulk_update_status(

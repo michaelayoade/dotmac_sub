@@ -19,19 +19,29 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.config import settings
-from app.services import poller_health
+from app.services import platform_health_observations, poller_health
+from app.services.platform_health_observations import (
+    PlatformHealthObservation,
+    PlatformHealthState,
+    make_platform_health_observation,
+)
 from app.services.poller_health import (
+    PollerDeviceFailure,
+    PollerFailureCategory,
     PollerHealthReason,
     PollerLivenessQuery,
     PollerSnapshot,
     decode_poller_health,
+    poller_platform_health_observation,
 )
 from app.syslog import health as syslog_health
 from app.syslog.health import (
     ListenerHealthReason,
     ListenerProbeQuery,
+    ListenerReadiness,
     bind_health_socket,
     query_listener_readiness,
+    syslog_platform_health_observation,
 )
 from app.syslog.listener import SyslogListener, SyslogProtocol
 
@@ -589,3 +599,333 @@ def test_typed_probe_budgets_reject_invalid_values(
         ListenerProbeQuery(tmp_path / "health.sock", budget)
     with pytest.raises(ValueError):
         PollerLivenessQuery(budget, NOW)
+
+
+def _platform_observation(**overrides: object) -> PlatformHealthObservation:
+    values: dict[str, object] = {
+        "source_ref": "deployment:sub:test",
+        "component_code": "sub.example",
+        "state": PlatformHealthState.HEALTHY,
+        "observed_at": NOW,
+        "received_at": NOW + timedelta(seconds=1),
+        "summary": "Example component observed",
+        "labels": (("reason", "ready"),),
+        "identity": "example:1",
+    }
+    values.update(overrides)
+    return make_platform_health_observation(**values)  # type: ignore[arg-type]
+
+
+def test_platform_health_observation_is_bounded_and_deterministic() -> None:
+    first = _platform_observation(labels=(("b", "2"), ("a", "1")))
+    second = _platform_observation(labels=(("a", "1"), ("b", "2")))
+    changed_identity = _platform_observation(identity="example:2")
+
+    assert first == second
+    assert first.observation_key != changed_identity.observation_key
+    assert len(first.observation_key) == 64
+    assert first.to_document() == {
+        "source_ref": "deployment:sub:test",
+        "observation_key": first.observation_key,
+        "component_code": "sub.example",
+        "state": "healthy",
+        "observed_at": NOW.isoformat(),
+        "received_at": (NOW + timedelta(seconds=1)).isoformat(),
+        "summary": "Example component observed",
+        "labels": {"a": "1", "b": "2"},
+    }
+    assert platform_health_observations.PlatformHealthState is PlatformHealthState
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"source_ref": "contains space"},
+        {"source_ref": "x" * 201},
+        {"component_code": ""},
+        {"observed_at": NOW.replace(tzinfo=None)},
+        {"received_at": NOW - timedelta(seconds=1)},
+        {"summary": "bad\nsummary"},
+        {"summary": "x" * 241},
+        {"labels": (("reason", "ready"), ("reason", "duplicate"))},
+        {"labels": tuple((f"k{index}", "v") for index in range(21))},
+        {"labels": (("k" * 81, "v"),)},
+        {"labels": (("reason", "v" * 161),)},
+        {"identity": "bad\nidentity"},
+    ],
+)
+def test_platform_health_observation_rejects_unbounded_input(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        _platform_observation(**overrides)
+
+
+@pytest.mark.parametrize(
+    "snapshot,state",
+    [
+        (_snapshot(), PlatformHealthState.HEALTHY),
+        (_snapshot(failing=1), PlatformHealthState.DEGRADED),
+        (_snapshot(failing=2), PlatformHealthState.UNHEALTHY),
+        (PollerSnapshot(NOW, 0, 0, 0, 0, 0), PlatformHealthState.HEALTHY),
+    ],
+)
+def test_poller_platform_health_state_uses_only_aggregate_counts(
+    snapshot: PollerSnapshot, state: PlatformHealthState
+) -> None:
+    canary_snapshot = replace(
+        snapshot,
+        device_failures=(
+            PollerDeviceFailure(
+                device_id=uuid4(),
+                name="CANARY-NAME",
+                host="CANARY-HOST",
+                error_category=PollerFailureCategory.TIMEOUT,
+                consecutive_failures=2,
+                last_attempt_at=NOW,
+                last_success_at=None,
+                next_attempt_at=None,
+                services_without_live_bandwidth=3,
+            ),
+        )
+        if snapshot.devices_failing
+        else (),
+    )
+    observation = poller_platform_health_observation(
+        snapshot=canary_snapshot,
+        source_ref="deployment:sub:test",
+        received_at=NOW + timedelta(seconds=2),
+    )
+
+    assert observation.component_code == "sub.bandwidth_poller"
+    assert observation.state is state
+    assert observation.observed_at == NOW
+    assert observation.labels == (
+        ("devices_failing", str(snapshot.devices_failing)),
+        ("devices_total", str(snapshot.devices_total)),
+        ("probe", "loop_liveness"),
+        ("reason", "snapshot_available"),
+    )
+    serialized = json.dumps(observation.to_document())
+    assert "CANARY" not in serialized
+    if canary_snapshot.device_failures:
+        assert str(canary_snapshot.device_failures[0].device_id) not in serialized
+
+
+@pytest.mark.parametrize(
+    "snapshot,reason",
+    [
+        (None, "unavailable"),
+        (_snapshot(observed_at=NOW + timedelta(seconds=5)), "future_timestamp"),
+    ],
+)
+def test_poller_platform_health_missing_or_future_snapshot_is_unknown(
+    snapshot: PollerSnapshot | None, reason: str
+) -> None:
+    observation = poller_platform_health_observation(
+        snapshot=snapshot,
+        source_ref="deployment:sub:test",
+        received_at=NOW,
+    )
+
+    assert observation.state is PlatformHealthState.UNKNOWN
+    assert observation.observed_at == observation.received_at == NOW
+    assert dict(observation.labels)["reason"] == reason
+
+
+@pytest.mark.parametrize(
+    "reason,state",
+    [
+        (ListenerHealthReason.READY, PlatformHealthState.HEALTHY),
+        (ListenerHealthReason.STARTING, PlatformHealthState.UNKNOWN),
+        (ListenerHealthReason.STOPPED, PlatformHealthState.UNHEALTHY),
+        (ListenerHealthReason.CLOSED, PlatformHealthState.UNHEALTHY),
+        (ListenerHealthReason.STALE, PlatformHealthState.UNHEALTHY),
+        (ListenerHealthReason.UNAVAILABLE, PlatformHealthState.UNKNOWN),
+        (ListenerHealthReason.MALFORMED, PlatformHealthState.UNKNOWN),
+    ],
+)
+def test_syslog_platform_health_state_mapping(
+    reason: ListenerHealthReason, state: PlatformHealthState
+) -> None:
+    readiness = ListenerReadiness(reason, uuid4(), time.monotonic())
+    observation = syslog_platform_health_observation(
+        readiness=readiness,
+        source_ref="deployment:sub:test",
+        received_at=NOW,
+    )
+
+    assert observation.component_code == "sub.syslog_receiver"
+    assert observation.state is state
+    assert dict(observation.labels) == {
+        "probe": "receiver_readiness",
+        "reason": reason.value,
+    }
+    assert str(readiness.generation) not in json.dumps(observation.to_document())
+
+
+def test_syslog_platform_health_rejects_invalid_monotonic() -> None:
+    with pytest.raises(ValueError):
+        syslog_platform_health_observation(
+            readiness=ListenerReadiness(
+                ListenerHealthReason.READY, uuid4(), float("nan")
+            ),
+            source_ref="deployment:sub:test",
+            received_at=NOW,
+        )
+    with pytest.raises(ValueError):
+        syslog_platform_health_observation(
+            readiness=ListenerReadiness(ListenerHealthReason.READY, uuid4(), 10**1000),
+            source_ref="deployment:sub:test",
+            received_at=NOW,
+        )
+
+
+def test_poller_platform_health_rejects_naive_snapshot_time() -> None:
+    with pytest.raises(ValueError):
+        poller_platform_health_observation(
+            snapshot=_snapshot(observed_at=NOW.replace(tzinfo=None)),
+            source_ref="deployment:sub:test",
+            received_at=NOW,
+        )
+
+
+def test_poller_cli_can_emit_platform_health_observation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    snapshot = _snapshot(observed_at=datetime.now(UTC), failing=1)
+    monkeypatch.setattr(poller_health, "load_poller_health", lambda: snapshot)
+
+    assert (
+        poller_health.main(
+            [
+                "--max-age-seconds",
+                "60",
+                "--platform-health-source-ref",
+                "deployment:sub:test",
+            ]
+        )
+        == 0
+    )
+    document = json.loads(capsys.readouterr().out)
+    assert document["component_code"] == "sub.bandwidth_poller"
+    assert document["state"] == "degraded"
+    assert document["source_ref"] == "deployment:sub:test"
+    assert set(document) == {
+        "source_ref",
+        "observation_key",
+        "component_code",
+        "state",
+        "observed_at",
+        "received_at",
+        "summary",
+        "labels",
+    }
+
+    stale = _snapshot(observed_at=datetime.now(UTC) - timedelta(seconds=120))
+    monkeypatch.setattr(poller_health, "load_poller_health", lambda: stale)
+    assert (
+        poller_health.main(
+            [
+                "--max-age-seconds",
+                "60",
+                "--platform-health-source-ref",
+                "deployment:sub:test",
+            ]
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().out)["state"] == "healthy"
+
+    with pytest.raises(SystemExit) as error:
+        poller_health.main(
+            [
+                "--max-age-seconds",
+                "60",
+                "--platform-health-source-ref",
+                "contains space",
+            ]
+        )
+    assert error.value.code == 2
+
+
+def test_poller_cli_stamps_receipt_after_loading_snapshot(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    received_at = NOW + timedelta(seconds=2)
+    snapshot = _snapshot(observed_at=NOW + timedelta(seconds=1))
+    loaded = False
+
+    class ProbeClock:
+        @staticmethod
+        def now(tz: object) -> datetime:
+            assert tz is UTC
+            return received_at if loaded else NOW
+
+    def load_snapshot() -> PollerSnapshot:
+        nonlocal loaded
+        loaded = True
+        return snapshot
+
+    monkeypatch.setattr(poller_health, "datetime", ProbeClock)
+    monkeypatch.setattr(poller_health, "load_poller_health", load_snapshot)
+
+    # Local liveness keeps its incumbent query-start timestamp and exit policy.
+    assert (
+        poller_health.main(
+            [
+                "--max-age-seconds",
+                "60",
+                "--platform-health-source-ref",
+                "deployment:sub:test",
+            ]
+        )
+        == 1
+    )
+    document = json.loads(capsys.readouterr().out)
+    assert document["state"] == "healthy"
+    assert document["labels"]["reason"] == "snapshot_available"
+    assert document["observed_at"] == snapshot.observed_at.isoformat()
+    assert document["received_at"] == received_at.isoformat()
+
+
+def test_syslog_cli_can_emit_platform_health_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    readiness = ListenerReadiness(ListenerHealthReason.READY, uuid4(), time.monotonic())
+
+    async def fake_query(*, query: ListenerProbeQuery) -> ListenerReadiness:
+        return readiness
+
+    monkeypatch.setattr(syslog_health, "query_listener_readiness", fake_query)
+    assert (
+        syslog_health.main(
+            [
+                "--socket",
+                str(tmp_path / "health.sock"),
+                "--platform-health-source-ref",
+                "deployment:sub:test",
+            ]
+        )
+        == 0
+    )
+    document = json.loads(capsys.readouterr().out)
+    assert document["component_code"] == "sub.syslog_receiver"
+    assert document["state"] == "healthy"
+    assert document["labels"] == {
+        "probe": "receiver_readiness",
+        "reason": "ready",
+    }
+
+    with pytest.raises(SystemExit) as error:
+        syslog_health.main(
+            [
+                "--socket",
+                str(tmp_path / "health.sock"),
+                "--platform-health-source-ref",
+                "contains space",
+            ]
+        )
+    assert error.value.code == 2

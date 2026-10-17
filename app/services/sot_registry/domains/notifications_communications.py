@@ -3672,7 +3672,11 @@ DOMAIN = DomainSOT(
                         name="Customer resolution readiness",
                         owner="communications.team_inbox_customer_completion",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Transaction-current Customer-only ActionReadiness verdict for agent resolution.",
+                        source=(
+                            "Transaction-current Customer/Lead classification and "
+                            "ActionReadiness verdict; spam resolution admits only "
+                            "unresolved identity without pending Lead materialization."
+                        ),
                     ),
                     AuthorityInput(
                         name="Meta channel resolution state",
