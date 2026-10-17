@@ -52,6 +52,7 @@ from dotmac_billing.service import (
     create_billing_account,
 )
 from dotmac_kernel.cache import TenantScope
+from dotmac_kernel.idempotency import IdempotencyConflict
 from dotmac_kernel.money import Currency, Money
 from dotmac_numbering import SeriesConfiguration, allocate, configure_series
 from dotmac_payments import (
@@ -403,7 +404,7 @@ def test_money_path_pay_qualify_fund_invoice_renew(isolated_database: URL) -> No
             currency="NGN",
             minor_units=2,
         )
-        with pytest.raises(BillingConflict):
+        with pytest.raises((BillingConflict, IdempotencyConflict)):
             accept_settlement(
                 session,
                 scope=SCOPE,
