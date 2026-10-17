@@ -136,16 +136,21 @@ CELERY_INSPECT_TIMEOUT_SECONDS="${CELERY_INSPECT_TIMEOUT_SECONDS:-5}"
 # changed after they started. See apply_service_config_changes below and
 # docs/runbooks/SERVICE_CONFIG_MOUNTS.md.
 # Derived at deploy time (derive_app_services) from the resolved Compose config:
-# every declared service whose image resolves to the release APP_IMAGE, minus
-# APP_IMAGE_DEPLOY_EXCLUSIONS. It used to be a hand-kept list that omitted
+# declared services whose image resolves to the release APP_IMAGE that either
+# already have a container in the project or are on the required list in
+# scripts/deploy_app_image_services.py, plus app-image services already running
+# in the project, minus APP_IMAGE_DEPLOY_EXCLUSIONS. It used to be a hand-kept list that omitted
 # team-inbox-smtp, which then stayed on an old image across releases. Profile-
 # gated services (celery-beat on staging, team-inbox-smtp without smtp-inbound)
 # appear only where their profile is active, so absent ones never fail a deploy.
 # INTERIM: per-service desired state/drift will move to Starter
 # dotmac-deployment-control / dotmac-release-catalog.
 APP_SERVICES=()
-# App-image services a deploy must NOT recreate (name + reason). Empty today.
-APP_IMAGE_DEPLOY_EXCLUSIONS=()
+# App-image services a deploy must NEVER recreate or create.
+#   app-backup: declared only in the production host override with
+#   privileged/pid:host/docker.sock; it has never run, and a deploy (or the
+#   rollback restore) must not bring up a new privileged container.
+APP_IMAGE_DEPLOY_EXCLUSIONS=(app-backup)
 CELERY_WORKER_SERVICES=(celery-worker celery-worker-bandwidth \
   celery-worker-ingestion celery-worker-monitoring \
   celery-worker-notifications-immediate celery-worker-notifications \
@@ -1337,58 +1342,64 @@ compose_project_name() {
     --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true
 }
 
-# Prints "<container-id>|<service>" for every container of this Compose project
-# that runs a dotmac_sub app image, whether or not Compose currently resolves
-# its service (a profile-gated service started by name, such as
-# team-inbox-smtp on production, is NOT listed by `config --services` unless
-# COMPOSE_PROFILES activates it, but it still runs the app image and must roll
-# with each release).
+# Prints "<container-id>|<service>" for every NON-ONE-OFF container (running or
+# stopped) of this Compose project that runs a dotmac_sub app image, whether or
+# not Compose currently resolves its service: a profile-gated service started by
+# name (team-inbox-smtp on production) is not listed by `config --services`
+# unless COMPOSE_PROFILES activates it, but it runs the app image and must roll
+# with each release.
+#
+# Images are pulled by digest and untagged on production, so `docker ps` shows a
+# short image ID. Match on the container's configured image reference, or on its
+# image ID being one of the local IMAGE_REPO image IDs. One-off containers
+# (`compose run`) and the warm candidate are never part of the set.
 project_app_image_containers() {
-  local project row id service image
+  local project ids row id service config_image image_id name repo_ids
   project="$(compose_project_name)"
   [[ -n "${project}" ]] || return 0
-  while IFS= read -r row; do
+  repo_ids="$(docker image ls --no-trunc -q "${IMAGE_REPO}" 2>/dev/null || true)"
+  ids="$(docker ps -a -q \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=com.docker.compose.oneoff=False" 2>/dev/null || true)"
+  while IFS= read -r id; do
+    [[ -n "${id}" ]] || continue
+    row="$(docker inspect "${id}" --format \
+      '{{.Id}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.Config.Image}}|{{.Image}}|{{.Name}}' \
+      2>/dev/null || true)"
     [[ -n "${row}" ]] || continue
-    IFS='|' read -r id service image <<<"${row}"
-    case "${image}" in
-      "${IMAGE_REPO}":* | "${IMAGE_REPO}"@*) printf '%s|%s\n' "${id}" "${service}" ;;
+    IFS='|' read -r id service config_image image_id name <<<"${row}"
+    [[ -n "${service}" ]] || continue
+    [[ "${name#/}" == "${CANDIDATE_CONTAINER}" ]] && continue
+    case "${config_image}" in
+      "${IMAGE_REPO}":* | "${IMAGE_REPO}"@*) printf '%s|%s\n' "${id}" "${service}"; continue ;;
     esac
-  done < <(docker ps --filter "label=com.docker.compose.project=${project}" \
-    --format '{{.ID}}|{{.Label "com.docker.compose.service"}}|{{.Image}}' 2>/dev/null || true)
+    if [[ -n "${image_id}" ]] && grep -Fxq "${image_id}" <<<"${repo_ids}"; then
+      printf '%s|%s\n' "${id}" "${service}"
+    fi
+  done <<<"${ids}"
 }
 
 derive_app_services() {
-  local derived service excluded
+  local derived service existing_service excluded
+  local args=(--image "${IMAGE}")
+  while IFS='|' read -r _ existing_service; do
+    [[ -n "${existing_service}" ]] && args+=(--existing "${existing_service}")
+  done < <(project_app_image_containers)
+  for excluded in ${APP_IMAGE_DEPLOY_EXCLUSIONS[@]+"${APP_IMAGE_DEPLOY_EXCLUSIONS[@]}"}; do
+    args+=(--exclude "${excluded}")
+  done
   if ! derived="$(
     APP_IMAGE="${IMAGE}" \
       "${COMPOSE[@]}" config --format json 2>/dev/null |
-      run_repo_module scripts.deploy_app_image_services --image "${IMAGE}" 2>/dev/null
+      run_repo_module scripts.deploy_app_image_services "${args[@]}" 2>/dev/null
   )"; then
     echo "DEPLOY CONFIG FAILURE: cannot derive app-image services from ${COMPOSE_FILES_DESC}." >&2
     return 1
   fi
   APP_SERVICES=()
   while IFS= read -r service; do
-    [[ -n "${service}" ]] || continue
-    for excluded in ${APP_IMAGE_DEPLOY_EXCLUSIONS[@]+"${APP_IMAGE_DEPLOY_EXCLUSIONS[@]}"}; do
-      [[ "${service}" == "${excluded}" ]] && continue 2
-    done
-    APP_SERVICES+=("${service}")
+    [[ -n "${service}" ]] && APP_SERVICES+=("${service}")
   done <<<"${derived}"
-  # Union with app-image services that are running even though their profile is
-  # inactive; naming them in `up -d` activates the profile for that call.
-  local row running_service already
-  while IFS='|' read -r _ running_service; do
-    [[ -n "${running_service}" ]] || continue
-    for excluded in ${APP_IMAGE_DEPLOY_EXCLUSIONS[@]+"${APP_IMAGE_DEPLOY_EXCLUSIONS[@]}"}; do
-      [[ "${running_service}" == "${excluded}" ]] && continue 2
-    done
-    already=0
-    for service in "${APP_SERVICES[@]}"; do
-      [[ "${service}" == "${running_service}" ]] && already=1
-    done
-    ((already)) || APP_SERVICES+=("${running_service}")
-  done < <(project_app_image_containers)
 }
 derive_app_services || exit 1
 if [[ " ${APP_SERVICES[*]} " != *" app "* ]]; then

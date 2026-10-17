@@ -13,7 +13,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from scripts.deploy_app_image_services import app_image_services
+from scripts.deploy_app_image_services import (
+    REQUIRED_APP_SERVICES,
+    app_image_services,
+    recreate_set,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = "registry.example.invalid/app@sha256:" + "a" * 64
@@ -78,3 +82,62 @@ def test_every_app_image_service_has_a_running_replica_in_product_toml() -> None
             f"{service} runs the app image but product.toml declares "
             f"replicas={replicas.get(service)}; drift comparison would skip it"
         )
+
+
+def _deploy_exclusions() -> list[str]:
+    text = (ROOT / "scripts" / "deploy.sh").read_text()
+    match = re.search(r"^APP_IMAGE_DEPLOY_EXCLUSIONS=\(([^)]*)\)", text, re.M)
+    assert match, "APP_IMAGE_DEPLOY_EXCLUSIONS not found in scripts/deploy.sh"
+    return re.sub(r"#.*", "", match.group(1)).split()
+
+
+def _with_host_override(images: dict[str, str]) -> dict[str, str]:
+    """Model production's host override: privileged `app-backup` on the app image."""
+    return {
+        **images,
+        "app-backup": "${APP_IMAGE}",
+        "override-only-app": "${APP_IMAGE}",
+    }
+
+
+def test_required_services_all_exist_on_the_app_image_in_compose() -> None:
+    declared = set(app_image_services(_resolved(_compose_services()), RELEASE))
+    assert set(REQUIRED_APP_SERVICES) <= declared, sorted(
+        set(REQUIRED_APP_SERVICES) - declared
+    )
+    # Every app-image service in the repo compose is required: a new one must be
+    # added to REQUIRED_APP_SERVICES deliberately (or be excluded).
+    assert declared <= set(REQUIRED_APP_SERVICES)
+
+
+def test_a_deploy_never_creates_an_override_only_service_nobody_ran() -> None:
+    declared = app_image_services(
+        _resolved(_with_host_override(_compose_services())), RELEASE
+    )
+    assert {"app-backup", "override-only-app"} <= set(declared)
+    chosen = recreate_set(declared, existing=[], excluded=_deploy_exclusions())
+    assert "app-backup" not in chosen
+    assert "override-only-app" not in chosen
+    assert "team-inbox-smtp" in chosen
+
+
+def test_app_backup_is_excluded_even_if_a_container_exists() -> None:
+    assert "app-backup" in _deploy_exclusions()
+    declared = app_image_services(
+        _resolved(_with_host_override(_compose_services())), RELEASE
+    )
+    chosen = recreate_set(
+        declared, existing=["app-backup"], excluded=_deploy_exclusions()
+    )
+    assert "app-backup" not in chosen
+
+
+def test_existing_profile_inactive_service_is_included_without_being_declared() -> None:
+    declared = [s for s in REQUIRED_APP_SERVICES if s != "team-inbox-smtp"]
+    chosen = recreate_set(declared, existing=["team-inbox-smtp"])
+    assert "team-inbox-smtp" in chosen
+
+
+def test_override_only_service_with_a_container_is_recreated() -> None:
+    chosen = recreate_set(["app", "override-only-app"], existing=["override-only-app"])
+    assert "override-only-app" in chosen

@@ -126,11 +126,17 @@ def _deploy_array(name: str) -> set[str]:
 
 
 def _deploy_recreated_services() -> set[str]:
-    """The set deploy.sh recreates: Compose services running ``${APP_IMAGE}``."""
-    from scripts.deploy_app_image_services import app_image_services
+    """What deploy.sh recreates on a host with no containers beyond the required set.
+
+    Compose services running ``${APP_IMAGE}``, restricted by the same rule as
+    deploy.sh (``recreate_set``), with a modelled host override that adds the
+    privileged ``app-backup`` service production declares.
+    """
+    from scripts.deploy_app_image_services import app_image_services, recreate_set
 
     release = "registry.example.invalid/app@sha256:" + "a" * 64
-    compose = _services(ROOT / "docker-compose.yml")
+    compose = dict(_services(ROOT / "docker-compose.yml"))
+    compose["app-backup"] = {"image": "${APP_IMAGE}"}  # host override
     resolved = {
         "services": {
             name: {
@@ -141,7 +147,13 @@ def _deploy_recreated_services() -> set[str]:
             for name, service in compose.items()
         }
     }
-    return set(app_image_services(resolved, release))
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    exclusions = re.search(r"^APP_IMAGE_DEPLOY_EXCLUSIONS=\(([^)]*)\)", script, re.M)
+    assert exclusions
+    excluded = re.sub(r"#.*", "", exclusions.group(1)).split()
+    chosen = set(recreate_set(app_image_services(resolved, release), [], excluded))
+    assert "app-backup" not in chosen
+    return chosen
 
 
 def test_compose_files_are_discovered() -> None:

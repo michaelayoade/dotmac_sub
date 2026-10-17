@@ -34,16 +34,58 @@ def app_image_services(document: object, image: str) -> list[str]:
     )
 
 
+#: App-image services a deploy may CREATE when no container exists yet. Any
+#: other app-image service in the resolved config (for example an `app-backup`
+#: declared only in a host override) is recreated only if the host already runs
+#: it: a deploy must never create a service the host has never run.
+REQUIRED_APP_SERVICES: tuple[str, ...] = (
+    "app",
+    "celery-worker",
+    "celery-worker-bandwidth",
+    "celery-worker-ingestion",
+    "celery-worker-monitoring",
+    "celery-worker-notifications-immediate",
+    "celery-worker-notifications",
+    "celery-worker-billing",
+    "celery-worker-tr069",
+    "celery-beat",
+    "bandwidth-poller",
+    "syslog-listener",
+    "team-inbox-smtp",
+)
+
+
+def recreate_set(
+    declared_app_image: Sequence[str],
+    existing: Sequence[str],
+    excluded: Sequence[str] = (),
+    required: Sequence[str] = REQUIRED_APP_SERVICES,
+) -> list[str]:
+    """Services a deploy recreates.
+
+    ``declared_app_image``: resolved-config services on the release image.
+    ``existing``: services with a non-one-off project container on a
+    dotmac_sub app image (a profile-gated service started by name is here even
+    though its profile is inactive, so config does not list it).
+    """
+    allowed = set(required) | set(existing)
+    chosen = {name for name in declared_app_image if name in allowed}
+    chosen |= set(existing)
+    return sorted(chosen - set(excluded))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
+    parser.add_argument("--existing", action="append", default=[])
+    parser.add_argument("--exclude", action="append", default=[])
     args = parser.parse_args(argv)
     try:
-        names = app_image_services(json.load(sys.stdin), args.image)
+        declared = app_image_services(json.load(sys.stdin), args.image)
     except (ValueError, json.JSONDecodeError):
         print("compose service graph unavailable", file=sys.stderr)
         return 1
-    print("\n".join(names))
+    print("\n".join(recreate_set(declared, args.existing, args.exclude)))
     return 0
 
 
