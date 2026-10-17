@@ -71,6 +71,51 @@ def test_billing_surface_inventory_and_total_match_baseline() -> None:
     )
 
 
+def test_money_writer_surface_outside_billing_paths_matches_baseline() -> None:
+    """Writers hiding behind non-billing filenames are pinned too.
+
+    The path-shaped surface above cannot see modules like topup intents or
+    prepaid funding reconciliation; this sweep detects direct money-model
+    instantiation anywhere under ``app/`` outside that surface, so the
+    writer inventory the migration must retire stays honest.
+    """
+
+    baseline_text = (ROOT / inv.MONEY_WRITER_BASELINE_PATH).read_text(encoding="utf-8")
+    pinned_total, pinned_files = _parse_baseline(baseline_text)
+    current_files = inv.money_writer_files_outside_surface(ROOT)
+    current_total = inv.total_money_writer_lines(ROOT)
+
+    new_files = sorted(set(current_files) - set(pinned_files))
+    removed_files = sorted(set(pinned_files) - set(current_files))
+    assert not new_files, (
+        "New money-writer modules appeared outside the billing surface. "
+        "Money-state writes belong in Starter dotmac-billing/payments "
+        "(thin-client gate, docs/FEATURE_FREEZE.md); a new writer requires "
+        "Michael's exception in docs/feature_freeze_exceptions.json and a "
+        "reviewed baseline edit:\n  " + "\n  ".join(new_files)
+    )
+    assert not removed_files, (
+        "Money-writer modules were retired but the baseline was not lowered "
+        "in the same change; regenerate it so the shrinkage locks in:\n  "
+        + "\n  ".join(removed_files)
+    )
+    assert current_total == pinned_total, (
+        f"Money-writer surface is {current_total} lines, baseline pins "
+        f"{pinned_total}. Shrinkage must lower the baseline in the same "
+        "change; net growth requires Michael's explicit exception (see "
+        "docs/FEATURE_FREEZE.md)."
+    )
+
+
+def test_money_writer_baseline_rendering_is_normalized() -> None:
+    pinned = (ROOT / inv.MONEY_WRITER_BASELINE_PATH).read_text(encoding="utf-8")
+    assert pinned == inv.render_money_writer_baseline(ROOT), (
+        "money_writer_surface_baseline.txt is not the normalized rendering — "
+        "regenerate it from billing_thin_client_inventory"
+        ".render_money_writer_baseline instead of editing by hand"
+    )
+
+
 def test_baseline_rendering_is_normalized() -> None:
     """The committed baseline is exactly `render_baseline` output."""
 
