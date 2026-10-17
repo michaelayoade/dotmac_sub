@@ -52,11 +52,11 @@ dependencies = [
     "defusedxml==0.7.1",
     "dotmac-auth-oidc==0.1.0a2",
     "dotmac-kernel==0.1.0a105",
-    "dotmac-billing==0.1.0a1",
+    "dotmac-billing==0.1.0a8",
     "dotmac-collections==0.1.0a1",
     "dotmac-inbox==0.1.0a1",
-    "dotmac-numbering==0.1.0a2",
-    "dotmac-payments==0.1.0a2",
+    "dotmac-numbering==0.1.0a3",
+    "dotmac-payments==0.1.0a3",
     "dotmac-service-orders==0.1.0a1",
     "dotmac-subscriptions==0.1.0a3",
     "dotmac-template-studio==0.2.0a5",
@@ -85,13 +85,13 @@ dotmac-auth-oidc = { version = "0.1.0a2", source = "forgejo" }
 dotmac-kernel = { version = "0.1.0a105", source = "forgejo" }
 # Dual-plane commercial owners selected TENANT-only for migration and shadow
 # preparation. Sub's incumbent money and collections writers remain active.
-dotmac-billing = { version = "0.1.0a1", source = "forgejo" }
+dotmac-billing = { version = "0.1.0a8", source = "forgejo" }
 dotmac-collections = { version = "0.1.0a1", source = "forgejo" }
 # Released numbering storage only: no product caller or series activation.
-dotmac-numbering = { version = "0.1.0a2", source = "forgejo" }
+dotmac-numbering = { version = "0.1.0a3", source = "forgejo" }
 # Tenant-only migration/shadow composition. Sub's incumbent payment writers
 # remain authoritative until a separate backfill, parity and sealed cutover.
-dotmac-payments = { version = "0.1.0a2", source = "forgejo" }
+dotmac-payments = { version = "0.1.0a3", source = "forgejo" }
 # First composed domain module. Its `so` lineage is registered in
 # alembic.ini and its prerequisites are bound in app/migration_bindings.py.
 dotmac-service-orders = { version = "0.1.0a1", source = "forgejo" }

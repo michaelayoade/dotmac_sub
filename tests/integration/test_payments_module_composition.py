@@ -17,6 +17,7 @@ import sqlalchemy as sa
 from alembic.config import Config
 from dotmac_kernel.cache import TenantScope
 from dotmac_payments import GetPaymentIntentV1, get_payment_intent_v1
+from dotmac_payments.models import TENANT_TABLES
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError
 
@@ -37,12 +38,8 @@ from tests.integration import test_kernel_lineage_rehearsal as kernel_rehearsal
 isolated_database = kernel_rehearsal.isolated_database
 
 SCHEMA = "mod_payments"
-PAYMENTS_HEAD = "pm_0003_confirmation_immutable"
-TABLES = (
-    "payment_intents",
-    "payment_transfer_proofs",
-    "payment_confirmations",
-)
+PAYMENTS_HEAD = "pm_0006_cash_qualification"
+TABLES = TENANT_TABLES
 
 
 def _render(url: URL) -> str:

@@ -1699,3 +1699,28 @@ were executed. This is one genuine observation consumer, not fleet parity,
 backfill, a financial authority switch, or permission to merge/deploy during the
 active production freeze. See
 `docs/designs/PAYMENT_INTENT_MODULE_OBSERVATION.md`.
+
+**2026-10-17 — money-pack supply pins move to the cutover package set:
+`dotmac-billing==0.1.0a8`, `dotmac-payments==0.1.0a3`,
+`dotmac-numbering==0.1.0a3` (Kernel stays `0.1.0a105`).** All four pack modules
+(including `dotmac-integration==0.1.0a19`, not a Sub dependency) were published
+from Starter protected main through the module release lane on 2026-10-17 after
+Starter PR #863 (`650c7827fa6ee62dddc63e2a4d383d5cbb0f8d4f`) landed the reviewed
+cutover package source set. Annotated tags peel to: billing
+`76c18287626ff6005b3b55bff41dd996800ffd03` (release run `39015266001`, verify
+included the level-2 composition check registering billing alongside published
+Kernel `0.1.0a105`, integration `0.1.0a19`, payments `0.1.0a3` and numbering
+`0.1.0a3`), payments `ec3c0398ad93912afc0a9dd4fa82098cc812d6dd` (run
+`39006968601`), numbering `62ecb6b0e198ba08bef9a096037194a9dfca4da0` (run
+`39010380319`). Locked wheel SHA256: billing
+`a1d76c5a3244777a60854078991fbbfa1e6c4bfc6de03d26c581cbe23de5e537`, payments
+`6ce2d846218931f568183e0814e376597ec03f836c502302dfefd0bd4264a8eb`, numbering
+`03e9ac4de8b2d4501b6d3a0daf11131ec4d85c2913cd9e0d91a31937cdc9032c`; the payments
+and numbering wheel hashes were cross-checked against Starter's
+`module-release-verifications.json`, and `poetry.lock` changed for exactly these
+three distributions. Migration heads are now `bi_0011_settlement_earmarks`,
+`pm_0006_cash_qualification` and `nu_0001_numbering`. This is a supply-pin move
+only: no caller switch, backfill, opening-balance import or authority change is
+included, and Sub's incumbent billing/payment writers remain authoritative until
+the sealed cutover. Hosted CI must prove install-from-lock, the composition
+canaries at the new heads, and unchanged runtime authority before acceptance.

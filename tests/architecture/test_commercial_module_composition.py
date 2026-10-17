@@ -101,18 +101,18 @@ def _external_commercial_imports_under_app(root: Path = ROOT) -> list[str]:
 def test_exact_tagged_commercial_dependencies_are_supply_pins() -> None:
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     project_dependencies = data["project"]["dependencies"]
-    assert "dotmac-billing==0.1.0a1" in project_dependencies
+    assert "dotmac-billing==0.1.0a8" in project_dependencies
     assert "dotmac-collections==0.1.0a1" in project_dependencies
     poetry_dependencies = data["tool"]["poetry"]["dependencies"]
     assert poetry_dependencies["dotmac-billing"] == {
-        "version": "0.1.0a1",
+        "version": "0.1.0a8",
         "source": "forgejo",
     }
     assert poetry_dependencies["dotmac-collections"] == {
         "version": "0.1.0a1",
         "source": "forgejo",
     }
-    assert billing_module.version == "0.1.0a1"
+    assert billing_module.version == "0.1.0a8"
     assert collections_module.version == "0.1.0a1"
 
 
@@ -120,26 +120,32 @@ def test_lock_carries_the_exact_billing_and_collections_artifacts() -> None:
     lock = tomllib.loads((ROOT / "poetry.lock").read_text(encoding="utf-8"))
     packages = {package["name"]: package for package in lock["package"]}
     expected = {
-        "dotmac-billing": {
-            "dotmac_billing-0.1.0a1-py3-none-any.whl": (
-                "sha256:ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b"
-            ),
-            "dotmac_billing-0.1.0a1.tar.gz": (
-                "sha256:c0ff6e1257a00ba09e62b832e471cffe3945504d1c2ad59a799baae77c0d0eef"
-            ),
-        },
-        "dotmac-collections": {
-            "dotmac_collections-0.1.0a1-py3-none-any.whl": (
-                "sha256:f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b"
-            ),
-            "dotmac_collections-0.1.0a1.tar.gz": (
-                "sha256:f3f298fbf7fa5ef05e5fa52369ac5d151a42b065d6be1eb81b644358be561aa1"
-            ),
-        },
+        "dotmac-billing": (
+            "0.1.0a8",
+            {
+                "dotmac_billing-0.1.0a8-py3-none-any.whl": (
+                    "sha256:a1d76c5a3244777a60854078991fbbfa1e6c4bfc6de03d26c581cbe23de5e537"
+                ),
+                "dotmac_billing-0.1.0a8.tar.gz": (
+                    "sha256:ff3926bcec8c857a4fbbce17f84958178c1e21700c4ec52d606e41de331146ff"
+                ),
+            },
+        ),
+        "dotmac-collections": (
+            "0.1.0a1",
+            {
+                "dotmac_collections-0.1.0a1-py3-none-any.whl": (
+                    "sha256:f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b"
+                ),
+                "dotmac_collections-0.1.0a1.tar.gz": (
+                    "sha256:f3f298fbf7fa5ef05e5fa52369ac5d151a42b065d6be1eb81b644358be561aa1"
+                ),
+            },
+        ),
     }
-    for name, expected_hashes in expected.items():
+    for name, (expected_version, expected_hashes) in expected.items():
         package = packages[name]
-        assert package["version"] == "0.1.0a1"
+        assert package["version"] == expected_version
         assert package["source"] == {
             "type": "legacy",
             "url": "https://registry.dotmac.io/api/packages/dotmac/pypi/simple",
@@ -278,19 +284,21 @@ def test_payments_getter_allowlist_is_exact_and_path_bound(tmp_path: Path) -> No
 
 def test_payments_released_getter_supply_pin() -> None:
     project = tomllib.loads(PYPROJECT.read_text())
-    assert "dotmac-payments==0.1.0a2" in project["project"]["dependencies"]
+    assert "dotmac-payments==0.1.0a3" in project["project"]["dependencies"]
     assert project["tool"]["poetry"]["dependencies"]["dotmac-payments"] == {
-        "version": "0.1.0a2",
+        "version": "0.1.0a3",
         "source": "forgejo",
     }
     lock = tomllib.loads((ROOT / "poetry.lock").read_text())
     package = next(
         item for item in lock["package"] if item["name"] == "dotmac-payments"
     )
-    assert package["version"] == "0.1.0a2"
-    assert package["files"] == [
-        {
-            "file": "dotmac_payments-0.1.0a2-py3-none-any.whl",
-            "hash": "sha256:da2877bc5365fc0d6cf93868a6235a608413edbb809199cd5c919f78390cf8ed",
-        }
-    ]
+    assert package["version"] == "0.1.0a3"
+    assert {entry["file"]: entry["hash"] for entry in package["files"]} == {
+        "dotmac_payments-0.1.0a3-py3-none-any.whl": (
+            "sha256:6ce2d846218931f568183e0814e376597ec03f836c502302dfefd0bd4264a8eb"
+        ),
+        "dotmac_payments-0.1.0a3.tar.gz": (
+            "sha256:ea957bdf6553a6503b3be43a92ba49d21f243fa5c367349ed41e1c9e6343d729"
+        ),
+    }
