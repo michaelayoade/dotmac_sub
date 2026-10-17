@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from hmac import digest
+from typing import Literal
 from uuid import uuid4
 
 import pytest
@@ -197,6 +198,17 @@ def test_complete_installed_chain_enters_without_consuming_sub_history(
             assert observed.kernel_heads == (entry.KERNEL_HEAD,)
             assert observed.sub_heads == plan.catalog.sub_heads
             assert _rows(connection, entry.ESCROW_SCHEMA) == before
+            # These unreachable NOLOGIN capability definitions have implicit
+            # USAGE even on a fresh schema; they are not ordinary login actors.
+            for role in ("pg_read_all_data", "pg_write_all_data"):
+                assert not connection.scalar(
+                    text("SELECT rolcanlogin FROM pg_roles WHERE rolname=:role"),
+                    {"role": role},
+                )
+                assert connection.scalar(
+                    text("SELECT has_schema_privilege(:role,:schema,'USAGE')"),
+                    {"role": role, "schema": entry.ESCROW_SCHEMA},
+                )
             destinations = {row.name: row for row in observed.canonical_relations}
             assert incoming_oid != destinations["parties"].oid
             assert (
@@ -245,6 +257,171 @@ def test_complete_installed_chain_enters_without_consuming_sub_history(
         with connection.begin():
             assert entry.observe_fixture_plan(connection) == plan
             assert _rows(connection, "public") == before
+
+
+@pytest.mark.parametrize(
+    "access",
+    (
+        "direct",
+        "inherited_read_all",
+        "set_read_all",
+        "set_owner",
+        "unreachable",
+        "set_chain",
+        "set_then_inherit",
+    ),
+)
+def test_escrow_fence_checks_ordinary_login_reachability(
+    engine: Engine,
+    populated: None,
+    access: Literal[
+        "direct",
+        "inherited_read_all",
+        "set_read_all",
+        "set_owner",
+        "unreachable",
+        "set_chain",
+        "set_then_inherit",
+    ],
+) -> None:
+    with engine.connect() as connection:
+        root = connection.begin()
+        original = entry.observe_fixture_plan(connection)
+        before = _rows(connection, "public")
+        suffix = uuid4().hex
+        actor = f"entry_actor_{suffix}"
+        capability = f"entry_capability_{suffix}"
+        bridge = f"entry_bridge_{suffix}"
+        hook = f"entry_grant_{suffix}"
+        quote = connection.dialect.identifier_preparer.quote
+        try:
+            connection.exec_driver_sql(
+                f"CREATE ROLE {quote(actor)} LOGIN NOSUPERUSER NOINHERIT"
+            )
+            connection.exec_driver_sql(f"CREATE ROLE {quote(capability)} NOLOGIN")
+            connection.exec_driver_sql(f"CREATE ROLE {quote(bridge)} NOLOGIN")
+            target = capability
+            if access == "direct":
+                target = actor
+            elif access == "inherited_read_all":
+                connection.exec_driver_sql(
+                    f"GRANT pg_read_all_data TO {quote(actor)} WITH INHERIT TRUE"
+                )
+                connection.exec_driver_sql(
+                    f"GRANT pg_read_all_data TO {quote(actor)} WITH SET FALSE"
+                )
+            elif access == "set_read_all":
+                connection.exec_driver_sql(
+                    f"GRANT pg_read_all_data TO {quote(actor)} WITH INHERIT FALSE"
+                )
+                connection.exec_driver_sql(
+                    f"GRANT pg_read_all_data TO {quote(actor)} WITH SET TRUE"
+                )
+            elif access == "set_owner":
+                target = str(connection.scalar(text("SELECT current_user")))
+                connection.exec_driver_sql(
+                    f"GRANT {quote(target)} TO {quote(actor)} WITH INHERIT FALSE"
+                )
+                connection.exec_driver_sql(
+                    f"GRANT {quote(target)} TO {quote(actor)} WITH SET TRUE"
+                )
+            elif access in ("set_chain", "set_then_inherit"):
+                connection.exec_driver_sql(
+                    f"GRANT {quote(bridge)} TO {quote(actor)} WITH INHERIT FALSE"
+                )
+                connection.exec_driver_sql(
+                    f"GRANT {quote(bridge)} TO {quote(actor)} WITH SET TRUE"
+                )
+                inherit = "TRUE" if access == "set_then_inherit" else "FALSE"
+                can_set = "FALSE" if access == "set_then_inherit" else "TRUE"
+                connection.exec_driver_sql(
+                    f"GRANT {quote(capability)} TO {quote(bridge)} WITH INHERIT {inherit}"
+                )
+                connection.exec_driver_sql(
+                    f"GRANT {quote(capability)} TO {quote(bridge)} WITH SET {can_set}"
+                )
+
+            # A real PostgreSQL DDL hook injects a schema ACL as escrow is
+            # created. No catalog stub or substituted participant is involved.
+            connection.exec_driver_sql(
+                f"CREATE FUNCTION public.{quote(hook)}() RETURNS event_trigger "  # noqa: S608 - fixed schema and dialect-quoted fixture identifiers
+                "LANGUAGE plpgsql AS $$ BEGIN "
+                "IF EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() "
+                f"WHERE object_identity = '{entry.ESCROW_SCHEMA}') THEN "
+                f"GRANT USAGE ON SCHEMA {quote(entry.ESCROW_SCHEMA)} TO {quote(target)}; "
+                "END IF; END; $$"
+            )
+            connection.exec_driver_sql(
+                f"CREATE EVENT TRIGGER {quote(hook)} ON ddl_command_end "
+                f"WHEN TAG IN ('CREATE SCHEMA') EXECUTE FUNCTION public.{quote(hook)}()"
+            )
+            plan = entry.observe_fixture_plan(connection)
+            if access == "unreachable":
+                observed = entry.rehearse_kernel_entry(connection, plan=plan)
+                assert observed.kernel_heads == (entry.KERNEL_HEAD,)
+                assert observed.sub_heads == original.catalog.sub_heads
+            else:
+                with pytest.raises(
+                    entry.KernelEntryRefused,
+                    match="^A non-owner ordinary role retains an escrow call path$",
+                ):
+                    entry.rehearse_kernel_entry(connection, plan=plan)
+            assert root.is_active and not connection.in_nested_transaction()
+            assert _rows(connection, entry.ESCROW_SCHEMA) == before
+            assert connection.scalar(
+                text("SELECT has_schema_privilege(:role,:schema,'USAGE')"),
+                {"role": target, "schema": entry.ESCROW_SCHEMA},
+            )
+            immediate = access in ("direct", "inherited_read_all")
+            assert (
+                bool(
+                    connection.scalar(
+                        text("SELECT has_schema_privilege(:actor,:schema,'USAGE')"),
+                        {"actor": actor, "schema": entry.ESCROW_SCHEMA},
+                    )
+                )
+                is immediate
+            )
+            reachable = (
+                "pg_read_all_data"
+                if access == "set_read_all"
+                else bridge
+                if access == "set_then_inherit"
+                else target
+            )
+            if access not in ("direct", "inherited_read_all"):
+                assert connection.scalar(
+                    text("SELECT has_schema_privilege(:role,:schema,'USAGE')"),
+                    {"role": reachable, "schema": entry.ESCROW_SCHEMA},
+                )
+                assert bool(
+                    connection.scalar(
+                        text(
+                            "SELECT pg_has_role(CAST(:actor AS name),"
+                            "CAST(:target AS name),'SET')"
+                        ),
+                        {"actor": actor, "target": reachable},
+                    )
+                ) is (access != "unreachable")
+            if access == "inherited_read_all":
+                assert connection.scalar(
+                    text(
+                        "SELECT pg_has_role(CAST(:actor AS name),'pg_read_all_data','USAGE') "
+                        "AND NOT pg_has_role(CAST(:actor AS name),'pg_read_all_data','SET')"
+                    ),
+                    {"actor": actor},
+                )
+        finally:
+            root.rollback()
+        with connection.begin():
+            assert entry.observe_fixture_plan(connection) == original
+            assert _rows(connection, "public") == before
+            assert not connection.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=ANY(:roles))"
+                ),
+                {"roles": [actor, capability, bridge]},
+            )
 
 
 @pytest.mark.parametrize("phase", tuple(entry.EntryPhase))
