@@ -40,14 +40,17 @@ from dotmac_billing import (
     PresentationAssetReferenceV1,
     ServicePeriodEvidenceV1,
     SettlementFundingLane,
-    allocate_settlement,
     get_current_receivable_position,
     issue_rated_invoice,
 )
 from dotmac_billing.commands import AllocationCommand
 from dotmac_billing.contracts import DueDateBasisStatus, ServicePeriodStatus
 from dotmac_billing.errors import BillingConflict, BillingRuleViolation
-from dotmac_billing.service import accept_settlement, create_billing_account
+from dotmac_billing.service import (
+    accept_settlement,
+    allocate_settlement,
+    create_billing_account,
+)
 from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency, Money
 from dotmac_numbering import SeriesConfiguration, allocate, configure_series
