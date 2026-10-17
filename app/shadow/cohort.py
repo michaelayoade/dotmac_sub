@@ -202,7 +202,7 @@ _ENTRIES: Final[tuple[ModuleEntry, ...]] = (
     _module(
         module="billing",
         package="dotmac-billing",
-        version="0.1.0a1",
+        version="0.1.0a8",
         revision=BILLING_REVISION,
         plane=PersistencePlane.DUAL,
         gate=(

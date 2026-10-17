@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier
@@ -19,7 +20,13 @@ import pytest
 import sqlalchemy as sa
 from alembic.config import Config
 from dotmac_billing import AccountingEffectV1, AccountingFactV1
-from dotmac_billing.models import AccountingFact, BillingAccount, PostingGroup
+from dotmac_billing.models import (
+    AccountingFact,
+    BillingAccount,
+    PostingGroup,
+    ReceivablePositionFact,
+    ReceivablePositionFactV2,
+)
 from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency, Money
 from psycopg import sql
@@ -113,6 +120,34 @@ def _seed_billing_fact(db: Session, fact: AccountingFactV1) -> None:
             occurred_at=INSTANT,
         )
     )
+    db.flush()
+    # Billing a8 fences posting-group writers at commit: every group must carry
+    # exact fresh V1 and V2 position snapshots. This synthetic group has no
+    # posting effects, so its exact snapshots are the zero position, shaped as
+    # the billing writer emits them (service._post_group).
+    snapshot = {
+        "tenant_id": OPERATOR_TENANT_ID,
+        "billing_account_id": fact.billing_account_id,
+        "source_owner": "dotmac-billing",
+        "source_version": 1,
+        "posting_group_watermark": fact.posting_group_id,
+        "currency": "NGN",
+        "minor_units": 2,
+        "collectible_receivable": Decimal("0"),
+        "available_credit": Decimal("0"),
+        "prepaid_funding": Decimal("0"),
+        "state_fingerprint": "0" * 64,
+        "rebuild_fingerprint": "0" * 64,
+        "source_authority": "internal",
+        "projection_mode": "authoritative",
+        "derived_from": "posting_groups",
+        "completeness": "complete",
+        "completeness_reason_code": None,
+        "financial_state": "resolved",
+        "observed_at": INSTANT,
+    }
+    db.add(ReceivablePositionFact(**snapshot))
+    db.add(ReceivablePositionFactV2(**snapshot, available_non_cash_credit=Decimal("0")))
     db.flush()
     db.add(
         AccountingFact(
