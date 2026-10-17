@@ -22,6 +22,8 @@ Exit status 0 means valid; any problem prints one line to stderr and exits 1.
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import os
 import re
 import sys
 from pathlib import Path
@@ -46,20 +48,24 @@ ALLOWED_PATHS = frozenset(
     }
 )
 
-# Version-line templates; {V} is the escaped old or new version.
+# Version-line templates, exact whitespace (no \s). {V} is the escaped old
+# version; the added line must equal the removed line with old->new substituted.
 VERSION_LINES = {
     "pyproject.toml": r'version = "{V}"',
     "package.json": r'  "version": "{V}",?',
-    "package-lock.json": r'\s*"version": "{V}",?',
-    "mobile/lib/src/config/env.dart": r"\s*String\.fromEnvironment\('APP_VERSION', defaultValue: '{V}'\);",
-    "mobile/lib/main.dart": r"\s*options\.release = 'dotmac-mobile@{V}';",
+    "package-lock.json": r'(  |      )"version": "{V}",?',
+    "mobile/lib/src/config/env.dart": (
+        r"      String\.fromEnvironment\('APP_VERSION', defaultValue: '{V}'\);"
+    ),
+    "mobile/lib/main.dart": (r"        options\.release = 'dotmac-mobile@{V}';"),
 }
+# Digest lines: (prefix)(hex)(suffix); removed/added are paired by prefix+suffix.
 DIGEST_LINES = {
     "docs/kernel-runtime-composition.json": [
-        rf'\s*"source_blob_sha256": "{HEX64}",?',
-        rf'\s*"extract_sha256": "{HEX64}"',
+        rf'(      "source_blob_sha256": ")({HEX64})(",?)',
+        rf'(      "extract_sha256": ")({HEX64})(",?)',
     ],
-    "deploy/product.toml": [rf'manifest_digest = "sha256:{HEX64}"'],
+    "deploy/product.toml": [rf'(manifest_digest = "sha256:)({HEX64})(")'],
 }
 MANIFEST_FIELD = '"product_version":"{V}"'
 HUNK = re.compile(r"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@")
@@ -85,8 +91,8 @@ def _split(patch: bytes) -> list[tuple[str, list[str], list[str]]]:
         raise PatchError("patch is not valid UTF-8 text") from exc
     if not text.strip():
         raise PatchError("empty patch")
-    if "\x00" in text or "\r" in text:
-        raise PatchError("patch contains NUL or CR")
+    if "\x00" in text:
+        raise PatchError("patch contains NUL")
     if not text.endswith("\n"):
         raise PatchError("patch does not end with a newline")
 
@@ -97,6 +103,12 @@ def _split(patch: bytes) -> list[tuple[str, list[str], list[str]]]:
     removed: list[str] = []
     added: list[str] = []
     for line in text[:-1].split("\n"):
+        # CR is legitimate only on context lines (deploy/product.toml has a CRLF
+        # line) and in hunk-header trailers; git apply verifies context exactly.
+        if "\r" in line and not (
+            (state == "hunk" and line.startswith(" ")) or HUNK.match(line)
+        ):
+            raise PatchError("patch contains CR outside context lines")
         if state in ("start", "hunk") and line.startswith("diff --git "):
             if state == "hunk":
                 files.append((path, removed, added))
@@ -147,6 +159,14 @@ def _split(patch: bytes) -> list[tuple[str, list[str], list[str]]]:
     return files
 
 
+def _digest_match(path: str, line: str) -> tuple[str, str, str] | None:
+    for pattern in DIGEST_LINES[path]:
+        match = re.fullmatch(pattern, line)
+        if match:
+            return match.group(1), match.group(2), match.group(3)
+    return None
+
+
 def _check_lines(
     path: str, removed: list[str], added: list[str], old: str, new: str
 ) -> None:
@@ -155,12 +175,14 @@ def _check_lines(
         if removed != [old] or added != [new]:
             raise PatchError(f"VERSION must change exactly {old} -> {new}")
     elif path in VERSION_LINES:
-        template = VERSION_LINES[path]
+        template = VERSION_LINES[path].replace("{V}", eo)
         if not removed or len(removed) != len(added):
             raise PatchError(f"{path}: unbalanced changes")
         for r, a in zip(removed, added, strict=True):
-            if not re.fullmatch(template.replace("{V}", eo), r) or not re.fullmatch(
-                template.replace("{V}", en), a
+            if (
+                not re.fullmatch(template, r)
+                or r.count(old) != 1
+                or r.replace(old, new) != a
             ):
                 raise PatchError(f"{path}: non-version change: {a[:60]!r}")
     elif path == "mobile/pubspec.yaml":
@@ -185,9 +207,11 @@ def _check_lines(
     elif path in DIGEST_LINES:
         if not removed or len(removed) != len(added):
             raise PatchError(f"{path}: unbalanced changes")
-        for line in removed + added:
-            if not any(re.fullmatch(p, line) for p in DIGEST_LINES[path]):
-                raise PatchError(f"{path}: non-digest change: {line[:60]!r}")
+        for r, a in zip(removed, added, strict=True):
+            rm = _digest_match(path, r)
+            am = _digest_match(path, a)
+            if not rm or not am or (rm[0], rm[2]) != (am[0], am[2]):
+                raise PatchError(f"{path}: non-digest change: {a[:60]!r}")
     elif path == "deploy/product-manifest.json":
         if len(removed) != 1 or len(added) != 1:
             raise PatchError(f"{path}: unexpected change count")
@@ -202,9 +226,52 @@ def _check_lines(
         raise PatchError(f"no rule for {path}")
 
 
-def validate(patch: bytes, version: str, root: Path | None = None) -> None:
+def _load(name: str):  # noqa: ANN202
+    """Load a sibling base-branch script by path (stdlib-only modules)."""
+    path = Path(__file__).resolve().parent.parent / name
+    spec = importlib.util.spec_from_file_location(f"_bump_{path.stem}", path)
+    if spec is None or spec.loader is None:
+        raise PatchError(f"cannot load {name}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def expected_version(base: str, pending: str, labels_json: str) -> str:
+    """next(max(base, pending), kind) using the base-branch bump rules."""
+    labels = _load("ci/version_labels.py")
+    try:
+        _, kind = labels.resolve(labels_json)
+    except ValueError as exc:
+        raise PatchError(str(exc)) from exc
+    except Exception as exc:  # malformed JSON
+        raise PatchError(f"unreadable labels: {exc}") from exc
+    if kind not in ("major", "minor", "patch"):
+        raise PatchError(f"no version bump expected for kind {kind!r}")
+    start = base
+    if pending and SEMVER.fullmatch(pending) and _parts(pending) > _parts(base):
+        start = pending
+    return _load("bump_version.py").next_version(start, kind, None)
+
+
+def validate(
+    patch: bytes,
+    version: str,
+    root: Path | None = None,
+    *,
+    labels_json: str | None = None,
+    pending: str = "",
+) -> None:
     new = version
     _parts(new)
+    if labels_json is not None:
+        if root is None:
+            raise PatchError("--root is required with --labels-env")
+        base = (root / "VERSION").read_text(encoding="utf-8").strip()
+        _parts(base)
+        expected = expected_version(base, pending, labels_json)
+        if new != expected:
+            raise PatchError(f"version {new} is not the expected {expected}")
     files = _split(patch)
     by_path = {path: (rem, add) for path, rem, add in files}
     if "VERSION" not in by_path or len(by_path["VERSION"][0]) != 1:
@@ -225,9 +292,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--patch", required=True, type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--root", type=Path)
+    parser.add_argument(
+        "--labels-env",
+        help="Name of the env var holding the PR labels JSON; enables the "
+        "independent expected-version check.",
+    )
+    parser.add_argument("--pending-version", default="")
     args = parser.parse_args(argv)
     try:
-        validate(args.patch.read_bytes(), args.version, args.root)
+        labels_json = None
+        if args.labels_env:
+            labels_json = os.environ.get(args.labels_env)
+            if labels_json is None:
+                raise PatchError(f"{args.labels_env} is not set")
+        validate(
+            args.patch.read_bytes(),
+            args.version,
+            args.root,
+            labels_json=labels_json,
+            pending=args.pending_version,
+        )
     except (PatchError, OSError) as exc:
         print(f"bump patch rejected: {exc}", file=sys.stderr)
         return 1

@@ -46,28 +46,7 @@ jobs:
         id: impact
         env:
           LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          labels = {
-              label["name"]
-              for label in json.loads(os.environ["LABELS_JSON"])
-              if isinstance(label, dict) and isinstance(label.get("name"), str)
-          }
-          impacts = sorted(labels & {"version:major", "version:minor", "version:patch", "version:none"})
-
-          if len(impacts) > 1:
-              raise SystemExit(f"Expected one version impact label, found: {', '.join(impacts)}")
-
-          impact = impacts[0] if impacts else "version:none"
-          bump = impact.split(":", 1)[1]
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              output.write(f"impact={impact}\n")
-              output.write(f"bump={bump}\n")
-          PY
+        run: python3 -I scripts/ci/version_labels.py
 
       # Seed from the rolling bump branch (if it has a newer pending version)
       # so an unmerged bump isn't lost or downgraded when the branch is
@@ -177,20 +156,43 @@ jobs:
           name: version-bump-patch
           path: ${{ runner.temp }}/patch
 
+      # The expected version is recomputed here, independently of the bump job:
+      # label kind (same mapping the bump job uses, from scripts/ci/version_labels.py)
+      # applied to max(base VERSION, pending VERSION on the rolling bump branch).
+      # The pending fetch is anonymous (public repo) and digits-only validated.
+      - name: Resolve pending version
+        id: pending
+        env:
+          BUMP_BRANCH: automation/version-bump-${{ github.event.pull_request.base.ref }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          PENDING=""
+          if git fetch "$REPO_URL" "$BUMP_BRANCH" 2>/dev/null; then
+            PENDING="$(git show FETCH_HEAD:VERSION 2>/dev/null | tr -d '[:space:]')" || PENDING=""
+          fi
+          if ! printf '%s' "$PENDING" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            PENDING=""
+          fi
+          echo "version=$PENDING" >> "$GITHUB_OUTPUT"
+
       # scripts/ci/validate_bump_patch.py is base-branch code (stdlib only,
-      # nothing installed). It treats the patch as untrusted: exact-path
-      # allowlist, no binary/new/renamed/mode-changed files, and every changed
-      # line must be a version or digest line.
+      # nothing installed). It treats the patch and the bump job's version as
+      # untrusted: exact-path allowlist, no binary/new/renamed/mode-changed
+      # files, every changed line a version or digest line, and the version must
+      # equal the independently computed expected version.
       - name: Validate and apply bump patch
         env:
           PATCH_FILE: ${{ runner.temp }}/patch/bump.patch
           BUMP_VERSION: ${{ needs.bump.outputs.version }}
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+          PENDING_VERSION: ${{ steps.pending.outputs.version }}
         run: |
           set -euo pipefail
           printf '%s' "$BUMP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
             || { echo "::error::Refusing malformed version"; exit 1; }
-          python3 scripts/ci/validate_bump_patch.py \
-            --patch "$PATCH_FILE" --version "$BUMP_VERSION" --root .
+          python3 -I scripts/ci/validate_bump_patch.py \
+            --patch "$PATCH_FILE" --version "$BUMP_VERSION" --root . \
+            --labels-env LABELS_JSON --pending-version "$PENDING_VERSION"
           git apply --check "$PATCH_FILE"
           git apply "$PATCH_FILE"
           test "$(cat VERSION)" = "$BUMP_VERSION"

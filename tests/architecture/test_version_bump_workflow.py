@@ -79,3 +79,20 @@ def test_validator_allowlist_matches_bump_script_outputs() -> None:
     assert "VERSION" in ALLOWED_PATHS
     assert "deploy/product-manifest.json" in ALLOWED_PATHS
     assert "deploy/product.toml" in ALLOWED_PATHS
+
+
+def test_open_pr_recomputes_expected_version_independently() -> None:
+    steps = _steps("open-pr")
+    step = next(s for s in steps if s.get("name") == "Validate and apply bump patch")
+    assert "python3 -I scripts/ci/validate_bump_patch.py" in step["run"]
+    assert "--labels-env LABELS_JSON" in step["run"]
+    assert "--pending-version" in step["run"]
+    assert "github.event.pull_request.labels" in step["env"]["LABELS_JSON"]
+    assert "${{" not in step["run"]
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "--set" not in text
+
+
+def test_bump_job_uses_shared_label_mapping() -> None:
+    step = next(s for s in _steps("bump") if s.get("name") == "Resolve version bump")
+    assert step["run"] == "python3 -I scripts/ci/version_labels.py"

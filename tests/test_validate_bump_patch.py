@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -80,22 +81,33 @@ def base(tmp_path: Path) -> Path:
 
 
 def _run(
-    base: Path, patch: str | bytes, version: str = NEW
+    base: Path,
+    patch: str | bytes,
+    version: str = NEW,
+    *,
+    labels: list[str] | None = None,
+    pending: str = "",
 ) -> subprocess.CompletedProcess[str]:
     patch_file = base / "bump.patch"
     patch_file.write_bytes(patch if isinstance(patch, bytes) else patch.encode())
+    cmd = [
+        sys.executable,
+        "-I",
+        str(SCRIPT),
+        "--patch",
+        str(patch_file),
+        "--version",
+        version,
+        "--root",
+        str(base),
+    ]
+    env = {}
+    if labels is not None:
+        env["LABELS_JSON"] = json.dumps([{"name": name} for name in labels])
+        cmd += ["--labels-env", "LABELS_JSON", "--pending-version", pending]
     return subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            str(SCRIPT),
-            "--patch",
-            str(patch_file),
-            "--version",
-            version,
-            "--root",
-            str(base),
-        ],
+        cmd,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -263,3 +275,164 @@ def test_changelog_removal_fails(base: Path) -> None:
 )
 def test_garbage_fails(base: Path, garbage: bytes) -> None:
     assert _run(base, garbage).returncode == 1
+
+
+def _bump_patch(old: str, new: str) -> str:
+    blocks = _valid_blocks()
+    out = []
+    for path, block in blocks.items():
+        out.append(block.replace(OLD, old).replace(NEW, new))
+    return "".join(out)
+
+
+def _set_base(base: Path, version: str) -> None:
+    (base / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("label", "new"),
+    [
+        ("version:patch", "1.2.4"),
+        ("version:minor", "1.3.0"),
+        ("version:major", "2.0.0"),
+    ],
+)
+def test_expected_version_accepted_without_pending(
+    base: Path, label: str, new: str
+) -> None:
+    result = _run(base, _bump_patch(OLD, new), new, labels=[label, "other"])
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("label", "pending", "new"),
+    [
+        ("version:patch", "1.2.9", "1.2.10"),
+        ("version:minor", "1.4.0", "1.5.0"),
+        ("version:major", "3.0.0", "4.0.0"),
+        ("version:patch", "1.0.0", "1.2.4"),  # pending older than base: ignored
+    ],
+)
+def test_expected_version_accepted_with_pending(
+    base: Path, label: str, pending: str, new: str
+) -> None:
+    result = _run(base, _bump_patch(OLD, new), new, labels=[label], pending=pending)
+    assert result.returncode == 0, result.stderr
+
+
+def test_inflated_version_rejected(base: Path) -> None:
+    patch = _bump_patch(OLD, "999.0.0")
+    result = _run(base, patch, "999.0.0", labels=["version:patch"])
+    assert result.returncode == 1
+    assert "expected" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("labels", "new"),
+    [
+        (["version:patch"], "1.3.0"),  # minor claimed under a patch label
+        (["version:minor"], "1.2.4"),  # patch claimed under a minor label
+        (["version:major"], "1.3.0"),
+        (["version:patch"], "1.2.5"),  # skipped a version
+    ],
+)
+def test_wrong_kind_rejected(base: Path, labels: list[str], new: str) -> None:
+    result = _run(base, _bump_patch(OLD, new), new, labels=labels)
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [[], ["version:none"], ["version:patch", "version:minor"], ["docs"]],
+)
+def test_missing_or_ambiguous_labels_rejected(base: Path, labels: list[str]) -> None:
+    assert _run(base, _patch(), labels=labels).returncode == 1
+
+
+def test_pending_version_cannot_be_ignored(base: Path) -> None:
+    result = _run(base, _patch(), labels=["version:patch"], pending="1.2.9")
+    assert result.returncode == 1
+
+
+def test_labels_env_missing_rejected(base: Path) -> None:
+    patch_file = base / "bump.patch"
+    patch_file.write_text(_patch(), encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(SCRIPT),
+            "--patch",
+            str(patch_file),
+            "--version",
+            NEW,
+            "--root",
+            str(base),
+            "--labels-env",
+            "LABELS_JSON",
+        ],
+        env={},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "removed", "added"),
+    [
+        ("package.json", f'\t"version": "{OLD}",', f'\t"version": "{NEW}",'),
+        ("package.json", f'    "version": "{OLD}",', f'    "version": "{NEW}",'),
+        ("package.json", f'  "version": "{OLD}" ,', f'  "version": "{NEW}" ,'),
+        ("pyproject.toml", f'version  = "{OLD}"', f'version  = "{NEW}"'),
+        (
+            "mobile/lib/main.dart",
+            f"\toptions.release = 'dotmac-mobile@{OLD}';",
+            f"\toptions.release = 'dotmac-mobile@{NEW}';",
+        ),
+    ],
+)
+def test_odd_indentation_or_whitespace_rejected(
+    base: Path, path: str, removed: str, added: str
+) -> None:
+    patch = _with(path, _block(path, [removed], [added]))
+    assert _run(base, patch).returncode == 1
+
+
+def test_version_line_must_be_exact_substitution(base: Path) -> None:
+    patch = _with(
+        "package.json",
+        _block(
+            "package.json",
+            [f'  "version": "{OLD}",'],
+            [f'  "version": "{NEW}", '],
+        ),
+    )
+    assert _run(base, patch).returncode == 1
+
+
+def test_digest_lines_must_pair_by_key(base: Path) -> None:
+    patch = _with(
+        "docs/kernel-runtime-composition.json",
+        _block(
+            "docs/kernel-runtime-composition.json",
+            [f'      "source_blob_sha256": "{DIGEST_A}",'],
+            [f'      "extract_sha256": "{DIGEST_B}",'],
+        ),
+    )
+    assert _run(base, patch).returncode == 1
+
+
+def test_crlf_allowed_on_context_line_only(base: Path) -> None:
+    ctx = " stability_window_seconds = 15\r\n"
+    block = _valid_blocks()["deploy/product.toml"]
+    head, body = block.split("@@ -1,1 +1,1 @@\n")
+    with_ctx = head + "@@ -1,2 +1,2 @@\n" + body + ctx
+    assert _run(base, _with("deploy/product.toml", with_ctx)).returncode == 0
+    bad = block.replace("+manifest_digest", "+manifest_digest", 1).replace(
+        DIGEST_B + '"\n', DIGEST_B + '"\r\n', 1
+    )
+    assert _run(base, _with("deploy/product.toml", bad)).returncode == 1
+    bad_minus = block.replace(DIGEST_A + '"\n', DIGEST_A + '"\r\n', 1)
+    assert _run(base, _with("deploy/product.toml", bad_minus)).returncode == 1
