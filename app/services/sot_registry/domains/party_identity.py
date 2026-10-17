@@ -29,6 +29,71 @@ DOMAIN = DomainSOT(
     domain="party_identity",
     services=(
         SOTService(
+            name="party.kernel_import",
+            module="app.services.party_kernel_import",
+            implementation_modules=("scripts.migration.kernel_party_import",),
+            owns=("rollback-only historical Party root and Sub context import",),
+            depends_on=("party.registry", "tenancy.operator_tenant_history"),
+            notes=(
+                "Historical fixture participant only; existing runtime authority remains. "
+                "Reserved event schema is unemitted in this rollback-only phase; "
+                "returned typed observations are outcomes, never dispatched events."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="rollback-only historical Party root and Sub context import",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("reviewed complete Party fixture cohort",),
+                        canonical_writer="party.kernel_import",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="reviewed complete Party fixture cohort",
+                        owner="party.registry",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact locked source rows plus explicit typed fixture dispositions; no live population acceptance",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Only kernel_party_import rehearsal calls this participant on the same supplied PostgreSQL root; caller always rolls back",
+                    locking="Entry locks all actual source and destination tables until caller rollback; source fingerprints revalidated under locks; complete destination keysets and exact fields verified before outcomes",
+                    idempotency="Replay, populated destination and partial history refuse; no repair or upsert",
+                    retries="Rollback entire fixture and reobserve complete catalog and cohort before retry",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("party.kernel_import.refused",),
+                    mapping_owner="hosted fixture caller",
+                    fail_closed_on=(
+                        "stale or conflicting disposition, wrong tenant, OID/history drift, populated destination, suppressed or corrupted destination rows",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("party.kernel_import.import_verified.v1",),
+                    schema_version=1,
+                    delivery_owner="party.kernel_import",
+                    compatibility="RESERVED and unemitted: rollback-only fixtures stage no event, outbox or durable delivery",
+                    replay="No event replay; returned observations are uncommitted outcomes only",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.INVENTORIED,
+                    old_owner="party.registry",
+                    new_owner="party.kernel_import",
+                    verification="Hosted real-chain rollback, exact destination verification and nonprivileged-role RLS tests; fixtures do not prove operational adoption",
+                    cutover_gate="Complete dispositions, reference and writer transfer, runtime acceptance and reverse recovery remain required",
+                    fallback_retirement="Existing runtime readers, writers and incoming FKs retain original source authority",
+                ),
+                steward="Sub identity and platform operations",
+                design_refs=("docs/designs/KERNEL_LINEAGE_ENTRY_PROTOTYPE.md",),
+                test_refs=(
+                    "tests/integration/test_kernel_party_import.py",
+                    "tests/architecture/test_kernel_party_import_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="party.registry",
             module="app.services.party",
             owns=(
