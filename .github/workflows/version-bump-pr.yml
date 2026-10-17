@@ -5,9 +5,9 @@ on:
     types: [closed]
     branches: [main]
 
+# Least privilege by default. Only the open-pr job is granted write scopes.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 env:
   PYTHON_VERSION: "3.12.13"
@@ -18,17 +18,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Job 1: runs repo code and third-party dependencies (poetry install, the
+  # app composition import). It holds NO write scope and NO VERSION_BUMP_TOKEN:
+  # only a read-only GITHUB_TOKEN (not persisted in .git/config) and the
+  # FORGEJO_READ_TOKEN, which exists only in the install step's env. Its sole
+  # output is a patch artifact plus a validated version string.
   bump:
-    name: Open version bump PR
+    name: Compute version bump
     if: >-
       github.event.pull_request.merged == true &&
       !startsWith(github.event.pull_request.head.ref, 'automation/version-bump-')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      impact: ${{ steps.impact.outputs.impact }}
+      bump: ${{ steps.impact.outputs.bump }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve version bump
         id: impact
@@ -57,9 +69,43 @@ jobs:
               output.write(f"bump={bump}\n")
           PY
 
+      # Seed from the rolling bump branch (if it has a newer pending version)
+      # so an unmerged bump isn't lost or downgraded when the branch is
+      # recreated from the base ref. Runs before any third-party code is
+      # installed; the read-only GITHUB_TOKEN lives only in this step's env.
+      - name: Seed pending version
+        if: steps.impact.outputs.bump != 'none'
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
+          BUMP_BRANCH: automation/version-bump-${{ github.event.pull_request.base.ref }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          PENDING=""
+          AUTH="$(printf 'x-access-token:%s' "$GH_READ_TOKEN" | base64 | tr -d '\n')"
+          if git -c "http.extraheader=AUTHORIZATION: basic $AUTH" fetch "$REPO_URL" "$BUMP_BRANCH" 2>/dev/null; then
+            PENDING="$(git show FETCH_HEAD:VERSION 2>/dev/null | tr -d '[:space:]')" || PENDING=""
+          fi
+          python3 - "$PENDING" <<'PY'
+          import sys
+          from pathlib import Path
+
+          pending = sys.argv[1]
+          version_file = Path("VERSION")
+          current = version_file.read_text(encoding="utf-8").strip()
+
+          def parts(version: str) -> tuple[int, ...]:
+              return tuple(int(piece) for piece in version.split("."))
+
+          try:
+              if pending and parts(pending) > parts(current):
+                  version_file.write_text(pending + "\n", encoding="utf-8")
+          except ValueError:
+              pass
+          PY
+
       # The bump regenerates deploy/product-manifest.json with the repo's own
       # generator, which imports the app composition and the private-index
-      # dotmac-kernel. The read token is scoped to the install step only.
+      # dotmac-kernel. The Forgejo read token is scoped to the install step only.
       - name: Install Python
         if: steps.impact.outputs.bump != 'none'
         uses: actions/setup-python@v5
@@ -85,42 +131,77 @@ jobs:
         if: steps.impact.outputs.bump != 'none'
         env:
           BUMP: ${{ steps.impact.outputs.bump }}
-          BUMP_BRANCH: automation/version-bump-${{ github.event.pull_request.base.ref }}
-        run: |
-          # Seed from the rolling bump branch (if it has a newer pending
-          # version) so an unmerged bump isn't lost or downgraded when the
-          # branch is recreated from the base ref.
-          PENDING=""
-          if git fetch origin "$BUMP_BRANCH" 2>/dev/null; then
-            PENDING="$(git show FETCH_HEAD:VERSION 2>/dev/null | tr -d '[:space:]')" || PENDING=""
-          fi
-          python3 - "$BUMP" "$PENDING" <<'PY'
-          import subprocess
-          import sys
-          from pathlib import Path
-
-          bump, pending = sys.argv[1], sys.argv[2]
-          version_file = Path("VERSION")
-          current = version_file.read_text(encoding="utf-8").strip()
-
-          def parts(version: str) -> tuple[int, ...]:
-              return tuple(int(piece) for piece in version.split("."))
-
-          try:
-              if pending and parts(pending) > parts(current):
-                  version_file.write_text(pending + "\n", encoding="utf-8")
-          except ValueError:
-              pass
-
-          subprocess.run(["poetry", "run", "python", "-m", "scripts.bump_version", bump], check=True)
-          PY
+        run: poetry run python -m scripts.bump_version "$BUMP"
 
       - name: Read bumped version
         if: steps.impact.outputs.bump != 'none'
         id: version
         run: |
           VERSION="$(tr -d '[:space:]' < VERSION)"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Refusing malformed version"
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Export bump patch
+        if: steps.impact.outputs.bump != 'none'
+        run: git diff --binary > "$RUNNER_TEMP/bump.patch"
+
+      - name: Upload bump patch
+        if: steps.impact.outputs.bump != 'none'
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-bump-patch
+          path: ${{ runner.temp }}/bump.patch
+          retention-days: 1
+
+  # Job 2: holds the write scopes and VERSION_BUMP_TOKEN. It installs no
+  # dependencies and executes no repository code: it only validates and applies
+  # the patch produced by the bump job, then opens the PR.
+  open-pr:
+    name: Open version bump PR
+    needs: bump
+    if: needs.bump.outputs.bump != 'none'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          persist-credentials: false
+
+      - name: Download bump patch
+        uses: actions/download-artifact@v4
+        with:
+          name: version-bump-patch
+          path: ${{ runner.temp }}/patch
+
+      - name: Validate and apply bump patch
+        env:
+          PATCH_FILE: ${{ runner.temp }}/patch/bump.patch
+          BUMP_VERSION: ${{ needs.bump.outputs.version }}
+        run: |
+          printf '%s' "$BUMP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::Refusing malformed version"; exit 1; }
+          test -s "$PATCH_FILE" || { echo "::error::Empty bump patch"; exit 1; }
+          # Allowlist: exactly the files scripts/bump_version.py writes.
+          ALLOWED='VERSION package.json package-lock.json pyproject.toml mobile/pubspec.yaml mobile/lib/src/config/env.dart mobile/lib/main.dart CHANGELOG.md docs/kernel-runtime-composition.json deploy/product-manifest.json deploy/product.toml'
+          # No creates, deletes, renames or mode changes: --summary is empty.
+          if [ -n "$(git apply --summary "$PATCH_FILE")" ]; then
+            echo "::error::Patch creates, deletes, renames or changes modes"
+            exit 1
+          fi
+          git apply --numstat -z "$PATCH_FILE" | tr '\0' '\n' | cut -f3 | while IFS= read -r path; do
+            case " $ALLOWED " in
+              *" $path "*) ;;
+              *) echo "::error::Patch touches non-allowlisted path: $path"; exit 1 ;;
+            esac
+          done
+          git apply --check "$PATCH_FILE"
+          git apply "$PATCH_FILE"
 
       # GitHub does not trigger workflow runs for events raised with GITHUB_TOKEN --
       # a deliberate guard against workflows recursing into themselves. So when we
@@ -134,7 +215,6 @@ jobs:
       # step then fails authentication with no explanation. So actually exercise
       # the token, and fall back to GITHUB_TOKEN if it does not authenticate.
       - name: Check PR-creation token
-        if: steps.impact.outputs.bump != 'none'
         id: token
         env:
           VERSION_BUMP_TOKEN: ${{ secrets.VERSION_BUMP_TOKEN }}
@@ -156,7 +236,6 @@ jobs:
           fi
 
       - name: Create version bump PR
-        if: steps.impact.outputs.bump != 'none'
         uses: peter-evans/create-pull-request@v6
         with:
           # Select on the *validated* verdict, not on `|| secrets.GITHUB_TOKEN`.
@@ -166,8 +245,8 @@ jobs:
           base: ${{ github.event.pull_request.base.ref }}
           branch: automation/version-bump-${{ github.event.pull_request.base.ref }}
           delete-branch: true
-          commit-message: "chore: bump version to ${{ steps.version.outputs.version }}"
-          title: "chore: bump version to ${{ steps.version.outputs.version }}"
+          commit-message: "chore: bump version to ${{ needs.bump.outputs.version }}"
+          title: "chore: bump version to ${{ needs.bump.outputs.version }}"
           body: |
             Rolling version bump PR for `${{ github.event.pull_request.base.ref }}` — updated in place as source PRs merge, carrying any pending bump forward.
 
@@ -186,6 +265,6 @@ jobs:
             > over `GITHUB_TOKEN`; once set, the next bump PR runs CI and merges on green.
             ' || '' }}
             Latest source PR: #${{ github.event.pull_request.number }}
-            Latest source impact: ${{ steps.impact.outputs.impact }}
-            New version: ${{ steps.version.outputs.version }}
+            Latest source impact: ${{ needs.bump.outputs.impact }}
+            New version: ${{ needs.bump.outputs.version }}
           labels: "version:none"

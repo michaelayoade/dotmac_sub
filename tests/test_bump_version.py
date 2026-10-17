@@ -130,3 +130,57 @@ def test_refresh_product_manifest_regenerates_manifest_and_descriptor_digest(
     assert f'manifest_digest = "{snapshot.digest}"' in descriptor.read_text(
         encoding="utf-8"
     )
+
+
+def test_failed_manifest_refresh_leaves_version_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bump_version, "ROOT", tmp_path)
+    monkeypatch.setattr(bump_version, "VERSION_FILE", tmp_path / "VERSION")
+    monkeypatch.setattr(
+        bump_version,
+        "COMPOSITION_OBSERVATION_FILE",
+        tmp_path / "docs/kernel-runtime-composition.json",
+    )
+    monkeypatch.setattr(
+        bump_version, "PRODUCT_MANIFEST_FILE", tmp_path / "deploy/product-manifest.json"
+    )
+    monkeypatch.setattr(
+        bump_version, "PRODUCT_DESCRIPTOR_FILE", tmp_path / "deploy/product.toml"
+    )
+    _write(tmp_path / "VERSION", "1.2.3\n")
+    _write(tmp_path / "package.json", '{"version": "1.2.3"}\n')
+    _write(
+        tmp_path / "package-lock.json",
+        '{"version": "1.2.3", "packages": {"": {"version": "1.2.3"}}}\n',
+    )
+    _write(tmp_path / "pyproject.toml", 'version = "1.2.3"\n')
+    _write(tmp_path / "mobile/pubspec.yaml", "version: 1.2.3+7\n")
+    _write(
+        tmp_path / "mobile/lib/src/config/env.dart",
+        "defaultValue: '1.2.3'\n",
+    )
+    _write(
+        tmp_path / "mobile/lib/main.dart", "options.release = 'dotmac-mobile@1.2.3';\n"
+    )
+    _write(tmp_path / "CHANGELOG.md", "# Changelog\n\n## 1.2.3 - 2026-01-01\n")
+    _write(
+        tmp_path / "docs/kernel-runtime-composition.json",
+        '{"observations": [{"id": "dependency-manifest", "source_path": '
+        '"pyproject.toml", "selector": "whole-file.v1"}]}\n',
+    )
+    # No deploy/product.toml: the manifest refresh fails after earlier writes.
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    def boom() -> None:
+        raise RuntimeError("manifest generator failed")
+
+    monkeypatch.setattr(bump_version, "refresh_product_manifest", boom)
+
+    with pytest.raises(RuntimeError, match="manifest generator failed"):
+        bump_version.update_files("1.2.4")
+
+    after = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert after == before
+    assert (tmp_path / "VERSION").read_text(encoding="utf-8") == "1.2.3\n"

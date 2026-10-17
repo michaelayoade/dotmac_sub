@@ -185,6 +185,14 @@ def refresh_dependency_manifest_observation() -> None:
     )
 
 
+def _load_manifest_emitter():  # noqa: ANN202
+    """Resolve the manifest generator up front, before any file is written."""
+
+    from scripts.product_manifest import emit_product_manifest
+
+    return emit_product_manifest
+
+
 def refresh_product_manifest() -> None:
     """Regenerate the release-bound product manifest and its descriptor digest.
 
@@ -194,8 +202,7 @@ def refresh_product_manifest() -> None:
     (dotmac-kernel and the app composition) to be importable.
     """
 
-    from scripts.product_manifest import emit_product_manifest
-
+    emit_product_manifest = _load_manifest_emitter()
     snapshot = emit_product_manifest(
         output=PRODUCT_MANIFEST_FILE,
         version_file=VERSION_FILE,
@@ -207,7 +214,46 @@ def refresh_product_manifest() -> None:
     )
 
 
+def _tracked_files() -> list[Path]:
+    return [
+        VERSION_FILE,
+        ROOT / "package.json",
+        ROOT / "package-lock.json",
+        ROOT / "pyproject.toml",
+        ROOT / "mobile/pubspec.yaml",
+        ROOT / "mobile/lib/src/config/env.dart",
+        ROOT / "mobile/lib/main.dart",
+        ROOT / "CHANGELOG.md",
+        COMPOSITION_OBSERVATION_FILE,
+        PRODUCT_MANIFEST_FILE,
+        PRODUCT_DESCRIPTOR_FILE,
+    ]
+
+
 def update_files(version: str) -> None:
+    """Rewrite every version-bearing file, or leave the tree untouched.
+
+    The manifest generator is resolved before the first write, and any failure
+    afterwards restores the original bytes of every file this function owns.
+    """
+
+    if not callable(_load_manifest_emitter()):
+        raise RuntimeError("product manifest generator is unavailable")
+    snapshot = {
+        path: path.read_bytes() if path.exists() else None for path in _tracked_files()
+    }
+    try:
+        _write_all(version)
+    except BaseException:
+        for path, original in snapshot.items():
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(original)
+        raise
+
+
+def _write_all(version: str) -> None:
     VERSION_FILE.write_text(version + "\n", encoding="utf-8")
     update_json_version(ROOT / "package.json", version)
     update_package_lock(version)
