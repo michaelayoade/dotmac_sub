@@ -295,7 +295,7 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: The deferred legacy-numbering canaries add two test-only database
 #: constructions; Numbering activation fixtures are not part of this change.
 #: Production construction remains unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 786
+TEST_FIXTURE_BASELINE_TOTAL = 788
 
 
 def _baseline() -> dict[str, int]:
