@@ -125,6 +125,25 @@ def _deploy_array(name: str) -> set[str]:
     return set(declared.group(1).split())
 
 
+def _deploy_recreated_services() -> set[str]:
+    """The set deploy.sh recreates: Compose services running ``${APP_IMAGE}``."""
+    from scripts.deploy_app_image_services import app_image_services
+
+    release = "registry.example.invalid/app@sha256:" + "a" * 64
+    compose = _services(ROOT / "docker-compose.yml")
+    resolved = {
+        "services": {
+            name: {
+                "image": release
+                if str(service.get("image", "")).startswith("${APP_IMAGE")
+                else service.get("image")
+            }
+            for name, service in compose.items()
+        }
+    }
+    return set(app_image_services(resolved, release))
+
+
 def test_compose_files_are_discovered() -> None:
     assert ROOT / "docker-compose.yml" in COMPOSE_FILES
 
@@ -213,7 +232,11 @@ def test_deploy_applies_changed_config_for_every_config_service() -> None:
             for source, _target, _ro in _bind_mounts(compose[service])
         ), service
     # Still not recreated by a deploy: a restart keeps the service definition.
-    assert not CONFIG_RESTART_SERVICES & _deploy_array("APP_SERVICES")
+    # deploy.sh derives its recreate set from Compose (services whose image is
+    # the release ${APP_IMAGE}); compute it the same way here.
+    recreated = _deploy_recreated_services()
+    assert {"app", "celery-worker", "team-inbox-smtp"} <= recreated, recreated
+    assert not CONFIG_RESTART_SERVICES & recreated
 
 
 def test_deploy_validates_freeradius_before_database_work_and_restart() -> None:
