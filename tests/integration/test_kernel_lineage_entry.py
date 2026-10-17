@@ -95,8 +95,8 @@ def populated(engine: Engine) -> None:
         connection.execute(
             text(
                 "INSERT INTO domain_settings "
-                "(id,tenant_id,scope_kind,domain,key,value_type,value_text,is_secret,is_active) "
-                "VALUES (:id,:tenant,'tenant','auth','kernel_entry_fixture','string','fixture',false,true)"
+                "(id,tenant_id,scope_kind,domain,key,value_type,value_text,is_secret,is_active,created_at,updated_at) "
+                "VALUES (:id,:tenant,'tenant','auth','kernel_entry_fixture','string','fixture',false,true,now(),now())"
             ),
             {"id": setting, "tenant": tenant},
         )
