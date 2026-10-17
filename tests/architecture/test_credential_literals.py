@@ -25,6 +25,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from app.migration_source.surfaces import COHORT_SURFACES
 from tests.architecture.credential_literal import (
     EXCLUDED_LANES,
@@ -34,7 +36,11 @@ from tests.architecture.credential_literal import (
     literals_for,
     literals_in_source,
 )
-from tests.architecture.source_index import python_ast, string_constants
+from tests.architecture.source_index import (
+    clear_source_index,
+    python_ast,
+    string_constants,
+)
 
 BASELINE = Path("tests/architecture/credential_literal_baseline.txt")
 
@@ -170,6 +176,27 @@ def test_the_detector_fires_on_the_shape_it_exists_for() -> None:
         "password",
         "PRIVATE_KEY",
     }, f"the detector missed a credential-binding shape; it saw {sorted(seen)}"
+
+
+def test_the_detector_scans_kernel_adoption_migrations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A credential added to the adoption lane must reach the real ratchet."""
+
+    migration = tmp_path / "alembic_kernel_adoption/versions/canary.py"
+    migration.parent.mkdir(parents=True)
+    migration.write_text(f"API_KEY = {PLACEHOLDER!r}\n", encoding="utf-8")
+    # The index caches relative paths; isolate this synthetic repository from
+    # the real repository scanned by other tests in the same worker.
+    clear_source_index()
+    try:
+        with monkeypatch.context() as patch:
+            patch.chdir(tmp_path)
+            assert counts_by_path() == {
+                "alembic_kernel_adoption/versions/canary.py": 1,
+            }
+    finally:
+        clear_source_index()
 
 
 def test_the_detector_ignores_resolved_and_named_credentials() -> None:
@@ -308,7 +335,12 @@ def test_every_python_entry_point_family_is_scanned() -> None:
     surface must be classified here rather than discovered later.
     """
 
-    assert set(SCANNED_ROOTS) == {"app", "scripts", "alembic"}
+    assert set(SCANNED_ROOTS) == {
+        "app",
+        "scripts",
+        "alembic",
+        "alembic_kernel_adoption",
+    }
     for root in SCANNED_ROOTS:
         assert Path(root).is_dir(), f"scanned root {root} no longer exists"
     assert Path("app/tasks").is_dir(), "the task/worker family moved out of app/"
