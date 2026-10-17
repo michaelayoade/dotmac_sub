@@ -135,11 +135,17 @@ CELERY_INSPECT_TIMEOUT_SECONDS="${CELERY_INSPECT_TIMEOUT_SECONDS:-5}"
 # recreates) freeradius, vmagent and promtail when a checkout file they mount
 # changed after they started. See apply_service_config_changes below and
 # docs/runbooks/SERVICE_CONFIG_MOUNTS.md.
-APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
-  celery-worker-monitoring celery-worker-notifications-immediate \
-  celery-worker-notifications celery-worker-billing \
-  celery-worker-tr069 celery-beat \
-  bandwidth-poller syslog-listener)
+# Derived at deploy time (derive_app_services) from the resolved Compose config:
+# every declared service whose image resolves to the release APP_IMAGE, minus
+# APP_IMAGE_DEPLOY_EXCLUSIONS. It used to be a hand-kept list that omitted
+# team-inbox-smtp, which then stayed on an old image across releases. Profile-
+# gated services (celery-beat on staging, team-inbox-smtp without smtp-inbound)
+# appear only where their profile is active, so absent ones never fail a deploy.
+# INTERIM: per-service desired state/drift will move to Starter
+# dotmac-deployment-control / dotmac-release-catalog.
+APP_SERVICES=()
+# App-image services a deploy must NOT recreate (name + reason). Empty today.
+APP_IMAGE_DEPLOY_EXCLUSIONS=()
 CELERY_WORKER_SERVICES=(celery-worker celery-worker-bandwidth \
   celery-worker-ingestion celery-worker-monitoring \
   celery-worker-notifications-immediate celery-worker-notifications \
@@ -352,6 +358,36 @@ background_runtime_ready() {
     echo "BACKGROUND RUNTIME FAILURE: a Celery worker did not answer ping or consume its required queue." >&2
     return 1
   fi
+}
+
+# Every container of every app-image service must run the release image. A
+# service left on an older image (team-inbox-smtp once stayed a month behind)
+# fails the deploy here instead of surfacing later as a runtime error.
+assert_app_services_on_release_image() {
+  local expected service container actual bad=0
+  expected="$(docker image inspect "${IMAGE}" --format '{{.Id}}' 2>/dev/null || true)"
+  if [[ -z "${expected}" ]]; then
+    echo "APP IMAGE DRIFT: cannot resolve the image ID of ${IMAGE}." >&2
+    return 1
+  fi
+  for service in "${APP_SERVICES[@]}"; do
+    local containers
+    containers="$("${COMPOSE[@]}" ps -q "${service}" 2>/dev/null || true)"
+    if [[ -z "${containers}" ]]; then
+      echo "APP IMAGE DRIFT: ${service} has no container after the deploy." >&2
+      bad=1
+      continue
+    fi
+    while IFS= read -r container; do
+      [[ -n "${container}" ]] || continue
+      actual="$(docker inspect "${container}" --format '{{.Image}}' 2>/dev/null || true)"
+      if [[ "${actual}" != "${expected}" ]]; then
+        echo "APP IMAGE DRIFT: ${service} is not running release image ${IMAGE} (container image ${actual:-unknown}, expected ${expected})." >&2
+        bad=1
+      fi
+    done <<<"${containers}"
+  done
+  return "${bad}"
 }
 
 wait_for_background_runtime() {
@@ -1054,7 +1090,8 @@ apply_service_config_changes() {
 # 21 services, measured 2026-08-31. (An earlier version of this comment said it
 # had none, which was wrong and is the sort of thing people reason from.) It
 # tunes resources and `command` for postgres-local, redis-local and the workers,
-# and publishes team-inbox-smtp on 127.0.0.1:18001. It declares no `ports:` for
+# and tunes team-inbox-smtp, which docker-compose.yml publishes on
+# 127.0.0.1:2525 by default (TEAM_INBOX_SMTP_BIND / ..._PUBLISH_PORT). It declares no `ports:` for
 # postgres-local, so the base file's binding is what applies there.
 # Set IGNORE_COMPOSE_OVERRIDE=1 to force single-file behaviour.
 RELEASE_COMPOSE_FILE="${REPO_DIR}/docker-compose.yml"
@@ -1275,7 +1312,30 @@ assert_candidate_port_available
 log "Resolving declared Compose services"
 load_declared_services
 assert_required_services_declared app "${CELERY_WORKER_SERVICES[@]}"
-mapfile -t APP_SERVICES < <(declared_subset "${APP_SERVICES[@]}")
+derive_app_services() {
+  local derived service excluded
+  if ! derived="$(
+    APP_IMAGE="${IMAGE}" \
+      "${COMPOSE[@]}" config --format json 2>/dev/null |
+      run_repo_module scripts.deploy_app_image_services --image "${IMAGE}" 2>/dev/null
+  )"; then
+    echo "DEPLOY CONFIG FAILURE: cannot derive app-image services from ${COMPOSE_FILES_DESC}." >&2
+    return 1
+  fi
+  APP_SERVICES=()
+  while IFS= read -r service; do
+    [[ -n "${service}" ]] || continue
+    for excluded in ${APP_IMAGE_DEPLOY_EXCLUSIONS[@]+"${APP_IMAGE_DEPLOY_EXCLUSIONS[@]}"}; do
+      [[ "${service}" == "${excluded}" ]] && continue 2
+    done
+    APP_SERVICES+=("${service}")
+  done <<<"${derived}"
+}
+derive_app_services || exit 1
+if [[ " ${APP_SERVICES[*]} " != *" app "* ]]; then
+  echo "DEPLOY CONFIG FAILURE: service app does not resolve to ${IMAGE} in ${COMPOSE_FILES_DESC}." >&2
+  exit 1
+fi
 if ((${#APP_SERVICES[@]} == 0)); then
   echo "DEPLOY CONFIG FAILURE: none of the app services are declared in ${COMPOSE_FILES_DESC}." >&2
   exit 1
@@ -1754,6 +1814,22 @@ if ! wait_for_background_runtime; then
     fi
   else
     log "No previous image recorded — healthy candidate retained. Investigate the Celery containers."
+  fi
+  exit 1
+fi
+
+log "Verifying every app-image service runs ${IMAGE}"
+if ! assert_app_services_on_release_image; then
+  trap - ERR
+  log "App image drift gate FAILED — checking previous-image rollback floor"
+  if [[ -n "${PREV_IMAGE}" ]]; then
+    if restore_prev; then
+      log "Rolled back to ${PREV_IMAGE}. NOTE: migrations from ${TAG} were NOT reverted."
+    else
+      report_rollback_outcome
+    fi
+  else
+    log "No previous image recorded — healthy candidate retained. Investigate the drifted services."
   fi
   exit 1
 fi

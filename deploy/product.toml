@@ -376,9 +376,11 @@ ping_command = ["python", "-m", "app.syslog.health", "--timeout-seconds", "2"]
 [[roles]]
 code = "team-inbox-smtp"
 command = ["python", "-m", "app.team_inbox_smtp", "serve"]
-# docker-compose.yml gates this service behind the `smtp-inbound` profile;
-# it is not part of the default production topology, hence zero replicas.
-replicas = 0
+# docker-compose.yml gates this service behind the `smtp-inbound` profile, and
+# production activates it and runs one container. Declaring zero replicas hid it
+# from drift comparison (zero-replica roles are skipped), which let it stay on an
+# old image across releases.
+replicas = 1
 stop_grace_seconds = 30
 materials = ["DATABASE_URL", "OPENBAO_ADDR", "OPENBAO_TOKEN"]
 

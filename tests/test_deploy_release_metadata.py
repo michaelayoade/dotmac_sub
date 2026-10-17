@@ -29,6 +29,7 @@ FULL_SERVICES = (
     "celery-beat",
     "bandwidth-poller",
     "syslog-listener",
+    "team-inbox-smtp",
 )
 
 
@@ -131,7 +132,11 @@ def _run_deploy(
         {
             "services": {
                 name: {
-                    "image": "__candidate_image__",
+                    "image": (
+                        "__candidate_image__"
+                        if name in FULL_SERVICES
+                        else "example.invalid/other:1"
+                    ),
                     "working_dir": "/app",
                     "environment": {"PYTHONPATH": "/app"},
                     "volumes": [],
@@ -146,6 +151,14 @@ def _run_deploy(
 set -eu
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 {docker_prelude}
+if [[ "$1 $2" == "image inspect" && "$*" == *"{{{{.Id}}}}"* ]]; then
+  printf 'sha256:release-image-id\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *"{{{{.Image}}}}"* ]]; then
+  printf '%s\\n' "${{FAKE_CONTAINER_IMAGE_ID:-sha256:release-image-id}}"
+  exit 0
+fi
 if [[ "$1 $2" == "image inspect" ]]; then
   if [[ "$*" == *"RepoDigests"* ]]; then
     printf '%s\\n' "{reported_digest_reference}"
@@ -294,7 +307,7 @@ exec /usr/bin/sed "$@"
 set -eu
 printf 'host-python cwd=%s args=%s\\n' "$PWD" "$*" >> "$DOCKER_LOG"
 # Pure, stdlib-only deploy helpers run for real against the test's files.
-if [[ "$*" == *"-m scripts.deploy_config_freshness"* || "$*" == *"-m scripts.deployment_secret_readiness"* ]]; then
+if [[ "$*" == *"-m scripts.deploy_config_freshness"* || "$*" == *"-m scripts.deployment_secret_readiness"* || "$*" == *"-m scripts.deploy_app_image_services"* ]]; then
   exec "{sys.executable}" "$@"
 fi
 if [[ "$*" == *"-m scripts.release_candidate_evidence verify-production"* ]]; then
@@ -1083,6 +1096,40 @@ def test_deploy_never_starts_a_service_the_host_does_not_declare(
     assert not any("celery-beat" in command for command in recreate_commands)
     # ...and it must not be health-gated as if it were running either.
     assert "BACKGROUND RUNTIME FAILURE: celery-beat" not in result.stderr
+
+
+def test_deploy_recreates_team_inbox_smtp_with_the_app_image(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, docker_log = _run_deploy(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_deploy_skips_team_inbox_smtp_when_its_profile_is_inactive(
+    tmp_path: Path,
+) -> None:
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, docker_log = _run_deploy(tmp_path, declared_services=without)
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert recreate
+    assert not any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_deploy_fails_when_an_app_service_runs_a_different_image(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, _docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"FAKE_CONTAINER_IMAGE_ID": "sha256:stale-image-id"},
+    )
+
+    assert result.returncode != 0
+    assert "APP IMAGE DRIFT" in result.stderr
 
 
 def test_deploy_refuses_missing_required_celery_worker(tmp_path: Path) -> None:
