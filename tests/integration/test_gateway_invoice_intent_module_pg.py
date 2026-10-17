@@ -56,6 +56,8 @@ def test_invoice_checkout_opens_matching_module_intent(
     )
     db_session.add(invoice)
     db_session.commit()
+    invoice_id = invoice.id
+    account_id = subscriber.id
     binding_id = enable_payment_provider(db_session, "paystack")[
         "payments.intent.v1"
     ].id
@@ -66,8 +68,8 @@ def test_invoice_checkout_opens_matching_module_intent(
         db_session,
         svc.CreateCustomerGatewayTopupIntentCommand(
             flow=svc.CustomerGatewayTopupFlow.invoice_payment,
-            account_id=subscriber.id,
-            invoice_id=invoice.id,
+            account_id=account_id,
+            invoice_id=invoice_id,
             reference=reference,
             provider_type="paystack",
             provider_id=None,

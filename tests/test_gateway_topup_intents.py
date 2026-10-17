@@ -466,6 +466,8 @@ def test_invoice_creation_opens_module_intent_once(
     )
     db_session.add(invoice)
     db_session.commit()
+    invoice_id = invoice.id
+    account_id = subscriber.id
     binding_id = _checkout_binding(db_session).id
 
     db_session_adapter.release_read_transaction(db_session)
@@ -473,8 +475,8 @@ def test_invoice_creation_opens_module_intent_once(
         db_session,
         svc.CreateCustomerGatewayTopupIntentCommand(
             flow=svc.CustomerGatewayTopupFlow.invoice_payment,
-            account_id=subscriber.id,
-            invoice_id=invoice.id,
+            account_id=account_id,
+            invoice_id=invoice_id,
             reference="gateway-module-intent-ref",
             provider_type="paystack",
             provider_id=None,
