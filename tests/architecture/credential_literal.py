@@ -48,8 +48,13 @@ from tests.architecture.source_index import python_ast, python_files
 #: Entry-point families scanned. Every Python surface that can run against a
 #: real deployment lives under one of these: application code and its Celery
 #: tasks/workers (`app`), operator CLI, seeds, migrations-support and one-offs
-#: (`scripts`), and schema migrations (`alembic`).
-SCANNED_ROOTS: tuple[str, ...] = ("app", "scripts", "alembic")
+#: (`scripts`), and schema migrations (`alembic`, `alembic_kernel_adoption`).
+SCANNED_ROOTS: tuple[str, ...] = (
+    "app",
+    "scripts",
+    "alembic",
+    "alembic_kernel_adoption",
+)
 
 #: `tests/` is scanned by nothing here, on a stated premise: test fixtures are
 #: REQUIRED to construct credentials, and a fixture password is inert by

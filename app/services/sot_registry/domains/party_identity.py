@@ -31,7 +31,6 @@ DOMAIN = DomainSOT(
         SOTService(
             name="party.kernel_import",
             module="app.services.party_kernel_import",
-            implementation_modules=("scripts.migration.kernel_party_import",),
             owns=("rollback-only historical Party root and Sub context import",),
             depends_on=("party.registry", "tenancy.operator_tenant_history"),
             notes=(

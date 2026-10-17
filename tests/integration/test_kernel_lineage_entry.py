@@ -28,7 +28,8 @@ from tests.integration.test_kernel_lineage_rehearsal import _synthetic_evidence
 
 @pytest.fixture
 def engine(cloned_database: Callable[[str], URL]) -> Iterator[Engine]:
-    # Real Sub + composed-module Alembic chain, never metadata/create_all.
+    # Replay the real Sub + composed-module Alembic chain; no test-owned
+    # schema substitute, including for the historical metadata-built base.
     value = create_engine(cloned_database("heads"))
     try:
         yield value
@@ -100,11 +101,14 @@ def populated(engine: Engine) -> None:
             ),
             {"id": setting, "tenant": tenant},
         )
+        # ORM defaults do not populate this raw SQL history fixture.
         connection.execute(
             text(
                 "INSERT INTO domain_setting_history "
-                "(id,tenant_id,domain,key,setting_id,action,value_after) "
-                "VALUES (:id,:tenant,'auth','kernel_entry_fixture',:setting,'create','fixture')"
+                "(id,tenant_id,domain,key,setting_id,action,value_after,"
+                "secret_changed,changed_at) "
+                "VALUES (:id,:tenant,'auth','kernel_entry_fixture',:setting,"
+                "'create','fixture',false,now())"
             ),
             {"id": uuid4(), "tenant": tenant, "setting": setting},
         )
