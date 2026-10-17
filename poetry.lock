@@ -1102,19 +1102,19 @@ reference = "forgejo"
 
 [[package]]
 name = "dotmac-billing"
-version = "0.1.0a1"
+version = "0.1.0a8"
 description = "DotMac dual-plane operational receivables owner"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main"]
 files = [
-    {file = "dotmac_billing-0.1.0a1-py3-none-any.whl", hash = "sha256:ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b"},
-    {file = "dotmac_billing-0.1.0a1.tar.gz", hash = "sha256:c0ff6e1257a00ba09e62b832e471cffe3945504d1c2ad59a799baae77c0d0eef"},
+    {file = "dotmac_billing-0.1.0a8-py3-none-any.whl", hash = "sha256:a1d76c5a3244777a60854078991fbbfa1e6c4bfc6de03d26c581cbe23de5e537"},
+    {file = "dotmac_billing-0.1.0a8.tar.gz", hash = "sha256:ff3926bcec8c857a4fbbce17f84958178c1e21700c4ec52d606e41de331146ff"},
 ]
 
 [package.dependencies]
 alembic = ">=1.13"
-dotmac-kernel = ">=0.1.0a89"
+dotmac-kernel = ">=0.1.0a105"
 sqlalchemy = ">=2.0,<3.0"
 
 [package.source]
@@ -1216,14 +1216,14 @@ reference = "forgejo"
 
 [[package]]
 name = "dotmac-numbering"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "DotMac dual-plane document-series allocation with immutable receipts"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main"]
 files = [
-    {file = "dotmac_numbering-0.1.0a2-py3-none-any.whl", hash = "sha256:ed7711ec3df50ccba066e920d7696ee4b9569fb7356108078719c3b139b184ec"},
-    {file = "dotmac_numbering-0.1.0a2.tar.gz", hash = "sha256:8e4b53760953ae691eac6923b31f0bf903337037c274d5ed4dd764c078dbffa0"},
+    {file = "dotmac_numbering-0.1.0a3-py3-none-any.whl", hash = "sha256:03e9ac4de8b2d4501b6d3a0daf11131ec4d85c2913cd9e0d91a31937cdc9032c"},
+    {file = "dotmac_numbering-0.1.0a3.tar.gz", hash = "sha256:4b609712451b804e44cef496b8f46dec86fda5c9491e3a21ed94f5187f0e8573"},
 ]
 
 [package.dependencies]
@@ -1237,13 +1237,14 @@ reference = "forgejo"
 
 [[package]]
 name = "dotmac-payments"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "Payment intent and confirmation correlation"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main"]
 files = [
-    {file = "dotmac_payments-0.1.0a2-py3-none-any.whl", hash = "sha256:da2877bc5365fc0d6cf93868a6235a608413edbb809199cd5c919f78390cf8ed"},
+    {file = "dotmac_payments-0.1.0a3-py3-none-any.whl", hash = "sha256:6ce2d846218931f568183e0814e376597ec03f836c502302dfefd0bd4264a8eb"},
+    {file = "dotmac_payments-0.1.0a3.tar.gz", hash = "sha256:ea957bdf6553a6503b3be43a92ba49d21f243fa5c367349ed41e1c9e6343d729"},
 ]
 
 [package.dependencies]
@@ -4686,15 +4687,12 @@ name = "routeros-api"
 version = "0.21.0"
 description = "Python API to RouterBoard devices produced by MikroTik."
 optional = false
-python-versions = ">=3.9"
+python-versions = "*"
 groups = ["main"]
 files = [
     {file = "routeros_api-0.21.0-py2.py3-none-any.whl", hash = "sha256:4189c11bdeae0d8d654b1f1212f3654a54f0df8e4ec0bcb4d5bc31303a7f76d0"},
     {file = "routeros_api-0.21.0.tar.gz", hash = "sha256:0d37452a4ff85cd476dca392068d7d76ba430c9b055c39d8dabc5930a997d82d"},
 ]
-
-[package.dependencies]
-six = "*"
 
 [[package]]
 name = "rsa"
@@ -6268,4 +6266,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "66892960c4749202c276844927526acc14535e9f114c7ea2f9843d19c515ac33"
+content-hash = "f3577fc8c7ed0cdbe6b85a17ed5618cfb5c888bed5b98ee1d9da9d96a750b350"

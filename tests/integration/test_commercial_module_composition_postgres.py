@@ -27,7 +27,7 @@ from tests.integration import test_kernel_lineage_rehearsal as kernel_rehearsal
 isolated_database = kernel_rehearsal.isolated_database
 
 PROVIDER_HEAD = "557_outbox_relay_prereq"
-BILLING_HEAD = "bi_0001_billing"
+BILLING_HEAD = "bi_0011_settlement_earmarks"
 COLLECTIONS_HEAD = "cl_0001_collections"
 SECOND_TENANT = "44444444-4444-4444-8444-444444444444"
 

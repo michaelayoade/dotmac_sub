@@ -23,7 +23,7 @@ What this file proves, with zero skips:
 - the Sub app builds with the kernel installed, and every ``dotmac_kernel``
   module in its import graph is one the ledger allowlist admits OR one the
   kernel reaches for itself (``TRANSITIVE_KERNEL_MODULES``, a reviewed
-  snapshot — forty-five of them, which is worth knowing) — and no kernel
+  snapshot — fifty-eight of them, which is worth knowing) — and no kernel
   middleware is mounted, no kernel route endpoint is served, and the top-level
   route prefix set is exactly the reviewed pin.
 
@@ -103,6 +103,12 @@ KERNEL_SOURCE = "forgejo"
 #: session_runtime does not construct or bind a runtime; its reference factory
 #: and DatabaseRuntime construction remain excluded from Sub boot.
 #:
+#: The 2026-10-17 money-pack pins (billing 0.1.0a8, payments 0.1.0a3) widen the
+#: snapshot by thirteen: their model/service imports reach the kernel's
+#: fingerprints, idempotency ledger and messaging (inbox/outbox/relay/worker)
+#: modules at app import time. Loading them constructs no relay, worker or
+#: ledger writer in Sub; the boot-construction sibling test still holds.
+#:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
 #: test below proves that separately, on middleware and routes. But the cost of
@@ -131,12 +137,25 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.exceptions",
         "dotmac_kernel.external_identity",
         "dotmac_kernel.facet_principal",
+        "dotmac_kernel.fingerprints",
         "dotmac_kernel.flag_models",
         "dotmac_kernel.flags",
+        "dotmac_kernel.idempotency",
+        "dotmac_kernel.idempotency_models",
         "dotmac_kernel.identity",
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.machine_models",
         "dotmac_kernel.machine_rotation",
+        "dotmac_kernel.messaging",
+        "dotmac_kernel.messaging.envelope",
+        "dotmac_kernel.messaging.inbox",
+        "dotmac_kernel.messaging.models",
+        "dotmac_kernel.messaging.outbox",
+        "dotmac_kernel.messaging.platform",
+        "dotmac_kernel.messaging.platform_relay",
+        "dotmac_kernel.messaging.platform_worker",
+        "dotmac_kernel.messaging.relay",
+        "dotmac_kernel.messaging.worker",
         "dotmac_kernel.models_platform",
         "dotmac_kernel.modules",
         "dotmac_kernel.namespaces",

@@ -18,7 +18,7 @@ from app.migration_bindings import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-RELEASE_REVISION = "4c282228b53405442effc4159f5db9d50446d335"
+RELEASE_REVISION = "62ecb6b0e198ba08bef9a096037194a9dfca4da0"
 READINESS_OWNER = "app/services/billing_numbering_readiness.py"
 READ_ONLY_IMPORTS = {
     "dotmac_numbering.models": frozenset(
@@ -60,11 +60,11 @@ INVOICE_IMPORTS = {
     "dotmac_numbering.service": frozenset({"MAX_DIGITS", "MAX_VALUE", "allocate"}),
 }
 ARTIFACT_HASHES = {
-    "dotmac_numbering-0.1.0a2-py3-none-any.whl": (
-        "sha256:ed7711ec3df50ccba066e920d7696ee4b9569fb7356108078719c3b139b184ec"
+    "dotmac_numbering-0.1.0a3-py3-none-any.whl": (
+        "sha256:03e9ac4de8b2d4501b6d3a0daf11131ec4d85c2913cd9e0d91a31937cdc9032c"
     ),
-    "dotmac_numbering-0.1.0a2.tar.gz": (
-        "sha256:8e4b53760953ae691eac6923b31f0bf903337037c274d5ed4dd764c078dbffa0"
+    "dotmac_numbering-0.1.0a3.tar.gz": (
+        "sha256:4b609712451b804e44cef496b8f46dec86fda5c9491e3a21ed94f5187f0e8573"
     ),
 }
 
@@ -138,15 +138,15 @@ def _activation_errors(root: Path) -> tuple[str, ...]:
 def test_numbering_release_and_kernel_are_exact_pins() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     dependencies = project["project"]["dependencies"]
-    assert "dotmac-numbering==0.1.0a2" in dependencies
+    assert "dotmac-numbering==0.1.0a3" in dependencies
     assert "dotmac-kernel==0.1.0a105" in dependencies
     enriched = project["tool"]["poetry"]["dependencies"]
-    assert enriched["dotmac-numbering"] == {"version": "0.1.0a2", "source": "forgejo"}
-    assert module.version == "0.1.0a2"
+    assert enriched["dotmac-numbering"] == {"version": "0.1.0a3", "source": "forgejo"}
+    assert module.version == "0.1.0a3"
     lock = tomllib.loads((ROOT / "poetry.lock").read_text())
     packages = [p for p in lock["package"] if p["name"] == "dotmac-numbering"]
     assert len(packages) == 1
-    assert packages[0]["version"] == "0.1.0a2"
+    assert packages[0]["version"] == "0.1.0a3"
     assert packages[0]["source"] == {
         "type": "legacy",
         "url": "https://registry.dotmac.io/api/packages/dotmac/pypi/simple",
@@ -157,7 +157,7 @@ def test_numbering_release_and_kernel_are_exact_pins() -> None:
     } == ARTIFACT_HASHES
     ledger = (ROOT / "docs/PLATFORM_ADOPTION_LEDGER.md").read_text()
     assert RELEASE_REVISION in ledger
-    assert "31908774569" in ledger
+    assert "39010380319" in ledger
 
 
 def test_numbering_installed_lineage_has_one_supported_tenant_selection() -> None:

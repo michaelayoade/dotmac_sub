@@ -179,7 +179,10 @@ def test_installed_tax_public_api_really_requires_the_binding_kernel_floor() -> 
             assert bounds, f"{name} has no unambiguous installed kernel lower bound"
             floors[name] = max(bounds)
     assert floors["dotmac-tax"] == Version("0.1.0a98")
-    assert max(floors.values()) == Version("0.1.0a98")
+    # Billing 0.1.0a8 (2026-10-17 money-pack pin) is now the binding floor:
+    # it requires the exact pinned kernel, above tax's a98 floor.
+    assert floors["dotmac-billing"] == Version("0.1.0a105")
+    assert max(floors.values()) == Version("0.1.0a105")
     assert importlib.metadata.version("dotmac-kernel") == "0.1.0a105"
     assert "site-packages" in Path(dotmac_tax.service.__file__).parts
     tree = ast.parse(inspect.getsource(dotmac_tax.service))

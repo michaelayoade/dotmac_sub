@@ -116,11 +116,11 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     assert repository_heads() == frozenset(
         {
             "690_backdated_invoice_permissions",
-            "bi_0001_billing",
+            "bi_0011_settlement_earmarks",
             "cl_0001_collections",
             "ib_0001_conversations",
             "nu_0001_numbering",
-            "pm_0003_confirmation_immutable",
+            "pm_0006_cash_qualification",
             "so_0001_service_delivery_orders",
             "su_0003_billing_treatments",
             "ts_0002_notify_identity",
