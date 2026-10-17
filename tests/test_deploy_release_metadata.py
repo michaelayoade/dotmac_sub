@@ -105,6 +105,9 @@ def _run_deploy(
         f"APP_ENV={app_env}\n"
         f"SERVER_NAME={server_name}\n"
     )
+    running_app_services = " ".join(
+        service for service in declared_services if service in FULL_SERVICES
+    )
     declared_services_literal = " ".join(
         f"'{service}'" for service in declared_services
     )
@@ -153,6 +156,20 @@ printf '%s\\n' "$*" >> "$DOCKER_LOG"
 {docker_prelude}
 if [[ "$1 $2" == "image inspect" && "$*" == *"{{{{.Id}}}}"* ]]; then
   printf 'sha256:release-image-id\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *"com.docker.compose.project"* ]]; then
+  printf 'dotmac_sub\\n'
+  exit 0
+fi
+if [[ "$1" == "ps" && "$*" == *"label=com.docker.compose.project"* ]]; then
+  for svc in ${{FAKE_PS_SERVICES-{running_app_services}}}; do
+    printf 'container-%s|%s|ghcr.io/michaelayoade/dotmac_sub:sha-running\\n' "$svc" "$svc"
+  done
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$2" == "${{FAKE_STALE_CONTAINER:-none}}" && "$*" == *"{{{{.Image}}}}"* ]]; then
+  printf 'sha256:stale-image-id\\n'
   exit 0
 fi
 if [[ "$1" == "inspect" && "$*" == *"{{{{.Image}}}}"* ]]; then
@@ -1118,6 +1135,39 @@ def test_deploy_skips_team_inbox_smtp_when_its_profile_is_inactive(
     recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
     assert recreate
     assert not any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_running_profile_gated_service_is_recreated_and_drift_checked(
+    tmp_path: Path,
+) -> None:
+    """Production starts team-inbox-smtp by name; its profile is not active."""
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={"FAKE_PS_SERVICES": " ".join(FULL_SERVICES)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_running_profile_gated_service_on_stale_image_fails_the_deploy(
+    tmp_path: Path,
+) -> None:
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, _docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={
+            "FAKE_PS_SERVICES": " ".join(FULL_SERVICES),
+            "FAKE_STALE_CONTAINER": "container-team-inbox-smtp",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "APP IMAGE DRIFT: team-inbox-smtp" in result.stderr
 
 
 def test_deploy_fails_when_an_app_service_runs_a_different_image(
