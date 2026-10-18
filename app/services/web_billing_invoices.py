@@ -48,6 +48,7 @@ from app.services.audit_helpers import (
     log_audit_event,
     resolve_actor_name,
 )
+from app.services.billing import starter_issuance as starter_issuance_service
 from app.services.billing.credit_notes import (
     CreditApplicationReversalOption,
     CreditApplicationReversalPreview,
@@ -340,6 +341,7 @@ def issue_invoice_from_detail(
     *,
     invoice_id: UUID,
     announce: bool = False,
+    actor_ref: str = "admin:invoice-detail",
 ) -> Invoice:
     """Issue a draft invoice from the admin detail page."""
     invoice_id_text = str(invoice_id)
@@ -364,6 +366,16 @@ def issue_invoice_from_detail(
                 "reconciliation_reason": prepaid_preview.reason,
             },
         )
+    # Thin-client lane (ADR 0031, Slice 6a): eligible drafts are issued by
+    # Starter as sole ledger writer. Eligibility is decided before any
+    # write; a Starter refusal propagates and never falls back here.
+    if starter_issuance_service.eligibility_reason(db, invoice) is None:
+        starter_issuance_service.issue_admin_invoice_via_starter(
+            db, invoice=invoice, actor_ref=actor_ref
+        )
+        db.commit()
+        db.refresh(invoice)
+        return invoice
     transition = billing_service.invoices.issue_draft_system(
         db,
         invoice_id_text,

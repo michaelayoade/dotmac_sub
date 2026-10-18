@@ -31,6 +31,28 @@ _SHADOW_IMPORTS = {
         ("dotmac_payments", "PaymentPurpose"),
         ("dotmac_payments", "open_payment_intent"),
     },
+    # Thin-client issuance (ADR 0031, Slice 6a): eligible admin drafts are
+    # issued by dotmac-billing as sole ledger writer; numbering imports are
+    # outside this gate's prefixes.
+    "app/services/billing/starter_issuance.py": {
+        ("dotmac_billing", "AcceptRatedObligationV1"),
+        ("dotmac_billing", "AppliedFxSnapshotV1"),
+        ("dotmac_billing", "AppliedTaxSnapshotV1"),
+        ("dotmac_billing", "DueDateBasisV1"),
+        ("dotmac_billing", "GetInvoiceDocumentFactV1"),
+        ("dotmac_billing", "IssueRatedInvoiceV1"),
+        ("dotmac_billing", "PartyDocumentSnapshotV1"),
+        ("dotmac_billing", "PaymentInstructionsSnapshotV1"),
+        ("dotmac_billing", "PostalAddressSnapshotV1"),
+        ("dotmac_billing", "PresentationAssetReferenceV1"),
+        ("dotmac_billing", "ServicePeriodEvidenceV1"),
+        ("dotmac_billing", "create_billing_account"),
+        ("dotmac_billing", "get_invoice_document_fact"),
+        ("dotmac_billing", "issue_rated_invoice"),
+        ("dotmac_billing.contracts", "DueDateBasisStatus"),
+        ("dotmac_billing.contracts", "ServicePeriodStatus"),
+        ("dotmac_billing.errors", "BillingError"),
+    },
     "app/services/dotmac_erp/billing_adapter.py": {
         ("dotmac_billing", "AccountingFactV1"),
     },
