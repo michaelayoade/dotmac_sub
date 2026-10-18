@@ -107,7 +107,7 @@ class _Numbering:
         scope: TenantScope,
         series_code: str,
         reference_date: date,
-        allocated_by: str | None = None,
+        idempotency_key: str,
     ) -> str:
         try:
             return numbering_allocate(
@@ -115,7 +115,7 @@ class _Numbering:
                 scope=scope,
                 series_code=series_code,
                 reference_date=reference_date,
-                allocated_by=allocated_by,
+                idempotency_key=idempotency_key,
             ).formatted_number
         except NumberingError:
             configure_series(
@@ -132,7 +132,7 @@ class _Numbering:
                 scope=scope,
                 series_code=series_code,
                 reference_date=reference_date,
-                allocated_by=allocated_by,
+                idempotency_key=idempotency_key,
             ).formatted_number
 
 
@@ -329,7 +329,7 @@ def issue_admin_invoice_via_starter(
                 ),
             )
         issued_at = datetime.now(UTC)
-        due_days = max((invoice.due_at.date() - issued_at.date()).days, 0)  # type: ignore[union-attr]
+        due_days = max((invoice.due_at.date() - issued_at.date()).days, 0)
         issued = issue_rated_invoice(
             db,
             scope=_SCOPE,
