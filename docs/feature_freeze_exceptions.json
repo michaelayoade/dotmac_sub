@@ -76,6 +76,17 @@
       "reason": "Michael directed the thin-client health goal on 2026-10-16: keep the existing poller/syslog probes and product semantics Sub-local, serialize Starter Platform Health observations at the source edge, and create no Sub health subsystem or deployment authority. He approved commit, push and draft PR #3655 for hosted CI. This entry covers only the listed bounded serialization module; modifications to the existing probe owners need no exception. CODEOWNERS review of this file remains required before merge.",
       "starter_contract": "Starter dotmac-platform-health HealthObservationInput: source_ref, observation_key, component_code, healthy/degraded/unhealthy/unknown state, observed_at, received_at, summary and bounded labels; Platform Health remains the future sole durable observation/evidence owner and Integrator remains the authenticated transport boundary.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-POLICIES",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py"
+      ],
+      "reason": "Michael directed on 2026-10-17 (money-pack cutover session): full cutover to Starter related modules, billing policies composable with defaults, no hardcoding, composable policies with settings. This exempts one new composition-wiring module that resolves the Starter billing issuance policy surface (account-ref convention at Subscriber granularity for linked radio/fiber accounts, obligation identity templates, tax/due/numbering/document-profile defaults) from domain settings with typed defaults. No writer is wired by the exempted PR; issuance switching remains a separately approved slice. The billing thin-client ratchet baseline grows deliberately by this module only and resumes shrinking as writers retire.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issuance contracts: IssueRatedInvoiceV1 / AcceptRatedObligationV1 / DueDateBasisV1 / AppliedTaxSnapshotV1 and create_billing_account (external_account_ref + currency get-or-create), consumed as composition wiring only.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
