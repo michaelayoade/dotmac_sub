@@ -683,7 +683,9 @@ def test_auto_policy_pause_resumes_and_extends_billing_when_ticket_resolves(
     resulting = active_subscription.next_billing_at
     if resulting.tzinfo is None:
         resulting = resulting.replace(tzinfo=UTC)
-    assert resulting == original_anchor + (now - effective_at)
+    assert resulting == original_anchor + timedelta(
+        seconds=int((now - effective_at).total_seconds())
+    )
 
     again = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
         _factory(db_session), now=now
