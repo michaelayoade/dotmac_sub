@@ -89,6 +89,7 @@ class StarterBillingPolicies:
     default_timezone: str
     default_unit_code: str
     admin_source_fact_template: str
+    admin_line_source_fact_template: str
     invoice_series_prefix: str
     credit_note_series_prefix: str
     default_country_code: str
@@ -111,6 +112,18 @@ class StarterBillingPolicies:
                 "configuration_invalid",
                 "Admin source fact template must contain {invoice_id}",
                 setting="starter_billing_admin_source_fact_template",
+            )
+        return rendered
+
+    def admin_line_source_fact_id(self, line_id: UUID) -> str:
+        rendered = self.admin_line_source_fact_template.replace(
+            "{line_id}", str(line_id)
+        )
+        if rendered == self.admin_line_source_fact_template or "{" in rendered:
+            raise _error(
+                "configuration_invalid",
+                "Admin line source fact template must contain {line_id}",
+                setting="starter_billing_admin_line_source_fact_template",
             )
         return rendered
 
@@ -154,6 +167,9 @@ def resolve_starter_billing_policies(db: Session) -> StarterBillingPolicies:
         default_unit_code=_text(db, "starter_billing_default_unit_code"),
         admin_source_fact_template=_text(
             db, "starter_billing_admin_source_fact_template"
+        ),
+        admin_line_source_fact_template=_text(
+            db, "starter_billing_admin_line_source_fact_template"
         ),
         invoice_series_prefix=_text(db, "starter_billing_invoice_series_prefix"),
         credit_note_series_prefix=_text(

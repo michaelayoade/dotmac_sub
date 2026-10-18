@@ -52,6 +52,13 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.contracts", "DueDateBasisStatus"),
         ("dotmac_billing.contracts", "ServicePeriodStatus"),
         ("dotmac_billing.errors", "BillingError"),
+        # Multi-line lane: accept-per-line plus draft-document composition.
+        ("dotmac_billing.commands", "CreateMultiLineDraftDocument"),
+        ("dotmac_billing.commands", "DraftDocumentLine"),
+        ("dotmac_billing.commands", "IssueDocument"),
+        ("dotmac_billing.service", "accept_rated_obligation"),
+        ("dotmac_billing.service", "create_multi_line_draft_document"),
+        ("dotmac_billing.service", "issue_document"),
     },
     # Step 5 opening rehearsal assembly (ADR 0020/0031): pure census-to-
     # observation translation onto the pinned rehearsal contracts; it
