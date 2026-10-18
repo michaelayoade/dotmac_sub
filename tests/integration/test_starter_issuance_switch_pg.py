@@ -83,6 +83,16 @@ def _seller_and_bank(db_session):
 
 
 def _draft(db_session, subscriber, *, total: str = "107.50") -> Invoice:
+    from app.models.billing import TaxRate
+
+    tax_rate = TaxRate(
+        name=f"Slice6a VAT {uuid4().hex[:8]}",
+        code="vat_standard",
+        rate=Decimal("0.0750"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
     invoice = Invoice(
         account_id=subscriber.id,
         status=InvoiceStatus.draft,
@@ -101,9 +111,11 @@ def _draft(db_session, subscriber, *, total: str = "107.50") -> Invoice:
             quantity=Decimal("1"),
             unit_price=Decimal("100.00"),
             amount=Decimal("100.00"),
+            tax_rate_id=tax_rate.id,
             tax_rate_code_snapshot="vat_standard",
             tax_rate_percent_snapshot=Decimal("7.5000"),
             tax_rate_snapshot_version=1,
+            tax_rate_is_active_snapshot=True,
             is_active=True,
         )
     ]

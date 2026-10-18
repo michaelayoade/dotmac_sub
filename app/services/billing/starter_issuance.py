@@ -37,7 +37,7 @@ from dotmac_billing import (
 from dotmac_billing.contracts import DueDateBasisStatus, ServicePeriodStatus
 from dotmac_billing.errors import BillingError
 from dotmac_billing.service import create_billing_account
-from dotmac_kernel.cache import TenantScope
+from dotmac_kernel.cache import Scope, TenantScope
 from dotmac_kernel.money import Currency, Money, MoneyError
 from dotmac_numbering import NumberingError, SeriesConfiguration, configure_series
 from dotmac_numbering import allocate as numbering_allocate
@@ -104,7 +104,7 @@ class _Numbering:
         self,
         db: Session,
         *,
-        scope: TenantScope,
+        scope: Scope,
         series_code: str,
         reference_date: date,
         idempotency_key: str,
