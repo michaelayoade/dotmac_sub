@@ -82,6 +82,42 @@ confirmed the layered design on 2026-10-18.
    (billing clock paused, access untouched) `→ released` when the
    ticket resolves `→ renewal extended`.
 
+9. **Human work is a first-class state.** Approvals and manual steps
+   (for example refund or credit approval) are waiting states with an
+   assignee role, a deadline, and escalation — never side-channel
+   decisions recorded after the fact. Maker-checker applies where the
+   step moves money.
+
+10. **One clock authority.** Deadlines, dunning steps, and renewal
+    generation are driven by a single scheduler surface (durable
+    timers), not per-module cron. A missed tick is recoverable because
+    deadlines are evaluated against stored state by the recovery sweep,
+    not by the tick itself.
+
+11. **Definition evolution.** Policy-version pinning covers settings;
+    state-machine shape changes need their own rule: in-flight
+    instances finish on the definition version they started under, and
+    a shape change ships with an explicit instance-migration or
+    grandfather decision recorded in the change.
+
+12. **Rules-engine guardrails.** Low-risk does not mean unbounded:
+    staff-composed reactions carry rate limits, a blast-radius cap,
+    loop detection (a reaction may not re-trigger itself), dry-run
+    preview before activation, audited changes, and a kill switch.
+    A reaction may never write money or service state — it may only
+    request work from an owning module.
+
+13. **Access failure posture.** When the access owner cannot decide,
+    service state fails closed (no silent grant), and the only bypass
+    is an approved, audited emergency override with an expiry — itself
+    a recorded workflow state, not a database edit.
+
+14. **Ordering and poison handling.** Intake tolerates duplicate and
+    out-of-order external events (a confirmation may arrive before its
+    intent is visible): events carry stable identities, handlers park
+    or reject to `attention-required` rather than guessing, and
+    repeatedly failing deliveries dead-letter with the reason attached.
+
 ## Invariants
 
 - Exactly one module may write each lifecycle's state; exactly one
@@ -91,6 +127,8 @@ confirmed the layered design on 2026-10-18.
   surface seen from two ends.
 - Replay of any event is a no-op: handlers key on stable identities.
 - A confirmation can discharge only the obligation its intent binds.
+- No lifecycle instance waits without a deadline, an owner, and a
+  recorded reason; no staff reaction writes money or service state.
 
 ## Acceptance tests (incident-derived, at the Starter boundary)
 
