@@ -3969,8 +3969,9 @@ SERVICES: tuple[SOTService, ...] = (
                 verification=(
                     "Migrated-PostgreSQL proof: a Starter-issued invoice "
                     "paid through the lane reaches zero collectible with "
-                    "a paid mirror and no legacy Payment row; a second "
-                    "claim on the same confirmation is refused."
+                    "a paid mirror and no legacy Payment row; an exact "
+                    "replay returns the same Starter identities and new "
+                    "cash against the discharged document is refused."
                 ),
                 cutover_gate=(
                     "Only invoices carrying a StarterInvoiceLink take "

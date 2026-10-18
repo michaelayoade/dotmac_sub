@@ -210,16 +210,49 @@ def test_starter_settlement_discharges_invoice_without_legacy_payment(
     ).scalar_one_or_none()
     assert legacy_payment is None
 
-    # A second claim against the discharged document is refused: the
-    # confirmation replays in payments, but billing will not allocate
-    # against a fully discharged document again.
+    # An exact replay is idempotent in Starter: same confirmation and
+    # settlement identities, no second allocation.
+    replay = settle_starter_invoice_payment(
+        db_session,
+        invoice=invoice,
+        link=link,
+        intent_reference=reference,
+        external_reference=external_reference,
+        confirmed_amount=Decimal("107.50"),
+        occurred_at=now,
+        observed_at=now,
+    )
+    db_session.commit()
+    assert replay.confirmation_id == result.confirmation_id
+    assert replay.settlement_id == result.settlement_id
+    assert _collectible(db_session, link) == Decimal("0.00")
+
+    # Genuinely new cash against the discharged document is refused:
+    # a fresh intent and confirmation cannot allocate twice.
+    reference2 = f"settle-proof:{uuid4().hex[:12]}"
+    open_payment_intent(
+        db_session,
+        scope=_SCOPE,
+        command=OpenPaymentIntent(
+            reference=reference2,
+            payer_reference=str(subscriber.id),
+            purpose=PaymentPurpose.INVOICE_SETTLEMENT,
+            target_reference=str(invoice.id),
+            requested=Money(Decimal("107.50"), Currency("NGN", 2)),
+            provider_type="paystack",
+            channel="customer_selfcare",
+            opened_at=now,
+            expires_at=now + timedelta(hours=24),
+        ),
+    )
+    db_session.flush()
     with pytest.raises(StarterSettlementError):
         settle_starter_invoice_payment(
             db_session,
             invoice=invoice,
             link=link,
-            intent_reference=reference,
-            external_reference=external_reference,
+            intent_reference=reference2,
+            external_reference=f"paystack-txn-{uuid4().hex[:12]}",
             confirmed_amount=Decimal("107.50"),
             occurred_at=now,
             observed_at=now,
