@@ -2369,6 +2369,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="starter_billing_admin_line_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_ADMIN_LINE_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="admin-manual-invoice-line:{line_id}",
+        label="Starter Billing Admin Line Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="starter_billing_invoice_series_prefix",
         env_var="BILLING_STARTER_BILLING_INVOICE_SERIES_PREFIX",
         value_type=SettingValueType.string,

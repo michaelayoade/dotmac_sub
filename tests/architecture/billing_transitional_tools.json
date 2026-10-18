@@ -56,6 +56,13 @@
       "baseline_lines": 149,
       "deletion_trigger": "Delete with opening_export.py after the opening import is sealed in dotmac-billing.",
       "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing/opening_rehearsal_assembly.py",
+      "purpose": "Read-only census-to-observation assembly for the opening rehearsal (Step 5); translates the opening census preview onto the pinned dotmac-billing rehearsal observation contract.",
+      "baseline_lines": 169,
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived.",
+      "owner": "michaelayoade"
     }
   ]
 }

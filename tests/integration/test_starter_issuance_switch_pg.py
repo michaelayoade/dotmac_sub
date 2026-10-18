@@ -168,6 +168,106 @@ def test_eligible_draft_issues_through_starter(
     assert current.position.collectible_receivable.amount == Decimal("107.50")
 
 
+def test_homogeneous_multiline_draft_issues_through_starter(
+    db_session, subscriber, _seller_and_bank, _starter_series_isolation
+) -> None:
+    from app.models.billing import StarterInvoiceLineLink, TaxRate
+
+    subscriber.billing_mode = BillingMode.postpaid
+    subscriber.billing_address_line1 = "2 Customer Close"
+    subscriber.billing_city = "Abuja"
+    tax_rate = TaxRate(
+        name=f"Multiline VAT {uuid4().hex[:8]}",
+        code="vat_standard",
+        rate=Decimal("0.0750"),
+        is_active=True,
+    )
+    db_session.add(tax_rate)
+    db_session.flush()
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        subtotal=Decimal("150.00"),
+        tax_total=Decimal("11.25"),
+        total=Decimal("161.25"),
+        balance_due=Decimal("161.25"),
+        discount_amount=Decimal("0.00"),
+        due_at=datetime.now(UTC) + timedelta(days=30),
+        due_date_basis=InvoiceDueDateBasis.contract_terms,
+        due_date_basis_ref="multiline-proof-terms",
+        due_date_policy_version="1",
+        is_proforma=False,
+    )
+    invoice.lines = [
+        InvoiceLine(
+            description="Fiber access (monthly)",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            tax_rate_id=tax_rate.id,
+            tax_rate_code_snapshot="vat_standard",
+            tax_rate_percent_snapshot=Decimal("7.5000"),
+            tax_rate_snapshot_version=1,
+            tax_rate_is_active_snapshot=True,
+            is_active=True,
+        ),
+        InvoiceLine(
+            description="Router rental",
+            quantity=Decimal("2"),
+            unit_price=Decimal("25.00"),
+            amount=Decimal("50.00"),
+            tax_rate_id=tax_rate.id,
+            tax_rate_code_snapshot="vat_standard",
+            tax_rate_percent_snapshot=Decimal("7.5000"),
+            tax_rate_snapshot_version=1,
+            tax_rate_is_active_snapshot=True,
+            is_active=True,
+        ),
+    ]
+    db_session.add(invoice)
+    db_session.commit()
+    db_session.refresh(invoice)
+
+    issued = web_invoices.issue_invoice_from_detail(
+        db_session, invoice_id=invoice.id, actor_ref="user:multiline-proof"
+    )
+
+    assert issued.status is InvoiceStatus.issued
+    assert issued.invoice_number is not None
+    assert issued.invoice_number.startswith("S6A-")
+    link = db_session.execute(
+        select(StarterInvoiceLink).where(StarterInvoiceLink.invoice_id == invoice.id)
+    ).scalar_one()
+    assert link.document_id is not None
+    assert link.obligation_id is None
+    line_links = (
+        db_session.execute(
+            select(StarterInvoiceLineLink).where(
+                StarterInvoiceLineLink.invoice_line_id.in_(
+                    [line.id for line in invoice.lines]
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(line_links) == 2
+    assert len({row.obligation_id for row in line_links}) == 2
+
+    current = get_current_receivable_position(
+        db_session,
+        scope=TenantScope(OPERATOR_TENANT_ID),
+        request=GetCurrentReceivablePositionV1(
+            scope=TenantScope(OPERATOR_TENANT_ID),
+            billing_account_id=link.billing_account_id,
+            currency=Currency("NGN", 2),
+        ),
+    )
+    assert current.position is not None
+    assert current.position.collectible_receivable.amount == Decimal("161.25")
+
+
 def test_multiline_draft_stays_on_legacy_writer(
     db_session, subscriber, _seller_and_bank, _starter_series_isolation
 ) -> None:
