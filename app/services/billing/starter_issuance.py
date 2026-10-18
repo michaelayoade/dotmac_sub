@@ -16,7 +16,7 @@ no Starter-contract literal is inlined here.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from dotmac_billing import (
@@ -31,12 +31,12 @@ from dotmac_billing import (
     PostalAddressSnapshotV1,
     PresentationAssetReferenceV1,
     ServicePeriodEvidenceV1,
-    create_billing_account,
     get_invoice_document_fact,
     issue_rated_invoice,
 )
 from dotmac_billing.contracts import DueDateBasisStatus, ServicePeriodStatus
 from dotmac_billing.errors import BillingError
+from dotmac_billing.service import create_billing_account
 from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency, Money, MoneyError
 from dotmac_numbering import NumberingError, SeriesConfiguration, configure_series
@@ -100,21 +100,40 @@ class _Numbering:
     def __init__(self, policies: StarterBillingPolicies) -> None:
         self._policies = policies
 
-    def allocate(self, db: Session, **kwargs: object) -> str:
+    def allocate(
+        self,
+        db: Session,
+        *,
+        scope: TenantScope,
+        series_code: str,
+        reference_date: date,
+        allocated_by: str | None = None,
+    ) -> str:
         try:
-            return numbering_allocate(db, **kwargs).formatted_number
+            return numbering_allocate(
+                db,
+                scope=scope,
+                series_code=series_code,
+                reference_date=reference_date,
+                allocated_by=allocated_by,
+            ).formatted_number
         except NumberingError:
-            series_code = str(kwargs["series_code"])
             configure_series(
                 db,
-                scope=_SCOPE,
+                scope=scope,
                 configuration=SeriesConfiguration(
                     series_code=series_code,
                     prefix=self._policies.series_prefix(series_code),
                     start_value=self._policies.series_start_value,
                 ),
             )
-            return numbering_allocate(db, **kwargs).formatted_number
+            return numbering_allocate(
+                db,
+                scope=scope,
+                series_code=series_code,
+                reference_date=reference_date,
+                allocated_by=allocated_by,
+            ).formatted_number
 
 
 def _money(amount: Decimal, currency: Currency) -> Money:
@@ -148,7 +167,7 @@ def _country_code(policies: StarterBillingPolicies, *candidates: object) -> str:
 def _seller_snapshot(
     db: Session, policies: StarterBillingPolicies, subscriber_id: object
 ) -> PartyDocumentSnapshotV1 | None:
-    brand = resolve_brand(db, subscriber_id=subscriber_id)
+    brand = resolve_brand(db, subscriber_id=str(subscriber_id))
     address = brand.legal_address or {}
     line_one = _clean(address.get("street1"))
     city = _clean(address.get("city"))
@@ -281,6 +300,7 @@ def issue_admin_invoice_via_starter(
     customer = _customer_snapshot(policies, subscriber)
     bank = get_invoice_bank_details(db, currency=invoice.currency)
     assert seller is not None and customer is not None and bank is not None
+    assert invoice.due_at is not None  # eligibility proved presence
     currency = Currency(invoice.currency.upper(), 2)
     try:
         account = create_billing_account(

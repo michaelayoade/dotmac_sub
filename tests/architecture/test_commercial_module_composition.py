@@ -46,7 +46,7 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing", "PostalAddressSnapshotV1"),
         ("dotmac_billing", "PresentationAssetReferenceV1"),
         ("dotmac_billing", "ServicePeriodEvidenceV1"),
-        ("dotmac_billing", "create_billing_account"),
+        ("dotmac_billing.service", "create_billing_account"),
         ("dotmac_billing", "get_invoice_document_fact"),
         ("dotmac_billing", "issue_rated_invoice"),
         ("dotmac_billing.contracts", "DueDateBasisStatus"),

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -215,7 +216,9 @@ def accepted_confirmation_evidence(db: Session) -> frozenset[str]:
     return tokens
 
 
-def collection_timing_for_billing_mode(billing_mode: object) -> str:
+def collection_timing_for_billing_mode(
+    billing_mode: object,
+) -> Literal["advance", "arrears"]:
     """Map Sub billing mode to Starter collection timing.
 
     Prepaid service is paid in advance; postpaid service is billed in
