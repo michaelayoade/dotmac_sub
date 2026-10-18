@@ -12811,6 +12811,46 @@ def reconcile_prepaid_draft_invoice(
     )
 
 
+def _record_funding_change_exception(
+    db: Session,
+    *,
+    account_id: UUID,
+    invoice_id: UUID,
+    preview: PrepaidDraftReconciliationPreview,
+    reason: str,
+    detail: str | None,
+    only_if_absent: bool = False,
+) -> None:
+    """Record one funding-change review item for a blocked draft.
+
+    ``only_if_absent`` never overwrites, reopens or re-notifies an existing row
+    (used for stale drafts, which every later payment would otherwise touch).
+    """
+
+    if only_if_absent and db.scalar(
+        select(PrepaidDraftReconciliationException.id).where(
+            PrepaidDraftReconciliationException.invoice_id == invoice_id
+        )
+    ):
+        return
+    record_prepaid_draft_reconciliation_exception(
+        db,
+        account_id=account_id,
+        invoice_id=invoice_id,
+        invoice_number=preview.invoice_number,
+        currency=preview.currency,
+        required_amount=preview.balance_due,
+        payment_backed_amount=preview.payment_backed_credit,
+        opening_funding_amount=preview.opening_funding_required,
+        preview_fingerprint=preview.fingerprint,
+        reason=reason,
+        subscription_id=(
+            preview.subscription_ids[0] if len(preview.subscription_ids) == 1 else None
+        ),
+        detail=detail,
+    )
+
+
 def stage_prepaid_draft_after_funding_change(
     db: Session,
     command: FundingChangeDraftCommand,
@@ -12854,48 +12894,43 @@ def stage_prepaid_draft_after_funding_change(
         )
     )
     # Stale drafts never receive new money: a draft whose service period ended
-    # before this funding event describes history, not the period the payment
-    # is buying. Record it for review and leave the money as account credit so
-    # the caller can continue to the current-period renewal.
+    # before this funding event (or that has no service period at all) is not
+    # the period this payment buys. Record it once for review and leave the
+    # money as account credit so the caller continues to the current-period
+    # renewal. Duplicate closure spends no money and the reviewed historical
+    # partial lane is already review-only (it still blocks renewal: the
+    # documented, tested behaviour), so neither is excluded.
     stale_count = 0
     live_ids: list[UUID] = []
     for candidate_id in invoice_ids:
         candidate = db.get(Invoice, candidate_id)
         period_end = candidate.billing_period_end if candidate is not None else None
-        stale_preview = (
+        no_period = period_end is None
+        stale = period_end is not None and _utc(period_end) < effective_at
+        candidate_preview = (
             preview_prepaid_draft_reconciliation(db, candidate_id)
-            if period_end is not None and _utc(period_end) < effective_at
+            if stale or no_period
             else None
         )
-        # Duplicate closure spends no money and the reviewed historical
-        # partial lane is already review-only, so neither is excluded here.
         if (
-            stale_preview is not None
-            and stale_preview.recommended_action
+            candidate_preview is not None
+            and candidate_preview.recommended_action
             is not PrepaidDraftAction.void_duplicate
-            and stale_preview.disposition
+            and candidate_preview.disposition
             is not PrepaidDraftDisposition.reviewed_historical_partial_fundable
         ):
-            record_prepaid_draft_reconciliation_exception(
+            _record_funding_change_exception(
                 db,
                 account_id=account_id,
                 invoice_id=candidate_id,
-                invoice_number=stale_preview.invoice_number,
-                currency=stale_preview.currency,
-                required_amount=stale_preview.balance_due,
-                payment_backed_amount=stale_preview.payment_backed_credit,
-                opening_funding_amount=stale_preview.opening_funding_required,
-                preview_fingerprint=stale_preview.fingerprint,
-                reason="stale_draft_period_ended_before_funding",
-                subscription_id=(
-                    stale_preview.subscription_ids[0]
-                    if len(stale_preview.subscription_ids) == 1
-                    else None
+                preview=candidate_preview,
+                reason=(
+                    "draft_without_service_period"
+                    if no_period
+                    else "stale_draft_period_ended_before_funding"
                 ),
-                detail=(
-                    "Draft service period ended before the funding event; "
-                    "new funding was not applied to it."
-                ),
+                detail="New funding was not applied to this draft.",
+                only_if_absent=True,
             )
             stale_count += 1
         else:
@@ -12913,25 +12948,12 @@ def stage_prepaid_draft_after_funding_change(
         )
     if len(invoice_ids) != 1:
         for blocked_invoice_id in invoice_ids:
-            blocked_preview = preview_prepaid_draft_reconciliation(
-                db, blocked_invoice_id
-            )
-            record_prepaid_draft_reconciliation_exception(
+            _record_funding_change_exception(
                 db,
                 account_id=account_id,
                 invoice_id=blocked_invoice_id,
-                invoice_number=blocked_preview.invoice_number,
-                currency=blocked_preview.currency,
-                required_amount=blocked_preview.balance_due,
-                payment_backed_amount=blocked_preview.payment_backed_credit,
-                opening_funding_amount=blocked_preview.opening_funding_required,
-                preview_fingerprint=blocked_preview.fingerprint,
+                preview=preview_prepaid_draft_reconciliation(db, blocked_invoice_id),
                 reason="multiple_draft_candidates",
-                subscription_id=(
-                    blocked_preview.subscription_ids[0]
-                    if len(blocked_preview.subscription_ids) == 1
-                    else None
-                ),
                 detail=f"{len(invoice_ids)} draft invoices found for this account/currency",
             )
         return FundingChangeDraftResult(
@@ -12961,22 +12983,12 @@ def stage_prepaid_draft_after_funding_change(
         PrepaidDraftAction.settle_paid,
         PrepaidDraftAction.void_duplicate,
     }:
-        record_prepaid_draft_reconciliation_exception(
+        _record_funding_change_exception(
             db,
             account_id=account_id,
             invoice_id=invoice_ids[0],
-            invoice_number=preview.invoice_number,
-            currency=preview.currency,
-            required_amount=preview.balance_due,
-            payment_backed_amount=preview.payment_backed_credit,
-            opening_funding_amount=preview.opening_funding_required,
-            preview_fingerprint=preview.fingerprint,
+            preview=preview,
             reason=f"draft_{preview.disposition.value}",
-            subscription_id=(
-                preview.subscription_ids[0]
-                if len(preview.subscription_ids) == 1
-                else None
-            ),
             detail=preview.reason,
         )
         return FundingChangeDraftResult(
