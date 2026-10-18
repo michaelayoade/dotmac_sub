@@ -36,6 +36,7 @@ _POLICY_DEFAULTS = {
     "starter_billing_default_unit_code": "unit",
     "starter_payments_accepted_evidence": "dotmac-payments:confirmed-cash-v1",
     "starter_billing_admin_source_fact_template": "admin-manual-invoice:{invoice_id}",
+    "starter_billing_admin_line_source_fact_template": "admin-manual-invoice-line:{line_id}",
     "starter_billing_invoice_series_prefix": "INV",
     "starter_billing_credit_note_series_prefix": "CN",
     "starter_billing_default_country_code": "NGA",
@@ -107,7 +108,7 @@ def test_manual_number_stays_legacy() -> None:
     assert reason is not None and "manually numbered" in reason
 
 
-def test_discount_and_quantity_stay_legacy() -> None:
+def test_discount_and_unreconciled_quantity_stay_legacy() -> None:
     discounted = issuance.eligibility_reason(
         _Db(_subscriber()),
         _invoice(discount_amount=Decimal("5.00")),  # type: ignore[arg-type]
@@ -116,7 +117,63 @@ def test_discount_and_quantity_stay_legacy() -> None:
     invoice = _invoice()
     invoice.lines[0].quantity = Decimal("2")  # type: ignore[attr-defined]
     quantity = issuance.eligibility_reason(_Db(_subscriber()), invoice)  # type: ignore[arg-type]
-    assert quantity is not None and "quantity" in quantity
+    assert quantity is not None and "reconcile" in quantity
+
+
+def _multiline_invoice(**overrides) -> Invoice:
+    invoice = _invoice(
+        subtotal=Decimal("150.00"),
+        total=Decimal("150.00"),
+        balance_due=Decimal("150.00"),
+        **overrides,
+    )
+    invoice.lines = [  # type: ignore[attr-defined]
+        InvoiceLine(
+            description="Access",
+            quantity=Decimal("1"),
+            unit_price=Decimal("100.00"),
+            amount=Decimal("100.00"),
+            is_active=True,
+        ),
+        InvoiceLine(
+            description="Router rental",
+            quantity=Decimal("2"),
+            unit_price=Decimal("25.00"),
+            amount=Decimal("50.00"),
+            is_active=True,
+        ),
+    ]
+    return invoice
+
+
+def test_heterogeneous_multiline_stays_legacy() -> None:
+    invoice = _multiline_invoice()
+    invoice.lines[1].subscription_id = uuid4()  # type: ignore[attr-defined]
+    reason = issuance.eligibility_reason(_Db(_subscriber()), invoice)  # type: ignore[arg-type]
+    assert reason is not None and "multiple services" in reason
+
+
+def test_zero_amount_line_stays_legacy() -> None:
+    invoice = _multiline_invoice()
+    invoice.lines[1].quantity = Decimal("1")  # type: ignore[attr-defined]
+    invoice.lines[1].unit_price = Decimal("0.00")  # type: ignore[attr-defined]
+    invoice.lines[1].amount = Decimal("0.00")  # type: ignore[attr-defined]
+    reason = issuance.eligibility_reason(_Db(_subscriber()), invoice)  # type: ignore[arg-type]
+    assert reason is not None and "non-positive" in reason
+
+
+def test_homogeneous_multiline_is_eligible(monkeypatch) -> None:
+    monkeypatch.setattr(
+        starter_policies,
+        "resolve_value",
+        lambda _db, _domain, key: _POLICY_DEFAULTS[key],
+    )
+    monkeypatch.setattr(issuance, "_seller_snapshot", lambda *_a, **_k: object())
+    monkeypatch.setattr(
+        issuance, "get_invoice_bank_details", lambda *_a, **_k: object()
+    )
+    reason = issuance.eligibility_reason(_Db(_subscriber()), _multiline_invoice())  # type: ignore[arg-type]
+    assert reason is None
 
 
 def test_prepaid_stays_legacy() -> None:

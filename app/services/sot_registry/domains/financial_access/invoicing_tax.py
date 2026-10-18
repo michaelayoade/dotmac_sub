@@ -3601,6 +3601,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "Starter-issued admin invoice mirror and structural link",
             "Starter issuance eligibility decision for admin drafts",
+            "Starter-issued multi-line admin invoice line links",
         ),
         depends_on=(
             "control.settings_spec",
@@ -3644,6 +3645,18 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical collection bank account",
                     ),
                 ),
+                ConcernContract(
+                    name="Starter-issued multi-line admin invoice line links",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "eligible admin draft invoice",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                    canonical_writer="financial.starter_issuance",
+                ),
             ),
             authoritative_inputs=(
                 AuthorityInput(
@@ -3651,9 +3664,10 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="financial.invoices",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "draft invoice with reconciled single quantity-one "
-                        "line, frozen tax snapshot when taxed, due date, and "
-                        "postpaid subscriber billing mode"
+                        "draft invoice with reconciled homogeneous lines "
+                        "(one service exposure, per-line frozen tax "
+                        "snapshots whose derived taxes reconcile), due "
+                        "date, and postpaid subscriber billing mode"
                     ),
                 ),
                 AuthorityInput(
