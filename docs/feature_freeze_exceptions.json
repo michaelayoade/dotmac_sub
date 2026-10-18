@@ -163,13 +163,13 @@
     },
     {
       "id": "THIN-OPENING-REHEARSAL-ASSEMBLY",
-      "kind": "feature-exception",
+      "kind": "transitional-tool",
       "paths": [
         "app/services/billing/opening_rehearsal_assembly.py"
       ],
       "reason": "Michael directed Step 5 (opening-balance rehearsal) to run in parallel with the remaining Step 4 lanes on 2026-10-18. This adds the read-only census-to-observation assembly that translates Sub's opening census preview onto the pinned dotmac-billing rehearsal observation contract, field for field, so rehearsal runs can count blockers into the manual exceptions queue. It verifies nothing, qualifies no cash, invents no originals, and writes no money state; manifest/command assembly and verifiers follow as their own slices.",
-      "starter_contract": "Published dotmac-billing 0.1.0a8 OpeningSubObservationV2 and observed-evidence contracts (opening_rehearsal_contracts), consumed exactly as registered in the commercial composition import allowlist.",
-      "approved_by": "michaelayoade"
+      "approved_by": "michaelayoade",
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived."
     }
   ]
 }
