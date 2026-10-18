@@ -2102,6 +2102,49 @@ class TopupIntent(Base):
     provider = relationship("PaymentProvider")
 
 
+class StarterInvoiceLink(Base):
+    """Structural identity link from a Sub invoice to its Starter document.
+
+    Thin-client issuance (ADR 0031) records the Starter billing account,
+    obligation and document identities returned by the pinned
+    ``dotmac-billing`` issuance receipt. This is identity, never financial
+    state (ADR 0007); balances and document facts are read from Starter.
+    Retires with the legacy Invoice writer at the cutover seal.
+    """
+
+    __tablename__ = "starter_invoice_links"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", name="uq_starter_invoice_link_invoice"),
+        UniqueConstraint("tenant_id", "id", name="uq_starter_invoice_link_scope"),
+        UniqueConstraint("document_id", name="uq_starter_invoice_link_document"),
+        Index(
+            "ix_starter_invoice_links_billing_account",
+            "billing_account_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    obligation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    source_fact_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    invoice = relationship("Invoice")
+
+
 class PaymentAllocation(Base):
     __tablename__ = "payment_allocations"
     __table_args__ = (
