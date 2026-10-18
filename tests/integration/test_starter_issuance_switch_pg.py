@@ -23,7 +23,13 @@ from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency
 from sqlalchemy import select
 
-from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, StarterInvoiceLink
+from app.models.billing import (
+    Invoice,
+    InvoiceDueDateBasis,
+    InvoiceLine,
+    InvoiceStatus,
+    StarterInvoiceLink,
+)
 from app.models.catalog import BillingMode
 from app.services import web_billing_invoices as web_invoices
 from app.services.billing import starter_policies
@@ -103,6 +109,9 @@ def _draft(db_session, subscriber, *, total: str = "107.50") -> Invoice:
         balance_due=Decimal(total),
         discount_amount=Decimal("0.00"),
         due_at=datetime.now(UTC) + timedelta(days=30),
+        due_date_basis=InvoiceDueDateBasis.contract_terms,
+        due_date_basis_ref="slice6a-proof-terms",
+        due_date_policy_version="1",
         is_proforma=False,
     )
     invoice.lines = [

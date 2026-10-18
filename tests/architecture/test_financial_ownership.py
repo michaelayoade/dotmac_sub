@@ -135,6 +135,10 @@ APPROVED_PAYMENT_ARRANGEMENT_WRITERS = {Path("app/services/payment_arrangements.
 APPROVED_INVOICE_LIFECYCLE_WRITERS = {
     Path("app/services/billing/_common.py"),
     Path("app/services/billing/invoices.py"),
+    # Slice 6a (ADR 0031): the Starter issuance lane mirrors the Starter
+    # document's issued status/number onto the Sub row; Starter billing is
+    # the ledger authority and this module writes no Sub ledger state.
+    Path("app/services/billing/starter_issuance.py"),
 }
 
 

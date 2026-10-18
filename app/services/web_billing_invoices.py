@@ -371,7 +371,7 @@ def issue_invoice_from_detail(
     # write; a Starter refusal propagates and never falls back here.
     if starter_issuance_service.eligibility_reason(db, invoice) is None:
         starter_issuance_service.issue_admin_invoice_via_starter(
-            db, invoice=invoice, actor_ref=actor_ref
+            db, invoice=invoice, actor_ref=actor_ref, announce=announce
         )
         db.commit()
         db.refresh(invoice)

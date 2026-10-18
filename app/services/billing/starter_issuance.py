@@ -52,8 +52,12 @@ from app.services.billing.starter_policies import (
     percent_to_fraction,
     resolve_starter_billing_policies,
 )
+from app.schemas.audit import AuditEventCreate
+from app.services.audit import AuditEvents
 from app.services.brand_profiles import resolve_brand
 from app.services.domain_errors import DomainError
+from app.services.events import emit_event
+from app.services.events.types import EventType
 from app.services.invoice_bank_details import get_invoice_bank_details
 from app.services.operator_tenant import OPERATOR_TENANT_ID
 
@@ -280,7 +284,7 @@ def _service_period(invoice: Invoice) -> ServicePeriodEvidenceV1:
 
 
 def issue_admin_invoice_via_starter(
-    db: Session, *, invoice: Invoice, actor_ref: str
+    db: Session, *, invoice: Invoice, actor_ref: str, announce: bool = False
 ) -> StarterInvoiceLink:
     """Issue one eligible admin draft through Starter as sole ledger writer.
 
@@ -442,5 +446,43 @@ def issue_admin_invoice_via_starter(
         source_fact_id=policies.admin_source_fact_id(invoice.id),
     )
     db.add(link)
+    AuditEvents.stage(
+        db,
+        AuditEventCreate(
+            action="issue_invoice_system",
+            entity_type="invoice",
+            entity_id=str(invoice.id),
+            metadata_={
+                "from_status": InvoiceStatus.draft.value,
+                "to_status": InvoiceStatus.issued.value,
+                "reason": "admin_invoice_detail_issue",
+                "issued_at": issued_at.isoformat(),
+                "issuance_lane": "starter",
+                "actor_ref": actor_ref,
+                "starter_document_id": str(issued.invoice_id),
+                "starter_obligation_id": str(issued.obligation_id),
+                "source_fact_id": link.source_fact_id,
+            },
+        ),
+    )
+    if announce:
+        emit_event(
+            db,
+            EventType.invoice_sent,
+            {
+                "invoice_id": str(invoice.id),
+                "invoice_number": invoice.invoice_number,
+                "amount": str(invoice.total),
+                "total": str(invoice.total),
+                "due_date": (
+                    invoice.due_at.date().isoformat() if invoice.due_at else None
+                ),
+                "currency": invoice.currency,
+                "from_status": InvoiceStatus.draft.value,
+                "to_status": InvoiceStatus.issued.value,
+            },
+            account_id=invoice.account_id,
+            invoice_id=invoice.id,
+        )
     db.flush()
     return link
