@@ -250,7 +250,10 @@ from app.tasks.usage import (
     reap_stale_radius_sessions,
     run_usage_rating,
 )
-from app.tasks.vacation_holds import resume_expired_holds
+from app.tasks.vacation_holds import (
+    resume_expired_holds,
+    resume_ticket_resolved_pauses,
+)
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.wireguard import (
     cleanup_connection_logs as cleanup_wireguard_logs,
@@ -411,6 +414,7 @@ __all__ = [
     "sync_inventory_devices_to_monitoring",
     "retired_detect_sla_breaches",
     "resume_expired_holds",
+    "resume_ticket_resolved_pauses",
     # OLT queue processing
     "execute_due_profile_sync_tasks",
     "refresh_monitoring_coverage",

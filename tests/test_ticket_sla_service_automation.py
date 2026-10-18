@@ -601,3 +601,104 @@ def test_destination_change_invalidates_merge_aware_resume_preview(
         )
 
     assert exc_info.value.code.endswith(".stale_resume_preview")
+
+
+def _factory(session):
+    """Share the test session; close() only ends the transaction."""
+
+    session.close = session.rollback  # type: ignore[method-assign]
+    return lambda: session
+
+
+def _new_auto_pause(db_session, subscriber, status=TicketStatus.open.value):
+    from dataclasses import replace
+
+    ticket = Ticket(
+        number=f"AUTO-{uuid4().hex[:8]}",
+        title="Service fault",
+        status=status,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(ticket)
+    db_session.flush()
+    command = replace(
+        _pause_command(ticket.id),
+        resume_policy=SubscriptionPauseResumePolicy.auto_on_ticket_resolution,
+    )
+    _seed_authoritative_breach(db_session, ticket_id=ticket.id, command=command)
+    outcome = (
+        ticket_sla_service_automation.pause_unique_active_service_for_ticket_sla_breach(
+            db_session, command
+        )
+    )
+    return ticket, outcome
+
+
+def test_auto_policy_pause_stays_until_ticket_resolves(
+    db_session, subscriber, active_subscription
+):
+    ticket, outcome = _new_auto_pause(db_session, subscriber)
+    ticket_id = ticket.id
+
+    counts = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session)
+    )
+
+    assert counts["resumed"] == 0
+    assert counts["skipped"] == 1
+    db_session.refresh(active_subscription)
+    assert active_subscription.status.value == "paused"
+    assert db_session.get(Ticket, ticket_id).status == TicketStatus.open.value
+
+
+@pytest.mark.parametrize(
+    "final_status", [TicketStatus.closed.value, TicketStatus.canceled.value]
+)
+def test_auto_policy_pause_resumes_and_extends_billing_when_ticket_resolves(
+    db_session, subscriber, active_subscription, final_status
+):
+    ticket, outcome = _new_auto_pause(db_session, subscriber)
+    original_anchor = active_subscription.next_billing_at
+    ticket.status = final_status
+    db_session.commit()
+
+    now = datetime.now(UTC) + timedelta(hours=2)
+    counts = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session), now=now
+    )
+
+    assert counts == {"total": 1, "resumed": 1, "skipped": 0, "failed": 0}
+    db_session.refresh(active_subscription)
+    assert active_subscription.status.value == "active"
+    if original_anchor is not None:
+        assert active_subscription.next_billing_at > original_anchor
+
+    again = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session), now=now
+    )
+    assert again["total"] == 0
+
+
+def test_manual_policy_pause_is_not_auto_resumed(
+    db_session, subscriber, active_subscription
+):
+    ticket = Ticket(
+        title="Manual policy",
+        status=TicketStatus.closed.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(ticket)
+    db_session.flush()
+    ticket_id = ticket.id
+    db_session.commit()
+    _pause_service_for_ticket_closed = _pause_command(ticket_id)
+    assert (
+        _pause_service_for_ticket_closed.resume_policy
+        is SubscriptionPauseResumePolicy.manual_after_ticket_resolution
+    )
+    counts = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session)
+    )
+    assert counts["total"] == 0

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -39,6 +42,8 @@ from app.services.prepaid_service_coverage import (
     PrepaidPauseCompensationCoverageQuery,
     resolve_prepaid_pause_compensation_coverage,
 )
+
+logger = logging.getLogger(__name__)
 
 OWNER = "support.ticket_sla_service_consequence"
 PAUSE_CONCERN = "ticket resolution SLA-breach service pause consequence"
@@ -539,6 +544,7 @@ def preview_ticket_service_resume(
     if effective_ticket_status not in {
         TicketStatus.pending_confirmation,
         TicketStatus.closed,
+        TicketStatus.canceled,
     }:
         blocking.append("ticket_is_not_resolved")
     if subscription.status != SubscriptionStatus.paused:
@@ -1061,7 +1067,76 @@ def resume_ticket_paused_service(
     )
 
 
+def auto_resume_resolved_ticket_pauses(
+    session_factory: Callable[[], Session],
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Resume active ``auto_on_ticket_resolution`` pauses whose ticket resolved.
+
+    Sweep adapter over the existing owner path: each cause is previewed and
+    resumed through ``resume_ticket_paused_service`` with a fingerprint computed
+    in-process. Every step uses a fresh transaction-free session, so the owner
+    command owns its transaction. Ineligible causes (open ticket, prepaid
+    coverage blockers) are left for manual handling; one failure never blocks
+    the others.
+    """
+
+    resumed_at = now or datetime.now(UTC)
+    with closing(session_factory()) as lookup:
+        cause_ids = tuple(
+            lookup.scalars(
+                select(SubscriptionPauseCause.id).where(
+                    SubscriptionPauseCause.status
+                    == SubscriptionPauseCauseStatus.active.value,
+                    SubscriptionPauseCause.reason_code
+                    == SubscriptionPauseReason.ticket_resolution_sla_breach.value,
+                    SubscriptionPauseCause.resume_policy
+                    == SubscriptionPauseResumePolicy.auto_on_ticket_resolution.value,
+                    SubscriptionPauseCause.ticket_id.isnot(None),
+                )
+            ).all()
+        )
+    counts = {"total": len(cause_ids), "resumed": 0, "skipped": 0, "failed": 0}
+    for cause_id in cause_ids:
+        try:
+            with closing(session_factory()) as preview_db:
+                preview = preview_ticket_service_resume(
+                    preview_db, cause_id=cause_id, proposed_resumed_at=resumed_at
+                )
+            if not preview.eligible:
+                counts["skipped"] += 1
+                continue
+            context = CommandContext.system(
+                actor="system:ticket_pause_auto_resume",
+                scope=f"subscription:{preview.subscription_id}",
+                reason="Linked ticket resolved; automatic resume of SLA pause",
+                idempotency_key=f"ticket-pause-auto-resume:{cause_id}",
+            )
+            with closing(session_factory()) as command_db:
+                resume_ticket_paused_service(
+                    command_db,
+                    ResumeTicketPausedServiceCommand(
+                        subscription_id=preview.subscription_id,
+                        cause_id=cause_id,
+                        preview_fingerprint=preview.fingerprint,
+                        resumed_at=resumed_at,
+                        actor=context.actor,
+                        reason=context.reason,
+                        context=context,
+                    ),
+                )
+            counts["resumed"] += 1
+        except Exception:
+            logger.warning(
+                "Ticket pause auto-resume failed for cause %s", cause_id, exc_info=True
+            )
+            counts["failed"] += 1
+    return counts
+
+
 __all__ = [
+    "auto_resume_resolved_ticket_pauses",
     "PauseTicketServiceForSlaBreachCommand",
     "PauseTicketServiceForSlaBreachOutcome",
     "ReconcileTicketPausedPrepaidServiceCommand",

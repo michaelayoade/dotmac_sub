@@ -256,7 +256,7 @@ The retired `support.ticket.suspend_unique_active_service` key remains
 runtime-readable only for immutable published rule versions created before the
 cutover. It is hidden from the builder, rejected from new or draft definitions,
 and its compatibility executor delegates to the same canonical Pause owner with
-the fixed `unique_active_subscription`, `manual_after_ticket_resolution`, and
+the fixed `unique_active_subscription`, `auto_on_ticket_resolution`, and
 `extend_by_effective_pause_duration` policies. It never creates a suspension or
 an enforcement lock. This preserves historical rule identity without preserving
 the retired business decision.
@@ -279,8 +279,11 @@ and whether the action is published remain operator-managed configuration.
 No workflow is seeded or published by deployment.
 
 Resume is an explicit administrative command from the subscription detail.
-It is offered only after the linked Ticket reaches `pending_confirmation` or
-`closed`. A read-only preview shows the exact interval and projected billing
+It is offered only after the linked Ticket reaches `pending_confirmation`,
+`closed` or `canceled`. A cause created with resume policy
+`auto_on_ticket_resolution` is additionally released by the
+`ticket_pause_auto_resume` sweep through the same owner command once the
+ticket resolves (ineligible causes stay for manual handling). A read-only preview shows the exact interval and projected billing
 anchor and fingerprints all eligibility evidence. Confirmation rechecks that
 fingerprint, releases only the selected cause, and resumes only after the final
 cause is gone. The billing anchor moves once by `[effective_at, resumed_at)`;

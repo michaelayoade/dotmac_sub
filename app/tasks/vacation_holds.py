@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
 
 
+@celery_app.task(name="app.tasks.vacation_holds.resume_ticket_resolved_pauses")
+def resume_ticket_resolved_pauses() -> dict:
+    """Resume SLA ticket pauses (auto_on_ticket_resolution) whose ticket resolved."""
+    from app.services.ticket_sla_service_automation import (
+        auto_resume_resolved_ticket_pauses,
+    )
+
+    return auto_resume_resolved_ticket_pauses(SessionLocal)
+
+
 @celery_app.task(name="app.tasks.vacation_holds.resume_expired_holds")
 def resume_expired_holds() -> dict:
     """Resume subscriptions with expired vacation holds.
