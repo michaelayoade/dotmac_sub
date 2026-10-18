@@ -22,6 +22,15 @@ _SHADOW_IMPORTS = {
         ("dotmac_payments", "PaymentPurpose"),
         ("dotmac_payments", "get_payment_intent_v1"),
     },
+    # Thin-client adoption (ADR 0020): invoice checkout opens the module
+    # intent at creation. This is the first registered runtime writer
+    # import; it is exact and path-bound like the shadow reads above.
+    "app/services/gateway_topup_intents.py": {
+        ("dotmac_payments", "OpenPaymentIntent"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "open_payment_intent"),
+    },
     "app/services/dotmac_erp/billing_adapter.py": {
         ("dotmac_billing", "AccountingFactV1"),
     },

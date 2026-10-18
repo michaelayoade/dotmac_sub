@@ -81,6 +81,20 @@ def _upsert_billing_setting(db_session, key: str, value: str) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _stub_module_intent_open(monkeypatch) -> None:
+    """Unit lane has no mod_payments schema; stub the module intent open.
+
+    Real cross-module behavior is proven on migrated PostgreSQL in
+    tests/integration/test_gateway_invoice_intent_module_pg.py.
+    """
+
+    monkeypatch.setattr(
+        "app.services.gateway_topup_intents._open_module_invoice_intent",
+        lambda _db, _intent: None,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _configure_paystack_route(db_session, monkeypatch):
     monkeypatch.setenv("PAYSTACK_TEST_SECRET", "sk_test_portal")
     monkeypatch.setenv("PAYSTACK_TEST_PUBLIC", "pk_test_portal")
