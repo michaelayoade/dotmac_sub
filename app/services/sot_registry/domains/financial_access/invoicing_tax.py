@@ -3594,4 +3594,194 @@ SERVICES: tuple[SOTService, ...] = (
             ),
         ),
     ),
+    SOTService(
+        name="financial.starter_issuance",
+        module="app.services.billing.starter_issuance",
+        implementation_modules=("app.services.web_billing_invoices",),
+        owns=(
+            "Starter-issued admin invoice mirror and structural link",
+            "Starter issuance eligibility decision for admin drafts",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "customer.accounts",
+            "customer.branding",
+            "financial.collection_accounts",
+            "financial.invoices",
+        ),
+        notes=(
+            "Slice 6a thin-client lane (ADR 0031): eligible admin drafts are "
+            "issued by pinned dotmac-billing as sole ledger writer. Sub "
+            "retains only the invoice-row mirror (number, status, issued_at), "
+            "the structural StarterInvoiceLink, the audit row, and the "
+            "announce event. app.services.web_billing_invoices is an "
+            "implementation module because its only direct persistence "
+            "mutation is committing this lane's transaction; its remaining "
+            "flows delegate to incumbent owners."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Starter-issued admin invoice mirror and structural link",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "eligible admin draft invoice",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                    canonical_writer="financial.starter_issuance",
+                ),
+                ConcernContract(
+                    name="Starter issuance eligibility decision for admin drafts",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "eligible admin draft invoice",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="eligible admin draft invoice",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "draft invoice with reconciled single quantity-one "
+                        "line, frozen tax snapshot when taxed, due date, and "
+                        "postpaid subscriber billing mode"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter billing policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): account-ref template, "
+                        "series, tax policy, document profile, due terms"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical seller legal identity",
+                    owner="customer.branding",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "resolved brand profile legal name and legal "
+                        "address for the issuing subscriber scope"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical subscriber billing identity",
+                    owner="customer.accounts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "subscriber legal/billing name and billing or "
+                        "contact postal address frozen into the Starter "
+                        "document party snapshot"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical collection bank account",
+                    owner="financial.collection_accounts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active collection account for the invoice currency "
+                        "resolved as document payment instructions"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The caller owns the transaction: Starter obligation, "
+                    "document, numbering allocation, Sub mirror, link, "
+                    "audit row, and announce event commit or roll back "
+                    "together. A Starter refusal propagates and never "
+                    "falls back to the legacy writer for that draft."
+                ),
+                locking=(
+                    "No Sub-side row locks beyond the caller's invoice "
+                    "load; Starter billing and numbering apply their own "
+                    "writer fences inside the same transaction."
+                ),
+                idempotency=(
+                    "The obligation source fact and correlation derive "
+                    "from the Sub invoice identity, so a replay after "
+                    "rollback re-presents identical evidence; a committed "
+                    "issuance leaves the draft issued and ineligible."
+                ),
+                retries=(
+                    "Callers retry the whole issuance after rollback with "
+                    "the same draft; partial Starter writes never survive "
+                    "a failed attempt."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_issuance.amount_unrepresentable",
+                    "financial.starter_issuance.ineligible",
+                    "financial.starter_issuance.source_kind_undeclared",
+                    "financial.starter_issuance.starter_refused",
+                ),
+                mapping_owner="admin billing invoice adapters",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "incomplete seller, customer, or bank document evidence",
+                    "unreconciled totals or missing frozen tax snapshot",
+                    "Starter billing refusal after eligibility was granted",
+                    "undeclared obligation source kind",
+                ),
+            ),
+            events=EventContract(
+                event_types=("invoice.sent",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 payload is identical to the legacy "
+                    "issue-with-announce event: invoice identity, number, "
+                    "total, due date, currency, and status transition."
+                ),
+                replay=(
+                    "Replay re-notifies from the committed mirror row; "
+                    "the Starter document remains the ledger authority."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.invoices native draft issuance",
+                new_owner="financial.starter_issuance",
+                verification=(
+                    "Eligibility unit tests and the migrated-PostgreSQL "
+                    "switch proof: eligible drafts carry Starter numbers "
+                    "and links with exact collectible position; "
+                    "ineligible drafts stay on the legacy writer."
+                ),
+                cutover_gate=(
+                    "ADR 0031 composable policies resolve from settings "
+                    "and the numbering series is seeded past the legacy "
+                    "maximum before production enablement."
+                ),
+                fallback_retirement=(
+                    "Eligibility narrows as lanes migrate; the legacy "
+                    "writer is deleted at the money-pack cutover, never "
+                    "used as a per-draft fallback after eligibility."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_issuance_eligibility.py",
+                "tests/integration/test_starter_issuance_switch_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
 )

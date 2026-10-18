@@ -33,6 +33,11 @@ _DEFAULTS = {
     "starter_billing_default_timezone": "Africa/Lagos",
     "starter_billing_default_unit_code": "unit",
     "starter_payments_accepted_evidence": "dotmac-payments:confirmed-cash-v1",
+    "starter_billing_admin_source_fact_template": "admin-manual-invoice:{invoice_id}",
+    "starter_billing_invoice_series_prefix": "INV",
+    "starter_billing_credit_note_series_prefix": "CN",
+    "starter_billing_default_country_code": "NGA",
+    "starter_billing_series_start_value": 1,
 }
 
 
@@ -122,6 +127,20 @@ def test_due_terms_code_and_percent_conversion() -> None:
         policies.due_terms_code(-1)
     assert policies.percent_to_fraction(Decimal("7.50")) == Decimal("0.075")
     assert policies.percent_to_fraction(Decimal("20.00")) == Decimal("0.2")
+
+
+def test_issuance_policy_additions_resolve(settings) -> None:
+    resolved = policies.resolve_starter_billing_policies(None)  # type: ignore[arg-type]
+    assert resolved.series_start_value == 1
+    assert resolved.series_prefix("invoice") == "INV"
+    assert resolved.series_prefix("credit-note") == "CN"
+    assert resolved.admin_source_fact_id(UUID(int=4)) == (
+        f"admin-manual-invoice:{UUID(int=4)}"
+    )
+    assert resolved.default_country_code == "NGA"
+    settings["starter_billing_series_start_value"] = 0
+    with pytest.raises(policies.StarterBillingPolicyError):
+        policies.resolve_starter_billing_policies(None)  # type: ignore[arg-type]
 
 
 def test_accepted_evidence_is_a_settings_driven_set(settings) -> None:

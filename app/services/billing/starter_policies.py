@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -87,9 +88,31 @@ class StarterBillingPolicies:
     default_locale: str
     default_timezone: str
     default_unit_code: str
+    admin_source_fact_template: str
+    invoice_series_prefix: str
+    credit_note_series_prefix: str
+    default_country_code: str
+    series_start_value: int
 
     def account_ref(self, subscriber_id: UUID) -> str:
         return account_ref_policy(self.account_ref_template, subscriber_id)
+
+    def series_prefix(self, series_code: str) -> str:
+        if series_code == self.credit_note_series:
+            return self.credit_note_series_prefix
+        return self.invoice_series_prefix
+
+    def admin_source_fact_id(self, invoice_id: UUID) -> str:
+        rendered = self.admin_source_fact_template.replace(
+            "{invoice_id}", str(invoice_id)
+        )
+        if rendered == self.admin_source_fact_template or "{" in rendered:
+            raise _error(
+                "configuration_invalid",
+                "Admin source fact template must contain {invoice_id}",
+                setting="starter_billing_admin_source_fact_template",
+            )
+        return rendered
 
     def admin_contract_line_ref(self, line_id: UUID) -> str:
         rendered = self.admin_contract_line_template.replace("{line_id}", str(line_id))
@@ -129,7 +152,41 @@ def resolve_starter_billing_policies(db: Session) -> StarterBillingPolicies:
         default_locale=_text(db, "starter_billing_default_locale"),
         default_timezone=_text(db, "starter_billing_default_timezone"),
         default_unit_code=_text(db, "starter_billing_default_unit_code"),
+        admin_source_fact_template=_text(
+            db, "starter_billing_admin_source_fact_template"
+        ),
+        invoice_series_prefix=_text(db, "starter_billing_invoice_series_prefix"),
+        credit_note_series_prefix=_text(
+            db, "starter_billing_credit_note_series_prefix"
+        ),
+        default_country_code=_text(db, "starter_billing_default_country_code"),
+        series_start_value=_positive_int(db, "starter_billing_series_start_value"),
     )
+
+
+def _positive_int(db: Session, key: str) -> int:
+    value = resolve_value(db, SettingDomain.billing, key)
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise _error(
+            "configuration_invalid",
+            "Starter billing policy setting must be a positive integer",
+            setting=key,
+        )
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise _error(
+            "configuration_invalid",
+            "Starter billing policy setting must be a positive integer",
+            setting=key,
+        ) from exc
+    if parsed < 1:
+        raise _error(
+            "configuration_invalid",
+            "Starter billing policy setting must be a positive integer",
+            setting=key,
+        )
+    return parsed
 
 
 def account_ref_policy(template: str, subscriber_id: UUID) -> str:
@@ -159,7 +216,9 @@ def accepted_confirmation_evidence(db: Session) -> frozenset[str]:
     return tokens
 
 
-def collection_timing_for_billing_mode(billing_mode: object) -> str:
+def collection_timing_for_billing_mode(
+    billing_mode: object,
+) -> Literal["advance", "arrears"]:
     """Map Sub billing mode to Starter collection timing.
 
     Prepaid service is paid in advance; postpaid service is billed in

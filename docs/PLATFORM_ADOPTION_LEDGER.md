@@ -1073,6 +1073,14 @@ shadow report needs the typed tenant scope carried by the module's public
 receivable observation. `PlatformScope`, cache-key construction and every
 other cache surface remain refused; this is not a platform-plane adoption.
 
+**Amended 2026-10-18, Slice 6a Starter issuance.** The `Scope` union alias
+(`TenantScope | PlatformScope`) is additionally admitted as a type name only:
+the pinned `dotmac-billing` `NumberingProvider` protocol declares its scope
+parameter as `Scope`, and Sub's numbering adapter must name that exact type
+to satisfy the protocol. Sub still constructs only `TenantScope`;
+`PlatformScope` construction and every other cache surface remain refused,
+and this is not a platform-plane adoption.
+
 **Amended 2026-08-23, composing `dotmac-service-orders`.** This clause
 previously read "effect NAMES only, and only in `app/migration_bindings.py`".
 That was written before any module was actually composed, and the real API
