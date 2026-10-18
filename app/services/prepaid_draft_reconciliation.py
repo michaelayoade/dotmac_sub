@@ -476,6 +476,7 @@ class FundingChangeDraftResult:
     review_exceptions: int
     invoice_ids: tuple[UUID, ...]
     subscription_outcomes: tuple[FundingChangeDraftSubscriptionOutcome, ...] = ()
+    stale_drafts_excluded: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -12852,14 +12853,63 @@ def stage_prepaid_draft_after_funding_change(
             ).all()
         )
     )
+    # Stale drafts never receive new money: a draft whose service period ended
+    # before this funding event describes history, not the period the payment
+    # is buying. Record it for review and leave the money as account credit so
+    # the caller can continue to the current-period renewal.
+    stale_count = 0
+    live_ids: list[UUID] = []
+    for candidate_id in invoice_ids:
+        candidate = db.get(Invoice, candidate_id)
+        period_end = candidate.billing_period_end if candidate is not None else None
+        stale_preview = (
+            preview_prepaid_draft_reconciliation(db, candidate_id)
+            if period_end is not None and _utc(period_end) < effective_at
+            else None
+        )
+        # Duplicate closure spends no money and the reviewed historical
+        # partial lane is already review-only, so neither is excluded here.
+        if (
+            stale_preview is not None
+            and stale_preview.recommended_action
+            is not PrepaidDraftAction.void_duplicate
+            and stale_preview.disposition
+            is not PrepaidDraftDisposition.reviewed_historical_partial_fundable
+        ):
+            record_prepaid_draft_reconciliation_exception(
+                db,
+                account_id=account_id,
+                invoice_id=candidate_id,
+                invoice_number=stale_preview.invoice_number,
+                currency=stale_preview.currency,
+                required_amount=stale_preview.balance_due,
+                payment_backed_amount=stale_preview.payment_backed_credit,
+                opening_funding_amount=stale_preview.opening_funding_required,
+                preview_fingerprint=stale_preview.fingerprint,
+                reason="stale_draft_period_ended_before_funding",
+                subscription_id=(
+                    stale_preview.subscription_ids[0]
+                    if len(stale_preview.subscription_ids) == 1
+                    else None
+                ),
+                detail=(
+                    "Draft service period ended before the funding event; "
+                    "new funding was not applied to it."
+                ),
+            )
+            stale_count += 1
+        else:
+            live_ids.append(candidate_id)
+    invoice_ids = tuple(live_ids)
     if not invoice_ids:
         return FundingChangeDraftResult(
             drafts_found=0,
             drafts_settled=0,
             drafts_voided=0,
             drafts_blocked=0,
-            review_exceptions=0,
+            review_exceptions=stale_count,
             invoice_ids=(),
+            stale_drafts_excluded=stale_count,
         )
     if len(invoice_ids) != 1:
         for blocked_invoice_id in invoice_ids:

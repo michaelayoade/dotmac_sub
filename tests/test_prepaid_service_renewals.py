@@ -1884,6 +1884,144 @@ def test_funding_change_renews_suspended_due_service_from_payment_day(
     assert str(event.invoice_id) == event.payload["invoice_id"]
 
 
+def _stale_draft(db_session, subscriber, subscription, *, start, end):
+    from app.models.billing import InvoiceLine
+
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number=f"INV-STALE-{uuid4().hex[:8]}",
+        status=InvoiceStatus.draft,
+        currency="NGN",
+        subtotal=Decimal("50.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("50.00"),
+        balance_due=Decimal("50.00"),
+        billing_period_start=start,
+        billing_period_end=end,
+        is_proforma=False,
+        is_active=True,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Prepaid service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("50.00"),
+            amount=Decimal("50.00"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    return invoice
+
+
+def _suspended_with_prepaid_lock(db_session, subscriber, subscription, monkeypatch):
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+    subscription.status = SubscriptionStatus.suspended
+    subscriber.status = SubscriberStatus.suspended
+    subscriber.billing_enabled = True
+    lock = EnforcementLock(
+        subscription_id=subscription.id,
+        subscriber_id=subscriber.id,
+        reason=EnforcementReason.prepaid,
+        source="pytest:prepaid-funding-change",
+        is_active=True,
+    )
+    db_session.add(lock)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.collections._core.resolve_prepaid_funding",
+        lambda _db, account, *, now=None: PrepaidFundingDecision(
+            account_id=str(account.id),
+            available_balance=Decimal("50.00"),
+            required_balance=Decimal("0.00"),
+            currency="NGN",
+            covered_subscription_ids=(subscription.id,),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.account_lifecycle.emit_event",
+        lambda *_args, **_kwargs: None,
+    )
+    return lock
+
+
+def test_funding_change_ignores_stale_draft_and_renews_current_period(
+    db_session, subscriber, subscription, monkeypatch
+):
+    """SUB-005060 shape: a months-old draft must not absorb the new top-up."""
+    from app.models.prepaid_funding import PrepaidDraftReconciliationException
+
+    lock = _suspended_with_prepaid_lock(
+        db_session, subscriber, subscription, monkeypatch
+    )
+    stale = _stale_draft(
+        db_session,
+        subscriber,
+        subscription,
+        start=datetime(2026, 6, 20, tzinfo=UTC),
+        end=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=datetime(2026, 7, 20, 17, 30, tzinfo=UTC),
+        funding_currency="NGN",
+        evidence_ref="pytest:stale-draft-new-topup",
+    )
+    db_session.commit()
+
+    db_session.refresh(lock)
+    db_session.refresh(subscription)
+    db_session.refresh(stale)
+    assert result.disposition == FundingChangeRenewalDisposition.funded
+    assert result.draft_invoices_settled == 0
+    assert stale.status is InvoiceStatus.draft
+    assert stale.balance_due == Decimal("50.00")
+    assert lock.is_active is False
+    assert subscription.status == SubscriptionStatus.active
+    exception = db_session.query(PrepaidDraftReconciliationException).one()
+    assert exception.invoice_id == stale.id
+    assert exception.reason == "stale_draft_period_ended_before_funding"
+
+
+def test_funding_change_still_settles_current_period_draft(
+    db_session, subscriber, subscription, monkeypatch
+):
+    from app.models.prepaid_funding import PrepaidDraftReconciliationException
+
+    _suspended_with_prepaid_lock(db_session, subscriber, subscription, monkeypatch)
+    current = _stale_draft(
+        db_session,
+        subscriber,
+        subscription,
+        start=datetime(2026, 7, 19, tzinfo=UTC),
+        end=datetime(2026, 8, 19, tzinfo=UTC),
+    )
+
+    result = apply_due_prepaid_service_after_funding_change(
+        db_session,
+        account_id=subscriber.id,
+        effective_at=datetime(2026, 7, 20, 17, 30, tzinfo=UTC),
+        funding_currency="NGN",
+        evidence_ref="pytest:current-draft-topup",
+    )
+    db_session.commit()
+
+    db_session.refresh(current)
+    assert result.draft_invoices_pending + result.draft_invoices_settled == 1
+    assert (
+        db_session.query(PrepaidDraftReconciliationException)
+        .filter_by(reason="stale_draft_period_ended_before_funding")
+        .count()
+        == 0
+    )
+
+
 def test_funding_change_does_not_bill_administratively_suspended_service(
     db_session, subscriber, subscription
 ):
