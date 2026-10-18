@@ -582,13 +582,14 @@ def issue_admin_invoice_via_starter(
                 ),
                 numbering=_Numbering(policies),
             )
-            document_number = issued_document.document_number
-            if not document_number:
+            number = issued_document.document_number
+            if not number:
                 raise _error(
                     "starter_refused",
                     "Starter billing issued no document number for this draft",
                     invoice_id=str(invoice.id),
                 )
+            document_number = number
             document_id = issued_document.id
             link_obligation_id = None
             line_obligations = [
