@@ -169,6 +169,11 @@ if [[ "$1" == "ps" && "$*" == *"label=com.docker.compose.project"* ]]; then
   for svc in ${{FAKE_PS_SERVICES-{running_app_services}}}; do
     printf 'container-%s\\n' "$svc"
   done
+  if [[ "$*" == *" -a "* ]]; then
+    for svc in ${{FAKE_EXITED_SERVICES:-}}; do
+      printf 'container-exited-%s\\n' "$svc"
+    done
+  fi
   if [[ "$*" != *"com.docker.compose.oneoff=False"* ]]; then
     for svc in ${{FAKE_ONEOFF_SERVICES:-}}; do
       printf 'container-oneoff-%s\\n' "$svc"
@@ -179,6 +184,7 @@ fi
 if [[ "$1" == "inspect" && "$*" == *"com.docker.compose.service"* ]]; then
   svc="${{2#container-}}"
   svc="${{svc#oneoff-}}"
+  svc="${{svc#exited-}}"
   if [[ "${{FAKE_CONFIG_IMAGE_SHORT:-0}}" == "1" ]]; then
     config_image="7081c646845a"
   else
@@ -1212,6 +1218,31 @@ def test_override_only_app_image_service_with_no_container_is_never_created(
     for command in recreate:
         assert "app-backup" not in command
         assert "override-only-app" not in command
+
+
+def test_exited_app_image_containers_are_neither_started_nor_flagged(
+    tmp_path: Path,
+) -> None:
+    """Long-dead containers (staging's poller/listener) must stay dead."""
+    exited = ("bandwidth-poller", "syslog-listener", "team-inbox-smtp")
+    declared = tuple(s for s in FULL_SERVICES if s not in exited)
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=declared,
+        extra_env={
+            "FAKE_EXITED_SERVICES": " ".join(exited),
+            "FAKE_STALE_CONTAINER": "container-exited-bandwidth-poller",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "APP IMAGE DRIFT" not in result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert recreate
+    for command in recreate:
+        for service in exited:
+            assert service not in command
+    assert not any(" ps -a " in c for c in docker_log.read_text().splitlines())
 
 
 def test_running_excluded_service_is_still_not_recreated(tmp_path: Path) -> None:

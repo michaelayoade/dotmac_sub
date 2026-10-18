@@ -1342,8 +1342,10 @@ compose_project_name() {
     --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true
 }
 
-# Prints "<container-id>|<service>" for every NON-ONE-OFF container (running or
-# stopped) of this Compose project that runs a dotmac_sub app image, whether or
+# Prints "<container-id>|<service>" for every NON-ONE-OFF container that is
+# running or restarting (`docker ps` without -a: exited containers never count,
+# so a long-dead service is neither started by a deploy nor flagged as drift)
+# of this Compose project that runs a dotmac_sub app image, whether or
 # not Compose currently resolves its service: a profile-gated service started by
 # name (team-inbox-smtp on production) is not listed by `config --services`
 # unless COMPOSE_PROFILES activates it, but it runs the app image and must roll
@@ -1358,7 +1360,7 @@ project_app_image_containers() {
   project="$(compose_project_name)"
   [[ -n "${project}" ]] || return 0
   repo_ids="$(docker image ls --no-trunc -q "${IMAGE_REPO}" 2>/dev/null || true)"
-  ids="$(docker ps -a -q \
+  ids="$(docker ps -q \
     --filter "label=com.docker.compose.project=${project}" \
     --filter "label=com.docker.compose.oneoff=False" 2>/dev/null || true)"
   while IFS= read -r id; do
