@@ -116,7 +116,8 @@
         "app/services/billing/starter_policies.py",
         "app/services/settings_spec.py",
         "app/services/web_billing_invoices.py",
-        "app/web/admin/billing_invoice_actions.py"
+        "app/web/admin/billing_invoice_actions.py",
+        "app/services/admin_workflow_guidance.py"
       ],
       "reason": "Michael approved the money-pack cutover continuation and merges on 2026-10-18 under the confirmed composable-policy direction (ADR 0031). Slice 6a adds the thin-client issuance composition module that routes eligible admin drafts (web detail Issue: postpaid, single-line, quantity-one, undiscounted, non-proforma, complete party evidence) through Starter dotmac-billing as sole ledger writer, mirroring number/status onto the Sub row with a structural link. This is consumer wiring for a published Starter contract; the legacy writer keeps every ineligible lane until its own slice. Policy surface grows deliberately under ADR 0031 and shrinks as legacy writers retire.",
       "starter_contract": "Published dotmac-billing 0.1.0a8 issue_rated_invoice + create_billing_account + get_invoice_document_fact, and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist.",
