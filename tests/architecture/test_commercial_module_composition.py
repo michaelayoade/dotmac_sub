@@ -53,6 +53,19 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.contracts", "ServicePeriodStatus"),
         ("dotmac_billing.errors", "BillingError"),
     },
+    # Step 5 opening rehearsal assembly (ADR 0020/0031): pure census-to-
+    # observation translation onto the pinned rehearsal contracts; it
+    # verifies nothing and writes no money state.
+    "app/services/billing/opening_rehearsal_assembly.py": {
+        ("dotmac_billing", "OpeningBlockerV1"),
+        ("dotmac_billing", "OpeningObservedControlV1"),
+        ("dotmac_billing", "OpeningObservedInvoiceV1"),
+        ("dotmac_billing", "OpeningObservedLaneV1"),
+        ("dotmac_billing", "OpeningObservedPopulationV1"),
+        ("dotmac_billing", "OpeningObservedPrecisionV1"),
+        ("dotmac_billing", "OpeningObservedSettlementV1"),
+        ("dotmac_billing", "OpeningSubObservationV2"),
+    },
     "app/services/dotmac_erp/billing_adapter.py": {
         ("dotmac_billing", "AccountingFactV1"),
     },
