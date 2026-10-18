@@ -31,12 +31,14 @@ from app.services.settings_spec import resolve_value
 __all__ = [
     "StarterBillingPolicies",
     "StarterBillingPolicyError",
+    "StarterSettlementPolicies",
     "account_ref_policy",
     "accepted_confirmation_evidence",
     "collection_timing_for_billing_mode",
     "due_terms_code",
     "percent_to_fraction",
     "resolve_starter_billing_policies",
+    "resolve_starter_settlement_policies",
 ]
 
 
@@ -276,3 +278,39 @@ def percent_to_fraction(percent: Decimal) -> Decimal:
             "tax_rate_invalid",
             "Tax percent snapshot cannot be converted to a rate fraction",
         ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class StarterSettlementPolicies:
+    """Resolved Starter settlement policy surface (ADR 0031).
+
+    The presented confirmation-evidence token must be a member of the
+    accepted-evidence set billing is asked to trust; anything else is a
+    configuration refusal, never a silent substitution.
+    """
+
+    settlement_source_system: str
+    settlement_source_version: str
+    funding_lane: str
+    confirmation_evidence: str
+    accepted_confirmation_evidence: frozenset[str]
+
+
+def resolve_starter_settlement_policies(db: Session) -> StarterSettlementPolicies:
+    accepted = accepted_confirmation_evidence(db)
+    presented = _text(db, "starter_payments_confirmation_evidence")
+    if presented not in accepted:
+        raise _error(
+            "configuration_invalid",
+            "Presented confirmation evidence is not in the accepted set",
+            setting="starter_payments_confirmation_evidence",
+        )
+    return StarterSettlementPolicies(
+        settlement_source_system=_text(db, "starter_payments_settlement_source_system"),
+        settlement_source_version=_text(
+            db, "starter_billing_settlement_source_version"
+        ),
+        funding_lane=_text(db, "starter_billing_settlement_funding_lane"),
+        confirmation_evidence=presented,
+        accepted_confirmation_evidence=accepted,
+    )

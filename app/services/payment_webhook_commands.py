@@ -14,6 +14,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    Invoice,
     Payment,
     PaymentProvider,
     PaymentProviderEvent,
@@ -21,6 +22,7 @@ from app.models.billing import (
     PaymentProviderEventStatus,
     PaymentProviderType,
     PaymentStatus,
+    StarterInvoiceLink,
     TopupIntent,
 )
 from app.models.integration_platform import IntegrationInbox
@@ -31,6 +33,11 @@ from app.services.account_credit_deposits import (
     AccountCreditDepositSettlementSource,
     DepositEligibilityError,
     SettleAccountCreditDepositCommand,
+)
+from app.services.billing.starter_settlement import (
+    StarterSettlementError,
+    StarterSettlementResult,
+    settle_starter_invoice_payment,
 )
 from app.services.common import round_money
 from app.services.domain_errors import DomainError
@@ -212,6 +219,8 @@ class ProcessedPaymentWebhook:
     provider_event_id: UUID | None
     payment_id: UUID | None
     replayed: bool = False
+    starter_confirmation_id: UUID | None = None
+    starter_settlement_id: UUID | None = None
 
     def consequence(self) -> dict[str, object]:
         return {
@@ -221,6 +230,14 @@ class ProcessedPaymentWebhook:
                 str(self.provider_event_id) if self.provider_event_id else None
             ),
             "payment_id": str(self.payment_id) if self.payment_id else None,
+            "starter_confirmation_id": (
+                str(self.starter_confirmation_id)
+                if self.starter_confirmation_id
+                else None
+            ),
+            "starter_settlement_id": (
+                str(self.starter_settlement_id) if self.starter_settlement_id else None
+            ),
         }
 
 
@@ -962,6 +979,76 @@ def _stage_period_purchase_settlement(
     )
 
 
+def _stage_starter_invoice_settlement(
+    db: Session,
+    *,
+    prepared: _PreparedPaymentWebhook,
+) -> StarterSettlementResult | None:
+    """Discharge a Starter-issued invoice through Starter (pay-then-record).
+
+    Returns ``None`` when the resolved intent does not target a
+    Starter-linked invoice; the legacy provider-event lane then owns the
+    consequence exactly as before. For a Starter-linked invoice the
+    legacy money staging must not run: the payments confirmation and the
+    billing allocation staged here are the only money record.
+    """
+
+    settlement = prepared.settlement
+    intent = prepared.topup_intent
+    if (
+        settlement is None
+        or settlement.status is not PaymentStatus.succeeded
+        or intent is None
+        or intent.invoice_id is None
+        or intent.purpose
+        in {
+            "account_credit_deposit",
+            "prepaid_period_purchase",
+        }
+    ):
+        return None
+    link = db.scalar(
+        select(StarterInvoiceLink).where(
+            StarterInvoiceLink.invoice_id == intent.invoice_id
+        )
+    )
+    if link is None:
+        return None
+    external_id = prepared.ingest.external_id
+    if settlement.amount is None or not external_id:
+        raise _error(
+            "starter_settlement_rejected",
+            "Starter invoice confirmation omitted amount or transaction identity",
+            intent_id=str(intent.id),
+        )
+    invoice = db.get(Invoice, intent.invoice_id)
+    if invoice is None:
+        raise _error(
+            "starter_settlement_rejected",
+            "Starter-linked invoice was not found for settlement",
+            intent_id=str(intent.id),
+        )
+    occurred_at = settlement.provider_paid_at or datetime.now(UTC)
+    try:
+        return settle_starter_invoice_payment(
+            db,
+            invoice=invoice,
+            link=link,
+            intent_reference=intent.reference,
+            external_reference=external_id,
+            confirmed_amount=settlement.amount,
+            occurred_at=occurred_at,
+            observed_at=datetime.now(UTC),
+        )
+    except StarterSettlementError as exc:
+        raise _error(
+            "starter_settlement_rejected",
+            exc.message,
+            starter_settlement_error_code=exc.code,
+            intent_id=str(intent.id),
+        ) from exc
+
+
 def _expected_financial_effect_unresolved(event: PaymentProviderEventResult) -> bool:
     """A real money-movement was expected but could not be resolved to a payment.
 
@@ -1070,6 +1157,10 @@ def _result_from_consequence(
         provider_event_id=_optional_uuid(consequence.get("provider_event_id")),
         payment_id=_optional_uuid(consequence.get("payment_id")),
         replayed=True,
+        starter_confirmation_id=_optional_uuid(
+            consequence.get("starter_confirmation_id")
+        ),
+        starter_settlement_id=_optional_uuid(consequence.get("starter_settlement_id")),
     )
 
 
@@ -1519,6 +1610,23 @@ def _process_claimed_payment_webhook(
         prepared=prepared,
         context=context,
     )
+    starter_result = _stage_starter_invoice_settlement(db, prepared=prepared)
+    if starter_result is not None:
+        result = ProcessedPaymentWebhook(
+            receipt_id=receipt.id,
+            provider=command.provider,
+            provider_event_id=None,
+            payment_id=None,
+            starter_confirmation_id=starter_result.confirmation_id,
+            starter_settlement_id=starter_result.settlement_id,
+        )
+        integration_inbox.mark_processed(
+            receipt,
+            consequence=result.consequence(),
+            claimed_attempt=command.claimed_attempt,
+        )
+        db.flush()
+        return result
     event = _stage_provider_event(db, prepared.ingest, context=context)
     if (
         prepared.settlement is not None

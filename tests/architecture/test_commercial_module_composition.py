@@ -73,6 +73,28 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing", "OpeningObservedSettlementV1"),
         ("dotmac_billing", "OpeningSubObservationV2"),
     },
+    # Thin-client settlement back-half (ADR 0031): provider evidence is
+    # confirmed in dotmac-payments and discharged in dotmac-billing for
+    # Starter-issued invoices; Sub mirrors from the Starter position.
+    "app/services/billing/starter_settlement.py": {
+        ("dotmac_billing", "AcceptSettlementV1"),
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing.commands", "AllocationCommand"),
+        ("dotmac_billing.contracts", "SettlementFundingLane"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "accept_settlement"),
+        ("dotmac_billing.service", "allocate_settlement"),
+        ("dotmac_payments", "ConfirmationSource"),
+        ("dotmac_payments", "GetConfirmedCashV1"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "RecordConfirmation"),
+        ("dotmac_payments", "get_confirmed_cash_v1"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+        ("dotmac_payments", "record_confirmation"),
+    },
     "app/services/dotmac_erp/billing_adapter.py": {
         ("dotmac_billing", "AccountingFactV1"),
     },
