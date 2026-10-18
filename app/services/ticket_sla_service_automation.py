@@ -45,6 +45,7 @@ from app.services.prepaid_service_coverage import (
 
 logger = logging.getLogger(__name__)
 
+AUTO_RESUME_BATCH_LIMIT = 200
 OWNER = "support.ticket_sla_service_consequence"
 PAUSE_CONCERN = "ticket resolution SLA-breach service pause consequence"
 
@@ -1086,7 +1087,8 @@ def auto_resume_resolved_ticket_pauses(
     with closing(session_factory()) as lookup:
         cause_ids = tuple(
             lookup.scalars(
-                select(SubscriptionPauseCause.id).where(
+                select(SubscriptionPauseCause.id)
+                .where(
                     SubscriptionPauseCause.status
                     == SubscriptionPauseCauseStatus.active.value,
                     SubscriptionPauseCause.reason_code
@@ -1095,9 +1097,22 @@ def auto_resume_resolved_ticket_pauses(
                     == SubscriptionPauseResumePolicy.auto_on_ticket_resolution.value,
                     SubscriptionPauseCause.ticket_id.isnot(None),
                 )
+                .order_by(
+                    SubscriptionPauseCause.activated_at.asc(),
+                    SubscriptionPauseCause.id.asc(),
+                )
+                .limit(AUTO_RESUME_BATCH_LIMIT)
             ).all()
         )
-    counts = {"total": len(cause_ids), "resumed": 0, "skipped": 0, "failed": 0}
+    counts = {
+        "total": len(cause_ids),
+        "resumed": 0,
+        "skipped": 0,
+        "skipped_open_ticket": 0,
+        "skipped_prepaid_blocker": 0,
+        "skipped_other": 0,
+        "failed": 0,
+    }
     for cause_id in cause_ids:
         try:
             with closing(session_factory()) as preview_db:
@@ -1105,7 +1120,24 @@ def auto_resume_resolved_ticket_pauses(
                     preview_db, cause_id=cause_id, proposed_resumed_at=resumed_at
                 )
             if not preview.eligible:
+                reasons = set(preview.blocking_reasons)
+                if reasons == {"ticket_is_not_resolved"}:
+                    bucket = "skipped_open_ticket"
+                elif any(
+                    "prepaid" in r or "coverage" in r or "compensation" in r
+                    for r in reasons
+                ):
+                    bucket = "skipped_prepaid_blocker"
+                else:
+                    bucket = "skipped_other"
                 counts["skipped"] += 1
+                counts[bucket] += 1
+                if bucket != "skipped_open_ticket":
+                    logger.info(
+                        "Ticket pause auto-resume skipped for cause %s: %s",
+                        cause_id,
+                        ",".join(sorted(reasons)),
+                    )
                 continue
             context = CommandContext.system(
                 actor="system:ticket_pause_auto_resume",
