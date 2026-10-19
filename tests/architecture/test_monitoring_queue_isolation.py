@@ -52,5 +52,10 @@ def test_all_runtime_workflows_include_the_monitoring_worker():
     assert "celery-worker-monitoring:" in dev_compose
     assert "prod-restart" in makefile
     assert "celery-worker-monitoring" in makefile
-    assert "APP_SERVICES=" in deploy
+    # deploy.sh derives its recreate set from Compose: the monitoring worker
+    # must run the release app image, and deploy must still gate on it.
+    assert "scripts.deploy_app_image_services" in deploy
     assert "celery-worker-monitoring" in deploy
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text()
+    block = compose[compose.index("  celery-worker-monitoring:") :]
+    assert "image: ${APP_IMAGE" in block[:400]

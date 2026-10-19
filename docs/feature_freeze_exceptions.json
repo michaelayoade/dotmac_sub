@@ -156,7 +156,30 @@
       "id": "THIN-STARTER-ISSUANCE-MULTILINE-SCHEMA",
       "kind": "schema",
       "reason": "Migration 692 adds starter_invoice_line_links (per-line Starter obligation identity) and makes starter_invoice_links.obligation_id nullable, because a multi-line Starter document carries one obligation per line while the invoice-level link holds account and document identity only. Structural identity only (ADR 0007); retires with the legacy Invoice writer.",
-      "approved_by": "michaelayoade"
+      "approved_by": "michaelayoade",
+      "paths": [
+        "alembic/versions/692_starter_invoice_line_links.py"
+      ]
+    },
+    {
+      "id": "THIN-OPENING-REHEARSAL-ASSEMBLY",
+      "kind": "transitional-tool",
+      "paths": [
+        "app/services/billing/opening_rehearsal_assembly.py"
+      ],
+      "reason": "Michael directed Step 5 (opening-balance rehearsal) to run in parallel with the remaining Step 4 lanes on 2026-10-18. This adds the read-only census-to-observation assembly that translates Sub's opening census preview onto the pinned dotmac-billing rehearsal observation contract, field for field, so rehearsal runs can count blockers into the manual exceptions queue. It verifies nothing, qualifies no cash, invents no originals, and writes no money state; manifest/command assembly and verifiers follow as their own slices.",
+      "approved_by": "michaelayoade",
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived."
+    },
+    {
+      "id": "THIN-OPENING-CENSUS-WIRE",
+      "kind": "transitional-tool",
+      "paths": [
+        "app/services/billing/opening_census_wire.py"
+      ],
+      "reason": "Step 5 (opening-balance rehearsal) continues in parallel at Michael's direction. Starter's read-only rehearsal adapter consumes Sub's serialized opening census (sub-billing-opening-census-v2/-v3 JSON), which Sub does not yet emit. This adds a pure evidence renderer that serializes the typed census preview (BillingOpeningExportPreviewV3) to that exact wire document field for field, with Decimals as exact strings. It verifies nothing, qualifies no cash, invents no originals, and writes no money state.",
+      "approved_by": "michaelayoade",
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived."
     }
   ]
 }

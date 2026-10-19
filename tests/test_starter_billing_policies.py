@@ -34,6 +34,7 @@ _DEFAULTS = {
     "starter_billing_default_unit_code": "unit",
     "starter_payments_accepted_evidence": "dotmac-payments:confirmed-cash-v1",
     "starter_billing_admin_source_fact_template": "admin-manual-invoice:{invoice_id}",
+    "starter_billing_admin_line_source_fact_template": "admin-manual-invoice-line:{line_id}",
     "starter_billing_invoice_series_prefix": "INV",
     "starter_billing_credit_note_series_prefix": "CN",
     "starter_billing_default_country_code": "NGA",
@@ -136,6 +137,9 @@ def test_issuance_policy_additions_resolve(settings) -> None:
     assert resolved.series_prefix("credit-note") == "CN"
     assert resolved.admin_source_fact_id(UUID(int=4)) == (
         f"admin-manual-invoice:{UUID(int=4)}"
+    )
+    assert resolved.admin_line_source_fact_id(UUID(int=5)) == (
+        f"admin-manual-invoice-line:{UUID(int=5)}"
     )
     assert resolved.default_country_code == "NGA"
     settings["starter_billing_series_start_value"] = 0

@@ -3601,6 +3601,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "Starter-issued admin invoice mirror and structural link",
             "Starter issuance eligibility decision for admin drafts",
+            "Starter-issued multi-line admin invoice line links",
         ),
         depends_on=(
             "control.settings_spec",
@@ -3644,6 +3645,18 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical collection bank account",
                     ),
                 ),
+                ConcernContract(
+                    name="Starter-issued multi-line admin invoice line links",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "eligible admin draft invoice",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                    canonical_writer="financial.starter_issuance",
+                ),
             ),
             authoritative_inputs=(
                 AuthorityInput(
@@ -3651,9 +3664,10 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="financial.invoices",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "draft invoice with reconciled single quantity-one "
-                        "line, frozen tax snapshot when taxed, due date, and "
-                        "postpaid subscriber billing mode"
+                        "draft invoice with reconciled homogeneous lines "
+                        "(one service exposure, per-line frozen tax "
+                        "snapshots whose derived taxes reconcile), due "
+                        "date, and postpaid subscriber billing mode"
                     ),
                 ),
                 AuthorityInput(
@@ -3780,6 +3794,203 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_starter_issuance_eligibility.py",
                 "tests/integration/test_starter_issuance_switch_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.starter_settlement",
+        module="app.services.billing.starter_settlement",
+        owns=(
+            "Starter invoice settlement from confirmed provider cash",
+            "Starter-settled invoice balance and status mirror",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.payment_webhooks",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Settlement back-half (ADR 0031, pay-then-record): the webhook "
+            "coordinator hands authenticated provider evidence for a "
+            "Starter-linked invoice to this lane instead of the legacy "
+            "provider-event money staging. dotmac-payments records the "
+            "confirmation, dotmac-billing accepts and allocates the cash, "
+            "and Sub mirrors balance/status from the Starter collectible "
+            "position. No legacy Payment is created and the legacy "
+            "TopupIntent projection is left to expire. The invoice.paid "
+            "email consequence stays legacy-coupled until its consumer "
+            "repoint; payment.received is emitted without a legacy "
+            "payment identity."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Starter invoice settlement from confirmed provider cash",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "verified provider settlement evidence",
+                        "canonical Starter payments intent binding",
+                        "canonical Starter settlement policies",
+                        "Starter-issued invoice and structural link",
+                    ),
+                    canonical_writer="financial.starter_settlement",
+                ),
+                ConcernContract(
+                    name="Starter-settled invoice balance and status mirror",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter collectible position",
+                    ),
+                    canonical_writer="financial.starter_settlement",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="verified provider settlement evidence",
+                    owner="external:payment_provider",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "signature-verified webhook settlement normalized "
+                        "by the webhook coordinator: succeeded status, "
+                        "gross amount, currency, provider transaction "
+                        "identity, and paid instant"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter payments intent binding",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "persisted intent observation by checkout "
+                        "reference: invoice-settlement purpose, invoice "
+                        "target, payer account, requested money"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter settlement policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settlement settings resolved through "
+                        "starter_policies (ADR 0031): source system and "
+                        "version, funding lane, presented and accepted "
+                        "confirmation evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink binding the Sub invoice to "
+                        "the Starter billing account, obligation, and "
+                        "document identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter collectible position",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "current receivable position read after allocation; "
+                        "its collectible amount is the only balance the "
+                        "Sub mirror may show"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The webhook owner command owns the transaction: "
+                    "payments confirmation, billing acceptance and "
+                    "allocation, Sub mirror, payment.received event, "
+                    "audit row, and inbox consequence commit or roll "
+                    "back together."
+                ),
+                locking=(
+                    "The claimed inbox receipt is locked by the caller; "
+                    "Starter payments and billing apply their own writer "
+                    "fences inside the same transaction."
+                ),
+                idempotency=(
+                    "The billing source settlement key is the payments "
+                    "confirmation identity, and a repeated provider "
+                    "external reference retains its original intent, "
+                    "amount, and source in payments; a processed receipt "
+                    "replays from its recorded consequence."
+                ),
+                retries=(
+                    "The webhook coordinator retries the whole claimed "
+                    "receipt after rollback; partial Starter writes "
+                    "never survive a failed attempt."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_settlement.amount_unrepresentable",
+                    "financial.starter_settlement.configuration_invalid",
+                    "financial.starter_settlement.intent_binding_mismatch",
+                    "financial.starter_settlement.intent_missing",
+                    "financial.starter_settlement.starter_refused",
+                ),
+                mapping_owner="payment webhook coordinator",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "missing or mismatched Starter payments intent binding",
+                    "confirmed cash that does not match presented evidence",
+                    "presented evidence outside the accepted set",
+                    "Starter payments or billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment.received",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries amount, currency, invoice "
+                    "identity, succeeded status, and the Starter "
+                    "confirmation/settlement identities; it deliberately "
+                    "omits the legacy payment identity, which existing "
+                    "handlers treat as optional."
+                ),
+                replay=(
+                    "Replay re-observes the payment for enforcement and "
+                    "arrangements; the Starter ledger remains the money "
+                    "authority and is never rewritten by replay."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.payment_webhooks legacy provider-event staging",
+                new_owner="financial.starter_settlement",
+                verification=(
+                    "Migrated-PostgreSQL proof: a Starter-issued invoice "
+                    "paid through the lane reaches zero collectible with "
+                    "a paid mirror and no legacy Payment row; an exact "
+                    "replay returns the same Starter identities and new "
+                    "cash against the discharged document is refused."
+                ),
+                cutover_gate=(
+                    "Only invoices carrying a StarterInvoiceLink take "
+                    "this lane; every other invoice keeps the legacy "
+                    "staging until its issuance lane migrates."
+                ),
+                fallback_retirement=(
+                    "The legacy provider-event money staging is deleted "
+                    "at the money-pack cutover; it is never used as a "
+                    "fallback for a Starter-linked invoice."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/integration/test_starter_settlement_pg.py",
                 "tests/architecture/test_sot_manifest_contracts.py",
             ),
         ),

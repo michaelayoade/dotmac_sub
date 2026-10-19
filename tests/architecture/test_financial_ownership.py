@@ -139,6 +139,10 @@ APPROVED_INVOICE_LIFECYCLE_WRITERS = {
     # document's issued status/number onto the Sub row; Starter billing is
     # the ledger authority and this module writes no Sub ledger state.
     Path("app/services/billing/starter_issuance.py"),
+    # Settlement back-half (ADR 0031): mirrors paid/partially-paid status
+    # and balance from the Starter collectible position after a Starter
+    # allocation; writes no Sub ledger state.
+    Path("app/services/billing/starter_settlement.py"),
 }
 
 
