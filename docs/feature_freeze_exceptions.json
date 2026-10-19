@@ -429,6 +429,25 @@
       ],
       "reason": "Permission-only migration registering subscription:credential:update (Michael decision D6, 2026-10-19): the credential edit path currently has no dedicated permission, so any actor holding subscription:update can rename or re-password a PPPoE credential. No tables, no role grants; additive and reversible unless operators have assigned it. Exact path; it is updated if the migration is renumbered on merge order.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "ACS-SINGLE-WRITER-20261019",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/genieacs_config.py",
+        "app/services/tr069.py",
+        "app/tasks/tr069.py",
+        "app/services/tr069_presets.py",
+        "app/services/tr069_provisions.py",
+        "app/services/network/tr069_job_commands.py",
+        "app/services/network/reconcile/applier.py",
+        "app/services/sot_registry/domains/network/network_control.py",
+        "app/services/sot_registry/domains/network/device_operations.py"
+      ],
+      "reason": "Michael decided on 2026-10-19 that ONT configuration and ACS/TR-069 stay in Sub plus GenieACS (not Starter) and that a modular single-writer rule is enforced per state, and approved one scoped exception for this programme (ACS single-writer programme). Scope is consolidation, enforcement and deletion only: widening the existing ACS/OLT canonical-writer architecture test and import contract, declaring owners in the SOT registry, giving GenieACS configuration objects (presets, provisions, virtual parameters, cwmp config) one owner module with a manifest and a read-only drift check, routing ManagementServer and TR-069 task writes through the existing owners, and removing duplicate writer paths. The listed paths are the existing owner modules that may grow beyond the size threshold. It does not authorize a new capability, a new app/ module, a new Alembic migration, credential rotation or enabling CPE authentication (those stay deferred); any of those needs its own entry added from base. It does not cover live GenieACS changes or the runtime NBI lock-down, which need separate approval.",
+      "starter_contract": "None. Per Michael's 2026-10-19 decision this ONT/ACS authority stays in Sub; the Starter ADR-0038 amendment withdraws dotmac-pon-access from network-suite-v1, so no Starter extraction target exists.",
+      "deletion_trigger": "Remove this entry when the ACS single-writer programme phases P1-P5 and P7 are merged and the ACS/OLT writer backlogs for the programme's items (GenieACS configuration objects, ManagementServer parameters, TR-069 tasks) reach zero.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
