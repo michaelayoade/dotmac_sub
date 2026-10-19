@@ -22,13 +22,24 @@ from app.services.owner_commands import CommandContext
 KEY = "billing:starter_ledger_live:write"
 
 
+def _detach(db, obj):
+    """Persist ``obj`` and return it detached with its attributes loaded.
+
+    Owner commands need an idle session; reading an expired attribute after a
+    commit would autobegin a transaction while building the command.
+    """
+    db.flush()
+    db.expunge(obj)
+    db.commit()
+    return obj
+
+
 def _user(db) -> SystemUser:
     user = SystemUser(
         id=uuid4(), first_name="A", last_name="B", email=f"a-{uuid4().hex}@x.test"
     )
     db.add(user)
-    db.commit()
-    return user
+    return _detach(db, user)
 
 
 def _admin(db) -> SystemUser:
@@ -37,8 +48,9 @@ def _admin(db) -> SystemUser:
         role = Role(name="admin", is_active=True)
         db.add(role)
         db.flush()
+    role_id = role.id
     user = _user(db)
-    db.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+    db.add(SystemUserRole(system_user_id=user.id, role_id=role_id))
     db.commit()
     return user
 
@@ -48,15 +60,13 @@ def _permission(db) -> Permission:
     if permission is None:
         permission = Permission(key=KEY, description="test")
         db.add(permission)
-        db.commit()
-    return permission
+    return _detach(db, permission)
 
 
 def _role(db) -> Role:
     role = Role(name=f"r-{uuid4().hex[:8]}", is_active=True)
     db.add(role)
-    db.commit()
-    return role
+    return _detach(db, role)
 
 
 def _ctx(user: SystemUser, scope: str) -> CommandContext:
@@ -249,8 +259,7 @@ def _legacy_role_with_key(db, *, active: bool = True) -> Role:
     db.add(role)
     db.flush()
     db.add(RolePermission(role_id=role.id, permission_id=permission.id))
-    db.commit()
-    return role
+    return _detach(db, role)
 
 
 def _holds(db, user: SystemUser) -> bool:

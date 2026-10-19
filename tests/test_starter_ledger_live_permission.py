@@ -39,6 +39,8 @@ def _user(db) -> SystemUser:
         id=uuid4(), first_name="A", last_name="B", email=f"a-{uuid4().hex}@x.test"
     )
     db.add(user)
+    db.flush()
+    db.expunge(user)  # keep attributes loaded: no autobegin when read later
     db.commit()
     return user
 
@@ -56,6 +58,7 @@ def _grant(db, user: SystemUser) -> None:
 
 
 def _write(db, actor: str, key: str, value: bool):
+    db.commit()  # owner commands need an idle session
     return apply_admin_settings_form_updates(
         db,
         ApplyAdminSettingsFormCommand(
@@ -321,8 +324,7 @@ def test_admin_only_grant_keys_match_required_permissions() -> None:
 
     declared = {
         spec.required_permission
-        for domain in SettingDomain
-        for spec in settings_spec.list_specs(domain)
+        for spec in settings_spec.SETTINGS_SPECS
         if spec.required_permission
     }
     assert declared <= ADMIN_ONLY_GRANT_PERMISSION_KEYS
@@ -341,6 +343,7 @@ def test_direct_only_keys_are_admin_only_keys() -> None:
 def test_disable_decision_uses_the_coerced_value(db_session) -> None:
     user = _user(db_session)  # no dedicated permission
     # A truthy spelling is ON, not a disable write: refused without the grant.
+    db_session.commit()
     with pytest.raises(AdminSettingsFormUpdateError):
         apply_admin_settings_form_updates(
             db_session,
