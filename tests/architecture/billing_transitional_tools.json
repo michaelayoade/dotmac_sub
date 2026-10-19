@@ -63,6 +63,13 @@
       "baseline_lines": 169,
       "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived.",
       "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing/opening_census_wire.py",
+      "purpose": "Read-only serializer rendering the typed opening census preview to the exact JSON document Starter's rehearsal adapter consumes (Step 5).",
+      "baseline_lines": 117,
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived.",
+      "owner": "michaelayoade"
     }
   ]
 }
