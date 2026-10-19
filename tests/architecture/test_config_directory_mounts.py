@@ -125,6 +125,37 @@ def _deploy_array(name: str) -> set[str]:
     return set(declared.group(1).split())
 
 
+def _deploy_recreated_services() -> set[str]:
+    """What deploy.sh recreates on a host with no containers beyond the required set.
+
+    Compose services running ``${APP_IMAGE}``, restricted by the same rule as
+    deploy.sh (``recreate_set``), with a modelled host override that adds the
+    privileged ``app-backup`` service production declares.
+    """
+    from scripts.deploy_app_image_services import app_image_services, recreate_set
+
+    release = "registry.example.invalid/app@sha256:" + "a" * 64
+    compose = dict(_services(ROOT / "docker-compose.yml"))
+    compose["app-backup"] = {"image": "${APP_IMAGE}"}  # host override
+    resolved = {
+        "services": {
+            name: {
+                "image": release
+                if str(service.get("image", "")).startswith("${APP_IMAGE")
+                else service.get("image")
+            }
+            for name, service in compose.items()
+        }
+    }
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    exclusions = re.search(r"^APP_IMAGE_DEPLOY_EXCLUSIONS=\(([^)]*)\)", script, re.M)
+    assert exclusions
+    excluded = re.sub(r"#.*", "", exclusions.group(1)).split()
+    chosen = set(recreate_set(app_image_services(resolved, release), [], excluded))
+    assert "app-backup" not in chosen
+    return chosen
+
+
 def test_compose_files_are_discovered() -> None:
     assert ROOT / "docker-compose.yml" in COMPOSE_FILES
 
@@ -213,7 +244,11 @@ def test_deploy_applies_changed_config_for_every_config_service() -> None:
             for source, _target, _ro in _bind_mounts(compose[service])
         ), service
     # Still not recreated by a deploy: a restart keeps the service definition.
-    assert not CONFIG_RESTART_SERVICES & _deploy_array("APP_SERVICES")
+    # deploy.sh derives its recreate set from Compose (services whose image is
+    # the release ${APP_IMAGE}); compute it the same way here.
+    recreated = _deploy_recreated_services()
+    assert {"app", "celery-worker", "team-inbox-smtp"} <= recreated, recreated
+    assert not CONFIG_RESTART_SERVICES & recreated
 
 
 def test_deploy_validates_freeradius_before_database_work_and_restart() -> None:

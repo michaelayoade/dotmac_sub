@@ -16,7 +16,7 @@ activated by adding these files.
   bytes beside the descriptor and binds the descriptor to its digest.
 - `deploy/product.toml` — the 13 app-owned process roles (app, eight Celery
   workers, Beat, bandwidth poller, syslog listener, profile-gated
-  team-inbox SMTP at zero replicas), managed `redis-local`/`postgres-local`,
+  team-inbox SMTP, one replica in production), managed `redis-local`/`postgres-local`,
   and unmanaged VictoriaMetrics/object-store/OpenBao/GenieACS dependencies.
   Poller and syslog health reuse the merged probe owners
   (`app.services.poller_health`, `app.syslog.health`).
