@@ -116,8 +116,12 @@ def test_detail_issue_goes_through_starter_when_on(monkeypatch) -> None:
 
 def _prepared() -> SimpleNamespace:
     return SimpleNamespace(
-        settlement=SimpleNamespace(status=PaymentStatus.succeeded, amount=1),
-        topup_intent=SimpleNamespace(invoice_id=uuid4(), purpose="invoice_payment"),
+        settlement=SimpleNamespace(
+            status=PaymentStatus.succeeded, amount=1, provider_paid_at=None
+        ),
+        topup_intent=SimpleNamespace(
+            id=uuid4(), invoice_id=uuid4(), purpose="invoice_payment", reference="r"
+        ),
         ingest=SimpleNamespace(external_id="txn"),
     )
 
