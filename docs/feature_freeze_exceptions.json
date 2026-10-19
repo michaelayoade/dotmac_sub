@@ -338,6 +338,25 @@
       "reason": "Michael approved 2026-10-19 landing the reviewed open branches via one integration PR (#3716) instead of 17 separate merges: Learning/Kernel party and operator-tenant imports (#3672-#3678), audit visibility fixes (#3660/#3661), billing kill-switch and ingestion split (#3708/#3709), and small fixes (#3631-#3635, #3671). The combined diff exceeds the per-PR size threshold and adds two kernel-import modules plus one audit template; each constituent branch was reviewed on its own PR. No new capability beyond those branches.",
       "starter_contract": "Starter kernel party-identity and operator-tenancy import contracts consumed by party_kernel_import/operator_tenant_kernel_import (Learning/Kernel #3672-#3678); remaining paths are corrections to existing Sub audit/admin surfaces (#3660/#3661, #3708/#3709, #3631-#3635, #3671) landed under the same approval, consuming no new Starter contract.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-D1-HOLD-3721",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/billing/starter_policies.py"
+      ],
+      "reason": "REQUIRES MICHAEL'S APPROVAL. PR #3721 puts the #3680 payments-module intent under the D1 hold: starter_policies.py gains has_starter_invoice_link (+23 lines), so the thin-client billing surface grows 94519 -> 94542 (money-writer baseline unchanged at 24075). It routes the module intent by the invoice's own Starter link row, as settlement does. No new capability and no new files; no further growth is authorized. The billing_thin_client_baseline.txt TOTAL edit (94519 -> 94542) lands in #3721 only after this entry is approved.",
+      "deletion_trigger": "Remove this entry with has_starter_invoice_link when the legacy Invoice writer retires at the cutover seal.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-D1-PERMISSION-SCHEMA-3722",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/694_starter_ledger_live_permission.py"
+      ],
+      "reason": "REQUIRES MICHAEL'S APPROVAL. PR #3722 restricts the D1 switch billing.starter_ledger_live_enabled to users holding billing:starter_ledger_live:write. Migration 694 only inserts that permission row (granted to no role or user) and downgrade removes it. Corrective access-control schema/data only; no billing data or writer behavior changes.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
