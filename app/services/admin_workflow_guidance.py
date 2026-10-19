@@ -1313,6 +1313,9 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Change only the intended setting and read its validation or operational warning.",
         "Save the change, then reopen the page to confirm the effective value.",
         "Use audit and health evidence when a saved setting does not produce the expected behavior.",
+        notes=(
+            "The Starter ledger live (D1) switch on the Billing tab is read-only in the general form. Change it only with its own Save switch button; turning it on needs the separate billing:starter_ledger_live:write permission, turning it off needs only system settings write, and every attempt is audited.",
+        ),
     ),
     _guide(
         "walled-garden",
