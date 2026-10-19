@@ -20,6 +20,7 @@ from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services.auth_dependencies import require_permission
 from app.services.network.action_logging import log_network_action_result
 from app.services.network.ont_scope import can_manage_ont_from_request
+from app.services.pppoe_password_reveal import UNUSABLE_MESSAGE, CredentialUnusable
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.web.request_parsing import parse_form_data_sync
 from app.web.templates import templates
@@ -1091,12 +1092,20 @@ def ont_reveal_pppoe_password(
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    password, found = web_network_ont_actions_service.reveal_stored_pppoe_password(
-        db, ont_id, request=request
-    )
+    no_store = {"Cache-Control": "no-store, private", "Pragma": "no-cache"}
+    try:
+        password, found = web_network_ont_actions_service.reveal_stored_pppoe_password(
+            db, ont_id, request=request
+        )
+    except CredentialUnusable:
+        return JSONResponse(
+            {"password": "", "detail": UNUSABLE_MESSAGE},
+            status_code=409,
+            headers=no_store,
+        )
     if not found:
-        return JSONResponse({"password": ""}, status_code=404)
-    return JSONResponse({"password": password})
+        return JSONResponse({"password": ""}, status_code=404, headers=no_store)
+    return JSONResponse({"password": password}, headers=no_store)
 
 
 @router.get(

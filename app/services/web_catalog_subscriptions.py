@@ -106,6 +106,12 @@ from app.services.network.radius_sessions import (
     latest_open_accounting_session_for_subscription,
 )
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_credentials import subscription_bound_credential
+from app.services.pppoe_password_reveal import (
+    UNUSABLE_MESSAGE,
+    CredentialUnusable,
+    refuse_secret_reference,
+)
 from app.services.subscription_ipv4_projection import (
     ServiceIPv4Source,
     SubscriptionServiceIPv4,
@@ -1346,12 +1352,30 @@ def _current_access_credential(
     ).first()
 
 
+def _decrypt_credential_row(
+    credential: AccessCredential | None, owner_ref: object
+) -> str | None:
+    if not credential or not credential.secret_hash:
+        return None
+    refuse_secret_reference(credential.secret_hash)
+    try:
+        return decrypt_credential(credential.secret_hash)
+    except Exception:
+        logger.warning(
+            "Failed to decrypt service credential for %s",
+            owner_ref,
+            exc_info=True,
+        )
+        return None
+
+
 def _current_service_password(
     db: Session, subscriber_id: str | UUID | None
 ) -> str | None:
     credential = _current_access_credential(db, subscriber_id)
     if not credential or not credential.secret_hash:
         return None
+    refuse_secret_reference(credential.secret_hash)
     try:
         return decrypt_credential(credential.secret_hash)
     except Exception:
@@ -1361,6 +1385,57 @@ def _current_service_password(
             exc_info=True,
         )
         return None
+
+
+def _own_service_credential_view(
+    db: Session, subscriber_id: object, subscription: object
+) -> tuple[str, bool, str]:
+    """Return ``(login, has_password, problem)`` from this subscription's own credential."""
+    subscription_id = subscription.get("id") if isinstance(subscription, dict) else None
+    if not subscriber_id or not subscription_id:
+        return "", False, ""
+    try:
+        credential = subscription_bound_credential(
+            db, str(subscriber_id), str(subscription_id)
+        )
+    except CredentialUnusable:
+        return "", False, UNUSABLE_MESSAGE
+    if credential is None:
+        return "", False, ""
+    return (
+        credential.username or "",
+        bool(getattr(credential, "secret_hash", None)),
+        "",
+    )
+
+
+def subscription_subscriber_id(db: Session, subscription_id: str) -> str | None:
+    """Return the owning subscriber id for audit attribution, or None."""
+    try:
+        subscription = catalog_service.subscriptions.get(
+            db=db, subscription_id=subscription_id
+        )
+    except Exception:
+        return None
+    return str(subscription.subscriber_id)
+
+
+def reveal_subscription_service_password(
+    db: Session, subscription_id: str
+) -> tuple[str, bool]:
+    """Return ``(password, found)`` for an explicit reveal action.
+
+    Bound strictly to this subscription's own credential; raises
+    ``CredentialUnusable`` for a secret reference or an ambiguous binding.
+    Callers must enforce the reveal permission, CSRF and audit; this never logs
+    the secret.
+    """
+    subscriber_id = subscription_subscriber_id(db, subscription_id)
+    if subscriber_id is None:
+        return "", False
+    credential = subscription_bound_credential(db, subscriber_id, subscription_id)
+    password = _decrypt_credential_row(credential, f"subscription {subscription_id}")
+    return password or "", bool(password)
 
 
 def _credential_contact_targets(subscriber: Subscriber) -> dict[str, list[str]]:
@@ -1388,6 +1463,7 @@ def send_subscription_credentials(
     db: Session,
     *,
     subscription_id: str,
+    actor_id: str | None = None,
 ) -> dict[str, object]:
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
@@ -1400,7 +1476,26 @@ def send_subscription_credentials(
     if not credential or not credential.username:
         raise ValueError("No service credential is stored for this subscriber.")
 
-    password = _current_service_password(db, subscription.subscriber_id)
+    try:
+        password = _current_service_password(db, subscription.subscriber_id)
+    except CredentialUnusable as exc:
+        from app.services.audit_adapter import AuditActor, record_audit_event
+
+        record_audit_event(
+            db,
+            action="subscription.credentials_send_refused",
+            entity_type="subscriber",
+            entity_id=str(subscription.subscriber_id),
+            actor=(
+                AuditActor.user(actor_id)
+                if actor_id
+                else AuditActor.system("send_subscription_credentials")
+            ),
+            metadata={"subscription_id": str(subscription_id), "reason": exc.reason},
+            status_code=409,
+            is_success=False,
+        )
+        raise ValueError(UNUSABLE_MESSAGE) from exc
     if not password:
         raise ValueError("Current service password is not available for delivery.")
 
@@ -4118,8 +4213,9 @@ def subscription_form_context(
     )
     route_range_options = _route_range_parent_options_for_ipam(db)
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
-    current_password = _current_service_password(db, str(subscriber_id or ""))
-    current_credential = _current_access_credential(db, str(subscriber_id or ""))
+    own_login, own_has_password, credential_problem = _own_service_credential_view(
+        db, subscriber_id, subscription
+    )
     credential_targets = None
     if subscriber_id:
         try:
@@ -4258,10 +4354,11 @@ def subscription_form_context(
             db, SettingDomain.catalog, "billing_mode_postpaid_notice"
         )
         or "This subscription follows dunning steps.",
-        "current_service_login": getattr(current_credential, "username", "")
-        if current_credential
-        else "",
-        "current_service_password": current_password or "",
+        "current_service_login": own_login,
+        "credential_problem": credential_problem,
+        # The stored password is never rendered into page HTML; the page only
+        # learns whether one exists. Revealing it is a separate audited action.
+        "has_current_service_password": own_has_password,
         "credential_targets": credential_targets or {"email": [], "sms": []},
         "commercial_policy": {"rows": []},
     }

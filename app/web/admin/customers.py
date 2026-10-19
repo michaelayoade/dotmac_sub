@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.adapters.customer_account_deletion import customer_deletion_actor
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.models.party import PartyType
 from app.models.subscriber import Reseller, SubscriberCategory, UserType
@@ -79,6 +80,7 @@ from app.services.customer_timeline import CustomerTimelineItem
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_password_reveal import REVEAL_PERMISSION, audited_reveal
 from app.services.prepaid_activation_funding_guard import (
     OVERRIDE_PERMISSION as PREPAID_ACTIVATION_OVERRIDE_PERMISSION,
 )
@@ -1747,9 +1749,12 @@ def person_detail_stats_export(
     )
 
 
-@router.get(
+@router.post(
     "/person/{customer_id}/pppoe-password",
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[
+        Depends(require_browser_csrf_header),
+        Depends(require_permission(REVEAL_PERMISSION)),
+    ],
 )
 def person_pppoe_password(
     request: Request,
@@ -1759,76 +1764,19 @@ def person_pppoe_password(
 ) -> JSONResponse:
     """Reveal a customer's reusable PPPoE service password.
 
-    Staff-only (admin router is system_user-gated). Every reveal is audited
-    and per-actor rate-limited — this exposes a reusable credential whose leak
-    equals takeover of the customer's connection.
+    Explicit action: POST, CSRF-protected, dedicated permission, audited,
+    per-actor rate-limited and never cached. A leak of this credential equals
+    takeover of the customer's connection.
     """
-    from app.services import web_admin as web_admin_service
-    from app.services.audit_adapter import AuditActor, record_audit_event
-    from app.services.rate_limiter_adapter import allow_operation
-
-    actor = web_admin_service.get_current_user(request)
-    actor_id = web_admin_service.get_actor_id(request)
-    audit_actor = AuditActor.user(
-        actor_id or "unknown",
-        label=actor.get("name") if actor else None,
-    )
-    actor_metadata = {
-        key: value
-        for key, value in {
-            "actor_name": actor.get("name") if actor else None,
-            "actor_email": actor.get("email") if actor else None,
-        }.items()
-        if value
-    }
-
-    decision = allow_operation(
-        f"pppoe-reveal:{actor_id or 'unknown'}",
-        limit=30,
-        window_seconds=3600,
-    )
-    if not decision.allowed:
-        record_audit_event(
-            db,
-            action="customer.pppoe_password_reveal",
-            entity_type="subscriber",
-            entity_id=str(customer_id),
-            actor=audit_actor,
-            metadata={
-                "credential_id": credential_id,
-                "reason": "rate_limited",
-                **actor_metadata,
-            },
-            status_code=429,
-            is_success=False,
-        )
-        return JSONResponse(
-            {"password": "", "detail": "Reveal rate limit reached. Try again later."},
-            status_code=429,
-        )
-
-    password, found = web_customer_details_service.reveal_customer_pppoe_password(
+    return audited_reveal(
+        request,
         db,
-        customer_id,
-        credential_id=credential_id,
+        subscriber_id=str(customer_id),
+        metadata={"credential_id": credential_id},
+        lookup=lambda: web_customer_details_service.reveal_customer_pppoe_password(
+            db, customer_id, credential_id=credential_id
+        ),
     )
-    record_audit_event(
-        db,
-        action="customer.pppoe_password_reveal",
-        entity_type="subscriber",
-        entity_id=str(customer_id),
-        actor=audit_actor,
-        metadata={
-            "credential_id": credential_id,
-            "found": bool(found),
-            **actor_metadata,
-        },
-        status_code=200 if found else 404,
-        is_success=bool(found),
-    )
-    if not found:
-        return JSONResponse({"password": ""}, status_code=404)
-    return JSONResponse({"password": password})
 
 
 @router.get(
