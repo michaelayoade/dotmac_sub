@@ -1,18 +1,15 @@
 """Admin invoice issuance through Starter dotmac-billing (ADR 0031).
 
-The web invoice-detail Issue action switches eligible drafts to the
-pinned ``dotmac-billing`` service as sole ledger writer: single-line
-quantity-one drafts take the rated-invoice composition, homogeneous
-multi-line (or quantity-bearing) drafts take accept-per-line plus the
-multi-line draft-document composition. The Sub invoice row becomes a
-mirror (number, status, issued_at) plus structural links. Ineligible
-drafts keep the legacy path until their lanes migrate — eligibility is
-decided before any write, and a Starter failure after eligibility
-never falls back (that would risk dual issuance); it propagates and
-the caller's transaction rolls back.
-
-All contract values resolve through ``starter_policies`` (ADR 0031):
-no Starter-contract literal is inlined here.
+The web invoice-detail Issue action switches eligible drafts to the pinned
+``dotmac-billing`` service as sole ledger writer: single-line quantity-one
+drafts take the rated-invoice composition, homogeneous multi-line drafts
+accept-per-line plus the multi-line draft-document composition. The Sub row
+mirrors number, status and issued_at plus structural links. Ineligible drafts
+(and every draft while the ``starter_ledger_live_enabled`` switch is OFF) keep
+the legacy path; eligibility is decided before any write, and a Starter
+failure after eligibility never falls back. Contract values resolve through
+``starter_policies``; no Starter-contract
+literal is inlined here.
 """
 
 from __future__ import annotations
@@ -74,6 +71,7 @@ from app.services.billing.starter_policies import (
     due_terms_code,
     percent_to_fraction,
     resolve_starter_billing_policies,
+    starter_ledger_live_enabled,
 )
 from app.services.brand_profiles import resolve_brand
 from app.services.domain_errors import DomainError
@@ -277,6 +275,8 @@ def eligibility_reason(
     numbered drafts); staff-chosen numbers never qualify.
     """
 
+    if not starter_ledger_live_enabled(db):
+        return "Starter ledger live switch is OFF; legacy lane"
     if invoice.is_proforma:
         return "proforma invoices stay on the legacy lane"
     if invoice.status is not InvoiceStatus.draft:
