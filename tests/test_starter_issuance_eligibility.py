@@ -6,11 +6,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
-from app.models.catalog import BillingMode
+from app.models.catalog import BillingMode, Subscription
 from app.models.subscriber import Subscriber
 from app.services.billing import starter_issuance as issuance
 from app.services.billing import starter_policies
+from app.services.billing.account_credit import AccountCreditApplications
 
 _POLICY_DEFAULTS = {
     "starter_billing_account_ref_template": "subscriber:{subscriber_id}",
@@ -19,6 +22,28 @@ _POLICY_DEFAULTS = {
     "starter_billing_admin_contract_line_template": "admin-manual:{line_id}",
     "starter_billing_admin_contract_version": "admin-manual-v1",
     "starter_billing_admin_price_version": "admin-manual-v1",
+    "starter_billing_admin_fx_observation_template": "admin-manual-fx:{invoice_id}",
+    "starter_billing_recurring_source_kind": "scheduled_billing_invoice_line",
+    "starter_billing_recurring_contract_line_template": "scheduled-billing:{line_id}",
+    "starter_billing_recurring_contract_version": "scheduled-billing-v1",
+    "starter_billing_recurring_price_version": "scheduled-billing-v1",
+    "starter_billing_recurring_source_fact_template": "scheduled-billing-invoice:{invoice_id}",
+    "starter_billing_recurring_line_source_fact_template": "scheduled-billing-invoice-line:{line_id}",
+    "starter_billing_recurring_fx_observation_template": "scheduled-billing-fx:{invoice_id}",
+    "starter_billing_system_actor_ref": "system:billing_automation",
+    "starter_billing_default_minor_units": 2,
+    "starter_billing_subject_party_template": "party:{party_id}",
+    "starter_billing_subject_subscriber_template": "subscriber:{subscriber_id}",
+    "starter_billing_service_subscription_template": "subscription:{subscription_id}",
+    "starter_billing_service_subscriber_template": "subscriber:{subscriber_id}",
+    "starter_billing_source_fact_version": "1",
+    "starter_billing_fx_observation_version": "1",
+    "starter_billing_fx_rate_purpose": "document_currency",
+    "starter_billing_fx_rounding_policy": "minor_units",
+    "starter_billing_fx_provenance": "source-supplied",
+    "starter_billing_payment_method_code": "bank_transfer",
+    "starter_billing_correlation_template": "starter-issuance:{invoice_id}",
+    "starter_billing_due_evidence_ref_template": "invoice-draft:{invoice_id}",
     "starter_billing_default_charge_component": "other",
     "starter_billing_tax_jurisdiction": "NG",
     "starter_billing_tax_policy_id": "sub-manual-vat",
@@ -45,11 +70,27 @@ _POLICY_DEFAULTS = {
 
 
 class _Db:
-    def __init__(self, subscriber: Subscriber | None) -> None:
+    def __init__(
+        self,
+        subscriber: Subscriber | None,
+        subscription: Subscription | None = None,
+    ) -> None:
         self._subscriber = subscriber
+        self._subscription = subscription
 
-    def get(self, _model, _id):  # noqa: ANN001, ANN202
+    def get(self, model, _id):  # noqa: ANN001, ANN202
+        if model is Subscription:
+            return self._subscription
         return self._subscriber
+
+
+@pytest.fixture(autouse=True)
+def _policy_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(
+        starter_policies,
+        "resolve_value",
+        lambda _db, _domain, key: _POLICY_DEFAULTS[key],
+    )
 
 
 def _invoice(**overrides) -> Invoice:
@@ -196,3 +237,70 @@ def test_missing_customer_address_stays_legacy(monkeypatch) -> None:
         _invoice(),  # type: ignore[arg-type]
     )
     assert reason is not None and "customer" in reason
+
+
+def _recurring_invoice() -> Invoice:
+    invoice = _invoice(invoice_number="INV-1042")
+    invoice.lines[0].subscription_id = uuid4()  # type: ignore[attr-defined]
+    return invoice
+
+
+def _subscription(**overrides) -> Subscription:
+    subscription = Subscription(billing_mode=BillingMode.postpaid)
+    for key, value in overrides.items():
+        setattr(subscription, key, value)
+    return subscription
+
+
+def _stub_recurring_evidence(monkeypatch, *, account_credit: Decimal) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(issuance, "_seller_snapshot", lambda *_a, **_k: object())
+    monkeypatch.setattr(
+        issuance, "get_invoice_bank_details", lambda *_a, **_k: object()
+    )
+    monkeypatch.setattr(
+        AccountCreditApplications,
+        "preview_invoice_funding",
+        staticmethod(lambda *_a, **_k: SimpleNamespace(account_credit=account_credit)),
+    )
+
+
+def test_system_numbered_draft_is_recurring_eligible(monkeypatch) -> None:
+    _stub_recurring_evidence(monkeypatch, account_credit=Decimal("0.00"))
+    reason = issuance.recurring_eligibility_reason(
+        _Db(_subscriber(), _subscription()),  # type: ignore[arg-type]
+        _recurring_invoice(),
+    )
+    assert reason is None
+
+
+def test_recurring_with_account_credit_stays_legacy(monkeypatch) -> None:
+    _stub_recurring_evidence(monkeypatch, account_credit=Decimal("25.00"))
+    reason = issuance.recurring_eligibility_reason(
+        _Db(_subscriber(), _subscription()),  # type: ignore[arg-type]
+        _recurring_invoice(),
+    )
+    assert reason is not None and "account credit" in reason
+
+
+def test_recurring_prepaid_subscription_stays_legacy(monkeypatch) -> None:
+    _stub_recurring_evidence(monkeypatch, account_credit=Decimal("0.00"))
+    reason = issuance.recurring_eligibility_reason(
+        _Db(  # type: ignore[arg-type]
+            _subscriber(), _subscription(billing_mode=BillingMode.prepaid)
+        ),
+        _recurring_invoice(),
+    )
+    assert reason is not None and "prepaid" in reason
+
+
+def test_recurring_line_without_subscription_stays_legacy(monkeypatch) -> None:
+    _stub_recurring_evidence(monkeypatch, account_credit=Decimal("0.00"))
+    invoice = _recurring_invoice()
+    invoice.lines[0].subscription_id = None  # type: ignore[attr-defined]
+    reason = issuance.recurring_eligibility_reason(
+        _Db(_subscriber(), _subscription()),  # type: ignore[arg-type]
+        invoice,
+    )
+    assert reason is not None and "subscription" in reason

@@ -20,6 +20,7 @@ from app.models.billing import (
     InvoiceDueDateBasis,
     InvoiceLine,
     InvoiceStatus,
+    StarterInvoiceLink,
     TaxApplication,
 )
 from app.models.catalog import (
@@ -47,8 +48,17 @@ from app.services.account_lifecycle import (
 )
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing._common import _calculate_tax_amount
-from app.services.billing.invoices import InvoiceLines, Invoices
+from app.services.billing.invoices import (
+    InvoiceIssuanceInput,
+    InvoiceLines,
+    InvoiceOwnerError,
+    Invoices,
+)
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
+from app.services.billing.starter_issuance import (
+    issue_recurring_invoice_via_starter,
+    recurring_eligibility_reason,
+)
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import (
     accounts_with_collectible_service,
@@ -1436,6 +1446,63 @@ def run_billing_notifications(
     }
 
 
+def _is_starter_linked(db: Session, invoice_id: object) -> bool:
+    """Whether Starter dotmac-billing already owns this invoice."""
+
+    return (
+        db.query(StarterInvoiceLink.id)
+        .filter(StarterInvoiceLink.invoice_id == invoice_id)
+        .first()
+        is not None
+    )
+
+
+def _issue_cycle_invoice(
+    db: Session,
+    invoice: Invoice,
+    *,
+    run_at: datetime,
+    summary: dict[str, Any],
+) -> None:
+    """Issue one cycle-staged draft via Starter when eligible, else legacy.
+
+    Eligibility is decided before any write for this draft; a Starter
+    refusal propagates and rolls the run back rather than falling back.
+    Legacy issuance defers account credit to the cycle's end-of-run
+    settlement, exactly as the previous stage-time issuance did.
+    """
+
+    if recurring_eligibility_reason(db, invoice) is None:
+        issue_recurring_invoice_via_starter(db, invoice=invoice, issued_at=run_at)
+        summary["starter_issued_invoices"] += 1
+        return
+    if (
+        invoice.due_at is None
+        or invoice.due_date_basis is None
+        or invoice.due_date_basis_ref is None
+        or invoice.due_date_policy_version is None
+    ):
+        raise InvoiceOwnerError(
+            code="financial.invoice.issue_evidence_incomplete",
+            message="Native invoice issuance evidence is incomplete.",
+        )
+    Invoices.issue_draft_system(
+        db,
+        str(invoice.id),
+        issuance=InvoiceIssuanceInput(
+            issued_at=run_at,
+            due_at=invoice.due_at,
+            due_date_basis=invoice.due_date_basis,
+            due_date_basis_ref=invoice.due_date_basis_ref,
+            due_date_policy_version=invoice.due_date_policy_version,
+            reason="scheduled_billing_run",
+        ),
+        announce=False,
+        apply_available_credit=False,
+        commit=False,
+    )
+
+
 def run_invoice_cycle(
     db: Session,
     run_at: datetime | None = None,
@@ -1603,6 +1670,7 @@ def run_invoice_cycle(
         "subscriptions_scanned": len(subscriptions),
         "subscriptions_billed": 0,
         "invoices_created": 0,
+        "starter_issued_invoices": 0,
         "lines_created": 0,
         "skipped": 0,
         "prepaid_skipped": prepaid_skipped,
@@ -1956,6 +2024,10 @@ def run_invoice_cycle(
             )
             invoice_query = invoice_query.filter(collectible_ar_invoice_filter())
             invoice = invoice_query.first()
+            if invoice is not None and _is_starter_linked(db, invoice.id):
+                # Starter owns this receivable; legacy lines must never be
+                # appended to it. The subscription bills on a new invoice.
+                invoice = None
             if invoice:
                 invoices[invoice_key] = invoice
         if not invoice:
@@ -1971,7 +2043,7 @@ def run_invoice_cycle(
                 InvoiceCreate(
                     account_id=subscription.subscriber_id,
                     invoice_number=None,
-                    status=InvoiceStatus.issued,
+                    status=InvoiceStatus.draft,
                     currency=currency or "NGN",
                     billing_period_start=period_start,
                     billing_period_end=period_end,
@@ -2107,6 +2179,14 @@ def run_invoice_cycle(
             _recalculate_invoice_totals(db, invoice)
         # Recalc writes balance_due/status onto the invoice objects; flush so the
         # credit settlement below sees the open balance via its query.
+        db.flush()
+
+        # Newly created invoices were staged as drafts so their complete
+        # line sets exist before issuance. Eligible drafts issue through
+        # Starter as sole ledger writer; the rest take the legacy system
+        # issuance with the cycle's original due evidence.
+        for invoice in newly_created_invoices:
+            _issue_cycle_invoice(db, invoice, run_at=run_at, summary=summary)
         db.flush()
 
         # Canonical account credit is always offered to newly-created

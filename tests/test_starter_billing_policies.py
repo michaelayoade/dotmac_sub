@@ -17,6 +17,28 @@ _DEFAULTS = {
     "starter_billing_admin_contract_line_template": "admin-manual:{line_id}",
     "starter_billing_admin_contract_version": "admin-manual-v1",
     "starter_billing_admin_price_version": "admin-manual-v1",
+    "starter_billing_admin_fx_observation_template": "admin-manual-fx:{invoice_id}",
+    "starter_billing_recurring_source_kind": "scheduled_billing_invoice_line",
+    "starter_billing_recurring_contract_line_template": "scheduled-billing:{line_id}",
+    "starter_billing_recurring_contract_version": "scheduled-billing-v1",
+    "starter_billing_recurring_price_version": "scheduled-billing-v1",
+    "starter_billing_recurring_source_fact_template": "scheduled-billing-invoice:{invoice_id}",
+    "starter_billing_recurring_line_source_fact_template": "scheduled-billing-invoice-line:{line_id}",
+    "starter_billing_recurring_fx_observation_template": "scheduled-billing-fx:{invoice_id}",
+    "starter_billing_system_actor_ref": "system:billing_automation",
+    "starter_billing_default_minor_units": 2,
+    "starter_billing_subject_party_template": "party:{party_id}",
+    "starter_billing_subject_subscriber_template": "subscriber:{subscriber_id}",
+    "starter_billing_service_subscription_template": "subscription:{subscription_id}",
+    "starter_billing_service_subscriber_template": "subscriber:{subscriber_id}",
+    "starter_billing_source_fact_version": "1",
+    "starter_billing_fx_observation_version": "1",
+    "starter_billing_fx_rate_purpose": "document_currency",
+    "starter_billing_fx_rounding_policy": "minor_units",
+    "starter_billing_fx_provenance": "source-supplied",
+    "starter_billing_payment_method_code": "bank_transfer",
+    "starter_billing_correlation_template": "starter-issuance:{invoice_id}",
+    "starter_billing_due_evidence_ref_template": "invoice-draft:{invoice_id}",
     "starter_billing_default_charge_component": "other",
     "starter_billing_tax_jurisdiction": "NG",
     "starter_billing_tax_policy_id": "sub-manual-vat",
@@ -104,6 +126,27 @@ def test_admin_contract_line_template_renders_line_identity(settings) -> None:
     resolved = policies.resolve_starter_billing_policies(None)  # type: ignore[arg-type]
     assert resolved.admin_contract_line_ref(UUID(int=5)) == (
         f"admin-manual:{UUID(int=5)}"
+    )
+
+
+def test_recurring_templates_render_lane_identities(settings) -> None:
+    resolved = policies.resolve_starter_billing_policies(None)  # type: ignore[arg-type]
+    assert resolved.recurring_source_kind == "scheduled_billing_invoice_line"
+    assert resolved.system_actor_ref == "system:billing_automation"
+    assert resolved.recurring_contract_line_ref(UUID(int=6)) == (
+        f"scheduled-billing:{UUID(int=6)}"
+    )
+    assert resolved.recurring_source_fact_id(UUID(int=7)) == (
+        f"scheduled-billing-invoice:{UUID(int=7)}"
+    )
+    assert resolved.recurring_line_source_fact_id(UUID(int=8)) == (
+        f"scheduled-billing-invoice-line:{UUID(int=8)}"
+    )
+    assert resolved.recurring_fx_observation_id(UUID(int=9)) == (
+        f"scheduled-billing-fx:{UUID(int=9)}"
+    )
+    assert resolved.admin_fx_observation_id(UUID(int=10)) == (
+        f"admin-manual-fx:{UUID(int=10)}"
     )
 
 

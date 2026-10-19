@@ -199,7 +199,7 @@ def settle_starter_invoice_payment(
                 document_id=link.document_id,
                 amount=confirmed,
                 occurred_at=occurred_at,
-                source_ref=f"payments-confirmation:{confirmation.id}",
+                source_ref=policies.settlement_source_ref(confirmation.id),
             ),
         )
         current = get_current_receivable_position(
