@@ -279,6 +279,13 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
             for activity_key, activity_label in email_service.SMTP_ACTIVITY_CHOICES
         ]
     return {
+        "starter_ledger_live_enabled": (
+            selected_domain == SettingDomain.billing
+            and settings_spec.resolve_value(
+                db, SettingDomain.billing, "starter_ledger_live_enabled"
+            )
+            is True
+        ),
         "domain": selected_domain.value,
         "domains": settings_domains(),
         "grouped_domains": grouped_settings_domains(),
