@@ -451,10 +451,77 @@ def test_customer_creation_rejects_missing_checkout_binding(
     assert exc_info.value.code.endswith("checkout_binding_unavailable")
 
 
-def test_invoice_creation_opens_module_intent_once(
+def _invoice_checkout(db_session, subscriber, *, number: str, reference: str):
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number=number,
+        currency="NGN",
+        subtotal=Decimal("1200.00"),
+        total=Decimal("1200.00"),
+        balance_due=Decimal("1200.00"),
+        status=InvoiceStatus.issued,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    invoice_id = invoice.id
+    account_id = subscriber.id
+    binding_id = _checkout_binding(db_session).id
+
+    db_session_adapter.release_read_transaction(db_session)
+    return svc.create_customer_gateway_topup_intent(
+        db_session,
+        svc.CreateCustomerGatewayTopupIntentCommand(
+            flow=svc.CustomerGatewayTopupFlow.invoice_payment,
+            account_id=account_id,
+            invoice_id=invoice_id,
+            reference=reference,
+            provider_type="paystack",
+            provider_id=None,
+            created_by="pytest",
+            capability_binding_id=binding_id,
+        ),
+        context=_context(svc.CREATE_CUSTOMER_SCOPE),
+    )
+
+
+def test_invoice_creation_switch_off_never_touches_payments_module(
+    monkeypatch, db_session, subscriber
+):
+    """D1 hold: switch OFF (the default) is the pre-#3680 legacy-only checkout.
+
+    The real helper is restored and the module entry point raises on any use,
+    so a missing mod_payments schema (or any module call) would fail here.
+    """
+
+    _patch_policy(monkeypatch)
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("payments module must not be touched while OFF")
+
+    monkeypatch.setattr(svc, "_open_module_invoice_intent", _REAL_MODULE_INTENT_OPEN)
+    monkeypatch.setattr(svc, "open_payment_intent", _forbidden)
+
+    result = _invoice_checkout(
+        db_session, subscriber, number="INV-MODULE-OFF", reference="gateway-off-ref"
+    )
+
+    intent = db_session.get(TopupIntent, result.intent_id)
+    assert intent is not None
+    assert intent.reference == "gateway-off-ref"
+    assert result.payment_flow == "invoice_payment"
+
+
+def test_invoice_creation_switch_on_opens_module_intent_once(
     monkeypatch, db_session, subscriber, _stub_module_intent_open
 ):
     _patch_policy(monkeypatch)
+    consulted: list[bool] = []
+
+    def _switch_on(_db) -> bool:
+        consulted.append(True)
+        return True
+
+    monkeypatch.setattr(svc, "starter_ledger_live_enabled", _switch_on)
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number="INV-MODULE-INTENT",
@@ -486,6 +553,7 @@ def test_invoice_creation_opens_module_intent_once(
         context=_context(svc.CREATE_CUSTOMER_SCOPE),
     )
 
+    assert consulted, "the D1 switch must be consulted before opening"
     assert [intent.id for intent in _stub_module_intent_open] == [result.intent_id]
 
 
