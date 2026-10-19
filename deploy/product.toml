@@ -376,9 +376,13 @@ ping_command = ["python", "-m", "app.syslog.health", "--timeout-seconds", "2"]
 [[roles]]
 code = "team-inbox-smtp"
 command = ["python", "-m", "app.team_inbox_smtp", "serve"]
-# docker-compose.yml gates this service behind the `smtp-inbound` profile;
-# it is not part of the default production topology, hence zero replicas.
-replicas = 0
+# docker-compose.yml gates this service behind the `smtp-inbound` profile, and
+# production activates it and runs one container. Declaring zero replicas hid it
+# from drift comparison (zero-replica roles are skipped), which let it stay on an
+# old image across releases. This is the PRODUCTION topology (the opt-in intake
+# is started with `make prod-smtp-inbound-up`); nothing in this repo shows a
+# staging host running it, so do not read replicas = 1 as a staging claim.
+replicas = 1
 stop_grace_seconds = 30
 materials = ["DATABASE_URL", "OPENBAO_ADDR", "OPENBAO_TOKEN"]
 
@@ -406,7 +410,7 @@ owner_material = "MIGRATION_DATABASE_URL"
 # local lineage plus the nine pinned module migration trees (2026-10-16);
 # tests/architecture/test_deployment_descriptor.py re-derives this set in CI.
 expected_heads = [
-    "691_starter_invoice_links",
+    "692_starter_invoice_line_links",
     "bi_0011_settlement_earmarks",
     "cl_0001_collections",
     "ib_0001_conversations",

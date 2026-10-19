@@ -31,12 +31,14 @@ from app.services.settings_spec import resolve_value
 __all__ = [
     "StarterBillingPolicies",
     "StarterBillingPolicyError",
+    "StarterSettlementPolicies",
     "account_ref_policy",
     "accepted_confirmation_evidence",
     "collection_timing_for_billing_mode",
     "due_terms_code",
     "percent_to_fraction",
     "resolve_starter_billing_policies",
+    "resolve_starter_settlement_policies",
 ]
 
 
@@ -89,6 +91,7 @@ class StarterBillingPolicies:
     default_timezone: str
     default_unit_code: str
     admin_source_fact_template: str
+    admin_line_source_fact_template: str
     invoice_series_prefix: str
     credit_note_series_prefix: str
     default_country_code: str
@@ -111,6 +114,18 @@ class StarterBillingPolicies:
                 "configuration_invalid",
                 "Admin source fact template must contain {invoice_id}",
                 setting="starter_billing_admin_source_fact_template",
+            )
+        return rendered
+
+    def admin_line_source_fact_id(self, line_id: UUID) -> str:
+        rendered = self.admin_line_source_fact_template.replace(
+            "{line_id}", str(line_id)
+        )
+        if rendered == self.admin_line_source_fact_template or "{" in rendered:
+            raise _error(
+                "configuration_invalid",
+                "Admin line source fact template must contain {line_id}",
+                setting="starter_billing_admin_line_source_fact_template",
             )
         return rendered
 
@@ -154,6 +169,9 @@ def resolve_starter_billing_policies(db: Session) -> StarterBillingPolicies:
         default_unit_code=_text(db, "starter_billing_default_unit_code"),
         admin_source_fact_template=_text(
             db, "starter_billing_admin_source_fact_template"
+        ),
+        admin_line_source_fact_template=_text(
+            db, "starter_billing_admin_line_source_fact_template"
         ),
         invoice_series_prefix=_text(db, "starter_billing_invoice_series_prefix"),
         credit_note_series_prefix=_text(
@@ -260,3 +278,39 @@ def percent_to_fraction(percent: Decimal) -> Decimal:
             "tax_rate_invalid",
             "Tax percent snapshot cannot be converted to a rate fraction",
         ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class StarterSettlementPolicies:
+    """Resolved Starter settlement policy surface (ADR 0031).
+
+    The presented confirmation-evidence token must be a member of the
+    accepted-evidence set billing is asked to trust; anything else is a
+    configuration refusal, never a silent substitution.
+    """
+
+    settlement_source_system: str
+    settlement_source_version: str
+    funding_lane: str
+    confirmation_evidence: str
+    accepted_confirmation_evidence: frozenset[str]
+
+
+def resolve_starter_settlement_policies(db: Session) -> StarterSettlementPolicies:
+    accepted = accepted_confirmation_evidence(db)
+    presented = _text(db, "starter_payments_confirmation_evidence")
+    if presented not in accepted:
+        raise _error(
+            "configuration_invalid",
+            "Presented confirmation evidence is not in the accepted set",
+            setting="starter_payments_confirmation_evidence",
+        )
+    return StarterSettlementPolicies(
+        settlement_source_system=_text(db, "starter_payments_settlement_source_system"),
+        settlement_source_version=_text(
+            db, "starter_billing_settlement_source_version"
+        ),
+        funding_lane=_text(db, "starter_billing_settlement_funding_lane"),
+        confirmation_evidence=presented,
+        accepted_confirmation_evidence=accepted,
+    )

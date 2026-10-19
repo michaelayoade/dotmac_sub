@@ -29,7 +29,11 @@ FULL_SERVICES = (
     "celery-beat",
     "bandwidth-poller",
     "syslog-listener",
+    "team-inbox-smtp",
 )
+#: App-image services a host override can declare that no container has ever
+#: run (production's `app-backup` is privileged); a deploy must never create them.
+OVERRIDE_ONLY_APP_SERVICES = ("app-backup", "override-only-app")
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -104,6 +108,9 @@ def _run_deploy(
         f"APP_ENV={app_env}\n"
         f"SERVER_NAME={server_name}\n"
     )
+    running_app_services = " ".join(
+        service for service in declared_services if service in FULL_SERVICES
+    )
     declared_services_literal = " ".join(
         f"'{service}'" for service in declared_services
     )
@@ -131,7 +138,11 @@ def _run_deploy(
         {
             "services": {
                 name: {
-                    "image": "__candidate_image__",
+                    "image": (
+                        "__candidate_image__"
+                        if name in FULL_SERVICES or name in OVERRIDE_ONLY_APP_SERVICES
+                        else "example.invalid/other:1"
+                    ),
                     "working_dir": "/app",
                     "environment": {"PYTHONPATH": "/app"},
                     "volumes": [],
@@ -146,6 +157,58 @@ def _run_deploy(
 set -eu
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 {docker_prelude}
+if [[ "$1 $2" == "image inspect" && "$*" == *"{{{{.Id}}}}"* ]]; then
+  printf 'sha256:release-image-id\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *"com.docker.compose.project"* ]]; then
+  printf 'dotmac_sub\\n'
+  exit 0
+fi
+if [[ "$1" == "ps" && "$*" == *"label=com.docker.compose.project"* ]]; then
+  for svc in ${{FAKE_PS_SERVICES-{running_app_services}}}; do
+    printf 'container-%s\\n' "$svc"
+  done
+  if [[ "$*" == *" -a "* ]]; then
+    for svc in ${{FAKE_EXITED_SERVICES:-}}; do
+      printf 'container-exited-%s\\n' "$svc"
+    done
+  fi
+  if [[ "$*" != *"com.docker.compose.oneoff=False"* ]]; then
+    for svc in ${{FAKE_ONEOFF_SERVICES:-}}; do
+      printf 'container-oneoff-%s\\n' "$svc"
+    done
+  fi
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *"com.docker.compose.service"* ]]; then
+  svc="${{2#container-}}"
+  svc="${{svc#oneoff-}}"
+  svc="${{svc#exited-}}"
+  if [[ "${{FAKE_CONFIG_IMAGE_SHORT:-0}}" == "1" ]]; then
+    config_image="7081c646845a"
+  else
+    config_image="ghcr.io/michaelayoade/dotmac_sub@sha256:cccc"
+  fi
+  image_id="sha256:release-image-id"
+  if [[ "$2" == "${{FAKE_STALE_CONTAINER:-none}}" ]]; then
+    image_id="sha256:stale-image-id"
+  fi
+  printf '%s|%s|%s|%s|/dotmac_sub_%s\\n' "$2" "$svc" "$config_image" "$image_id" "$svc"
+  exit 0
+fi
+if [[ "$*" == "image ls --no-trunc -q "* ]]; then
+  printf 'sha256:release-image-id\\nsha256:stale-image-id\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$2" == "${{FAKE_STALE_CONTAINER:-none}}" && "$*" == *"{{{{.Image}}}}"* ]]; then
+  printf 'sha256:stale-image-id\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *"{{{{.Image}}}}"* ]]; then
+  printf '%s\\n' "${{FAKE_CONTAINER_IMAGE_ID:-sha256:release-image-id}}"
+  exit 0
+fi
 if [[ "$1 $2" == "image inspect" ]]; then
   if [[ "$*" == *"RepoDigests"* ]]; then
     printf '%s\\n' "{reported_digest_reference}"
@@ -294,7 +357,7 @@ exec /usr/bin/sed "$@"
 set -eu
 printf 'host-python cwd=%s args=%s\\n' "$PWD" "$*" >> "$DOCKER_LOG"
 # Pure, stdlib-only deploy helpers run for real against the test's files.
-if [[ "$*" == *"-m scripts.deploy_config_freshness"* || "$*" == *"-m scripts.deployment_secret_readiness"* ]]; then
+if [[ "$*" == *"-m scripts.deploy_config_freshness"* || "$*" == *"-m scripts.deployment_secret_readiness"* || "$*" == *"-m scripts.deploy_app_image_services"* ]]; then
   exec "{sys.executable}" "$@"
 fi
 if [[ "$*" == *"-m scripts.release_candidate_evidence verify-production"* ]]; then
@@ -1083,6 +1146,175 @@ def test_deploy_never_starts_a_service_the_host_does_not_declare(
     assert not any("celery-beat" in command for command in recreate_commands)
     # ...and it must not be health-gated as if it were running either.
     assert "BACKGROUND RUNTIME FAILURE: celery-beat" not in result.stderr
+
+
+def test_deploy_recreates_team_inbox_smtp_with_the_app_image(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, docker_log = _run_deploy(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_deploy_skips_team_inbox_smtp_when_its_profile_is_inactive(
+    tmp_path: Path,
+) -> None:
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, docker_log = _run_deploy(tmp_path, declared_services=without)
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert recreate
+    assert not any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_running_profile_gated_service_is_recreated_and_drift_checked(
+    tmp_path: Path,
+) -> None:
+    """Production starts team-inbox-smtp by name; its profile is not active."""
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={"FAKE_PS_SERVICES": " ".join(FULL_SERVICES)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_running_profile_gated_service_on_stale_image_fails_the_deploy(
+    tmp_path: Path,
+) -> None:
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, _docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={
+            "FAKE_PS_SERVICES": " ".join(FULL_SERVICES),
+            "FAKE_STALE_CONTAINER": "container-team-inbox-smtp",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "APP IMAGE DRIFT: team-inbox-smtp" in result.stderr
+
+
+def test_override_only_app_image_service_with_no_container_is_never_created(
+    tmp_path: Path,
+) -> None:
+    """Production's override declares a privileged `app-backup`; nothing runs it."""
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=(*FULL_SERVICES, *OVERRIDE_ONLY_APP_SERVICES),
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert recreate
+    for command in recreate:
+        assert "app-backup" not in command
+        assert "override-only-app" not in command
+
+
+def test_exited_app_image_containers_are_neither_started_nor_flagged(
+    tmp_path: Path,
+) -> None:
+    """Long-dead containers (staging's poller/listener) must stay dead."""
+    exited = ("bandwidth-poller", "syslog-listener", "team-inbox-smtp")
+    declared = tuple(s for s in FULL_SERVICES if s not in exited)
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=declared,
+        extra_env={
+            "FAKE_EXITED_SERVICES": " ".join(exited),
+            "FAKE_STALE_CONTAINER": "container-exited-bandwidth-poller",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "APP IMAGE DRIFT" not in result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert recreate
+    for command in recreate:
+        for service in exited:
+            assert service not in command
+    assert not any(" ps -a " in c for c in docker_log.read_text().splitlines())
+
+
+def test_running_excluded_service_is_still_not_recreated(tmp_path: Path) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=(*FULL_SERVICES, "app-backup"),
+        extra_env={"FAKE_PS_SERVICES": " ".join((*FULL_SERVICES, "app-backup"))},
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert not any("app-backup" in command for command in recreate)
+
+
+def test_one_off_container_on_an_old_image_is_ignored(tmp_path: Path) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={
+            "FAKE_ONEOFF_SERVICES": "celery-worker team-inbox-smtp",
+            "FAKE_STALE_CONTAINER": "container-oneoff-celery-worker",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "APP IMAGE DRIFT" not in result.stderr
+    assert any("oneoff=False" in c for c in docker_log.read_text().splitlines())
+
+
+def test_one_off_container_does_not_pull_a_profile_gated_service_in(
+    tmp_path: Path,
+) -> None:
+    without = tuple(s for s in FULL_SERVICES if s != "celery-beat")
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={"FAKE_ONEOFF_SERVICES": "celery-beat"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert not any("celery-beat" in command for command in recreate)
+
+
+def test_running_service_is_found_when_the_image_is_untagged_and_digest_pulled(
+    tmp_path: Path,
+) -> None:
+    """Production shows a short image ID, never `ghcr.io/...:tag`, in `docker ps`."""
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={
+            "FAKE_PS_SERVICES": " ".join(FULL_SERVICES),
+            "FAKE_CONFIG_IMAGE_SHORT": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_deploy_fails_when_an_app_service_runs_a_different_image(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, _docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"FAKE_CONTAINER_IMAGE_ID": "sha256:stale-image-id"},
+    )
+
+    assert result.returncode != 0
+    assert "APP IMAGE DRIFT" in result.stderr
 
 
 def test_deploy_refuses_missing_required_celery_worker(tmp_path: Path) -> None:
