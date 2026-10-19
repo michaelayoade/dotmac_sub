@@ -10,7 +10,10 @@ from ipaddress import ip_network
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
-from app.services.credential_crypto import encrypt_credential
+from app.services.credential_crypto import (
+    encrypt_credential,
+    reject_reserved_service_password,
+)
 from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
@@ -152,6 +155,13 @@ class OntFeatureService:
         if ssid is not None:
             proposed["wifi_ssid"] = ssid
         if password is not None:
+            try:
+                reject_reserved_service_password(password)
+            except ValueError:
+                return ActionResult(
+                    success=False,
+                    message="That WiFi password is not allowed. Choose a different one.",
+                )
             protected_password = encrypt_credential(password)
             if protected_password is None:
                 return ActionResult(

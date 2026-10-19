@@ -172,7 +172,7 @@ def test_wifi_intent_queues_without_false_success_and_rejects_plaintext_secret(
         target_type=UispIntentTargetType.cpe,
         target_id=cpe.id,
         desired_state={
-            "wifi": {"ssid": "Customer", "password_ref": "bao://uisp/wifi/1"}
+            "wifi": {"ssid": "Customer", "password_ref": "enc:opaque-test-value"}
         },
     )
     observe_intent(db_session, intent, _observation())
