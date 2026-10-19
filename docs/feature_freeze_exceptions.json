@@ -157,6 +157,16 @@
       "kind": "schema",
       "reason": "Migration 692 adds starter_invoice_line_links (per-line Starter obligation identity) and makes starter_invoice_links.obligation_id nullable, because a multi-line Starter document carries one obligation per line while the invoice-level link holds account and document identity only. Structural identity only (ADR 0007); retires with the legacy Invoice writer.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PREPAID-STALE-DRAFT-3699",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/prepaid_draft_reconciliation.py"
+      ],
+      "reason": "Michael explicitly approved Sub #3699 on 2026-10-19 under the freeze carve-out 'root-cause the settlement auto-repair' (PAID-NOT-REACTIVATED 2026-10-18, SUB-005060): +62 money-writer lines (TOTAL 24013 -> 24075) in one existing file. A prepaid draft whose billing_period_end precedes the funding event, or which has no service period, no longer receives new funding; it is recorded once (insert-if-absent) in prepaid_draft_reconciliation_exceptions for manual review and the existing current-period renewal proceeds. No new money path, migration or data repair; no further growth authorized.",
+      "deletion_trigger": "Remove when prepaid funding/renewal moves to Starter dotmac-billing (ADR 0020) and prepaid_draft_reconciliation.py is retired, or when the money-writer baseline next shrinks below 24013.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
