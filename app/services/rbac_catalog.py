@@ -692,12 +692,12 @@ def _replace_role_permissions(
 def _update_role_touched(db: Session, command: UpdateRoleCommand) -> set[UUID]:
     if command.permission_ids is None:
         return set()
-    return set(_role_permission_ids(db, command.role_id)) ^ set(
-        command.permission_ids
-    )
+    return set(_role_permission_ids(db, command.role_id)) ^ set(command.permission_ids)
 
 
-def _link_touched(db: Session, link_id: UUID, new_permission_id: UUID | None) -> set[UUID]:
+def _link_touched(
+    db: Session, link_id: UUID, new_permission_id: UUID | None
+) -> set[UUID]:
     link = db.get(RolePermission, link_id)
     touched: set[UUID] = set()
     if link is not None:
@@ -1252,7 +1252,9 @@ def update_role_permission(
         definition=_ROLE_COMMAND,
         context=command.context,
         operation=operation,
-        touched=lambda session: _link_touched(session, command.link_id, command.permission_id),
+        touched=lambda session: _link_touched(
+            session, command.link_id, command.permission_id
+        ),
         operation_name="update_role_permission",
     )
 

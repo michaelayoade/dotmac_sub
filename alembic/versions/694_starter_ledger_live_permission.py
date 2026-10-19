@@ -75,5 +75,7 @@ def downgrade() -> None:
         ("system_user_permissions", "permission_id"),
     ):
         if table in tables:
-            bind.execute(sa.text(f"DELETE FROM {table} WHERE {column} = :id"), {"id": row})
+            bind.execute(
+                sa.text(f"DELETE FROM {table} WHERE {column} = :id"), {"id": row}
+            )
     bind.execute(sa.text("DELETE FROM permissions WHERE id = :id"), {"id": row})

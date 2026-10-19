@@ -44,7 +44,9 @@ def _user(db) -> SystemUser:
 
 
 def _grant(db, user: SystemUser) -> None:
-    permission = db.scalars(select(Permission).where(Permission.key == PERMISSION)).first()
+    permission = db.scalars(
+        select(Permission).where(Permission.key == PERMISSION)
+    ).first()
     if permission is None:
         permission = Permission(key=PERMISSION, description="test")
         db.add(permission)
@@ -113,7 +115,9 @@ def test_write_without_permission_is_refused_and_audited(db_session) -> None:
 
 def test_non_user_actor_is_refused(db_session) -> None:
     with pytest.raises(AdminSettingsFormUpdateError):
-        _write(db_session, "api_key:" + str(uuid4()), "starter_ledger_live_enabled", True)
+        _write(
+            db_session, "api_key:" + str(uuid4()), "starter_ledger_live_enabled", True
+        )
     with pytest.raises(AdminSettingsFormUpdateError):
         _write(db_session, "system:job", "starter_ledger_live_enabled", True)
 
@@ -304,7 +308,9 @@ def test_off_write_through_owner_command_needs_no_dedicated_permission(
     db_session,
 ) -> None:
     user = _user(db_session)
-    outcome = _write(db_session, f"user:{user.id}", "starter_ledger_live_enabled", False)
+    outcome = _write(
+        db_session, f"user:{user.id}", "starter_ledger_live_enabled", False
+    )
     assert outcome.updated_keys == ("billing.starter_ledger_live_enabled",)
 
 
