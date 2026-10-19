@@ -210,12 +210,16 @@ _POST_SHAPED_READS: dict[str, str] = {
         "Simulates FUP rules against a hypothetical usage scenario and returns JSON."
     ),
     "POST /admin/catalog/subscriptions/{subscription_id}/lifecycle/preview": (
-        "Previews one lifecycle command without mutating subscription state, "
-        "and additionally re-checks the per-kind permission in the body "
-        "(``_assert_lifecycle_preview_permission``)."
+        "Previews one lifecycle command without mutating subscription state "
+        "(``subscription:read``). The execute route enforces the per-kind "
+        "permission."
     ),
     "POST /admin/catalog/subscriptions/bulk/lifecycle/preview": (
         "Batch counterpart of the lifecycle preview; no item is mutated."
+    ),
+    "POST /admin/catalog/bulk-tariff-change/preview": (
+        "Computes the bulk tariff change preview and fingerprint from posted "
+        "offer ids; persists nothing. The execute route stays on catalog:write."
     ),
     "POST /admin/provisioning/bulk-activate/preview": (
         "Builds the bulk-activation preview from posted filters/mapping. The "

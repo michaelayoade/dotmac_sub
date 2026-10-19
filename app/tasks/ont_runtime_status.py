@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Parent cadence assumed when no enabled schedule row exists (5 minutes).
+_DEFAULT_PARENT_INTERVAL_SECONDS = 300
+
 
 def _olt_lock_key(olt_id: str) -> int:
     digest = hashlib.blake2b(olt_id.encode("utf-8"), digest_size=8).digest()
@@ -74,7 +77,15 @@ def dispatch_huawei_ont_status() -> dict[str, int]:
         huawei_olt_status_pollable_criteria,
         queue_huawei_olt_status_poll,
     )
+    from app.services.scheduler_config import fanout_child_expires_seconds
 
+    # Own session: a failed interval lookup must not poison the fan-out query.
+    with db_session_adapter.read_session() as lookup_db:
+        child_expires = fanout_child_expires_seconds(
+            lookup_db,
+            "app.tasks.ont_runtime_status.dispatch_huawei_ont_status",
+            default_interval_seconds=_DEFAULT_PARENT_INTERVAL_SECONDS,
+        )
     with db_session_adapter.session() as db:
         olt_ids = list(
             db.scalars(
@@ -86,7 +97,9 @@ def dispatch_huawei_ont_status() -> dict[str, int]:
     queued = 0
     for olt_id in olt_ids:
         result = queue_huawei_olt_status_poll(
-            str(olt_id), source="network.ont_runtime_status.scheduled"
+            str(olt_id),
+            source="network.ont_runtime_status.scheduled",
+            expires=child_expires,
         )
         if result.queued:
             queued += 1

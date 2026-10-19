@@ -132,7 +132,11 @@ def _use_database(monkeypatch: pytest.MonkeyPatch, database_url: URL) -> None:
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
 
 

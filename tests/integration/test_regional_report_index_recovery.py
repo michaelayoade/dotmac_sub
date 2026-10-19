@@ -50,6 +50,7 @@ def fresh_migration_database(template_base_url: URL, monkeypatch) -> Iterator[UR
             # Alembic/SQLAlchemy must retain the installed psycopg v3 driver;
             # only direct psycopg.connect calls use the plain PostgreSQL URL.
             database_url=target.render_as_string(hide_password=False),
+            migration_database_url=target.render_as_string(hide_password=False),
         ),
     )
     try:

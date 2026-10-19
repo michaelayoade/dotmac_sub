@@ -188,7 +188,7 @@
         "path": "tests/test_team_inbox_whatsapp_webhook.py",
         "symbol": "<module>",
         "category": "provider_credential",
-        "fingerprint": "6b5ec793e3c6236cda3fd4a2acac14846cc9c8970a068551ed3b3bb8bfb2c3fc"
+        "fingerprint": "065610eb62693ff22caf0bca689fe3af7d9790efd43bf2566e83c923e86947c8"
       }
     ]
   }

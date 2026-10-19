@@ -22,6 +22,70 @@ DOMAIN = DomainSOT(
     domain="tenancy",
     services=(
         SOTService(
+            name="tenancy.operator_tenant_history",
+            module="app.services.operator_tenant_kernel_import",
+            owns=("rollback-only exact historical operator Tenant import",),
+            depends_on=("tenancy.operator_tenant",),
+            notes=(
+                "Historical fixture participant only; existing runtime authority remains. "
+                "Reserved event schema is unemitted in this rollback-only phase; "
+                "returned typed observations are outcomes, never dispatched events."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="rollback-only exact historical operator Tenant import",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("exact escrow operator Tenant",),
+                        canonical_writer="tenancy.operator_tenant_history",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="exact escrow operator Tenant",
+                        owner="tenancy.operator_tenant",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact locked source rows plus explicit typed fixture dispositions; no live population acceptance",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Only kernel_party_import rehearsal calls this participant on the same supplied PostgreSQL root; caller always rolls back",
+                    locking="Entry locks all actual source and destination tables until caller rollback; source fingerprints revalidated under locks; complete destination keysets and exact fields verified before outcomes",
+                    idempotency="Replay, populated destination and partial history refuse; no repair or upsert",
+                    retries="Rollback entire fixture and reobserve complete catalog and cohort before retry",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("tenancy.operator_tenant_history.refused",),
+                    mapping_owner="hosted fixture caller",
+                    fail_closed_on=(
+                        "stale or conflicting disposition, wrong tenant, OID/history drift, populated destination, suppressed or corrupted destination rows",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("tenancy.operator_tenant_history.import_verified.v1",),
+                    schema_version=1,
+                    delivery_owner="tenancy.operator_tenant_history",
+                    compatibility="RESERVED and unemitted: rollback-only fixtures stage no event, outbox or durable delivery",
+                    replay="No event replay; returned observations are uncommitted outcomes only",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.INVENTORIED,
+                    old_owner="tenancy.operator_tenant",
+                    new_owner="tenancy.operator_tenant_history",
+                    verification="Hosted real-chain rollback, exact destination verification and nonprivileged-role RLS tests; fixtures do not prove operational adoption",
+                    cutover_gate="Complete dispositions, reference and writer transfer, runtime acceptance and reverse recovery remain required",
+                    fallback_retirement="Existing runtime readers, writers and incoming FKs retain original source authority",
+                ),
+                steward="Sub identity and platform operations",
+                design_refs=("docs/designs/KERNEL_LINEAGE_ENTRY_PROTOTYPE.md",),
+                test_refs=(
+                    "tests/integration/test_kernel_party_import.py",
+                    "tests/architecture/test_kernel_party_import_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="tenancy.operator_tenant",
             module="app.services.operator_tenant",
             owns=(

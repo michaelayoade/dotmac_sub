@@ -32,6 +32,7 @@ from app.models.billing import (
 )
 from app.models.catalog import BillingMode
 from app.services import web_billing_invoices as web_invoices
+from app.services.billing import starter_issuance as issuance
 from app.services.billing import starter_policies
 from app.services.brand_profiles import upsert_brand_profile
 from app.services.operator_tenant import OPERATOR_TENANT_ID
@@ -53,6 +54,7 @@ def _starter_series_isolation(monkeypatch):
         return real_resolve(db, domain, key)
 
     monkeypatch.setattr(starter_policies, "resolve_value", _resolve)
+    monkeypatch.setattr(issuance, "starter_ledger_live_enabled", lambda _db: True)
 
 
 @pytest.fixture
@@ -296,6 +298,29 @@ def test_multiline_draft_stays_on_legacy_writer(
     # test database; the lane discriminator is the absence of a Starter
     # number and, structurally, of a StarterInvoiceLink.
     assert not (issued.invoice_number or "").startswith("S6A-")
+    link = db_session.execute(
+        select(StarterInvoiceLink).where(StarterInvoiceLink.invoice_id == invoice.id)
+    ).scalar_one_or_none()
+    assert link is None
+
+
+def test_switch_off_routes_eligible_draft_to_legacy_writer(
+    db_session, subscriber, _seller_and_bank, monkeypatch
+) -> None:
+    """D1 hold: with the live switch OFF (default) an eligible draft stays legacy."""
+
+    monkeypatch.setattr(issuance, "starter_ledger_live_enabled", lambda _db: False)
+    subscriber.billing_mode = BillingMode.postpaid
+    subscriber.billing_address_line1 = "2 Customer Close"
+    subscriber.billing_city = "Abuja"
+    db_session.commit()
+    invoice = _draft(db_session, subscriber)
+
+    issued = web_invoices.issue_invoice_from_detail(
+        db_session, invoice_id=invoice.id, actor_ref="user:d1-hold-proof"
+    )
+
+    assert issued.status is InvoiceStatus.issued
     link = db_session.execute(
         select(StarterInvoiceLink).where(StarterInvoiceLink.invoice_id == invoice.id)
     ).scalar_one_or_none()

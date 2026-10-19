@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy.exc import OperationalError
+
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
     Notification,
@@ -11,11 +13,22 @@ from app.models.notification import (
 from app.services import email as email_service
 from app.services.branding_config import get_brand
 from app.services.communication_attachments import CommunicationAttachmentError
+from app.tasks import notifications as notification_tasks
 from app.tasks.notifications import (
     _deliver_notification_queue,
     _deliver_notification_queue_stats,
     deliver_inbound_smtp_health_probe,
 )
+
+
+def test_deliver_notification_queue_retries_transient_database_failures():
+    task = notification_tasks.deliver_notification_queue
+
+    assert OperationalError in task.autoretry_for
+    assert task.retry_kwargs == {"max_retries": 3}
+    assert task.retry_backoff is True
+    assert task.retry_backoff_max == 60
+    assert task.retry_jitter is True
 
 
 def _queued_notification(

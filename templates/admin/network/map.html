@@ -949,7 +949,8 @@
 
     const customerRegionBounds = L.latLngBounds();
     customerRegions.forEach(region => {
-        const circle = L.circle([region.latitude, region.longitude], {
+        const regionCenter = L.latLng(region.latitude, region.longitude);
+        const circle = L.circle(regionCenter, {
             radius: region.radius_meters,
             color: region.color,
             fillColor: region.color,
@@ -958,7 +959,7 @@
             dashArray: '5, 6'
         }).bindTooltip(`${escapeHtml(region.name)} · ${Math.round(region.radius_meters)} m`);
         layers.regions.addLayer(circle);
-        customerRegionBounds.extend(circle.getBounds());
+        customerRegionBounds.extend(regionCenter.toBounds(region.radius_meters));
     });
     if (document.getElementById('layer-regions')?.checked) {
         map.addLayer(layers.regions);

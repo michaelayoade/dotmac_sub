@@ -2698,7 +2698,13 @@ def create_impersonation_session(
     actor_id_value = None
     if isinstance(auth, dict):
         actor_id_value = (
-            str(auth.get("subscriber_id") or auth.get("person_id") or "") or None
+            str(
+                auth.get("principal_id")
+                or auth.get("subscriber_id")
+                or auth.get("person_id")
+                or ""
+            )
+            or None
         )
 
     record_audit_event(

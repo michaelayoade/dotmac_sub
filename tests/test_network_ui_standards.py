@@ -352,6 +352,23 @@ def test_network_map_layer_controls_bind_before_batched_feature_rendering() -> N
     assert "skippedMapFeatures += 1;" in source
 
 
+def test_network_map_region_bounds_do_not_require_an_attached_leaflet_layer() -> None:
+    source = (TEMPLATES / "admin/network/map.html").read_text(encoding="utf-8")
+    region_setup = source.split("const customerRegionBounds", 1)[1].split(
+        "const semanticTones", 1
+    )[0]
+
+    assert (
+        "const regionCenter = L.latLng(region.latitude, region.longitude);"
+        in region_setup
+    )
+    assert (
+        "customerRegionBounds.extend(regionCenter.toBounds(region.radius_meters));"
+        in region_setup
+    )
+    assert "circle.getBounds()" not in region_setup
+
+
 def test_shared_confirmation_assets_and_critical_actions_are_wired():
     base = (TEMPLATES / "base.html").read_text()
     confirmation_js = Path("static/js/action-confirmations.js").read_text()

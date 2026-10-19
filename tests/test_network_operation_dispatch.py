@@ -66,7 +66,7 @@ def test_stage_dispatch_is_typed_and_idempotent(db_session):
     )
     assert dispatch.args_payload == [str(ont.id), str(operation.id)]
     assert dispatch.kwargs_payload == {}
-    assert dispatch.queue == "ingestion"
+    assert dispatch.queue == "inventory"
 
 
 def test_stage_dispatch_rejects_arbitrary_or_mismatched_commands(db_session):
@@ -152,7 +152,7 @@ def test_publisher_sends_only_the_dispatch_envelope(db_session, monkeypatch):
             {
                 "args": list(dispatch.args_payload),
                 "kwargs": {"_network_dispatch_id": str(dispatch.id)},
-                "queue": "ingestion",
+                "queue": "inventory",
                 "correlation_id": operation.correlation_key,
                 "source": "network_operation_dispatch",
                 "request_id": str(dispatch.id),

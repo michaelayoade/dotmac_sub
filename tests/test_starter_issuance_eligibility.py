@@ -69,6 +69,13 @@ _POLICY_DEFAULTS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _switch_on(monkeypatch):
+    """These cases exercise eligibility rules, so the live switch is ON."""
+
+    monkeypatch.setattr(issuance, "starter_ledger_live_enabled", lambda _db: True)
+
+
 class _Db:
     def __init__(
         self,

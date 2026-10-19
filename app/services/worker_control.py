@@ -25,6 +25,7 @@ _DEFAULT_RESTART_CONTAINERS = {
     "celery-worker-tr069": "dotmac_sub_celery_worker_tr069",
     "celery-worker-bandwidth": "dotmac_sub_celery_worker_bandwidth",
     "celery-worker-monitoring": "dotmac_sub_celery_worker_monitoring",
+    "celery-worker-inventory": "dotmac_sub_celery_worker_inventory",
     "celery-worker-billing": "dotmac_sub_celery_worker_billing",
 }
 
