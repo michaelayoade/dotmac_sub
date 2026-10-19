@@ -567,6 +567,7 @@ def _issue_via_starter(
             )
             document_number = fact.fact.document_number
             document_id = issued.invoice_id
+            issued_fact_version: int | None = issued.issued_fact_version
             link_obligation_id: UUID | None = issued.obligation_id
             line_obligations: list[tuple[InvoiceLine, UUID]] = [
                 (line, issued.obligation_id)
@@ -649,6 +650,7 @@ def _issue_via_starter(
                 )
             document_number = number
             document_id = issued_document.id
+            issued_fact_version = None
             link_obligation_id = None
             line_obligations = [
                 (line, row.id) for line, row in zip(lines, accepted, strict=True)
@@ -672,6 +674,7 @@ def _issue_via_starter(
         obligation_id=link_obligation_id,
         document_id=document_id,
         source_fact_id=invoice_source_fact_id,
+        issued_fact_version=issued_fact_version,
     )
     db.add(link)
     if link_obligation_id is None:
