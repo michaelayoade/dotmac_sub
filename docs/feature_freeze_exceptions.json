@@ -189,9 +189,10 @@
         "app/services/billing/starter_issuance.py",
         "app/services/billing/starter_policies.py",
         "app/services/settings_spec.py",
-        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py",
+        "app/services/billing/account_credit.py"
       ],
-      "reason": "Next Step 4 caller-migration lane after the admin issuance slices (6a #3691, multi-line #3697): switch the scheduled invoice cycle's newly created postpaid invoices to Starter issuance at end-of-run. The cycle stages drafts, appends lines, then issues eligible groups (single-subscription homogeneous line sets, no available account credit) through the existing starter_issuance service; ineligible groups keep the legacy issuance path. A reuse guard excludes Starter-linked invoices from the cycle's existing-invoice line appends. Sub remains caller-only: no new billing logic, no dual-write.",
+      "reason": "Next Step 4 caller-migration lane after the admin issuance slices (6a #3691, multi-line #3697): switch the scheduled invoice cycle's newly created postpaid invoices to Starter issuance at end-of-run. The cycle stages drafts, appends lines, then issues eligible groups (single-subscription homogeneous line sets, no available account credit) through the existing starter_issuance service; ineligible groups keep the legacy issuance path. A reuse guard excludes Starter-linked invoices from the cycle's existing-invoice line appends. Sub remains caller-only: no new billing logic, no dual-write. The account_credit path carries the structural guard excluding Starter-linked invoices from legacy account-credit settlement.",
       "approved_by": "michaelayoade",
       "starter_contract": "Published dotmac-billing 0.1.0a8 issue_rated_invoice + accept_rated_obligation + create_multi_line_draft_document + issue_document + create_billing_account, and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist."
     },
