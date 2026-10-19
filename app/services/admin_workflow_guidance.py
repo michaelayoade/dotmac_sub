@@ -482,6 +482,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "Force Resync is refused on purpose when the last attempt left the ONT out of sync — that is a deliberate checkpoint asking you to confirm it is safe before retrying, not a bug.",
             "A failed push does not necessarily mean nothing happened on the device; check the ONT's actual status before assuming it is still on the old settings.",
+            "Retry current configuration works directly from the ONT detail page's Configuration tab. Each page view issues a fresh one-time retry key, so a retry is accepted once, and a second submission of the same page is ignored as a duplicate; reload the page to get a new key.",
             "In Assign Subscriber, select the subscriber before choosing a service subscription. Clearing the subscriber also clears and disables the subscription choices; select a subscriber again to reload its services.",
         ),
     ),
