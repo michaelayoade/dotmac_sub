@@ -55,9 +55,9 @@ check-file: lint-file type-check-file ## Lint + type-check a single file (usage:
 
 bump-version: ## Bump app version (usage: make bump-version BUMP=patch or VERSION=1.2.3)
 	@if [ -n "$(VERSION)" ]; then \
-		python3 scripts/bump_version.py --set "$(VERSION)"; \
+		poetry run python -m scripts.bump_version --set "$(VERSION)"; \
 	else \
-		python3 scripts/bump_version.py "$(BUMP)"; \
+		poetry run python -m scripts.bump_version "$(BUMP)"; \
 	fi
 
 # ─── Testing ──────────────────────────────────────────────
