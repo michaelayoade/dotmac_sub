@@ -451,8 +451,8 @@ def test_mac_harvest_tasks_registered_routed_and_exported():
 
     assert dispatcher in celery_app.tasks
     assert child in celery_app.tasks
-    assert celery_app.conf.task_routes[dispatcher] == {"queue": "ingestion"}
-    assert celery_app.conf.task_routes[child] == {"queue": "ingestion"}
+    assert celery_app.conf.task_routes[dispatcher] == {"queue": "inventory"}
+    assert celery_app.conf.task_routes[child] == {"queue": "inventory"}
     assert "run_single_olt_mac_harvest" in tasks.__all__
 
 

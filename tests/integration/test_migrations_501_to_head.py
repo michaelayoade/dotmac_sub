@@ -136,7 +136,11 @@ def test_postgres_drops_the_obsolete_column_and_keeps_501_resolvable(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
     config = _alembic_config()
 
@@ -180,7 +184,11 @@ def test_501_downgrade_preserves_obsolete_column_removal(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
     config = _alembic_config()
 

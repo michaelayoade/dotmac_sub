@@ -128,7 +128,7 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_router_management_connection.py` | `test_execute_honors_tunable_overrides` | `delivery_retry` | `c887e359adc3583a9c7332c37a3fb951afdad207057a5e96fb02cd136463d31e` |
 | `tests/test_team_inbox_meta_social_webhook.py` | `<module>` | `provider_credential` | `24ef8ff0b3d4670d3cc08efed8d4b43a85d4824b88e5f78d30bc08436e58cde0` |
 | `tests/test_team_inbox_smtp_runtime.py` | `test_readiness_uses_smtp_noop` | `outbound_transport` | `93abe275aa5f06c2edbe1286e2e1918d61e9cc2a4888101c70134c7cc8bc08b9` |
-| `tests/test_team_inbox_whatsapp_webhook.py` | `<module>` | `provider_credential` | `6b5ec793e3c6236cda3fd4a2acac14846cc9c8970a068551ed3b3bb8bfb2c3fc` |
+| `tests/test_team_inbox_whatsapp_webhook.py` | `<module>` | `provider_credential` | `065610eb62693ff22caf0bca689fe3af7d9790efd43bf2566e83c923e86947c8` |
 
 The 2026-09-05 review re-recorded `test_coverage_metrics.py` after its LLDP
 wrapper assertions moved to the typed detached-poll contracts. The file remains

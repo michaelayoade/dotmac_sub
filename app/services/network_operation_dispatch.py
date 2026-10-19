@@ -152,7 +152,7 @@ def _ont_status_refresh_invocation(
     return DispatchInvocation(
         args=[str(operation.target_id), str(operation.id)],
         kwargs={},
-        queue="ingestion",
+        queue="inventory",
     )
 
 

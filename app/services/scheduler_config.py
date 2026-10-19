@@ -287,6 +287,39 @@ def _entry_expires_seconds(interval_seconds: int) -> int:
     return interval_seconds
 
 
+def fanout_child_expires_seconds(
+    db, parent_task_name: str, *, default_interval_seconds: int
+) -> int:
+    """Message expiry for children a periodic parent fans out.
+
+    Children inherit the parent's interval: once the next parent run has fanned
+    out again, an unconsumed child is obsolete. Unbounded children always
+    executed while the minute-cadence tasks queued behind them expired
+    (ingestion RCA 2026-10-19). Reads the parent's enabled interval row, else
+    the documented default.
+    """
+    interval: int | None = None
+    try:
+        row = (
+            db.query(ScheduledTask)
+            .filter(
+                ScheduledTask.task_name == parent_task_name,
+                ScheduledTask.enabled.is_(True),
+                ScheduledTask.schedule_type == ScheduleType.interval,
+            )
+            .order_by(ScheduledTask.created_at.desc())
+            .first()
+        )
+        interval = row.interval_seconds if row else None
+    except Exception:  # noqa: BLE001 - expiry must never block the fan-out
+        logger.warning(
+            "fanout_expiry_lookup_failed parent=%s; using default",
+            parent_task_name,
+            exc_info=True,
+        )
+    return _entry_expires_seconds(max(int(interval or default_interval_seconds), 1))
+
+
 def _interval_to_beat_schedule(
     task_id: UUID | str, interval_seconds: int
 ) -> crontab | timedelta:

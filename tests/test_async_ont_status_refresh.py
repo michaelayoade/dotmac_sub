@@ -45,7 +45,7 @@ def test_queue_refresh_tracks_and_deduplicates_operation(db_session):
     dispatch = db_session.query(NetworkOperationDispatch).one()
     assert dispatch.operation_id == operation.id
     assert dispatch.args_payload == [str(ont.id), first.operation_id]
-    assert dispatch.queue == "ingestion"
+    assert dispatch.queue == "inventory"
     assert dispatch.status == NetworkOperationDispatchStatus.pending
     history = build_operation_history(db_session, "ont", str(ont.id))
     assert history[0]["title"] == "ONT Status Refresh"
@@ -142,7 +142,7 @@ def test_ont_refresh_controls_only_post_device_work():
 def test_ont_refresh_task_is_routed_and_classified():
     task_name = "app.tasks.ont_runtime_status.refresh_single_ont_status"
 
-    assert celery_app.conf.task_routes[task_name] == {"queue": "ingestion"}
+    assert celery_app.conf.task_routes[task_name] == {"queue": "inventory"}
     assert task_name in TASK_RELIABILITY_CONTRACTS
 
 

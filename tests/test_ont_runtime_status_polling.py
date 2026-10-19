@@ -66,7 +66,8 @@ def test_runtime_status_owner_publishes_bulk_observation_poll(monkeypatch):
             "app.tasks.ont_runtime_status.refresh_huawei_olt_status",
             {
                 "args": ["olt-1"],
-                "queue": "ingestion",
+                "queue": "inventory",
+                "expires": None,
                 "correlation_id": "ont-status-refresh:olt-1",
                 "source": "network.ont_status_refresh",
             },
@@ -98,12 +99,17 @@ def test_scheduled_dispatch_uses_shared_pollability_and_queue_owner(
 
     queued: list[tuple[str, str]] = []
 
-    def fake_queue(olt_id: str, *, source: str) -> QueueDispatchResult:
+    expiries: list[int | None] = []
+
+    def fake_queue(
+        olt_id: str, *, source: str, expires: int | None = None
+    ) -> QueueDispatchResult:
         queued.append((olt_id, source))
+        expiries.append(expires)
         return QueueDispatchResult(
             queued=True,
             task_name="app.tasks.ont_runtime_status.refresh_huawei_olt_status",
-            queue="ingestion",
+            queue="inventory",
         )
 
     monkeypatch.setattr(ont_runtime_status_tasks.db_session_adapter, "session", session)
@@ -119,6 +125,8 @@ def test_scheduled_dispatch_uses_shared_pollability_and_queue_owner(
     assert queued == [
         (str(pollable.id), "network.ont_runtime_status.scheduled"),
     ]
+    # Fan-out children expire with the parent interval (never unbounded).
+    assert len(expiries) == 1 and expiries[0] is not None and expiries[0] > 0
 
 
 def test_worker_rechecks_pollability_before_device_io(db_session, monkeypatch):

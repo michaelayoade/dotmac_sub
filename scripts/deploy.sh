@@ -152,7 +152,7 @@ APP_SERVICES=()
 #   rollback restore) must not bring up a new privileged container.
 APP_IMAGE_DEPLOY_EXCLUSIONS=(app-backup)
 CELERY_WORKER_SERVICES=(celery-worker celery-worker-bandwidth \
-  celery-worker-ingestion celery-worker-monitoring \
+  celery-worker-ingestion celery-worker-inventory celery-worker-monitoring \
   celery-worker-notifications-immediate celery-worker-notifications \
   celery-worker-billing celery-worker-tr069)
 CELERY_BEAT_SERVICE="celery-beat"

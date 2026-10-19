@@ -40,7 +40,7 @@ def test_task_registered_routed_and_exported():
     import app.tasks as tasks
 
     assert TASK_NAME in celery_app.tasks
-    assert celery_app.conf.task_routes[TASK_NAME] == {"queue": "ingestion"}
+    assert celery_app.conf.task_routes[TASK_NAME] == {"queue": "monitoring"}
     assert "run_radius_health_check" in tasks.__all__
 
 

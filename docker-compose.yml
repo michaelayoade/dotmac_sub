@@ -406,6 +406,11 @@ services:
     - -Q
     - bandwidth
 
+  # Minute-cadence RADIUS accounting import, usage metering, session and outage
+  # reconciliation. Long inventory/SSH collection lives on `inventory`, so it can
+  # no longer make these tasks expire in the queue (RCA 2026-10-19). Concurrency
+  # is declared here: a host override `command:` for this service is obsolete
+  # and must be removed at deploy.
   celery-worker-ingestion:
     image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
     container_name: dotmac_sub_celery_worker_ingestion
@@ -436,6 +441,9 @@ services:
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
+      DB_APPLICATION_NAME: dotmac_sub_celery_worker_ingestion
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "1"
     env_file:
     - .env
     depends_on:
@@ -449,13 +457,60 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
-    - --concurrency=1
+    - --concurrency=3
     - --max-tasks-per-child=50
     - -Q
     - ingestion
 
+  # Long-running inventory and SSH/API collection (OLT MAC harvest, UISP
+  # topology, Huawei ONT status, LLDP, UFiber links, router runtime). Split from
+  # `ingestion` so slow device sweeps cannot starve the minute-cadence tasks.
+  celery-worker-inventory:
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
+    container_name: dotmac_sub_celery_worker_inventory
+    restart: unless-stopped
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *id001
+    extra_hosts: *observability_extra_hosts
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      REDIS_URL: ${REDIS_URL}
+      VICTORIAMETRICS_URL: http://victoriametrics:8428
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+      NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
+      DB_APPLICATION_NAME: dotmac_sub_celery_worker_inventory
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "1"
+    env_file:
+    - .env
+    depends_on:
+      victoriametrics:
+        condition: service_started
+    volumes:
+    - ./uploads:/app/uploads
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=2
+    - --max-tasks-per-child=50
+    - -Q
+    - inventory
+
   # Reserved consumer for native reachability observations and the topology
-  # status projection. Bulk SSH/inventory jobs stay on `ingestion`, so they
+  # status projection (and the RADIUS probe). Bulk SSH/inventory jobs run on
+  # `inventory`, so they
   # cannot make customer-visible device health stale by monopolizing a worker.
   celery-worker-monitoring:
     image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
@@ -479,6 +534,10 @@ services:
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
+      RADIUS_PROBE_SECRET: ${RADIUS_PROBE_SECRET:-}
+      RADIUS_PROBE_PASSWORD: ${RADIUS_PROBE_PASSWORD:-}
+      RADIUS_PROBE_HOST: ${RADIUS_PROBE_HOST:-freeradius}
+      DB_APPLICATION_NAME: dotmac_sub_celery_worker_monitoring
     env_file:
     - .env
     depends_on:

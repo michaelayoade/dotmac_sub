@@ -3,12 +3,13 @@
 The permission is UI-assignable and receives no role grants here (admin holds
 "*"); administrators attach it to the exact roles that need it.
 
-Revision ID: 695_subscription_credential_permission
-Revises: 692_starter_invoice_line_links
+Revision ID: 696_subscription_credential_permission
+Revises: 693_starter_credit_note_links
 Create Date: 2026-10-19
 
-NOTE: based on the head of this branch. Merge order is #3716 (693), #3722 (694),
-then this PR; renumber / re-point down_revision on merge if needed.
+NOTE: down_revision is main's head (693) at authoring time. Planned order is
+#3722 (694), #3725/#3726 (695), then this migration (696); re-point
+down_revision when those merge.
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "695_subscription_credential_permission"
-down_revision: str | None = "692_starter_invoice_line_links"
+revision: str = "696_subscription_credential_permission"
+down_revision: str | None = "693_starter_credit_note_links"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

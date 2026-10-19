@@ -73,6 +73,7 @@ def test_expected_celery_queues_uses_default_when_unset(monkeypatch):
         "bandwidth",
         "monitoring",
         "ingestion",
+        "inventory",
         "crm",
         "billing",
     ]
@@ -97,6 +98,7 @@ def test_celery_queue_restart_targets_default_mapping(monkeypatch):
     assert targets["tr069"] == "celery-worker-tr069"
     assert targets["monitoring"] == "celery-worker-monitoring"
     assert targets["ingestion"] == "celery-worker-ingestion"
+    assert targets["inventory"] == "celery-worker-inventory"
 
 
 def test_celery_queue_restart_targets_parses_env(monkeypatch):
