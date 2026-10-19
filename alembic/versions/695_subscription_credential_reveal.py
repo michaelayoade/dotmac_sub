@@ -5,11 +5,10 @@ permission is UI-assignable and receives no role grants here (admin holds
 "*"); administrators attach it to the exact roles that need it.
 
 Revision ID: 695_subscription_credential_reveal
-Revises: 693_starter_credit_note_links
+Revises: 694_starter_ledger_live_permission
 Create Date: 2026-10-19
 
-NOTE: based on the current head. Other open PRs also add migrations on 693;
-re-point down_revision to 694 if #3722 merges first.
+NOTE: based on the current head. Other open PRs also add migrations; re-point down_revision if one lands first.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "695_subscription_credential_reveal"
-down_revision: str | None = "693_starter_credit_note_links"
+down_revision: str | None = "694_starter_ledger_live_permission"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

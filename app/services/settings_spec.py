@@ -100,6 +100,15 @@ class SettingSpec(ListResponseMixin):
     #: ``control:settings:write``), which audits every change. Declare it for a
     #: governance switch whose change must always leave an audit event.
     owner_command_only: bool = False
+    #: Optional dedicated RBAC permission key the acting system user must hold
+    #: (exact key, granted through a role or directly; the ``admin`` role and
+    #: wildcard grants do NOT satisfy it) IN ADDITION to ``control:settings:write``
+    #: before the owner command writes this key. Refused attempts are audited.
+    required_permission: str | None = None
+    #: With ``required_permission`` on a boolean: require it only to turn the
+    #: setting ON. Writing ``False`` (the safe direction) needs only
+    #: ``control:settings:write`` and is still audited.
+    required_permission_enable_only: bool = False
     allowed: set[str] | None = None
     min_value: int | None = None
     max_value: int | None = None
@@ -2472,6 +2481,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="invoice",
         label="Starter Billing Invoice Numbering Series",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_credit_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_CREDIT_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="credit-note-issue:{credit_note_id}",
+        label="Starter Billing Credit Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_credit_correlation_template",
+        env_var="BILLING_STARTER_BILLING_CREDIT_CORRELATION_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="starter-credit-issue:{idempotency_key}",
+        label="Starter Billing Credit Correlation Template",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -5871,6 +5896,8 @@ SETTINGS_SPECS.append(
         label="Starter ledger live (issue and settle eligible postpaid invoices through Starter)",
         inherits=False,
         owner_command_only=True,
+        required_permission="billing:starter_ledger_live:write",
+        required_permission_enable_only=True,
     )
 )
 
