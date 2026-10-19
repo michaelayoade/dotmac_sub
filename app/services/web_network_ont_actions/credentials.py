@@ -9,6 +9,10 @@ from starlette.requests import Request
 
 from app.models.network import OntUnit
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.pppoe_password_reveal import (
+    CredentialUnusable,
+    refuse_secret_reference,
+)
 from app.services.web_network_ont_actions._common import _log_action_audit
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,7 @@ def resolve_stored_pppoe_password(db: Session, ont_id: str) -> str:
     raw = getattr(ont, "pppoe_password", None)
     if not raw:
         return ""
+    refuse_secret_reference(raw)
 
     try:
         return decrypt_credential(raw) or ""
@@ -41,7 +46,19 @@ def reveal_stored_pppoe_password(
     if not ont:
         return "", False
 
-    password = resolve_stored_pppoe_password(db, ont_id)
+    try:
+        password = resolve_stored_pppoe_password(db, ont_id)
+    except CredentialUnusable as exc:
+        _log_action_audit(
+            db,
+            request=request,
+            action="reveal_pppoe_password_refused",
+            ont_id=ont_id,
+            metadata={"reason": exc.reason},
+            status_code=409,
+            is_success=False,
+        )
+        raise
     effective = resolve_effective_ont_config(db, ont)
     values = effective.get("values", {}) if isinstance(effective, dict) else {}
     _log_action_audit(

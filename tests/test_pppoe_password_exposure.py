@@ -38,6 +38,7 @@ def credential(db_session, subscriber, subscription):
     db_session.add(Permission(key="subscription:update", is_active=True))
     row = AccessCredential(
         subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
         username="100099999",
         secret_hash=encrypt_credential(SECRET),
         connection_type=ConnectionType.pppoe,
@@ -242,3 +243,176 @@ def test_send_credentials_does_not_log_secret(
     assert result["email_sent"] + result["sms_sent"] >= 1
     assert any(SECRET in body for body in sent)  # delivery still carries it
     assert SECRET not in caplog.text
+
+
+# --- 5. R1: reveal is bound to this subscription's own credential -----------
+
+OTHER_SECRET = "Other-Service-Secret-1b2"  # noqa: S105 - test fixture value
+
+
+@pytest.fixture()
+def second_service(db_session, subscriber, subscription, credential, catalog_offer):
+    """A second service on the same account with its own, different credential."""
+    from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
+
+    other = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.pending,
+        billing_mode=BillingMode.postpaid,
+    )
+    db_session.add(other)
+    db_session.flush()
+    row = AccessCredential(
+        subscriber_id=subscriber.id,
+        subscription_id=other.id,
+        username="100088888",
+        secret_hash=encrypt_credential(OTHER_SECRET),
+        connection_type=ConnectionType.pppoe,
+        is_active=True,
+    )
+    db_session.add(row)
+    db_session.commit()
+    return other
+
+
+def test_reveal_returns_only_this_services_password(
+    db_session, subscription, second_service
+):
+    client = _client(db_session, [REVEAL])
+    mine = client.post(_reveal_url(subscription), headers=_headers())
+    theirs = client.post(_reveal_url(second_service), headers=_headers())
+    assert mine.json() == {"password": SECRET}
+    assert theirs.json() == {"password": OTHER_SECRET}
+
+
+def test_reveal_does_not_fall_back_to_another_services_credential(
+    db_session, subscription, second_service, credential
+):
+    # This service has no credential of its own; the account's other credential
+    # must not be returned in its place.
+    credential.subscription_id = second_service.id
+    for row in db_session.query(AccessCredential).filter(
+        AccessCredential.subscription_id == second_service.id
+    ):
+        if row.id != credential.id:
+            row.is_active = False
+    db_session.commit()
+    client = _client(db_session, [REVEAL])
+    response = client.post(_reveal_url(subscription), headers=_headers())
+    assert response.status_code == 404
+    assert SECRET not in response.text and OTHER_SECRET not in response.text
+
+
+def test_reveal_refused_when_two_active_credentials_are_bound(
+    db_session, subscriber, subscription, credential
+):
+    db_session.add(
+        AccessCredential(
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            username="100077777",
+            secret_hash=encrypt_credential(OTHER_SECRET),
+            connection_type=ConnectionType.pppoe,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    client = _client(db_session, [REVEAL])
+    response = client.post(_reveal_url(subscription), headers=_headers())
+    assert response.status_code == 409
+    assert SECRET not in response.text and OTHER_SECRET not in response.text
+
+
+# --- 6. H1: secret references are never resolved ----------------------------
+
+REFERENCES = [
+    "env://SUB_TEST_APP_SECRET",
+    "bao://kv/data/x#k",
+    "vault://a/b",
+    "openbao://a/b",
+]
+
+
+@pytest.fixture()
+def planted_env(monkeypatch):
+    monkeypatch.setenv("SUB_TEST_APP_SECRET", "RESOLVED-APP-SECRET-VALUE")
+
+
+@pytest.mark.parametrize("reference", REFERENCES)
+def test_edit_page_reveal_refuses_secret_reference(
+    db_session, subscription, credential, planted_env, reference
+):
+    credential.secret_hash = reference
+    db_session.commit()
+    client = _client(db_session, [REVEAL])
+    response = client.post(_reveal_url(subscription), headers=_headers())
+    assert response.status_code == 409
+    assert "Credential unusable" in response.json()["detail"]
+    assert "RESOLVED-APP-SECRET-VALUE" not in response.text
+    event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "customer.pppoe_password_reveal")
+        .one()
+    )
+    assert event.is_success is False
+    assert event.metadata_["reason"] == "secret_reference"
+    assert "RESOLVED-APP-SECRET-VALUE" not in json.dumps(event.metadata_, default=str)
+    assert reference not in json.dumps(event.metadata_, default=str)
+
+
+def test_customer_reveal_refuses_secret_reference(
+    db_session, subscriber, credential, planted_env
+):
+    credential.secret_hash = "env://SUB_TEST_APP_SECRET"
+    db_session.commit()
+    client = _client(db_session, [REVEAL])
+    url = f"/admin/customers/person/{subscriber.id}/pppoe-password"
+    response = client.post(url, headers=_headers())
+    assert response.status_code == 409
+    assert "RESOLVED-APP-SECRET-VALUE" not in response.text
+
+
+def test_send_credentials_refuses_secret_reference_and_audits(
+    db_session, subscription, subscriber, credential, planted_env, monkeypatch
+):
+    from app.services import web_catalog_subscriptions as core
+
+    credential.secret_hash = "env://SUB_TEST_APP_SECRET"
+    subscriber.email = "subscriber@example.test"
+    db_session.commit()
+    sent: list[str] = []
+    monkeypatch.setattr(core.email_service, "send_email", lambda **kw: sent.append("x"))
+    monkeypatch.setattr(core.sms_service, "send_sms", lambda *a, **k: sent.append("x"))
+    with pytest.raises(ValueError, match="Credential unusable"):
+        core.send_subscription_credentials(
+            db_session, subscription_id=str(subscription.id)
+        )
+    assert sent == []
+    event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "subscription.credentials_send_refused")
+        .one()
+    )
+    assert event.is_success is False
+    assert "RESOLVED-APP-SECRET-VALUE" not in json.dumps(event.metadata_, default=str)
+
+
+def test_ont_reveal_refuses_secret_reference_and_audits(planted_env, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services.pppoe_password_reveal import CredentialUnusable
+    from app.services.web_network_ont_actions import credentials as ont_credentials
+
+    ont = SimpleNamespace(pppoe_password="env://SUB_TEST_APP_SECRET")
+    db = SimpleNamespace(get=lambda *_a, **_k: ont)
+    audits: list[dict] = []
+    monkeypatch.setattr(
+        ont_credentials, "_log_action_audit", lambda *a, **k: audits.append(k)
+    )
+    with pytest.raises(CredentialUnusable):
+        ont_credentials.reveal_stored_pppoe_password(db, "ont-1", request=object())
+    assert audits and audits[0]["action"] == "reveal_pppoe_password_refused"
+    assert "RESOLVED-APP-SECRET-VALUE" not in repr(audits)
+    with pytest.raises(CredentialUnusable):
+        ont_credentials.resolve_stored_pppoe_password(db, "ont-1")

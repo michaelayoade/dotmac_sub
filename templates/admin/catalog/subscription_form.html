@@ -394,10 +394,10 @@
                                             try {
                                                 const token = decodeURIComponent((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '');
                                                 const response = await fetch('/admin/catalog/subscriptions/{{ subscription.id }}/reveal-service-password', { method: 'POST', cache: 'no-store', credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-CSRF-Token': token } });
-                                                if (!response.ok) throw new Error('unavailable');
+                                                if (!response.ok) { let detail = 'Password unavailable'; try { detail = (await response.json()).detail || detail; } catch (_) {} throw new Error(detail); }
                                                 revealed = (await response.json()).password || '';
                                                 revealPassword = !!revealed;
-                                            } catch (e) { revealError = 'Password unavailable'; } finally { revealLoading = false; }
+                                            } catch (e) { revealError = e.message || 'Password unavailable'; } finally { revealLoading = false; }
                                         })()"
                                         class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                                         <span x-text="revealPassword ? 'Hide' : 'Reveal'"></span>

@@ -1618,6 +1618,7 @@ def catalog_subscription_reveal_service_password(
     dependencies=[Depends(require_permission("catalog:write"))],
 )
 def catalog_subscription_send_credentials(
+    request: Request,
     subscription_id: str,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -1625,6 +1626,7 @@ def catalog_subscription_send_credentials(
         web_catalog_subscription_workflows_service.send_subscription_credentials_redirect(
             db,
             subscription_id=subscription_id,
+            actor_id=_get_actor_id(request),
         ),
         status_code=303,
     )

@@ -23,6 +23,35 @@ NO_STORE_HEADERS = {
 }
 
 
+class CredentialUnusable(Exception):  # noqa: N818 - domain signal, not an error type
+    """A stored credential must not be resolved or revealed (fail closed)."""
+
+    def __init__(self, reason: str = "secret_reference") -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+UNUSABLE_MESSAGE = (
+    "Credential unusable: the stored value is not a plain service password. "
+    "It cannot be revealed or sent. Set a new service password."
+)
+
+
+def refuse_secret_reference(stored: str | None) -> None:
+    """Raise ``CredentialUnusable`` if ``stored`` is a secret reference.
+
+    A secret reference (``env://``, ``bao://``, ``vault://``, ``openbao://``...)
+    makes ``decrypt_credential`` resolve a process or vault secret, so it must
+    never be resolved on a staff-facing path.
+    """
+    if not stored:
+        return
+    from app.services.secrets import is_secret_ref
+
+    if is_secret_ref(stored):
+        raise CredentialUnusable("secret_reference")
+
+
 def _json(payload: dict[str, object], status_code: int) -> JSONResponse:
     return JSONResponse(payload, status_code=status_code, headers=NO_STORE_HEADERS)
 
@@ -76,7 +105,25 @@ def audited_reveal(
             429,
         )
 
-    password, found = lookup()
+    try:
+        password, found = lookup()
+    except CredentialUnusable as exc:
+        record_audit_event(
+            db,
+            action=REVEAL_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(subscriber_id),
+            actor=audit_actor,
+            metadata={
+                **metadata,
+                "reason": exc.reason,
+                "refused": True,
+                **actor_metadata,
+            },
+            status_code=409,
+            is_success=False,
+        )
+        return _json({"password": "", "detail": UNUSABLE_MESSAGE}, 409)
     record_audit_event(
         db,
         action=REVEAL_AUDIT_ACTION,

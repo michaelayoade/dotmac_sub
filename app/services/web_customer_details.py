@@ -109,6 +109,7 @@ from app.services.network.radius_sessions import (
 )
 from app.services.nin_matching import mask_nin
 from app.services.portal_account_health import build_portal_account_health
+from app.services.pppoe_password_reveal import refuse_secret_reference
 from app.services.status_presentation import (
     access_session_status_presentation,
     account_status_presentation,
@@ -1497,6 +1498,7 @@ def reveal_customer_pppoe_password(
         return "", False
     if credential_id and str(credential.id) != str(credential_id):
         return "", False
+    refuse_secret_reference(credential.secret_hash)
     try:
         password = decrypt_credential(credential.secret_hash)
     except Exception:

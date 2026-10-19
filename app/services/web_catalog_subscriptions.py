@@ -106,6 +106,11 @@ from app.services.network.radius_sessions import (
     latest_open_accounting_session_for_subscription,
 )
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_password_reveal import (
+    UNUSABLE_MESSAGE,
+    CredentialUnusable,
+    refuse_secret_reference,
+)
 from app.services.subscription_ipv4_projection import (
     ServiceIPv4Source,
     SubscriptionServiceIPv4,
@@ -1346,12 +1351,60 @@ def _current_access_credential(
     ).first()
 
 
+def _subscription_bound_credential(
+    db: Session, subscriber_id: str | UUID | None, subscription_id: str | UUID | None
+) -> AccessCredential | None:
+    """Return this subscription's own active credential, strictly.
+
+    No fallback to the subscriber's newest credential: on an account with
+    several services that would return another service's password. Raises
+    ``CredentialUnusable("ambiguous_credential")`` when more than one active
+    credential is bound to the subscription.
+    """
+    try:
+        subscriber_uuid = UUID(str(subscriber_id))
+        subscription_uuid = UUID(str(subscription_id))
+    except (TypeError, ValueError):
+        return None
+    rows = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscriber_uuid,
+            AccessCredential.subscription_id == subscription_uuid,
+            AccessCredential.is_active.is_(True),
+        )
+        .limit(2)
+        .all()
+    )
+    if len(rows) > 1:
+        raise CredentialUnusable("ambiguous_credential")
+    return rows[0] if rows else None
+
+
+def _decrypt_credential_row(
+    credential: AccessCredential | None, owner_ref: object
+) -> str | None:
+    if not credential or not credential.secret_hash:
+        return None
+    refuse_secret_reference(credential.secret_hash)
+    try:
+        return decrypt_credential(credential.secret_hash)
+    except Exception:
+        logger.warning(
+            "Failed to decrypt service credential for %s",
+            owner_ref,
+            exc_info=True,
+        )
+        return None
+
+
 def _current_service_password(
     db: Session, subscriber_id: str | UUID | None
 ) -> str | None:
     credential = _current_access_credential(db, subscriber_id)
     if not credential or not credential.secret_hash:
         return None
+    refuse_secret_reference(credential.secret_hash)
     try:
         return decrypt_credential(credential.secret_hash)
     except Exception:
@@ -1361,6 +1414,21 @@ def _current_service_password(
             exc_info=True,
         )
         return None
+
+
+def _has_own_service_password(
+    db: Session, subscriber_id: object, subscription: object
+) -> bool:
+    subscription_id = subscription.get("id") if isinstance(subscription, dict) else None
+    if not subscriber_id or not subscription_id:
+        return False
+    try:
+        credential = _subscription_bound_credential(
+            db, str(subscriber_id), str(subscription_id)
+        )
+    except CredentialUnusable:
+        return True  # shown so staff can see the problem on reveal
+    return bool(credential and getattr(credential, "secret_hash", None))
 
 
 def subscription_subscriber_id(db: Session, subscription_id: str) -> str | None:
@@ -1379,13 +1447,16 @@ def reveal_subscription_service_password(
 ) -> tuple[str, bool]:
     """Return ``(password, found)`` for an explicit reveal action.
 
+    Bound strictly to this subscription's own credential; raises
+    ``CredentialUnusable`` for a secret reference or an ambiguous binding.
     Callers must enforce the reveal permission, CSRF and audit; this never logs
     the secret.
     """
     subscriber_id = subscription_subscriber_id(db, subscription_id)
     if subscriber_id is None:
         return "", False
-    password = _current_service_password(db, subscriber_id)
+    credential = _subscription_bound_credential(db, subscriber_id, subscription_id)
+    password = _decrypt_credential_row(credential, f"subscription {subscription_id}")
     return password or "", bool(password)
 
 
@@ -1414,6 +1485,7 @@ def send_subscription_credentials(
     db: Session,
     *,
     subscription_id: str,
+    actor_id: str | None = None,
 ) -> dict[str, object]:
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
@@ -1426,7 +1498,26 @@ def send_subscription_credentials(
     if not credential or not credential.username:
         raise ValueError("No service credential is stored for this subscriber.")
 
-    password = _current_service_password(db, subscription.subscriber_id)
+    try:
+        password = _current_service_password(db, subscription.subscriber_id)
+    except CredentialUnusable as exc:
+        from app.services.audit_adapter import AuditActor, record_audit_event
+
+        record_audit_event(
+            db,
+            action="subscription.credentials_send_refused",
+            entity_type="subscriber",
+            entity_id=str(subscription.subscriber_id),
+            actor=(
+                AuditActor.user(actor_id)
+                if actor_id
+                else AuditActor.system("send_subscription_credentials")
+            ),
+            metadata={"subscription_id": str(subscription_id), "reason": exc.reason},
+            status_code=409,
+            is_success=False,
+        )
+        raise ValueError(UNUSABLE_MESSAGE) from exc
     if not password:
         raise ValueError("Current service password is not available for delivery.")
 
@@ -4288,8 +4379,8 @@ def subscription_form_context(
         else "",
         # The stored password is never rendered into page HTML; the page only
         # learns whether one exists. Revealing it is a separate audited action.
-        "has_current_service_password": bool(
-            current_credential and getattr(current_credential, "secret_hash", None)
+        "has_current_service_password": _has_own_service_password(
+            db, subscriber_id, subscription
         ),
         "credential_targets": credential_targets or {"email": [], "sms": []},
         "commercial_policy": {"rows": []},
