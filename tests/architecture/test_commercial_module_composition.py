@@ -22,6 +22,79 @@ _SHADOW_IMPORTS = {
         ("dotmac_payments", "PaymentPurpose"),
         ("dotmac_payments", "get_payment_intent_v1"),
     },
+    # Thin-client adoption (ADR 0020): invoice checkout opens the module
+    # intent at creation. This is the first registered runtime writer
+    # import; it is exact and path-bound like the shadow reads above.
+    "app/services/gateway_topup_intents.py": {
+        ("dotmac_payments", "OpenPaymentIntent"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "open_payment_intent"),
+    },
+    # Thin-client issuance (ADR 0031, Slice 6a): eligible admin drafts are
+    # issued by dotmac-billing as sole ledger writer; numbering imports are
+    # outside this gate's prefixes.
+    "app/services/billing/starter_issuance.py": {
+        ("dotmac_billing", "AcceptRatedObligationV1"),
+        ("dotmac_billing", "AppliedFxSnapshotV1"),
+        ("dotmac_billing", "AppliedTaxSnapshotV1"),
+        ("dotmac_billing", "DueDateBasisV1"),
+        ("dotmac_billing", "GetInvoiceDocumentFactV1"),
+        ("dotmac_billing", "IssueRatedInvoiceV1"),
+        ("dotmac_billing", "PartyDocumentSnapshotV1"),
+        ("dotmac_billing", "PaymentInstructionsSnapshotV1"),
+        ("dotmac_billing", "PostalAddressSnapshotV1"),
+        ("dotmac_billing", "PresentationAssetReferenceV1"),
+        ("dotmac_billing", "ServicePeriodEvidenceV1"),
+        ("dotmac_billing.service", "create_billing_account"),
+        ("dotmac_billing", "get_invoice_document_fact"),
+        ("dotmac_billing", "issue_rated_invoice"),
+        ("dotmac_billing.contracts", "DueDateBasisStatus"),
+        ("dotmac_billing.contracts", "ServicePeriodStatus"),
+        ("dotmac_billing.errors", "BillingError"),
+        # Multi-line lane: accept-per-line plus draft-document composition.
+        ("dotmac_billing.commands", "CreateMultiLineDraftDocument"),
+        ("dotmac_billing.commands", "DraftDocumentLine"),
+        ("dotmac_billing.commands", "IssueDocument"),
+        ("dotmac_billing.service", "accept_rated_obligation"),
+        ("dotmac_billing.service", "create_multi_line_draft_document"),
+        ("dotmac_billing.service", "issue_document"),
+    },
+    # Step 5 opening rehearsal assembly (ADR 0020/0031): pure census-to-
+    # observation translation onto the pinned rehearsal contracts; it
+    # verifies nothing and writes no money state.
+    "app/services/billing/opening_rehearsal_assembly.py": {
+        ("dotmac_billing", "OpeningBlockerV1"),
+        ("dotmac_billing", "OpeningObservedControlV1"),
+        ("dotmac_billing", "OpeningObservedInvoiceV1"),
+        ("dotmac_billing", "OpeningObservedLaneV1"),
+        ("dotmac_billing", "OpeningObservedPopulationV1"),
+        ("dotmac_billing", "OpeningObservedPrecisionV1"),
+        ("dotmac_billing", "OpeningObservedSettlementV1"),
+        ("dotmac_billing", "OpeningSubObservationV2"),
+    },
+    # Thin-client settlement back-half (ADR 0031): provider evidence is
+    # confirmed in dotmac-payments and discharged in dotmac-billing for
+    # Starter-issued invoices; Sub mirrors from the Starter position.
+    "app/services/billing/starter_settlement.py": {
+        ("dotmac_billing", "AcceptSettlementV1"),
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing.commands", "AllocationCommand"),
+        ("dotmac_billing.contracts", "SettlementFundingLane"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "accept_settlement"),
+        ("dotmac_billing.service", "allocate_settlement"),
+        ("dotmac_payments", "ConfirmationSource"),
+        ("dotmac_payments", "GetConfirmedCashV1"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "RecordConfirmation"),
+        ("dotmac_payments", "get_confirmed_cash_v1"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+        ("dotmac_payments", "record_confirmation"),
+    },
     "app/services/dotmac_erp/billing_adapter.py": {
         ("dotmac_billing", "AccountingFactV1"),
     },

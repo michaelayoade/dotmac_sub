@@ -6,7 +6,7 @@
 # exception recorded in docs/feature_freeze_exceptions.json.
 # Regenerate with tests.architecture.billing_thin_client_inventory
 # .render_baseline(<repo root>).
-TOTAL 92494
+TOTAL 93937
 app/services/account_billing_approval.py
 app/services/api_billing_webhooks.py
 app/services/billing/__init__.py
@@ -31,6 +31,7 @@ app/services/billing/obligations.py
 app/services/billing/opening_balance_history.py
 app/services/billing/opening_export.py
 app/services/billing/opening_export_contracts.py
+app/services/billing/opening_rehearsal_assembly.py
 app/services/billing/payment_invoice_paid.py
 app/services/billing/payment_receipt_identity.py
 app/services/billing/payments.py
@@ -44,6 +45,9 @@ app/services/billing/reporting.py
 app/services/billing/runs.py
 app/services/billing/scheduled.py
 app/services/billing/shadow_verification.py
+app/services/billing/starter_issuance.py
+app/services/billing/starter_policies.py
+app/services/billing/starter_settlement.py
 app/services/billing/subledger_opening.py
 app/services/billing/tax.py
 app/services/billing/unwall_paid_accounts.py

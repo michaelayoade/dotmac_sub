@@ -706,6 +706,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Save drafts first; issue and send only after review.",
         "Use Void only when an invoice should never have existed; use Write Off for valid debt that will not be collected.",
         notes=(
+            "Eligible postpaid single-line drafts are now issued by the Starter billing ledger: the invoice number and ledger position come from Starter, and this page mirrors them. If Starter issuance is refused, the draft stays unissued — resolve the named evidence gap instead of retrying edits.",
             "Issued invoices use post-issue actions, not direct edits.",
             "The Unpaid view includes collectible issued, partially paid, and overdue balances; it excludes drafts, proformas, and zero-balance invoices.",
         ),

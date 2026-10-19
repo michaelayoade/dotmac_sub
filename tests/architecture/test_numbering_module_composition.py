@@ -59,6 +59,20 @@ INVOICE_IMPORTS = {
     "dotmac_numbering.models": frozenset({"NumberSeries", "SeriesCounter"}),
     "dotmac_numbering.service": frozenset({"MAX_DIGITS", "MAX_VALUE", "allocate"}),
 }
+# Slice 6a (ADR 0031): the Starter issuance lane is the second reviewed
+# numbering participant. It adapts dotmac-numbering to the pinned billing
+# NumberingProvider protocol and lazily provisions its policy-declared
+# series; it allocates only through the module service.
+STARTER_ISSUANCE_PARTICIPANT = "app/services/billing/starter_issuance.py"
+STARTER_ISSUANCE_IMPORTS = {
+    "dotmac_numbering": frozenset(
+        {"NumberingError", "SeriesConfiguration", "allocate", "configure_series"}
+    ),
+}
+REVIEWED_PARTICIPANTS = {
+    INVOICE_PARTICIPANT: INVOICE_IMPORTS,
+    STARTER_ISSUANCE_PARTICIPANT: STARTER_ISSUANCE_IMPORTS,
+}
 ARTIFACT_HASHES = {
     "dotmac_numbering-0.1.0a3-py3-none-any.whl": (
         "sha256:03e9ac4de8b2d4501b6d3a0daf11131ec4d85c2913cd9e0d91a31937cdc9032c"
@@ -99,13 +113,12 @@ def _activation_errors(root: Path) -> tuple[str, ...]:
                     alias.name in allowed_imports[node.module] for alias in node.names
                 ):
                     continue
-                if (
-                    path.relative_to(root).as_posix() == INVOICE_PARTICIPANT
-                    and node.module in INVOICE_IMPORTS
-                    and all(
-                        alias.name in INVOICE_IMPORTS[node.module]
-                        for alias in node.names
-                    )
+                participant_imports = REVIEWED_PARTICIPANTS.get(
+                    path.relative_to(root).as_posix(), {}
+                )
+                if node.module in participant_imports and all(
+                    alias.name in participant_imports[node.module]
+                    for alias in node.names
                 ):
                     continue
                 names = (node.module or "",)

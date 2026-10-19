@@ -76,6 +76,110 @@
       "reason": "Michael directed the thin-client health goal on 2026-10-16: keep the existing poller/syslog probes and product semantics Sub-local, serialize Starter Platform Health observations at the source edge, and create no Sub health subsystem or deployment authority. He approved commit, push and draft PR #3655 for hosted CI. This entry covers only the listed bounded serialization module; modifications to the existing probe owners need no exception. CODEOWNERS review of this file remains required before merge.",
       "starter_contract": "Starter dotmac-platform-health HealthObservationInput: source_ref, observation_key, component_code, healthy/degraded/unhealthy/unknown state, observed_at, received_at, summary and bounded labels; Platform Health remains the future sole durable observation/evidence owner and Integrator remains the authenticated transport boundary.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-POLICIES",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py"
+      ],
+      "reason": "Michael directed on 2026-10-17 (money-pack cutover session): full cutover to Starter related modules, billing policies composable with defaults, no hardcoding, composable policies with settings. This exempts one new composition-wiring module that resolves the Starter billing issuance policy surface (account-ref convention at Subscriber granularity for linked radio/fiber accounts, obligation identity templates, tax/due/numbering/document-profile defaults) from domain settings with typed defaults. No writer is wired by the exempted PR; issuance switching remains a separately approved slice. The billing thin-client ratchet baseline grows deliberately by this module only and resumes shrinking as writers retire.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issuance contracts: IssueRatedInvoiceV1 / AcceptRatedObligationV1 / DueDateBasisV1 / AppliedTaxSnapshotV1 and create_billing_account (external_account_ref + currency get-or-create), consumed as composition wiring only.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-INVOICE-LINK",
+      "kind": "feature-exception",
+      "paths": [
+        "alembic/versions/691_starter_invoice_links.py",
+        "app/models/billing.py"
+      ],
+      "reason": "Michael approved the money-pack cutover continuation on 2026-10-17 (merge approval for the thin-client slice stack after confirming the composable-policy direction, ADR 0031). Slice 6a issuance switching needs a structural Sub<->Starter invoice link (ADR 0007 forbids metadata as financial identity): one tenant-scoped table recording, per Sub invoice, the Starter billing account, obligation and document identities. Schema-only change; no writer behavior changes in the exempted PR, and the table retires with the legacy Invoice writer at cutover seal.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issuance receipts: IssuedRatedInvoiceV1 (billing_account_id, obligation_id, invoice_id) persisted as the structural link target; Starter remains sole ledger authority once the slice gate passes.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-INVOICE-LINK-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/691_starter_invoice_links.py"
+      ],
+      "reason": "Schema half of THIN-STARTER-INVOICE-LINK (Michael approved the money-pack cutover continuation and merges on 2026-10-18): migration 691 creates the tenant-scoped starter_invoice_links table, the structural Sub<->Starter invoice identity link required by Slice 6a issuance switching (ADR 0007/0031). Corrective composition schema only; no writer behavior changes in the exempted PR.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-ISSUANCE-6A",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_issuance.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/web_billing_invoices.py",
+        "app/web/admin/billing_invoice_actions.py",
+        "app/services/admin_workflow_guidance.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Michael approved the money-pack cutover continuation and merges on 2026-10-18 under the confirmed composable-policy direction (ADR 0031). Slice 6a adds the thin-client issuance composition module that routes eligible admin drafts (web detail Issue: postpaid, single-line, quantity-one, undiscounted, non-proforma, complete party evidence) through Starter dotmac-billing as sole ledger writer, mirroring number/status onto the Sub row with a structural link. This is consumer wiring for a published Starter contract; the legacy writer keeps every ineligible lane until its own slice. Policy surface grows deliberately under ADR 0031 and shrinks as legacy writers retire. The SOT registry path is covered because the lane must declare its canonical owner (financial.starter_issuance) in the financial-access registry before the architecture liveness guard accepts the new writer.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issue_rated_invoice + create_billing_account + get_invoice_document_fact, and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-SETTLEMENT-BACKHALF",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_settlement.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/payment_webhook_commands.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Michael approved the money-pack cutover continuation and merges on 2026-10-18 under the confirmed composable-policy direction (ADR 0031) and the pay-then-record constraint for the renewal pay link. This slice completes the settlement back-half for Starter-issued invoices: an authenticated provider webhook records confirmation in Starter dotmac-payments, Starter dotmac-billing accepts and allocates the confirmed cash against the Starter document, and Sub mirrors balance/status from the Starter collectible position. No legacy Payment is created for Starter-linked invoices and no billing logic is built in Sub; the legacy provider-event money staging keeps every non-Starter lane until its own slice. Settlement policy values resolve from settings under ADR 0031.",
+      "starter_contract": "Published dotmac-payments 0.1.0a3 get_payment_intent_v1 + record_confirmation + get_confirmed_cash_v1, and dotmac-billing 0.1.0a8 accept_settlement + allocate_settlement + get_current_receivable_position, consumed exactly as registered in the commercial composition import allowlist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-ISSUANCE-MULTILINE",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_issuance.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py",
+        "app/models/billing.py"
+      ],
+      "reason": "Michael approved the money-pack cutover continuation and merges on 2026-10-18 under the confirmed composable-policy direction (ADR 0031), including running remaining steps in parallel. This slice extends the Slice 6a web-detail Issue switch from single-line to homogeneous multi-line admin drafts (accept-per-line plus create_multi_line_draft_document plus issue_document, the composition proven in #3681), still with Starter dotmac-billing as sole ledger writer and the Sub row as mirror plus structural links. Eligibility remains pre-write and a Starter refusal never falls back to the legacy writer.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 accept_rated_obligation + create_multi_line_draft_document + issue_document, and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-ISSUANCE-MULTILINE-SCHEMA",
+      "kind": "schema",
+      "reason": "Migration 692 adds starter_invoice_line_links (per-line Starter obligation identity) and makes starter_invoice_links.obligation_id nullable, because a multi-line Starter document carries one obligation per line while the invoice-level link holds account and document identity only. Structural identity only (ADR 0007); retires with the legacy Invoice writer.",
+      "approved_by": "michaelayoade",
+      "paths": [
+        "alembic/versions/692_starter_invoice_line_links.py"
+      ]
+    },
+    {
+      "id": "THIN-OPENING-REHEARSAL-ASSEMBLY",
+      "kind": "transitional-tool",
+      "paths": [
+        "app/services/billing/opening_rehearsal_assembly.py"
+      ],
+      "reason": "Michael directed Step 5 (opening-balance rehearsal) to run in parallel with the remaining Step 4 lanes on 2026-10-18. This adds the read-only census-to-observation assembly that translates Sub's opening census preview onto the pinned dotmac-billing rehearsal observation contract, field for field, so rehearsal runs can count blockers into the manual exceptions queue. It verifies nothing, qualifies no cash, invents no originals, and writes no money state; manifest/command assembly and verifiers follow as their own slices.",
+      "approved_by": "michaelayoade",
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived."
+    },
+    {
+      "id": "THIN-OPENING-CENSUS-WIRE",
+      "kind": "transitional-tool",
+      "paths": [
+        "app/services/billing/opening_census_wire.py"
+      ],
+      "reason": "Step 5 (opening-balance rehearsal) continues in parallel at Michael's direction. Starter's read-only rehearsal adapter consumes Sub's serialized opening census (sub-billing-opening-census-v2/-v3 JSON), which Sub does not yet emit. This adds a pure evidence renderer that serializes the typed census preview (BillingOpeningExportPreviewV3) to that exact wire document field for field, with Decimals as exact strings. It verifies nothing, qualifies no cash, invents no originals, and writes no money state.",
+      "approved_by": "michaelayoade",
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived."
     }
   ]
 }

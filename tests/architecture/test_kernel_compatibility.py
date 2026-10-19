@@ -109,6 +109,12 @@ KERNEL_SOURCE = "forgejo"
 #: modules at app import time. Loading them constructs no relay, worker or
 #: ledger writer in Sub; the boot-construction sibling test still holds.
 #:
+#: Slice 6a (Starter issuance) adds `transactions`: `dotmac_billing.service`
+#: imports `conflict_savepoint_requires_rollback` from it, and the issuance
+#: lane now imports the billing service at app import time. The helper only
+#: classifies savepoint conflicts inside the billing writer's own calls; Sub
+#: constructs no transaction owner from it.
+#:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
 #: test below proves that separately, on middleware and routes. But the cost of
@@ -177,6 +183,7 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.settings_cache",
         "dotmac_kernel.settings_crypto",
         "dotmac_kernel.source_applications",
+        "dotmac_kernel.transactions",
         "dotmac_kernel.web_deps",
         "dotmac_kernel.web_surfaces",
     }
