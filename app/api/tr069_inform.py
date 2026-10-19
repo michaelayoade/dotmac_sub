@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services.adapters.ont_types import ont_type_registry
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import decrypt_stored_secret_or_none
 from app.services.genieacs_service import genieacs_service
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_serials import find_unique_active_ont_by_serial
@@ -157,12 +157,8 @@ def get_device_config(
     values = effective.get("values", {}) if isinstance(effective, dict) else {}
 
     def decrypt_if_needed(value: str | None) -> str | None:
-        if not value:
-            return None
-        try:
-            return decrypt_credential(value)
-        except Exception:
-            return value  # Already decrypted or plain text
+        # Never resolves a stored secret reference; None when unusable.
+        return decrypt_stored_secret_or_none(value)
 
     def transform_security_mode(mode: str) -> str:
         """Transform security mode using adapter, or pass through."""

@@ -1,9 +1,9 @@
 """Secret resolution for the reconciler.
 
 Plugs ``app.services.secrets.resolve_secret`` into the reconciler's
-``SecretResolver`` slot so production reconciles pull OLT CR passwords,
-PPPoE passwords, and WiFi PSKs from OpenBao instead of trusting
-plaintext refs.
+``SecretResolver`` slot so production reconciles pull OLT CR and
+ACS passwords from OpenBao. PPPoE and WiFi passwords are stored
+encrypted (``enc:``) and the applier refuses secret references for them.
 
 Three layers in order of preference, controlled by the
 ``OPENBAO_ADDR`` environment variable:

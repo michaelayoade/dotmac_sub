@@ -1446,6 +1446,21 @@ def command_preview_context(
         )
     ]
 
+    if any(
+        getattr(ws, "pppoe_password_unusable", False)
+        for ws in getattr(spec, "wan_services", None) or []
+    ):
+        command_sets.append(
+            OltCommandSet(
+                step="PPPoE password omitted",
+                commands=[],
+                description=(
+                    "The stored static PPPoE password is a secret reference and "
+                    "is unusable: it was omitted from this preview. Re-enter it."
+                ),
+                requires_config_mode=False,
+            )
+        )
     context["command_sets"] = command_sets
     context["spec"] = spec
     context["prov_context"] = prov_context
