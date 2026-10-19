@@ -116,7 +116,7 @@ def test_edit_page_does_not_echo_submitted_password_on_rerender():
     from pathlib import Path
 
     source = Path("templates/admin/catalog/subscription_form.html").read_text()
-    assert "value=\"{{ subscription.service_password }}\"" not in source
+    assert 'value="{{ subscription.service_password }}"' not in source
     assert "{{ current_service_password" not in source
 
 
@@ -178,9 +178,7 @@ def test_reveal_returns_password_with_no_store_when_permitted(
 # --- 3. audit --------------------------------------------------------------
 
 
-def test_reveal_writes_audit_event_without_secret(
-    db_session, subscription, credential
-):
+def test_reveal_writes_audit_event_without_secret(db_session, subscription, credential):
     client = _client(db_session, [REVEAL])
     response = client.post(_reveal_url(subscription), headers=_headers())
     assert response.status_code == 200

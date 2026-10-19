@@ -29,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.adapters.customer_account_deletion import customer_deletion_actor
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.models.party import PartyType
 from app.models.subscriber import Reseller, SubscriberCategory, UserType
@@ -62,8 +63,6 @@ from app.services import web_customer_lists as web_customer_lists_service
 from app.services import web_customer_sla as web_customer_sla_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services import web_notifications as web_notifications_service
-from app.csrf import require_browser_csrf_header
-from app.services.pppoe_password_reveal import REVEAL_PERMISSION, audited_reveal
 from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
@@ -81,6 +80,7 @@ from app.services.customer_timeline import CustomerTimelineItem
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_password_reveal import REVEAL_PERMISSION, audited_reveal
 from app.services.prepaid_activation_funding_guard import (
     OVERRIDE_PERMISSION as PREPAID_ACTIVATION_OVERRIDE_PERMISSION,
 )
