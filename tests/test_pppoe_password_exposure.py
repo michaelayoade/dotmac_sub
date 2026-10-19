@@ -416,3 +416,59 @@ def test_ont_reveal_refuses_secret_reference_and_audits(planted_env, monkeypatch
     assert "RESOLVED-APP-SECRET-VALUE" not in repr(audits)
     with pytest.raises(CredentialUnusable):
         ont_credentials.resolve_stored_pppoe_password(db, "ont-1")
+
+
+# --- 7. N1: the edit page shows this service's own login ---------------------
+
+
+def _edit_html(db_session, monkeypatch, subscription) -> str:
+    from fastapi.responses import HTMLResponse
+
+    monkeypatch.setattr(
+        admin_catalog,
+        "_base_context",
+        lambda request, *a, **k: {"request": request, "csrf_token": CSRF},
+    )
+    from fastapi.templating import Jinja2Templates
+
+    real = Jinja2Templates(directory="templates")
+
+    class _Render:
+        @staticmethod
+        def TemplateResponse(name, context, **kwargs):  # noqa: N802
+            body = real.env.get_template(name).render(
+                {**context, "can": lambda *_a, **_k: True}
+            )
+            return HTMLResponse(body)
+
+    monkeypatch.setattr(admin_catalog, "templates", _Render)
+    client = _client(db_session, ["subscription:update", REVEAL])
+    return client.get(f"/admin/catalog/subscriptions/{subscription.id}/edit").text
+
+
+def test_edit_page_shows_each_services_own_login(
+    db_session, monkeypatch, subscription, second_service
+):
+    first = _edit_html(db_session, monkeypatch, subscription)
+    second = _edit_html(db_session, monkeypatch, second_service)
+    assert "100099999" in first and "100088888" not in first
+    assert "100088888" in second and "100099999" not in second
+
+
+def test_edit_page_shows_no_login_when_binding_is_ambiguous(
+    db_session, monkeypatch, subscriber, subscription, credential
+):
+    db_session.add(
+        AccessCredential(
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            username="100077777",
+            secret_hash=encrypt_credential(OTHER_SECRET),
+            connection_type=ConnectionType.pppoe,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    html = _edit_html(db_session, monkeypatch, subscription)
+    assert "100099999" not in html and "100077777" not in html
+    assert "Credential unusable" in html

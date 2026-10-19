@@ -1416,19 +1416,26 @@ def _current_service_password(
         return None
 
 
-def _has_own_service_password(
+def _own_service_credential_view(
     db: Session, subscriber_id: object, subscription: object
-) -> bool:
+) -> tuple[str, bool, str]:
+    """Return ``(login, has_password, problem)`` from this subscription's own credential."""
     subscription_id = subscription.get("id") if isinstance(subscription, dict) else None
     if not subscriber_id or not subscription_id:
-        return False
+        return "", False, ""
     try:
         credential = _subscription_bound_credential(
             db, str(subscriber_id), str(subscription_id)
         )
     except CredentialUnusable:
-        return True  # shown so staff can see the problem on reveal
-    return bool(credential and getattr(credential, "secret_hash", None))
+        return "", False, UNUSABLE_MESSAGE
+    if credential is None:
+        return "", False, ""
+    return (
+        credential.username or "",
+        bool(getattr(credential, "secret_hash", None)),
+        "",
+    )
 
 
 def subscription_subscriber_id(db: Session, subscription_id: str) -> str | None:
@@ -4235,7 +4242,9 @@ def subscription_form_context(
     )
     route_range_options = _route_range_parent_options_for_ipam(db)
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
-    current_credential = _current_access_credential(db, str(subscriber_id or ""))
+    own_login, own_has_password, credential_problem = _own_service_credential_view(
+        db, subscriber_id, subscription
+    )
     credential_targets = None
     if subscriber_id:
         try:
@@ -4374,14 +4383,11 @@ def subscription_form_context(
             db, SettingDomain.catalog, "billing_mode_postpaid_notice"
         )
         or "This subscription follows dunning steps.",
-        "current_service_login": getattr(current_credential, "username", "")
-        if current_credential
-        else "",
+        "current_service_login": own_login,
+        "credential_problem": credential_problem,
         # The stored password is never rendered into page HTML; the page only
         # learns whether one exists. Revealing it is a separate audited action.
-        "has_current_service_password": _has_own_service_password(
-            db, subscriber_id, subscription
-        ),
+        "has_current_service_password": own_has_password,
         "credential_targets": credential_targets or {"email": [], "sms": []},
         "commercial_policy": {"rows": []},
     }

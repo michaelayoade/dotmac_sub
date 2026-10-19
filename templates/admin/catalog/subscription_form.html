@@ -372,6 +372,9 @@
                 <h2 class="font-semibold text-slate-900 dark:text-white">Service Provisioning</h2>
             </div>
             <div class="p-6 space-y-6" x-data="subscriptionProvisioning()">
+                {% if subscription.id and credential_problem %}
+                <p class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">{{ credential_problem }}</p>
+                {% endif %}
                 {% if subscription.id and current_service_login %}
                 <div x-data="{ revealPassword: false, revealed: '', revealLoading: false, revealError: '' }" class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
                     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
