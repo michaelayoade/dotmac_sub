@@ -428,6 +428,18 @@
                     </p>
                 </div>
                 {% endif %}
+                {% if subscription.id and not current_service_login and can_manage_subscription_catalog %}
+                <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
+                    <p class="text-xs font-medium text-slate-600 dark:text-slate-300">Current Service Password</p>
+                    <button id="service-password-unavailable" type="button" disabled aria-describedby="service-password-unavailable-reason"
+                        class="mt-2 inline-flex cursor-not-allowed items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        Unavailable
+                    </button>
+                    <p id="service-password-unavailable-reason" class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        No password is linked to this service. Staff must confirm the correct credential before it can be shown.
+                    </p>
+                </div>
+                {% endif %}
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
                         <label for="provisioning_nas_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Router (All Devices)</label>

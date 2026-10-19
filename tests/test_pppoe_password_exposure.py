@@ -472,3 +472,21 @@ def test_edit_page_shows_no_login_when_binding_is_ambiguous(
     html = _edit_html(db_session, monkeypatch, subscription)
     assert "100099999" not in html and "100077777" not in html
     assert "Credential unusable" in html
+
+
+def test_edit_page_marks_unbound_password_unavailable(
+    db_session, monkeypatch, subscription, credential
+):
+    credential.subscription_id = None
+    db_session.commit()
+
+    html = _edit_html(db_session, monkeypatch, subscription)
+    assert 'id="service-password-unavailable"' in html
+    assert 'disabled aria-describedby="service-password-unavailable-reason"' in html
+    assert "No password is linked to this service" in html
+    assert SECRET not in html
+
+    client = _client(db_session, ["subscription:update", REVEAL])
+    response = client.post(_reveal_url(subscription), headers=_headers())
+    assert response.status_code == 404
+    assert SECRET not in response.text
