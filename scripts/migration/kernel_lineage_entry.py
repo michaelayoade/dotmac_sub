@@ -438,7 +438,7 @@ def observe_fixture_plan(connection: Connection) -> KernelEntryFixturePlan:
             text("SELECT version_num FROM public.alembic_version ORDER BY version_num")
         )
     )
-    if "690_backdated_invoice_permissions" not in heads:
+    if "693_starter_credit_note_links" not in heads:
         raise KernelEntryRefused("Fixture lacks the reviewed actual Sub source head")
     return KernelEntryFixturePlan(
         FixtureCatalog(

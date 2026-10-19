@@ -560,7 +560,8 @@ def test_audit_exports_reuse_filters_and_redacted_event_projection(db_session):
     assert document.row_count == 1
     assert payload["filters"]["action"] == "invoice.issue"
     assert payload["events"][0]["action"] == "invoice.issue"
-    assert payload["events"][0]["details"]["credentials"] == {"api_token": "<redacted>"}
+    # Fail closed: a sensitive-named container is redacted whole, not recursed.
+    assert payload["events"][0]["details"]["credentials"] == "<redacted>"
     assert "must-not-export" not in document.content.decode("utf-8")
 
 

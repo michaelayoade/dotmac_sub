@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any
@@ -518,7 +518,9 @@ def list_audit_events_for_entities(
     )
 
 
-def load_audit_actor_subscribers(db: Session, events: list) -> dict[str, object]:
+def load_audit_actor_subscribers(
+    db: Session, events: Sequence[Any]
+) -> dict[str, object]:
     """Resolve the actors referenced by the provided audit events.
 
     Covers user actors (Subscriber/SystemUser) and api_key actors (ApiKey), so
