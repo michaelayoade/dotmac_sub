@@ -205,6 +205,66 @@
       "reason": "Michael explicitly approved Sub #3699 on 2026-10-19 under the freeze carve-out 'root-cause the settlement auto-repair' (PAID-NOT-REACTIVATED 2026-10-18, SUB-005060): +62 money-writer lines (TOTAL 24013 -> 24075) in one existing file. A prepaid draft whose billing_period_end precedes the funding event, or which has no service period, no longer receives new funding; it is recorded once (insert-if-absent) in prepaid_draft_reconciliation_exceptions for manual review and the existing current-period renewal proceeds. No new money path, migration or data repair; no further growth authorized.",
       "deletion_trigger": "Remove when prepaid funding/renewal moves to Starter dotmac-billing (ADR 0020) and prepaid_draft_reconciliation.py is retired, or when the money-writer baseline next shrinks below 24013.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-CREDIT-NOTES",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_credit_notes.py",
+        "app/services/billing/credit_notes.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Step 4 caller migration: credit notes against Starter-issued invoices are issued by pinned dotmac-billing as sole ledger writer through a new thin-client module; the legacy credit-note writer keeps only non-Starter invoices. Eligibility is structural (the invoice carries a StarterInvoiceLink) and decided before any write; Sub remains caller-only.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issue_credit_note and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "THIN-STARTER-MANUAL-PAYMENTS",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_manual_settlement.py",
+        "app/services/manual_payment_recording.py",
+        "app/services/billing/account_credit.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Step 4 caller migration: staff-recorded manual payments and account-credit applications against Starter-issued invoices settle through dotmac-payments confirmation into dotmac-billing (pay-then-record), never through legacy money writers. Legacy credit application to Starter receivables is closed structurally; Sub remains caller-only.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-payments 0.1.0a3 record_confirmation + get_confirmed_cash_v1 and dotmac-billing 0.1.0a8 accept_settlement + allocate_settlement + credit-lane commands, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "THIN-STARTER-INVOICE-READERS",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_positions.py",
+        "app/services/billing_invoice_pdf.py",
+        "app/services/web_billing_documents.py",
+        "app/services/billing/reporting.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Step 4 reader repoint: for Starter-issued invoices, balance/position reads, invoice PDF facts, and reporting read the Starter ledger position and document fact instead of legacy projections. Read-only lane; legacy invoices keep legacy readers until cutover.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 get_current_receivable_position + get_invoice_document_fact, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "THIN-STARTER-PREPAID-RENEWALS",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_prepaid.py",
+        "app/services/prepaid_service_renewals.py",
+        "app/services/prepaid_draft_reconciliation.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Step 4 caller migration, gated by the ADR 0032 incident acceptance tests at the Starter boundary (a payment bound to one intent cannot settle another obligation; full settlement yields exactly one access signal even when replayed; only the access owner switches service). Prepaid renewals then fund and issue through Starter earmarks and advance-collection issuance; Sub remains caller-only and the legacy prepaid writers retire under the ratchet.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 earmark commands + issue_rated_invoice (advance collection) + accept/allocate settlement, and dotmac-payments 0.1.0a3 intent-bound confirmation, consumed exactly as registered in the commercial composition import allowlist."
     }
   ]
 }
