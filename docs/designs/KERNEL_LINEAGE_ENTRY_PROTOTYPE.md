@@ -9,7 +9,8 @@ The participant deliberately has no command-line entrypoint, runtime caller,
 engine, connection factory, transaction completion or ordinary deployment
 composition. A fixture database name is a defensive boundary, never operational
 approval. The caller supplies an already active PostgreSQL root transaction,
-without a savepoint, and must rollback even after successful entry.
+without a savepoint, and must rollback even after successful entry. This is a
+caller-owned transaction; the participant never completes it.
 
 ## Bound source and artifact
 
@@ -140,3 +141,90 @@ The current atomic OIDC ceremony/session contract and principal → credential �
 Party → binding → session order are unchanged. No standing epoch, authentication
 activation, feature flag, provider registry or Kernel API is added.
 
+## Rollback-only Party import foundation
+
+The bounded next participant is `scripts/migration/kernel_party_import.py`, with
+Party owner `party.kernel_import` and the existing Tenant authority's historical
+participant `tenancy.operator_tenant_history`. It composes the unchanged entry
+participant on the **same supplied Connection and root transaction**, then copies
+exactly one reviewed operator Tenant, all canonical Party roots, a genuine
+independent Sub adoption revision, and all Sub Party contexts. The caller always
+rolls back. No production import, runtime activation or Academy learner proof is
+claimed. Existing entry-only tests and direct-overlay expected-first-failure
+ratchet remain in place.
+
+A complete typed `PartyImportCohort` names the current deterministic operator
+Tenant and one `PartyFixtureDisposition` per source UUID. Source Party is
+deployment-global: this is an explicit reviewed product-scope attribution, never
+an invented per-row tenant source. Each disposition carries an exact whole-row
+fingerprint, explicit canonical `is_active`, nonempty fixture provenance and
+explicit no-adoption decisions for email, subtype and custom fields. Missing,
+duplicate, stale, unused, differently tenanted and conflicting decisions refuse.
+Lifecycle status never implies the Boolean. The owner copies UUID/type/name and
+both timestamps exactly, with NULL email, no subtype rows and explicit `{}`
+custom fields. It does not call the trimming/defaulting `create_party` API.
+Tenant's exact nullable suspension/deletion and timestamps survive; historical
+copy never calls runtime provisioning, commits or invents Tenant defaults.
+
+Only after all roots exist does the independent
+`alembic_kernel_adoption/versions/ska0001_party_context.py` revision create
+`public.sub_party_context`, recorded in
+`public.sub_kernel_adoption_alembic_version`. Ordinary Sub Alembic
+`version_locations` are unchanged. The runner revalidates canonical and escrow
+OIDs and actual unchanged Kernel/Sub histories immediately before adoption DDL;
+the revision requires that typed observation itself. Both context FKs are
+composite `(tenant_id, party_id)` / `(tenant_id, merged_into_party_id)` references
+to canonical `public.parties(tenant_id,id)`. Context's source status,
+classification, merge-target and no-self-merge checks remain enforced. Nullable
+reason and metadata retain source types; metadata is copied JSON-to-JSON with
+`INSERT SELECT`, preserving SQL NULL, JSON null, empty objects, arrays, scalars,
+whitespace and duplicate JSON object keys. Inserting all roots first preserves
+source-valid merge cycles. Tenant RLS is enabled and forced. All non-owner table
+grants, including default grants, are revoked; no runtime write grant is added.
+A populated downgrade refuses destructive drop. Replay and partial adoption
+repair are refused.
+
+The manifest reserves import-verification event schemas but emits and stages no
+event in this rollback-only phase. Returned typed observations are outcomes,
+never dispatched events or durable receipts. This follows the existing explicit
+reserved/unemitted event-contract precedent in
+`app/services/sot_registry/domains/workforce_operations.py`.
+
+Hosted authored tests cover exact fixture fields, lifecycle/classification/type
+vocabularies, explicit Boolean dispositions, raw JSON representation, timestamps,
+merge facts/cycles, context tenant FK and canonical/escrow OIDs. Faults after
+Tenant, roots, adoption DDL and contexts require root rollback to restore original
+rows, catalog definitions, OIDs, grants and histories. Tests are not executed
+locally; only static checks are permitted here. Fixtures are not operational
+acceptance, provider correspondence or a learner identity ceremony.
+
+Incoming Sub FKs still reference escrow and runtime readers/writers remain on
+existing authority: adoption is explicitly incomplete. Business temporal
+`party_roles`, RBAC, profiles, credentials, audit history, TenantDomain rows,
+reference transfer, writer cutover, post-write reverse recovery and operational
+acceptance remain outside this slice. No Kernel contract or released migration
+change is needed or added.
+
+
+### Destination verification and real-role RLS proof
+
+Before returning an import outcome, the Tenant participant verifies the complete
+source/destination keyset and every copied Tenant field. The Party participant
+verifies complete root/context keysets, exact source fields, every explicit
+Boolean disposition, NULL email, empty custom fields and absent subtype rows.
+Context comparisons include metadata text and SQL-nullness, so JSON null cannot
+substitute for SQL NULL. Verification disables RLS filtering transaction-locally;
+a connection unable to inspect all forced-RLS rows refuses verification. Only
+mismatch Booleans and verified destination counts are returned, never payloads.
+Early Tenant/root checks catch suppressed inserts before downstream FK inserts;
+the final pipeline check catches subsequent drift before any outcome. Hosted
+regressions install sacrificial suppressing/modifying triggers or inject extra
+rows and require typed refusal plus complete root rollback.
+
+The authored RLS proof creates a temporary NOLOGIN/NOSUPERUSER/NOBYPASSRLS role
+inside the fixture root, grants fixture-only SELECT/INSERT, and switches to that
+actual role. It proves same-tenant reads, hidden other/unset-tenant rows and
+WITH CHECK write refusal by PostgreSQL permission SQLSTATE. Root rollback
+removes the role and all temporary grants. The adoption migration still grants
+no runtime access. These remain authored hosted tests, not locally executed
+PostgreSQL evidence.

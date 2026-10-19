@@ -295,6 +295,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: The deferred legacy-numbering canaries add two test-only database
 #: constructions; Numbering activation fixtures are not part of this change.
 #: Production construction remains unchanged.
+#: +2 from tests/integration/test_kernel_lineage_entry.py: one disposable
+#: migrated clone engine and one Session for the existing owner to seed canaries.
+#: Party import reuses that fixture and adds no constructor. These are reviewed
+#: test-only constructions; the production construction baseline is unchanged.
 TEST_FIXTURE_BASELINE_TOTAL = 788
 
 

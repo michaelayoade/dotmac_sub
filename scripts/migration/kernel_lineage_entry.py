@@ -492,11 +492,19 @@ def _escrow(connection: Connection) -> None:
             f"ALTER TABLE public.{quote(name)} SET SCHEMA {schema}"
         )
     # Fresh owner-only schema also fences retained column grants and implicit
-    # function-owner EXECUTE. Superuser/custody containment is a separate gate.
+    # function-owner EXECUTE. Check usable ordinary LOGIN actors, including
+    # inherited privileges and SET ROLE paths to any privileged target. A
+    # NOLOGIN capability alone is not an actor. Direct superuser/current-owner
+    # custody containment remains a separate gate.
     accessible = connection.scalar(
         text(
-            "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE NOT rolsuper "
-            "AND rolname <> current_user AND has_schema_privilege(oid,:schema,'USAGE'))"
+            "SELECT EXISTS (SELECT 1 FROM pg_roles actor "
+            "WHERE actor.rolcanlogin AND NOT actor.rolsuper "
+            "AND actor.rolname <> current_user AND ("
+            "has_schema_privilege(actor.oid,:schema,'USAGE') OR EXISTS ("
+            "SELECT 1 FROM pg_roles target "
+            "WHERE pg_has_role(actor.oid,target.oid,'SET') "
+            "AND has_schema_privilege(target.oid,:schema,'USAGE'))))"
         ),
         {"schema": ESCROW_SCHEMA},
     )
