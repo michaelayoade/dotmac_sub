@@ -324,6 +324,32 @@
       "reason": "Michael approved 2026-10-19 landing the reviewed open branches via one integration PR (#3716) instead of 17 separate merges: Learning/Kernel party and operator-tenant imports (#3672-#3678), audit visibility fixes (#3660/#3661), billing kill-switch and ingestion split (#3708/#3709), and small fixes (#3631-#3635, #3671). The combined diff exceeds the per-PR size threshold and adds two kernel-import modules plus one audit template; each constituent branch was reviewed on its own PR. No new capability beyond those branches.",
       "starter_contract": "Starter kernel party-identity and operator-tenancy import contracts consumed by party_kernel_import/operator_tenant_kernel_import (Learning/Kernel #3672-#3678); remaining paths are corrections to existing Sub audit/admin surfaces (#3660/#3661, #3708/#3709, #3631-#3635, #3671) landed under the same approval, consuming no new Starter contract.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PPPOE-CREDENTIAL-INHERIT-20261019",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/pppoe_credentials.py",
+        "app/services/settings_spec.py",
+        "app/services/web_catalog_subscriptions.py",
+        "app/services/web_catalog_subscription_workflows.py",
+        "app/services/enforcement.py",
+        "app/web/admin/catalog.py",
+        "templates/admin/catalog/subscription_form.html",
+        "scripts/seed/seed_rbac.py"
+      ],
+      "reason": "Michael approved option C on 2026-10-19 (D3 ended-service credential may be inherited by the same customer only; D6 new permission subscription:credential:update; D7 disconnect after RADIUS projection). Minimal Sub bridge until the Starter access-credentials owner exists: setting-gated inherit of a replacement service's credential (default 'new', behaviour unchanged until flipped), reactivation keeps the existing password, typed create-form login/password honoured, and the edit path corrected to touch only this service's credential, remove the old username from RADIUS, disconnect only after projection succeeds and surface failure. No new Python module, no new template, no OpenAPI change.",
+      "starter_contract": "proposed dotmac-access-credentials on_replacement_service / inherit_from_service_states / change_disconnect policy keys (ADR-00NN, pending); the bridge settings map 1:1 and the bridge branch is deleted at the Starter cutover.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PPPOE-CREDENTIAL-PERMISSION-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/*_subscription_credential_permission.py"
+      ],
+      "reason": "Permission-only migration registering subscription:credential:update (Michael decision D6, 2026-10-19): the credential edit path currently has no dedicated permission, so any actor holding subscription:update can rename or re-password a PPPoE credential. No tables, no role grants; additive and reversible unless operators have assigned it. Glob so a renumber on merge order does not invalidate the exception.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
