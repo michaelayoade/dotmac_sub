@@ -427,7 +427,7 @@ def edit_context(client_for, monkeypatch):
         wf,
         "subscription_edit_form_context",
         lambda *a, **k: {
-            "current_service_password": "s3cret-pw",
+            "has_current_service_password": True,
             "current_service_login": "user",
             "subscription": {"id": SUB_ID, "service_password": "s3cret-pw"},
         },
@@ -441,7 +441,7 @@ def test_edit_page_hides_password_from_additional_ip_writer(edit_context):
     assert response.status_code == 200
     assert captured["can_manage_subscription_catalog"] is False
     assert captured["can_manage_additional_ip"] is True
-    assert captured["current_service_password"] == ""
+    assert captured["has_current_service_password"] is False
     assert captured["subscription"]["service_password"] == ""
 
 
@@ -450,7 +450,7 @@ def test_edit_page_shows_password_with_subscription_update(edit_context):
     response = client_for(["subscription:update"]).get(f"{_S}/edit")
     assert response.status_code == 200
     assert captured["can_manage_subscription_catalog"] is True
-    assert captured["current_service_password"] == "s3cret-pw"
+    assert captured["has_current_service_password"] is True
 
 
 def _flag_block(source: str, anchor: str) -> str:

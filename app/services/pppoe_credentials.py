@@ -32,6 +32,7 @@ from app.services.credential_crypto import encrypt_credential
 from app.services.customer_identifiers import pppoe_username_from_subscriber_number
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.pppoe_password_reveal import CredentialUnusable
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -424,3 +425,33 @@ __all__ = [
     "PppoeCredentialError",
     "ensure_pppoe_credential",
 ]
+
+
+def subscription_bound_credential(
+    db: Session, subscriber_id: str | UUID | None, subscription_id: str | UUID | None
+) -> AccessCredential | None:
+    """Return this subscription's own active credential, strictly.
+
+    No fallback to the subscriber's newest credential: on an account with
+    several services that would return another service's password. Raises
+    ``CredentialUnusable("ambiguous_credential")`` when more than one active
+    credential is bound to the subscription.
+    """
+    try:
+        subscriber_uuid = UUID(str(subscriber_id))
+        subscription_uuid = UUID(str(subscription_id))
+    except (TypeError, ValueError):
+        return None
+    rows = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscriber_uuid,
+            AccessCredential.subscription_id == subscription_uuid,
+            AccessCredential.is_active.is_(True),
+        )
+        .limit(2)
+        .all()
+    )
+    if len(rows) > 1:
+        raise CredentialUnusable("ambiguous_credential")
+    return rows[0] if rows else None

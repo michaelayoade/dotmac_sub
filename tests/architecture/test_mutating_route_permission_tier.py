@@ -116,6 +116,7 @@ _WRITE_TIER_VERBS = frozenset(
         "repair",  # Executes reviewed financial recovery.
         "reconstruct_backdated_service",  # Adds reviewed historical identity.
         "retire",
+        "reveal",  # Audited disclosure of a stored credential; never read-tier.
         "reverse",
         "revoke",  # Withdraws current authority or approval.
         "resume",

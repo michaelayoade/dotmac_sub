@@ -1451,12 +1451,14 @@ def send_subscription_credentials_redirect(
     db: Session,
     *,
     subscription_id: str,
+    actor_id: str | None = None,
 ) -> str:
     """Send service credentials and return the edit-page redirect URL."""
     try:
         result = core.send_subscription_credentials(
             db,
             subscription_id=subscription_id,
+            actor_id=actor_id,
         )
         notice = (
             f"Sent credentials to {result['email_sent']} email target(s) "
