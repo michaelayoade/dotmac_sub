@@ -76,18 +76,20 @@ def _refusals(db) -> list[AuditEvent]:
 
 
 def _assign(db, actor: SystemUser, target: SystemUser, permission_ids):
+    role_ids = tuple(
+        db.scalars(
+            select(SystemUserRole.role_id).where(
+                SystemUserRole.system_user_id == target.id
+            )
+        )
+    )
+    db.commit()  # owner commands need an idle session
     return system_user_assignments.replace_system_user_assignments(
         db,
         system_user_assignments.ReplaceSystemUserAssignmentsCommand(
             context=_ctx(actor, system_user_assignments.ASSIGNMENT_SCOPE),
             user_id=target.id,
-            role_ids=tuple(
-                db.scalars(
-                    select(SystemUserRole.role_id).where(
-                        SystemUserRole.system_user_id == target.id
-                    )
-                )
-            ),
+            role_ids=role_ids,
             direct_permission_ids=tuple(permission_ids),
         ),
     )
@@ -146,6 +148,7 @@ def test_non_admin_adding_it_to_a_role_is_refused_and_audited(db_session) -> Non
     permission = _permission(db_session)
     actor, role = _user(db_session), _role(db_session)
     with pytest.raises(rbac_catalog.RbacCatalogError) as caught:
+        db_session.commit()  # owner commands need an idle session
         rbac_catalog.grant_role_permission(
             db_session,
             rbac_catalog.GrantRolePermissionCommand(
@@ -163,6 +166,7 @@ def test_non_admin_role_update_with_the_permission_is_refused(db_session) -> Non
     permission = _permission(db_session)
     actor, role = _user(db_session), _role(db_session)
     with pytest.raises(rbac_catalog.RbacCatalogError):
+        db_session.commit()  # owner commands need an idle session
         rbac_catalog.update_role(
             db_session,
             rbac_catalog.UpdateRoleCommand(
@@ -177,6 +181,7 @@ def test_non_admin_role_update_with_the_permission_is_refused(db_session) -> Non
 def test_admin_adding_it_to_a_role_succeeds(db_session) -> None:
     permission = _permission(db_session)
     admin, role = _admin(db_session), _role(db_session)
+    db_session.commit()  # owner commands need an idle session
     rbac_catalog.grant_role_permission(
         db_session,
         rbac_catalog.GrantRolePermissionCommand(
@@ -197,6 +202,7 @@ def test_admin_adding_it_to_a_role_succeeds(db_session) -> None:
 def test_non_admin_cannot_revoke_a_role_grant(db_session) -> None:
     permission = _permission(db_session)
     admin, actor, role = _admin(db_session), _user(db_session), _role(db_session)
+    db_session.commit()  # owner commands need an idle session
     outcome = rbac_catalog.grant_role_permission(
         db_session,
         rbac_catalog.GrantRolePermissionCommand(
@@ -206,6 +212,7 @@ def test_non_admin_cannot_revoke_a_role_grant(db_session) -> None:
         ),
     )
     with pytest.raises(rbac_catalog.RbacCatalogError):
+        db_session.commit()  # owner commands need an idle session
         rbac_catalog.revoke_role_permission(
             db_session,
             rbac_catalog.RevokeRolePermissionCommand(

@@ -255,13 +255,15 @@ def guard_admin_only_grants(
     touched: Callable[[], Iterable[UUID]],
     make_error: Callable[[tuple[str, ...]], Exception],
     operation: Callable[[], object],
+    commit: Callable[[], None],
 ):
     """Wrap an RBAC owner operation with the admin-only-grant rule.
 
     Pre-check on a transaction-free session: a refusal is audited in its own
     committed event (the owner transaction would roll it back) and raised.
     The same check is repeated inside the owner transaction as a backstop.
-    Names only; no secrets.
+    Names only; no secrets. ``commit`` is the caller's own session commit (this
+    module owns no persistence).
     """
 
     def checked():
@@ -306,8 +308,8 @@ def guard_admin_only_grants(
                     "correlation_id": str(context.correlation_id),
                 },
             )
-            db.commit()
+            commit()
             raise make_error(keys)
         if db.in_transaction():
-            db.commit()
+            commit()
     return checked

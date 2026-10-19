@@ -787,5 +787,6 @@ def replace_system_user_assignments(
             touched=lambda: _admin_only_touched(db, command),
             make_error=_admin_required_error,
             operation=operation,
+            commit=db.commit,
         ),
     )

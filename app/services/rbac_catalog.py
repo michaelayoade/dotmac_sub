@@ -732,6 +732,7 @@ def _execute(
             touched=lambda: touched(db),
             make_error=_admin_required_error,
             operation=operation,
+            commit=db.commit,
         )
     try:
         return execute_owner_command(
