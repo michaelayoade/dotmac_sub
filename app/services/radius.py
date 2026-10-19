@@ -55,7 +55,11 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
-from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.credential_crypto import (
+    decrypt_credential,
+    encrypt_credential,
+    is_secret_reference_value,
+)
 from app.services.external_radius_targets import (
     active_external_radius_targets,
     external_radius_table,
@@ -271,6 +275,12 @@ def _normalize_imported_radius_secret(
     attr = str(attribute or "").strip().lower()
     raw_value = str(value or "").strip()
     if not raw_value:
+        return None, False
+    if attr in ("crypt-password", "cleartext-password") and (
+        is_secret_reference_value(raw_value)
+    ):
+        # A reference in an external RADIUS row is never stored: it would be
+        # resolved later. Counted as skipped by the caller.
         return None, False
     if attr == "crypt-password":
         return raw_value, True

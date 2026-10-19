@@ -46,7 +46,11 @@ from app.models.ont_service_configuration import (
 )
 from app.models.tr069 import Tr069CpeDevice
 from app.services.audit_adapter import stage_audit_event
-from app.services.credential_crypto import encrypt_credential, get_encryption_key
+from app.services.credential_crypto import (
+    encrypt_credential,
+    get_encryption_key,
+    reject_reserved_service_password,
+)
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -618,6 +622,7 @@ def _change_updates(
         }
         evidence = dict(updates)
         if change.password:
+            _refuse_reserved_wifi_password(change.password)
             updates["wifi.password"] = encrypt_credential(change.password)
             evidence["wifi.password"] = "changed"
     elif section is OntConfigurationSection.management and isinstance(
@@ -678,6 +683,17 @@ def _change_updates(
     return updates, evidence
 
 
+_WIFI_PASSWORD_REFUSED = "That WiFi password is not allowed. Choose a different one."
+
+
+def _refuse_reserved_wifi_password(password: str | None) -> None:
+    """Fixed-text refusal of secret references and storage wrappers."""
+    try:
+        reject_reserved_service_password(password)
+    except ValueError:
+        raise _error("invalid_change", _WIFI_PASSWORD_REFUSED) from None
+
+
 def _customer_wifi_change_updates(
     change: CustomerWifiConfigurationChange,
 ) -> tuple[dict[str, object], dict[str, object]]:
@@ -687,6 +703,7 @@ def _customer_wifi_change_updates(
         raise _error("invalid_change", "WiFi name must be 1-32 characters.")
     if password is not None and not 8 <= len(password) <= 63:
         raise _error("invalid_change", "WiFi password must be 8-63 characters.")
+    _refuse_reserved_wifi_password(password)
     updates: dict[str, object] = {"wifi.ssid": ssid}
     evidence: dict[str, object] = {"wifi.ssid": ssid}
     if password is not None:
@@ -716,6 +733,7 @@ def _cpe_wifi_change_updates(
         password = change.password.strip()
         if not 8 <= len(password) <= 63:
             raise _error("invalid_change", "WiFi password must be 8-63 characters.")
+        _refuse_reserved_wifi_password(password)
         updates["wifi.password"] = encrypt_credential(password)
         evidence["wifi.password"] = "changed"
     return updates, evidence

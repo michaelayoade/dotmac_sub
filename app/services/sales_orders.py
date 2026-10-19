@@ -82,6 +82,10 @@ from app.services.common import (
     round_money,
     validate_enum,
 )
+from app.services.credential_crypto import (
+    UNUSABLE_STORED_SECRET_MESSAGE,
+    is_secret_reference_value,
+)
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.operator_tenant import OPERATOR_TENANT_ID
@@ -1118,6 +1122,11 @@ def _build_staged_device_intent(
         "wan.ip_protocol": ip_protocol,
     }
     if connection_type == ConnectionType.pppoe:
+        if is_secret_reference_value(credential.secret_hash):
+            # Never copy a stored reference into ONT intent: the ONT steps would
+            # resolve it and push an app secret to the CPE. The value is not
+            # logged or echoed.
+            raise HTTPException(status_code=409, detail=UNUSABLE_STORED_SECRET_MESSAGE)
         desired_config.update(
             {
                 "wan.pppoe_username": credential.username,
