@@ -59,7 +59,7 @@ from app.services.prepaid_period_purchases import (
     SettleVerifiedPrepaidPeriodPurchaseCommand,
     stage_verified_prepaid_period_purchase,
 )
-from app.services.settings_spec import starter_ledger_live_enabled
+from app.services.billing.starter_policies import starter_ledger_live_enabled
 from app.services.topup_intents import (
     COMPLETION_SCOPE,
     CompleteTopupIntentCommand,
@@ -932,10 +932,6 @@ def _stage_period_purchase_settlement(
     prepared: _PreparedPaymentWebhook,
     context: CommandContext,
 ) -> _PreparedPaymentWebhook:
-    # D1 hold: with the Starter ledger live switch OFF no Starter table is
-    # read or written; the legacy provider-event lane owns the settlement.
-    if not starter_ledger_live_enabled(db):
-        return None
     settlement = prepared.settlement
     intent = prepared.topup_intent
     if (
@@ -998,6 +994,10 @@ def _stage_starter_invoice_settlement(
     billing allocation staged here are the only money record.
     """
 
+    # D1 hold: with the Starter ledger live switch OFF no Starter table is
+    # read or written; the legacy provider-event lane owns the settlement.
+    if not starter_ledger_live_enabled(db):
+        return None
     settlement = prepared.settlement
     intent = prepared.topup_intent
     if (

@@ -6306,17 +6306,6 @@ def active_setting_updated_at(db, domain: SettingDomain, key: str) -> datetime |
     return db.scalar(stmt)
 
 
-def starter_ledger_live_enabled(db) -> bool:
-    """True only when the Starter ledger live switch is explicitly ON.
-
-    Fail closed: any unset, malformed or non-boolean value is OFF. Reads
-    domain settings only; never touches the Starter tables.
-    """
-
-    value = resolve_value(db, SettingDomain.billing, "starter_ledger_live_enabled")
-    return value is True
-
-
 def resolve_boolean(db, domain: SettingDomain, key: str) -> bool:
     """Resolve a registered boolean without call-site fallback semantics."""
 

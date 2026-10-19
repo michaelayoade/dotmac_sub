@@ -1,18 +1,11 @@
 """Composable policies for consuming Starter money-pack contracts (ADR 0031).
 
 Every assembly-supplied value the pinned ``dotmac-billing`` /
-``dotmac-payments`` contracts require — account identity, obligation
-identity, tax and due-date policy evidence, numbering series, document
-profiles, accepted confirmation evidence — resolves here from domain
-settings with typed defaults declared in ``settings_spec``. Callers never
-inline Starter-contract literals; changing a convention is a settings
-change, not a release.
+``dotmac-payments`` contracts require resolves here from domain settings with
+typed defaults declared in ``settings_spec``; callers never inline
+Starter-contract literals.
 
-Account granularity is per Subscriber per currency (ADR 0031): a person
-with linked radio and fiber accounts holds independent ledger accounts;
-person identity travels as subject, service heterogeneity as service
-reference and charge component. Resolution is deterministic and performs
-no money-state writes.
+Account granularity is per Subscriber per currency (ADR 0031). No money writes.
 """
 
 from __future__ import annotations
@@ -39,7 +32,14 @@ __all__ = [
     "percent_to_fraction",
     "resolve_starter_billing_policies",
     "resolve_starter_settlement_policies",
+    "starter_ledger_live_enabled",
 ]
+
+
+def starter_ledger_live_enabled(db: Session) -> bool:
+    """D1 hold switch, fail closed: only a boolean ``True`` is ON."""
+    value = resolve_value(db, SettingDomain.billing, "starter_ledger_live_enabled")
+    return value is True
 
 
 class StarterBillingPolicyError(DomainError, ValueError):

@@ -68,6 +68,7 @@ from app.services.billing.starter_policies import (
     due_terms_code,
     percent_to_fraction,
     resolve_starter_billing_policies,
+    starter_ledger_live_enabled,
 )
 from app.services.brand_profiles import resolve_brand
 from app.services.domain_errors import DomainError
@@ -75,7 +76,6 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.invoice_bank_details import get_invoice_bank_details
 from app.services.operator_tenant import OPERATOR_TENANT_ID
-from app.services.settings_spec import starter_ledger_live_enabled
 
 __all__ = [
     "StarterIssuanceError",

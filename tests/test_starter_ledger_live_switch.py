@@ -18,6 +18,7 @@ from app.services import payment_webhook_commands as webhooks
 from app.services import settings_spec
 from app.services import web_billing_invoices as web_invoices
 from app.services.billing import starter_issuance as issuance
+from app.services.billing import starter_policies
 
 _KEY = "starter_ledger_live_enabled"
 
@@ -39,13 +40,13 @@ def test_spec_is_default_off_and_owner_command_only() -> None:
 
 @pytest.mark.parametrize("raw", [None, False, "true", 1, "", "on"])
 def test_reader_fails_closed_for_anything_but_boolean_true(monkeypatch, raw) -> None:
-    monkeypatch.setattr(settings_spec, "resolve_value", lambda *_a, **_k: raw)
-    assert settings_spec.starter_ledger_live_enabled(object()) is False
+    monkeypatch.setattr(starter_policies, "resolve_value", lambda *_a, **_k: raw)
+    assert starter_policies.starter_ledger_live_enabled(object()) is False  # type: ignore[arg-type]
 
 
 def test_reader_is_on_only_for_boolean_true(monkeypatch) -> None:
-    monkeypatch.setattr(settings_spec, "resolve_value", lambda *_a, **_k: True)
-    assert settings_spec.starter_ledger_live_enabled(object()) is True
+    monkeypatch.setattr(starter_policies, "resolve_value", lambda *_a, **_k: True)
+    assert starter_policies.starter_ledger_live_enabled(object()) is True  # type: ignore[arg-type]
 
 
 def test_eligibility_short_circuits_when_off(monkeypatch) -> None:
@@ -89,6 +90,8 @@ def _issue_with_switch(monkeypatch, *, live: bool) -> list[str]:
     monkeypatch.setattr(
         web_invoices.billing_service.invoices, "issue_draft_system", _legacy
     )
+    monkeypatch.setattr(web_invoices, "_draft_issue_time", lambda _inv: None)
+    monkeypatch.setattr(web_invoices, "verified_draft_issuance", lambda *_a, **_k: None)
     db = SimpleNamespace(commit=lambda: None, refresh=lambda _o: None)
     with pytest.raises(RuntimeError) if not live else _nullcontext():
         web_invoices.issue_invoice_from_detail(db, invoice_id=invoice.id)  # type: ignore[arg-type]
