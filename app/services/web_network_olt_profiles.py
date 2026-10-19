@@ -1446,7 +1446,10 @@ def command_preview_context(
         )
     ]
 
-    if any(getattr(ws, "pppoe_password_unusable", False) for ws in spec.wan_services):
+    if any(
+        getattr(ws, "pppoe_password_unusable", False)
+        for ws in getattr(spec, "wan_services", None) or []
+    ):
         command_sets.append(
             OltCommandSet(
                 step="PPPoE password omitted",
