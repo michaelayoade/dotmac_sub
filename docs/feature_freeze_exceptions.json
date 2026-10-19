@@ -265,6 +265,15 @@
       "reason": "Step 4 caller migration, gated by the ADR 0032 incident acceptance tests at the Starter boundary (a payment bound to one intent cannot settle another obligation; full settlement yields exactly one access signal even when replayed; only the access owner switches service). Prepaid renewals then fund and issue through Starter earmarks and advance-collection issuance; Sub remains caller-only and the legacy prepaid writers retire under the ratchet.",
       "approved_by": "michaelayoade",
       "starter_contract": "Published dotmac-billing 0.1.0a8 earmark commands + issue_rated_invoice (advance collection) + accept/allocate settlement, and dotmac-payments 0.1.0a3 intent-bound confirmation, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "THIN-STARTER-CREDIT-LINK-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/693_starter_credit_note_links.py"
+      ],
+      "reason": "Structural identity storage for the credits and readers lanes (ADR 0007: no metadata as financial identity): starter_credit_note_links records the Starter credit document identity for credit notes issued through dotmac-billing, and starter_invoice_links gains the issued document fact version so readers can read the exact frozen document fact. Identity only, never financial state.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
