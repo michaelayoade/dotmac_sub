@@ -219,6 +219,10 @@ DEFAULT_PERMISSIONS = [
     ("subscription:create", "Create subscriptions"),
     ("subscription:update", "Update subscriptions"),
     (
+        "subscription:credential:reveal",
+        "Reveal a stored PPPoE service password (audited)",
+    ),
+    (
         "subscription:additional_ip:write",
         "Assign and remove additional subscription IP ranges",
     ),

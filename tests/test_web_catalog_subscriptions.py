@@ -386,9 +386,10 @@ def test_upsert_access_credential_stores_service_password_in_reversible_format(
     )
 
 
-def test_subscription_form_context_exposes_current_service_password(
+def test_subscription_form_context_never_exposes_current_service_password(
     db_session,
     subscriber,
+    subscription,
 ):
     web_catalog_subscriptions_service._upsert_access_credential(
         db_session,
@@ -398,10 +399,17 @@ def test_subscription_form_context_exposes_current_service_password(
         radius_profile_id=None,
     )
 
+    from app.models.catalog import AccessCredential
+
+    db_session.query(AccessCredential).filter(
+        AccessCredential.subscriber_id == subscriber.id
+    ).update({"subscription_id": subscription.id})
+    db_session.commit()
+
     context = web_catalog_subscriptions_service.subscription_form_context(
         db_session,
         {
-            "id": "sub-1",
+            "id": str(subscription.id),
             "subscriber_id": str(subscriber.id),
             "account_id": str(subscriber.id),
             "login": "10004167",
@@ -410,7 +418,9 @@ def test_subscription_form_context_exposes_current_service_password(
     )
 
     assert context["current_service_login"] == "10004167"
-    assert context["current_service_password"] == "VisiblePass123"
+    assert context["has_current_service_password"] is True
+    assert "current_service_password" not in context
+    assert "VisiblePass123" not in repr(context)
 
 
 def test_subscription_detail_context_resolves_commercial_policy_from_customer_and_globals(
