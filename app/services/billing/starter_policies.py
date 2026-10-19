@@ -65,6 +65,19 @@ def _text(db: Session, key: str) -> str:
     return value.strip()
 
 
+def _render_template(
+    template: str, placeholder: str, value: UUID, *, setting: str
+) -> str:
+    rendered = template.replace("{" + placeholder + "}", str(value))
+    if rendered == template or "{" in rendered:
+        raise _error(
+            "configuration_invalid",
+            f"Template must contain {{{placeholder}}}",
+            setting=setting,
+        )
+    return rendered
+
+
 @dataclass(frozen=True, slots=True)
 class StarterBillingPolicies:
     """Resolved Starter billing policy surface for one command assembly."""
@@ -75,6 +88,28 @@ class StarterBillingPolicies:
     admin_contract_line_template: str
     admin_contract_version: str
     admin_price_version: str
+    admin_fx_observation_template: str
+    recurring_source_kind: str
+    recurring_contract_line_template: str
+    recurring_contract_version: str
+    recurring_price_version: str
+    recurring_source_fact_template: str
+    recurring_line_source_fact_template: str
+    recurring_fx_observation_template: str
+    system_actor_ref: str
+    default_minor_units: int
+    subject_party_template: str
+    subject_subscriber_template: str
+    service_subscription_template: str
+    service_subscriber_template: str
+    source_fact_version: str
+    fx_observation_version: str
+    fx_rate_purpose: str
+    fx_rounding_policy: str
+    fx_provenance: str
+    payment_method_code: str
+    correlation_template: str
+    due_evidence_ref_template: str
     default_charge_component: str
     tax_jurisdiction: str
     tax_policy_id: str
@@ -106,38 +141,114 @@ class StarterBillingPolicies:
         return self.invoice_series_prefix
 
     def admin_source_fact_id(self, invoice_id: UUID) -> str:
-        rendered = self.admin_source_fact_template.replace(
-            "{invoice_id}", str(invoice_id)
+        return _render_template(
+            self.admin_source_fact_template,
+            "invoice_id",
+            invoice_id,
+            setting="starter_billing_admin_source_fact_template",
         )
-        if rendered == self.admin_source_fact_template or "{" in rendered:
-            raise _error(
-                "configuration_invalid",
-                "Admin source fact template must contain {invoice_id}",
-                setting="starter_billing_admin_source_fact_template",
-            )
-        return rendered
 
     def admin_line_source_fact_id(self, line_id: UUID) -> str:
-        rendered = self.admin_line_source_fact_template.replace(
-            "{line_id}", str(line_id)
+        return _render_template(
+            self.admin_line_source_fact_template,
+            "line_id",
+            line_id,
+            setting="starter_billing_admin_line_source_fact_template",
         )
-        if rendered == self.admin_line_source_fact_template or "{" in rendered:
-            raise _error(
-                "configuration_invalid",
-                "Admin line source fact template must contain {line_id}",
-                setting="starter_billing_admin_line_source_fact_template",
-            )
-        return rendered
 
     def admin_contract_line_ref(self, line_id: UUID) -> str:
-        rendered = self.admin_contract_line_template.replace("{line_id}", str(line_id))
-        if rendered == self.admin_contract_line_template or "{" in rendered:
-            raise _error(
-                "configuration_invalid",
-                "Admin contract line template must contain {line_id}",
-                setting="starter_billing_admin_contract_line_template",
+        return _render_template(
+            self.admin_contract_line_template,
+            "line_id",
+            line_id,
+            setting="starter_billing_admin_contract_line_template",
+        )
+
+    def admin_fx_observation_id(self, invoice_id: UUID) -> str:
+        return _render_template(
+            self.admin_fx_observation_template,
+            "invoice_id",
+            invoice_id,
+            setting="starter_billing_admin_fx_observation_template",
+        )
+
+    def recurring_source_fact_id(self, invoice_id: UUID) -> str:
+        return _render_template(
+            self.recurring_source_fact_template,
+            "invoice_id",
+            invoice_id,
+            setting="starter_billing_recurring_source_fact_template",
+        )
+
+    def recurring_line_source_fact_id(self, line_id: UUID) -> str:
+        return _render_template(
+            self.recurring_line_source_fact_template,
+            "line_id",
+            line_id,
+            setting="starter_billing_recurring_line_source_fact_template",
+        )
+
+    def recurring_contract_line_ref(self, line_id: UUID) -> str:
+        return _render_template(
+            self.recurring_contract_line_template,
+            "line_id",
+            line_id,
+            setting="starter_billing_recurring_contract_line_template",
+        )
+
+    def recurring_fx_observation_id(self, invoice_id: UUID) -> str:
+        return _render_template(
+            self.recurring_fx_observation_template,
+            "invoice_id",
+            invoice_id,
+            setting="starter_billing_recurring_fx_observation_template",
+        )
+
+    def subject_ref(self, *, party_id: UUID | None, subscriber_id: UUID) -> str:
+        if party_id is not None:
+            return _render_template(
+                self.subject_party_template,
+                "party_id",
+                party_id,
+                setting="starter_billing_subject_party_template",
             )
-        return rendered
+        return _render_template(
+            self.subject_subscriber_template,
+            "subscriber_id",
+            subscriber_id,
+            setting="starter_billing_subject_subscriber_template",
+        )
+
+    def service_ref(self, *, subscription_id: UUID | None, subscriber_id: UUID) -> str:
+        if subscription_id is not None:
+            return _render_template(
+                self.service_subscription_template,
+                "subscription_id",
+                subscription_id,
+                setting="starter_billing_service_subscription_template",
+            )
+        return _render_template(
+            self.service_subscriber_template,
+            "subscriber_id",
+            subscriber_id,
+            setting="starter_billing_service_subscriber_template",
+        )
+
+    def correlation_id(self, invoice_id: UUID) -> str:
+        return _render_template(
+            self.correlation_template,
+            "invoice_id",
+            invoice_id,
+            setting="starter_billing_correlation_template",
+        )
+
+    def due_evidence_ref(self, invoice_id: UUID) -> str:
+        return _render_template(
+            self.due_evidence_ref_template,
+            "invoice_id",
+            invoice_id,
+            setting="starter_billing_due_evidence_ref_template",
+        )
 
 
 def resolve_starter_billing_policies(db: Session) -> StarterBillingPolicies:
@@ -152,6 +263,48 @@ def resolve_starter_billing_policies(db: Session) -> StarterBillingPolicies:
         ),
         admin_contract_version=_text(db, "starter_billing_admin_contract_version"),
         admin_price_version=_text(db, "starter_billing_admin_price_version"),
+        admin_fx_observation_template=_text(
+            db, "starter_billing_admin_fx_observation_template"
+        ),
+        recurring_source_kind=_text(db, "starter_billing_recurring_source_kind"),
+        recurring_contract_line_template=_text(
+            db, "starter_billing_recurring_contract_line_template"
+        ),
+        recurring_contract_version=_text(
+            db, "starter_billing_recurring_contract_version"
+        ),
+        recurring_price_version=_text(db, "starter_billing_recurring_price_version"),
+        recurring_source_fact_template=_text(
+            db, "starter_billing_recurring_source_fact_template"
+        ),
+        recurring_line_source_fact_template=_text(
+            db, "starter_billing_recurring_line_source_fact_template"
+        ),
+        recurring_fx_observation_template=_text(
+            db, "starter_billing_recurring_fx_observation_template"
+        ),
+        system_actor_ref=_text(db, "starter_billing_system_actor_ref"),
+        default_minor_units=_minor_units(db, "starter_billing_default_minor_units"),
+        subject_party_template=_text(db, "starter_billing_subject_party_template"),
+        subject_subscriber_template=_text(
+            db, "starter_billing_subject_subscriber_template"
+        ),
+        service_subscription_template=_text(
+            db, "starter_billing_service_subscription_template"
+        ),
+        service_subscriber_template=_text(
+            db, "starter_billing_service_subscriber_template"
+        ),
+        source_fact_version=_text(db, "starter_billing_source_fact_version"),
+        fx_observation_version=_text(db, "starter_billing_fx_observation_version"),
+        fx_rate_purpose=_text(db, "starter_billing_fx_rate_purpose"),
+        fx_rounding_policy=_text(db, "starter_billing_fx_rounding_policy"),
+        fx_provenance=_text(db, "starter_billing_fx_provenance"),
+        payment_method_code=_text(db, "starter_billing_payment_method_code"),
+        correlation_template=_text(db, "starter_billing_correlation_template"),
+        due_evidence_ref_template=_text(
+            db, "starter_billing_due_evidence_ref_template"
+        ),
         default_charge_component=_text(db, "starter_billing_default_charge_component"),
         tax_jurisdiction=_text(db, "starter_billing_tax_jurisdiction"),
         tax_policy_id=_text(db, "starter_billing_tax_policy_id"),
@@ -180,6 +333,31 @@ def resolve_starter_billing_policies(db: Session) -> StarterBillingPolicies:
         default_country_code=_text(db, "starter_billing_default_country_code"),
         series_start_value=_positive_int(db, "starter_billing_series_start_value"),
     )
+
+
+def _minor_units(db: Session, key: str) -> int:
+    value = resolve_value(db, SettingDomain.billing, key)
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise _error(
+            "configuration_invalid",
+            "Starter billing minor units must be an integer from 0 to 6",
+            setting=key,
+        )
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise _error(
+            "configuration_invalid",
+            "Starter billing minor units must be an integer from 0 to 6",
+            setting=key,
+        ) from exc
+    if not 0 <= parsed <= 6:
+        raise _error(
+            "configuration_invalid",
+            "Starter billing minor units must be an integer from 0 to 6",
+            setting=key,
+        )
+    return parsed
 
 
 def _positive_int(db: Session, key: str) -> int:
@@ -292,8 +470,17 @@ class StarterSettlementPolicies:
     settlement_source_system: str
     settlement_source_version: str
     funding_lane: str
+    settlement_source_ref_template: str
     confirmation_evidence: str
     accepted_confirmation_evidence: frozenset[str]
+
+    def settlement_source_ref(self, confirmation_id: UUID) -> str:
+        return _render_template(
+            self.settlement_source_ref_template,
+            "confirmation_id",
+            confirmation_id,
+            setting="starter_billing_settlement_source_ref_template",
+        )
 
 
 def resolve_starter_settlement_policies(db: Session) -> StarterSettlementPolicies:
@@ -311,6 +498,9 @@ def resolve_starter_settlement_policies(db: Session) -> StarterSettlementPolicie
             db, "starter_billing_settlement_source_version"
         ),
         funding_lane=_text(db, "starter_billing_settlement_funding_lane"),
+        settlement_source_ref_template=_text(
+            db, "starter_billing_settlement_source_ref_template"
+        ),
         confirmation_evidence=presented,
         accepted_confirmation_evidence=accepted,
     )

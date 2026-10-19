@@ -3602,11 +3602,14 @@ SERVICES: tuple[SOTService, ...] = (
             "Starter-issued admin invoice mirror and structural link",
             "Starter issuance eligibility decision for admin drafts",
             "Starter-issued multi-line admin invoice line links",
+            "Starter-issued scheduled-cycle invoice mirror",
         ),
         depends_on=(
             "control.settings_spec",
             "customer.accounts",
             "customer.branding",
+            "financial.account_credit_applications",
+            "financial.billing_automation",
             "financial.collection_accounts",
             "financial.invoices",
         ),
@@ -3618,7 +3621,14 @@ SERVICES: tuple[SOTService, ...] = (
             "announce event. app.services.web_billing_invoices is an "
             "implementation module because its only direct persistence "
             "mutation is committing this lane's transaction; its remaining "
-            "flows delegate to incumbent owners."
+            "flows delegate to incumbent owners. The scheduled-cycle lane "
+            "reuses the same core as a caller: app.services.billing_automation stages "
+            "cycle drafts, appends lines, and at end-of-run issues eligible "
+            "drafts (single-subscription homogeneous line sets with no "
+            "spendable account credit) through this service inside the "
+            "cycle transaction; ineligible drafts keep legacy system "
+            "issuance, and Starter-linked invoices are excluded from both "
+            "legacy line appends and legacy account-credit settlement."
         ),
         contract=ServiceContract(
             concerns=(
@@ -3657,6 +3667,19 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                     canonical_writer="financial.starter_issuance",
                 ),
+                ConcernContract(
+                    name="Starter-issued scheduled-cycle invoice mirror",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "eligible scheduled-cycle draft invoice",
+                        "canonical account-credit funding preview",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                    canonical_writer="financial.starter_issuance",
+                ),
             ),
             authoritative_inputs=(
                 AuthorityInput(
@@ -3668,6 +3691,27 @@ SERVICES: tuple[SOTService, ...] = (
                         "(one service exposure, per-line frozen tax "
                         "snapshots whose derived taxes reconcile), due "
                         "date, and postpaid subscriber billing mode"
+                    ),
+                ),
+                AuthorityInput(
+                    name="eligible scheduled-cycle draft invoice",
+                    owner="financial.billing_automation",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "cycle-staged draft with complete reconciled "
+                        "single-subscription homogeneous lines, frozen tax "
+                        "snapshots, verified due evidence, and a postpaid "
+                        "subscription and subscriber billing mode"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical account-credit funding preview",
+                    owner="financial.account_credit_applications",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "write-free funding projection proving the account "
+                        "holds no spendable credit for this invoice, so no "
+                        "legacy credit application is bypassed"
                     ),
                 ),
                 AuthorityInput(
@@ -3794,6 +3838,7 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_starter_issuance_eligibility.py",
                 "tests/integration/test_starter_issuance_switch_pg.py",
+                "tests/integration/test_starter_recurring_issuance_pg.py",
                 "tests/architecture/test_sot_manifest_contracts.py",
             ),
         ),

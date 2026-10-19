@@ -40,6 +40,7 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentSettlement,
     PaymentStatus,
+    StarterInvoiceLink,
     TopupIntent,
 )
 from app.models.customer_subledger import (
@@ -431,7 +432,11 @@ def _invoice_void_release_preview(
 
 
 def eligible_invoices(db: Session, account_id: str) -> list[Invoice]:
-    """Return collectible invoices in the canonical oldest-debt order."""
+    """Return collectible invoices in the canonical oldest-debt order.
+
+    Starter-linked invoices are excluded: their receivable is owned by
+    dotmac-billing, so legacy account credit must never settle them.
+    """
     return (
         db.query(Invoice)
         .filter(Invoice.account_id == coerce_uuid(account_id))
@@ -439,6 +444,9 @@ def eligible_invoices(db: Session, account_id: str) -> list[Invoice]:
         .filter(Invoice.is_proforma.is_not(True))
         .filter(Invoice.status.in_(ELIGIBLE_INVOICE_STATUSES))
         .filter(Invoice.balance_due > 0)
+        .filter(
+            ~Invoice.id.in_(db.query(StarterInvoiceLink.invoice_id).scalar_subquery())
+        )
         .order_by(
             Invoice.due_at.asc().nulls_last(),
             Invoice.created_at.asc(),

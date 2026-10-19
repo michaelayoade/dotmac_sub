@@ -17,6 +17,8 @@ no Starter-contract literal is inlined here.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
@@ -67,6 +69,7 @@ from app.schemas.audit import AuditEventCreate
 from app.services.audit import AuditEvents
 from app.services.billing.starter_policies import (
     StarterBillingPolicies,
+    StarterBillingPolicyError,
     collection_timing_for_billing_mode,
     due_terms_code,
     percent_to_fraction,
@@ -83,6 +86,8 @@ __all__ = [
     "StarterIssuanceError",
     "eligibility_reason",
     "issue_admin_invoice_via_starter",
+    "issue_recurring_invoice_via_starter",
+    "recurring_eligibility_reason",
 ]
 
 _SCOPE = TenantScope(OPERATOR_TENANT_ID)
@@ -101,13 +106,14 @@ def _error(suffix: str, message: str, **details: object) -> StarterIssuanceError
 
 
 class _ObligationSources:
-    """Assembly obligation-source registry for the admin manual lane."""
+    """Assembly obligation-source registry for one issuance lane."""
 
-    def __init__(self, policies: StarterBillingPolicies) -> None:
+    def __init__(self, policies: StarterBillingPolicies, source_kind: str) -> None:
         self._policies = policies
+        self._source_kind = source_kind
 
     def require_obligation_source(self, code: str) -> str:
-        if code != self._policies.admin_source_kind:
+        if code != self._source_kind:
             raise _error(
                 "source_kind_undeclared",
                 "Obligation source kind is not declared for Starter issuance",
@@ -174,11 +180,11 @@ def _active_lines(invoice: Invoice) -> list[InvoiceLine]:
     return [line for line in invoice.lines if line.is_active]
 
 
-def _quantize2(amount: Decimal) -> Decimal:
-    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+def _quantize(amount: Decimal, minor_units: int) -> Decimal:
+    return amount.quantize(Decimal(1).scaleb(-minor_units), rounding=ROUND_HALF_UP)
 
 
-def _line_tax_amount(line: InvoiceLine) -> Decimal | None:
+def _line_tax_amount(line: InvoiceLine, minor_units: int) -> Decimal | None:
     """Derive one line's tax from its frozen snapshot, else ``None``.
 
     A line with no snapshot percent and no snapshot code is untaxed; a
@@ -192,7 +198,7 @@ def _line_tax_amount(line: InvoiceLine) -> Decimal | None:
         return Decimal("0.00") if not code else None
     if not code:
         return None
-    return _quantize2(line.amount * percent / Decimal("100"))
+    return _quantize(line.amount * percent / Decimal("100"), minor_units)
 
 
 def _clean(value: object) -> str:
@@ -259,30 +265,39 @@ def _customer_snapshot(
     )
 
 
-def eligibility_reason(db: Session, invoice: Invoice) -> str | None:
+def eligibility_reason(
+    db: Session, invoice: Invoice, *, allow_numbered: bool = False
+) -> str | None:
     """Return why this draft cannot take the Starter lane yet, else None.
 
     Decided before any write: an eligible draft that then fails inside
-    Starter never falls back to the legacy writer.
+    Starter never falls back to the legacy writer. ``allow_numbered``
+    admits system-numbered drafts whose legacy number the Starter
+    document number replaces at issuance (the scheduled cycle stages
+    numbered drafts); staff-chosen numbers never qualify.
     """
 
     if invoice.is_proforma:
         return "proforma invoices stay on the legacy lane"
     if invoice.status is not InvoiceStatus.draft:
         return "only drafts can be issued"
-    if _clean(invoice.invoice_number):
+    if _clean(invoice.invoice_number) and not allow_numbered:
         return "manually numbered drafts stay on the legacy lane"
     if invoice.due_at is None:
         return "a due date is required for Starter issuance"
     if invoice.discount_amount != 0:
         return "discounted invoices stay on the legacy lane"
+    policies = resolve_starter_billing_policies(db)
     lines = _active_lines(invoice)
     if not lines:
         return "draft has no active lines for Starter issuance"
     for line in lines:
         if line.quantity <= 0 or line.amount <= 0:
             return "non-positive line quantity or amount stays on the legacy lane"
-        if _quantize2(line.quantity * line.unit_price) != line.amount:
+        if (
+            _quantize(line.quantity * line.unit_price, policies.default_minor_units)
+            != line.amount
+        ):
             return "line amounts do not reconcile for Starter issuance"
     if sum((line.amount for line in lines), Decimal("0.00")) != invoice.subtotal:
         return "line amounts do not reconcile for Starter issuance"
@@ -290,7 +305,9 @@ def eligibility_reason(db: Session, invoice: Invoice) -> str | None:
         return "invoice totals do not reconcile for Starter issuance"
     if invoice.tax_total < 0 or invoice.total <= 0:
         return "non-positive totals stay on the legacy lane"
-    line_taxes = [_line_tax_amount(line) for line in lines]
+    line_taxes = [
+        _line_tax_amount(line, policies.default_minor_units) for line in lines
+    ]
     if any(tax is None for tax in line_taxes):
         return "taxed lines need a frozen tax rate snapshot"
     if sum((tax for tax in line_taxes if tax is not None), Decimal("0.00")) != (
@@ -302,11 +319,12 @@ def eligibility_reason(db: Session, invoice: Invoice) -> str | None:
     subscriber = db.get(Subscriber, invoice.account_id)
     if subscriber is None:
         return "invoice account has no subscriber"
-    if str(getattr(subscriber.billing_mode, "value", subscriber.billing_mode)) != (
-        "postpaid"
-    ):
+    try:
+        timing = collection_timing_for_billing_mode(subscriber.billing_mode)
+    except StarterBillingPolicyError:
+        return "billing mode has no Starter collection timing mapping"
+    if timing != "arrears":
         return "prepaid issuance stays on the legacy lane in this slice"
-    policies = resolve_starter_billing_policies(db)
     if _seller_snapshot(db, policies, subscriber.id) is None:
         return "seller legal identity or address is incomplete"
     if _customer_snapshot(policies, subscriber) is None:
@@ -335,7 +353,7 @@ def _tax_snapshots_for_line(
 ) -> tuple[AppliedTaxSnapshotV1, ...]:
     if line.tax_rate_percent_snapshot is None:
         return ()
-    tax_amount = _line_tax_amount(line)
+    tax_amount = _line_tax_amount(line, policies.default_minor_units)
     assert tax_amount is not None  # eligibility proved a complete snapshot
     return (
         AppliedTaxSnapshotV1(
@@ -364,28 +382,29 @@ def _obligation_for_line(
     currency: Currency,
     issued_at: datetime,
     source_fact_id: str,
+    source_kind: str,
+    contract_line_ref: str,
+    contract_version: str,
+    price_version: str,
+    fx_observation_id: str,
 ) -> AcceptRatedObligationV1:
-    tax_amount = _line_tax_amount(line)
+    tax_amount = _line_tax_amount(line, policies.default_minor_units)
     assert tax_amount is not None  # eligibility proved reconciliation
     return AcceptRatedObligationV1(
         scope=_SCOPE,
         billing_account_id=account_id,
-        contract_line_ref=policies.admin_contract_line_ref(line.id),
-        contract_version=policies.admin_contract_version,
+        contract_line_ref=contract_line_ref,
+        contract_version=contract_version,
         charge_component=policies.default_charge_component,
         source_system=policies.source_system,
-        source_kind=policies.admin_source_kind,
+        source_kind=source_kind,
         source_fact_id=source_fact_id,
-        source_fact_version="1",
-        subject_ref=(
-            f"party:{subscriber.party_id}"
-            if subscriber.party_id is not None
-            else f"subscriber:{subscriber.id}"
+        source_fact_version=policies.source_fact_version,
+        subject_ref=policies.subject_ref(
+            party_id=subscriber.party_id, subscriber_id=subscriber.id
         ),
-        service_ref=(
-            f"subscription:{line.subscription_id}"
-            if line.subscription_id is not None
-            else f"subscriber:{subscriber.id}"
+        service_ref=policies.service_ref(
+            subscription_id=line.subscription_id, subscriber_id=subscriber.id
         ),
         service_period=_service_period(invoice),
         collection_timing=collection_timing_for_billing_mode(subscriber.billing_mode),
@@ -393,32 +412,35 @@ def _obligation_for_line(
         tax_amount=_money(tax_amount, currency),
         total_amount=_money(line.amount + tax_amount, currency),
         rated_at=issued_at,
-        price_version_id=policies.admin_price_version,
+        price_version_id=price_version,
         tax_snapshots=_tax_snapshots_for_line(policies, line, currency),
         fx_snapshot=AppliedFxSnapshotV1(
-            observation_id=f"admin-manual-fx:{invoice.id}",
-            observation_version="1",
+            observation_id=fx_observation_id,
+            observation_version=policies.fx_observation_version,
             base_currency=currency.code,
             quote_currency=currency.code,
             rate=Decimal("1.000000"),
-            rate_purpose="document_currency",
+            rate_purpose=policies.fx_rate_purpose,
             observed_at=issued_at,
             effective_at=issued_at,
-            rounding_policy="minor_units",
-            provenance="source-supplied",
+            rounding_policy=policies.fx_rounding_policy,
+            provenance=policies.fx_provenance,
         ),
     )
 
 
 def _due_basis(
-    policies: StarterBillingPolicies, invoice: Invoice, issued_at: datetime
+    policies: StarterBillingPolicies,
+    invoice: Invoice,
+    issued_at: datetime,
+    evidence_ref: str,
 ) -> DueDateBasisV1:
     assert invoice.due_at is not None  # eligibility proved presence
     due_days = max((invoice.due_at.date() - issued_at.date()).days, 0)
     return DueDateBasisV1(
         status=DueDateBasisStatus.VERIFIED,
         source_authority=policies.source_system,
-        evidence_ref=f"invoice-draft:{invoice.id}",
+        evidence_ref=evidence_ref,
         payment_terms_code=due_terms_code(due_days),
         payment_terms_version=policies.due_terms_version,
         issued_at=issued_at,
@@ -429,9 +451,11 @@ def _due_basis(
     )
 
 
-def _payment_instructions(bank: dict) -> PaymentInstructionsSnapshotV1:
+def _payment_instructions(
+    policies: StarterBillingPolicies, bank: dict
+) -> PaymentInstructionsSnapshotV1:
     return PaymentInstructionsSnapshotV1(
-        method_code="bank_transfer",
+        method_code=policies.payment_method_code,
         bank_name=bank["bank_name"],
         account_name=bank["account_name"],
         account_reference=bank["account_number"],
@@ -439,19 +463,38 @@ def _payment_instructions(bank: dict) -> PaymentInstructionsSnapshotV1:
     )
 
 
-def issue_admin_invoice_via_starter(
-    db: Session, *, invoice: Invoice, actor_ref: str, announce: bool = False
+@dataclass(frozen=True, slots=True)
+class _IssuanceFlavor:
+    """Lane-specific Starter contract identity for one issuance path."""
+
+    source_kind: str
+    contract_version: str
+    price_version: str
+    audit_reason: str
+
+
+def _issue_via_starter(
+    db: Session,
+    *,
+    invoice: Invoice,
+    actor_ref: str,
+    issued_at: datetime,
+    flavor: _IssuanceFlavor,
+    contract_line_ref: Callable[[InvoiceLine], str],
+    line_source_fact_id: Callable[[InvoiceLine], str],
+    invoice_source_fact_id: str,
+    fx_observation_id: str,
+    due_evidence_ref: str,
+    announce: bool,
 ) -> StarterInvoiceLink:
-    """Issue one eligible admin draft through Starter as sole ledger writer.
+    """Issue one eligible draft through Starter as sole ledger writer.
 
     The caller owns the transaction boundary: on any failure nothing here
     may be committed, and the caller must not fall back to the legacy
-    writer for this draft.
+    writer for this draft. Eligibility is decided by the caller before
+    any write.
     """
 
-    reason = eligibility_reason(db, invoice)
-    if reason is not None:
-        raise _error("ineligible", reason, invoice_id=str(invoice.id))
     policies = resolve_starter_billing_policies(db)
     lines = _active_lines(invoice)
     subscriber = db.get(Subscriber, invoice.account_id)
@@ -461,8 +504,7 @@ def issue_admin_invoice_via_starter(
     bank = get_invoice_bank_details(db, currency=invoice.currency)
     assert seller is not None and customer is not None and bank is not None
     assert invoice.due_at is not None  # eligibility proved presence
-    currency = Currency(invoice.currency.upper(), 2)
-    issued_at = datetime.now(UTC)
+    currency = Currency(invoice.currency.upper(), policies.default_minor_units)
     try:
         account = create_billing_account(
             db,
@@ -485,13 +527,18 @@ def issue_admin_invoice_via_starter(
                         line=line,
                         currency=currency,
                         issued_at=issued_at,
-                        source_fact_id=policies.admin_source_fact_id(invoice.id),
+                        source_fact_id=invoice_source_fact_id,
+                        source_kind=flavor.source_kind,
+                        contract_line_ref=contract_line_ref(line),
+                        contract_version=flavor.contract_version,
+                        price_version=flavor.price_version,
+                        fx_observation_id=fx_observation_id,
                     ),
                     description=line.description,
                     unit_code=policies.default_unit_code,
                     seller_snapshot=seller,
                     customer_snapshot=customer,
-                    payment_instructions=_payment_instructions(bank),
+                    payment_instructions=_payment_instructions(policies, bank),
                     brand_asset=PresentationAssetReferenceV1.none(),
                     locale=policies.default_locale,
                     timezone=policies.default_timezone,
@@ -500,11 +547,13 @@ def issue_admin_invoice_via_starter(
                     series_code=policies.invoice_series,
                     reference_date=issued_at.date(),
                     due_at=invoice.due_at,
-                    due_date_basis=_due_basis(policies, invoice, issued_at),
+                    due_date_basis=_due_basis(
+                        policies, invoice, issued_at, due_evidence_ref
+                    ),
                     actor_ref=actor_ref,
-                    correlation_id=f"starter-issuance:{invoice.id}",
+                    correlation_id=policies.correlation_id(invoice.id),
                 ),
-                obligation_sources=_ObligationSources(policies),
+                obligation_sources=_ObligationSources(policies, flavor.source_kind),
                 numbering=_Numbering(policies),
             )
             fact = get_invoice_document_fact(
@@ -535,9 +584,14 @@ def issue_admin_invoice_via_starter(
                         line=line,
                         currency=currency,
                         issued_at=issued_at,
-                        source_fact_id=policies.admin_line_source_fact_id(line.id),
+                        source_fact_id=line_source_fact_id(line),
+                        source_kind=flavor.source_kind,
+                        contract_line_ref=contract_line_ref(line),
+                        contract_version=flavor.contract_version,
+                        price_version=flavor.price_version,
+                        fx_observation_id=fx_observation_id,
                     ),
-                    accepted_source_kinds=frozenset({policies.admin_source_kind}),
+                    accepted_source_kinds=frozenset({flavor.source_kind}),
                 )
                 for line in lines
             ]
@@ -546,7 +600,7 @@ def issue_admin_invoice_via_starter(
                 scope=_SCOPE,
                 command=CreateMultiLineDraftDocument(
                     billing_account_id=account.id,
-                    idempotency_key=policies.admin_source_fact_id(invoice.id),
+                    idempotency_key=invoice_source_fact_id,
                     lines=tuple(
                         DraftDocumentLine(
                             obligation_id=row.id,
@@ -559,13 +613,15 @@ def issue_admin_invoice_via_starter(
                     ),
                     seller_snapshot=seller,
                     customer_snapshot=customer,
-                    payment_instructions=_payment_instructions(bank),
+                    payment_instructions=_payment_instructions(policies, bank),
                     brand_asset=PresentationAssetReferenceV1.none(),
                     locale=policies.default_locale,
                     timezone=policies.default_timezone,
                     document_profile_code=policies.document_profile_code,
                     document_profile_version=policies.document_profile_version,
-                    due_date_basis=_due_basis(policies, invoice, issued_at),
+                    due_date_basis=_due_basis(
+                        policies, invoice, issued_at, due_evidence_ref
+                    ),
                 ),
             )
             issued_document = issue_document(
@@ -576,9 +632,11 @@ def issue_admin_invoice_via_starter(
                     series_code=policies.invoice_series,
                     reference_date=issued_at.date(),
                     due_at=invoice.due_at,
-                    due_date_basis=_due_basis(policies, invoice, issued_at),
+                    due_date_basis=_due_basis(
+                        policies, invoice, issued_at, due_evidence_ref
+                    ),
                     actor_ref=actor_ref,
-                    correlation_id=f"starter-issuance:{invoice.id}",
+                    correlation_id=policies.correlation_id(invoice.id),
                 ),
                 numbering=_Numbering(policies),
             )
@@ -613,7 +671,7 @@ def issue_admin_invoice_via_starter(
         billing_account_id=account.id,
         obligation_id=link_obligation_id,
         document_id=document_id,
-        source_fact_id=policies.admin_source_fact_id(invoice.id),
+        source_fact_id=invoice_source_fact_id,
     )
     db.add(link)
     if link_obligation_id is None:
@@ -634,7 +692,7 @@ def issue_admin_invoice_via_starter(
             metadata_={
                 "from_status": InvoiceStatus.draft.value,
                 "to_status": InvoiceStatus.issued.value,
-                "reason": "admin_invoice_detail_issue",
+                "reason": flavor.audit_reason,
                 "issued_at": issued_at.isoformat(),
                 "issuance_lane": "starter",
                 "actor_ref": actor_ref,
@@ -667,3 +725,101 @@ def issue_admin_invoice_via_starter(
         )
     db.flush()
     return link
+
+
+def issue_admin_invoice_via_starter(
+    db: Session, *, invoice: Invoice, actor_ref: str, announce: bool = False
+) -> StarterInvoiceLink:
+    """Issue one eligible admin draft through Starter as sole ledger writer."""
+
+    reason = eligibility_reason(db, invoice)
+    if reason is not None:
+        raise _error("ineligible", reason, invoice_id=str(invoice.id))
+    policies = resolve_starter_billing_policies(db)
+    return _issue_via_starter(
+        db,
+        invoice=invoice,
+        actor_ref=actor_ref,
+        issued_at=datetime.now(UTC),
+        flavor=_IssuanceFlavor(
+            source_kind=policies.admin_source_kind,
+            contract_version=policies.admin_contract_version,
+            price_version=policies.admin_price_version,
+            audit_reason="admin_invoice_detail_issue",
+        ),
+        contract_line_ref=lambda line: policies.admin_contract_line_ref(line.id),
+        line_source_fact_id=lambda line: policies.admin_line_source_fact_id(line.id),
+        invoice_source_fact_id=policies.admin_source_fact_id(invoice.id),
+        fx_observation_id=policies.admin_fx_observation_id(invoice.id),
+        due_evidence_ref=policies.due_evidence_ref(invoice.id),
+        announce=announce,
+    )
+
+
+def recurring_eligibility_reason(db: Session, invoice: Invoice) -> str | None:
+    """Return why this cycle draft cannot take the Starter lane yet.
+
+    Beyond the shared draft checks, the scheduled cycle lane requires a
+    postpaid subscription behind every line and no spendable account
+    credit: legacy credit application is not wired to Starter
+    receivables in this slice, so credited accounts keep the legacy
+    issuance path.
+    """
+
+    reason = eligibility_reason(db, invoice, allow_numbered=True)
+    if reason is not None:
+        return reason
+    from app.models.catalog import Subscription
+    from app.services.billing.account_credit import AccountCreditApplications
+
+    subscription_ids = {line.subscription_id for line in _active_lines(invoice)}
+    (subscription_id,) = subscription_ids  # shared checks proved exactly one
+    if subscription_id is None:
+        return "recurring lines need a subscription for Starter issuance"
+    subscription = db.get(Subscription, subscription_id)
+    if subscription is None:
+        return "recurring line subscription is missing"
+    try:
+        timing = collection_timing_for_billing_mode(subscription.billing_mode)
+    except StarterBillingPolicyError:
+        return "billing mode has no Starter collection timing mapping"
+    if timing != "arrears":
+        return "prepaid issuance stays on the legacy lane in this slice"
+    preview = AccountCreditApplications.preview_invoice_funding(db, invoice)
+    if preview.account_credit > 0:
+        return "available account credit stays on the legacy lane in this slice"
+    return None
+
+
+def issue_recurring_invoice_via_starter(
+    db: Session, *, invoice: Invoice, issued_at: datetime
+) -> StarterInvoiceLink:
+    """Issue one eligible scheduled-cycle draft through Starter."""
+
+    reason = recurring_eligibility_reason(db, invoice)
+    if reason is not None:
+        raise _error("ineligible", reason, invoice_id=str(invoice.id))
+    policies = resolve_starter_billing_policies(db)
+    due_ref = _clean(invoice.due_date_basis_ref) or policies.due_evidence_ref(
+        invoice.id
+    )
+    return _issue_via_starter(
+        db,
+        invoice=invoice,
+        actor_ref=policies.system_actor_ref,
+        issued_at=issued_at,
+        flavor=_IssuanceFlavor(
+            source_kind=policies.recurring_source_kind,
+            contract_version=policies.recurring_contract_version,
+            price_version=policies.recurring_price_version,
+            audit_reason="scheduled_billing_run",
+        ),
+        contract_line_ref=lambda line: policies.recurring_contract_line_ref(line.id),
+        line_source_fact_id=lambda line: policies.recurring_line_source_fact_id(
+            line.id
+        ),
+        invoice_source_fact_id=policies.recurring_source_fact_id(invoice.id),
+        fx_observation_id=policies.recurring_fx_observation_id(invoice.id),
+        due_evidence_ref=due_ref,
+        announce=False,
+    )
