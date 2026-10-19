@@ -10,7 +10,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import (
+    decrypt_credential,
+    is_secret_reference_value,
+)
 from app.services.network.olt_validators import (
     validate_gem_index,
     validate_profile_name,
@@ -19,6 +22,23 @@ from app.services.network.olt_validators import (
 from app.services.network.parsers.cli import canonical_fsp
 
 logger = logging.getLogger(__name__)
+
+
+def _static_pppoe_password(stored: str | None) -> str:
+    """Decrypt a profile's static PPPoE password; never resolve a reference.
+
+    A stored secret reference would be dereferenced by ``decrypt_credential``
+    and rendered into OLT commands. Fail closed to an empty password.
+    """
+    if is_secret_reference_value(stored):
+        logger.warning(
+            "Refusing to resolve a stored secret reference as a PPPoE password"
+        )
+        return ""
+    decrypted = decrypt_credential(stored) or ""
+    if is_secret_reference_value(decrypted):
+        return ""
+    return decrypted
 
 
 def _enum_value(raw: Any) -> str:
@@ -530,7 +550,7 @@ def build_spec_from_profile(
                 gem_index=ws.gem_port_id or i,
                 connection_type=_enum_value(ws.connection_type),
                 pppoe_username_template=ws.pppoe_username_template or "",
-                pppoe_password=decrypt_credential(ws.pppoe_static_password) or "",
+                pppoe_password=_static_pppoe_password(ws.pppoe_static_password),
                 pppoe_password_mode=password_mode,
                 cos_priority=ws.cos_priority,
                 c_vlan=ws.c_vlan,

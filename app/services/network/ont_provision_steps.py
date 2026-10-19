@@ -494,14 +494,35 @@ def wait_tr069_bootstrap(
 
 
 def _decrypt_optional_secret(value: object) -> str | None:
+    """Decrypt a stored CPE credential for pushing, never resolving a reference.
+
+    A stored ``env://``/``bao://`` reference would make ``decrypt_credential``
+    read an app secret that is then pushed to the CPE. Fail closed: return
+    ``None`` (callers report the credential as not configured) and log only
+    that a reference was refused, never the value or what it resolves to.
+    """
     if value in (None, ""):
         return None
-    from app.services.credential_crypto import decrypt_credential
+    from app.services.credential_crypto import (
+        decrypt_credential,
+        is_secret_reference_value,
+    )
 
+    if is_secret_reference_value(value):
+        logger.warning(
+            "Refusing to resolve a stored secret reference as a CPE credential"
+        )
+        return None
     try:
-        return decrypt_credential(str(value)) or str(value)
+        decrypted = decrypt_credential(str(value)) or str(value)
     except Exception:
         return str(value)
+    if is_secret_reference_value(decrypted):
+        logger.warning(
+            "Refusing to push a decrypted secret reference as a CPE credential"
+        )
+        return None
+    return decrypted
 
 
 def _igd_wan_instance_for_vlan_from_snapshot(

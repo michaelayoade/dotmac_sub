@@ -69,7 +69,11 @@ from app.services import radius_auth as radius_auth_service
 from app.services.auth_session_staging import StagedSession
 from app.services.capability_recipient import resolve_capability_recipient
 from app.services.common import coerce_uuid
-from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.credential_crypto import (
+    decrypt_credential,
+    encrypt_credential,
+    reject_reserved_service_password,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.response import ListResponseMixin
@@ -1094,7 +1098,13 @@ def hash_service_secret(password: str) -> str:
     PPPoE and other RADIUS flows may require Cleartext-Password or NT-Password
     for MS-CHAP-compatible auth. We therefore store service credentials using
     the shared credential encryption layer instead of a one-way hash.
+
+    This is the choke point for typed service passwords: a value that the
+    secret resolver would dereference (``env://``, ``bao://`` ...) or that
+    carries an at-rest wrapper (``enc:``, ``plain:``, ``cleartext:``) is
+    refused, so a stored credential can never make the app read a secret.
     """
+    reject_reserved_service_password(password)
     return cast(str, encrypt_credential(password))
 
 
