@@ -2517,7 +2517,10 @@ DOMAIN = DomainSOT(
                         key="resume_policy",
                         label="Resume policy",
                         value_type=AutomationValueType.enum,
-                        enum_values=("manual_after_ticket_resolution",),
+                        enum_values=(
+                            "manual_after_ticket_resolution",
+                            "auto_on_ticket_resolution",
+                        ),
                     ),
                     AutomationActionInput(
                         key="billing_policy",

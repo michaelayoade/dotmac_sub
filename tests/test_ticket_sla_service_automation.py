@@ -17,6 +17,8 @@ from app.models.service_extension import (
 )
 from app.models.subscription_pause import (
     SubscriptionPauseBillingPolicy,
+    SubscriptionPauseCause,
+    SubscriptionPauseEpisode,
     SubscriptionPauseResumePolicy,
 )
 from app.models.support import Ticket, TicketStatus
@@ -601,3 +603,137 @@ def test_destination_change_invalidates_merge_aware_resume_preview(
         )
 
     assert exc_info.value.code.endswith(".stale_resume_preview")
+
+
+def _factory(session):
+    """Share the test session; close() only ends the transaction."""
+
+    session.close = session.rollback  # type: ignore[method-assign]
+    return lambda: session
+
+
+def _new_auto_pause(db_session, subscriber, status=TicketStatus.open.value):
+    from dataclasses import replace
+
+    ticket = Ticket(
+        number=f"AUTO-{uuid4().hex[:8]}",
+        title="Service fault",
+        status=status,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(ticket)
+    db_session.flush()
+    command = replace(
+        _pause_command(ticket.id),
+        resume_policy=SubscriptionPauseResumePolicy.auto_on_ticket_resolution,
+    )
+    _seed_authoritative_breach(db_session, ticket_id=ticket.id, command=command)
+    outcome = (
+        ticket_sla_service_automation.pause_unique_active_service_for_ticket_sla_breach(
+            db_session, command
+        )
+    )
+    return ticket, outcome
+
+
+def test_auto_policy_pause_stays_until_ticket_resolves(
+    db_session, subscriber, active_subscription
+):
+    ticket, outcome = _new_auto_pause(db_session, subscriber)
+    ticket_id = ticket.id
+
+    counts = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session)
+    )
+
+    assert counts["resumed"] == 0
+    assert counts["skipped"] == 1
+    db_session.refresh(active_subscription)
+    assert active_subscription.status.value == "paused"
+    assert db_session.get(Ticket, ticket_id).status == TicketStatus.open.value
+
+
+@pytest.mark.parametrize(
+    "final_status", [TicketStatus.closed.value, TicketStatus.canceled.value]
+)
+def test_auto_policy_pause_resumes_and_extends_billing_when_ticket_resolves(
+    db_session, subscriber, active_subscription, final_status
+):
+    original_anchor = datetime(2030, 1, 1, tzinfo=UTC)
+    active_subscription.next_billing_at = original_anchor
+    db_session.commit()
+    ticket, outcome = _new_auto_pause(db_session, subscriber)
+    ticket.status = final_status
+    db_session.commit()
+
+    now = datetime.now(UTC) + timedelta(hours=2)
+    counts = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session), now=now
+    )
+
+    assert counts["total"] == 1 and counts["resumed"] == 1
+    assert counts["skipped"] == 0 and counts["failed"] == 0
+    db_session.refresh(active_subscription)
+    episode = db_session.get(SubscriptionPauseEpisode, outcome.pause_episode_id)
+    effective_at = episode.effective_at
+    if effective_at.tzinfo is None:
+        effective_at = effective_at.replace(tzinfo=UTC)
+    assert active_subscription.status.value == "active"
+    resulting = active_subscription.next_billing_at
+    if resulting.tzinfo is None:
+        resulting = resulting.replace(tzinfo=UTC)
+    assert resulting == original_anchor + timedelta(
+        seconds=int((now - effective_at).total_seconds())
+    )
+
+    again = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session), now=now
+    )
+    assert again["total"] == 0
+
+
+def test_manual_policy_pause_is_not_auto_resumed(
+    db_session, subscriber, active_subscription
+):
+    ticket = Ticket(
+        number=f"MAN-{uuid4().hex[:8]}",
+        title="Manual policy",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        customer_account_id=subscriber.id,
+    )
+    db_session.add(ticket)
+    db_session.flush()
+    ticket_id = ticket.id
+    db_session.commit()
+    outcome = _pause_service_for_ticket(db_session, ticket_id)
+    cause = db_session.get(SubscriptionPauseCause, outcome.pause_cause_id)
+    assert (
+        cause.resume_policy
+        == SubscriptionPauseResumePolicy.manual_after_ticket_resolution.value
+    )
+    db_session.get(Ticket, ticket_id).status = TicketStatus.closed.value
+    db_session.commit()
+
+    counts = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session)
+    )
+
+    assert counts["total"] == 0 and counts["resumed"] == 0
+    db_session.refresh(active_subscription)
+    assert active_subscription.status.value == "paused"
+    assert db_session.get(SubscriptionPauseCause, outcome.pause_cause_id).status == (
+        "active"
+    )
+
+
+def test_open_ticket_skip_is_counted_separately(
+    db_session, subscriber, active_subscription
+):
+    _new_auto_pause(db_session, subscriber)
+    counts = ticket_sla_service_automation.auto_resume_resolved_ticket_pauses(
+        _factory(db_session)
+    )
+    assert counts["skipped_open_ticket"] == 1
+    assert counts["skipped_other"] == 0 and counts["skipped_prepaid_blocker"] == 0

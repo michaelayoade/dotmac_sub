@@ -178,9 +178,7 @@ def _suspend_support_ticket_service_for_sla_breach(
             selection_policy=(
                 TicketSlaServiceSelectionPolicy.unique_active_subscription
             ),
-            resume_policy=(
-                SubscriptionPauseResumePolicy.manual_after_ticket_resolution
-            ),
+            resume_policy=(SubscriptionPauseResumePolicy.auto_on_ticket_resolution),
             billing_policy=(
                 SubscriptionPauseBillingPolicy.extend_by_effective_pause_duration
             ),

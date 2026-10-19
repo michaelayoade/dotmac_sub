@@ -1033,6 +1033,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.vacation_holds.resume_expired_holds": _c(
         "customer", SWEEP, GUARDED, HEALTH
     ),
+    "app.tasks.vacation_holds.resume_ticket_resolved_pauses": _c(
+        "customer", SWEEP, GUARDED, HEALTH
+    ),
     "app.tasks.vpn.run_vpn_control_job": _c("network", STATE, STATEFUL, STATUS),
     "app.tasks.vpn.run_vpn_health_scan": _c("network", SWEEP, IDEMP, HEALTH),
     "app.tasks.wireguard.cleanup_connection_logs": _c("network", SWEEP, IDEMP, LOG),

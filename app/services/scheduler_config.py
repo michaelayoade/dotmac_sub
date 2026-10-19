@@ -1082,6 +1082,13 @@ def build_beat_schedule() -> dict:
         )
         _sync_scheduled_task(
             session,
+            name="ticket_pause_auto_resume",
+            task_name="app.tasks.vacation_holds.resume_ticket_resolved_pauses",
+            enabled=True,
+            interval_seconds=max(vacation_hold_resume_interval, 300),
+        )
+        _sync_scheduled_task(
+            session,
             name="customer_bulk_message_outbox",
             task_name="app.tasks.notifications.dispatch_customer_bulk_messages",
             enabled=True,
