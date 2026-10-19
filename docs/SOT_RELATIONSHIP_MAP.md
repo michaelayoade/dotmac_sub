@@ -29,6 +29,16 @@ lists or service declarations.
 
 ## Modular conversion source evidence
 
+Sub platform operations retains the bounded Kernel rehearsal responsibility.
+The [Kernel entry prototype](designs/KERNEL_LINEAGE_ENTRY_PROTOTYPE.md) is a
+disposable-fixture migration participant with caller-owned rollback, rather
+than a new runtime service or business command. It relocates the reviewed
+fifteen collisions and four old relay functions before executing the complete
+unchanged installed a105 chain with independent history. It transfers no Party,
+credential, RBAC, audit, business-capacity or runtime writer authority. Canonical
+imports, the separate post-Kernel adoption lineage, durable maintenance/recovery,
+ordinary future composition and full reference acceptance remain required.
+
 `migration.cohort_export` owns the read-only cohort snapshot and digest boundary.
 `app/migration_source/programme.py` pins accepted Governance identity; Sub's
 legacy domains convert to composed module authority inside the same product and
