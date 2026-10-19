@@ -167,7 +167,7 @@ def test_non_admin_adding_it_to_a_role_is_refused_and_audited(db_session) -> Non
                 permission_id=permission.id,
             ),
         )
-    assert caught.value.code.endswith("admin_role_required")
+    assert caught.value.code.endswith("direct_only_permission")
     assert db_session.scalars(select(RolePermission)).first() is None
     assert len(_refusals(db_session)) == 1
 
@@ -188,48 +188,22 @@ def test_non_admin_role_update_with_the_permission_is_refused(db_session) -> Non
     assert len(_refusals(db_session)) == 1
 
 
-def test_admin_adding_it_to_a_role_succeeds(db_session) -> None:
-    permission = _permission(db_session)
-    admin, role = _admin(db_session), _role(db_session)
-    db_session.commit()  # owner commands need an idle session
-    rbac_catalog.grant_role_permission(
-        db_session,
-        rbac_catalog.GrantRolePermissionCommand(
-            context=_ctx(admin, rbac_catalog.ROLE_WRITE_SCOPE),
-            role_id=role.id,
-            permission_id=permission.id,
-        ),
-    )
-    assert (
-        db_session.scalars(
-            select(RolePermission).where(RolePermission.role_id == role.id)
-        ).first()
-        is not None
-    )
-    assert _refusals(db_session) == []
-
-
-def test_non_admin_cannot_revoke_a_role_grant(db_session) -> None:
-    permission = _permission(db_session)
-    admin, actor, role = _admin(db_session), _user(db_session), _role(db_session)
-    db_session.commit()  # owner commands need an idle session
-    outcome = rbac_catalog.grant_role_permission(
-        db_session,
-        rbac_catalog.GrantRolePermissionCommand(
-            context=_ctx(admin, rbac_catalog.ROLE_WRITE_SCOPE),
-            role_id=role.id,
-            permission_id=permission.id,
-        ),
-    )
-    with pytest.raises(rbac_catalog.RbacCatalogError):
-        db_session.commit()  # owner commands need an idle session
+def test_non_admin_cannot_revoke_a_legacy_role_grant(db_session) -> None:
+    role = _legacy_role_with_key(db_session)
+    actor = _user(db_session)
+    link_id = db_session.scalars(
+        select(RolePermission.id).where(RolePermission.role_id == role.id)
+    ).one()
+    db_session.commit()
+    with pytest.raises(rbac_catalog.RbacCatalogError) as caught:
         rbac_catalog.revoke_role_permission(
             db_session,
             rbac_catalog.RevokeRolePermissionCommand(
                 context=_ctx(actor, rbac_catalog.ROLE_WRITE_SCOPE),
-                link_id=outcome.id,
+                link_id=link_id,
             ),
         )
+    assert caught.value.code.endswith("admin_role_required")
     assert len(_refusals(db_session)) == 1
 
 
