@@ -1041,6 +1041,12 @@ def _resolve_or_fail(
             ReconcileFailureReason.ACS_WRITE_FAULTED,
             "secret resolver returned None",
         )
+    if refuse_reference and is_secret_reference_value(value):
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.INVALID_CHANGE,
+            "stored password is a secret reference and is not used",
+        )
     return value
 
 

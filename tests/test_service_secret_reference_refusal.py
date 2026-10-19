@@ -349,6 +349,22 @@ def test_reconcile_resolve_refuses_reference_without_resolving():
     assert _resolve_or_fail(ctx, SimpleNamespace(), "bao://a/b#c") == "x"
 
 
+def test_reconcile_resolve_refuses_reference_after_unwrap(spy_resolve):
+    from app.services.network.reconcile.applier import ApplyError, _resolve_or_fail
+    from app.services.network.reconcile.secrets import credential_secret_resolver
+
+    ctx = SimpleNamespace(resolve_secret=credential_secret_resolver)
+    with pytest.raises(ApplyError) as exc_info:
+        _resolve_or_fail(
+            ctx,
+            SimpleNamespace(),
+            f"plain:env://{PLANTED_VAR}",
+            refuse_reference=True,
+        )
+    assert PLANTED_VAR not in str(exc_info.value)
+    assert spy_resolve == []
+
+
 def test_enforcement_access_credential_password_never_resolves_reference(
     monkeypatch, spy_resolve
 ):
