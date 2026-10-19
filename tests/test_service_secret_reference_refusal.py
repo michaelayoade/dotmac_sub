@@ -401,3 +401,39 @@ def test_radius_import_skips_references():
             None,
             False,
         )
+
+
+def test_uisp_stage_intent_refuses_reference_password_ref():
+
+    from app.services import uisp_control_plane as ucp
+
+    with pytest.raises(ucp.UispIntentError) as exc:
+        ucp.stage_intent(
+            MagicMock(),
+            target_type=next(iter(ucp.UispIntentTargetType)),
+            target_id=uuid.uuid4(),
+            desired_state={
+                "wifi": {"ssid": "s", "password_ref": f"env://{PLANTED_VAR}"}
+            },
+        )
+    assert PLANTED_VAR not in str(exc.value)
+
+
+def test_uisp_typed_wifi_password_refuses_reserved():
+    from app.services import uisp_control_plane as ucp
+
+    intent = SimpleNamespace(desired_state={})
+    with pytest.raises(ucp.UispIntentError) as exc:
+        ucp.update_intent_desired(
+            MagicMock(), intent, wifi_password=f"env://{PLANTED_VAR}"
+        )
+    assert PLANTED_VAR not in str(exc.value)
+
+
+def test_uisp_write_adapter_never_resolves_stored_reference(spy_resolve):
+    from app.services import uisp_write_adapter as uwa
+
+    mapping = SimpleNamespace(values=None)
+    with pytest.raises(uwa.UispWriteAdapterError):
+        uwa._materialize_value("wifi.password_ref", f"env://{PLANTED_VAR}", mapping)
+    assert spy_resolve == []
