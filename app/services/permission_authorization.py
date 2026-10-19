@@ -165,7 +165,8 @@ def system_user_holds_exact_permission(
     For dedicated, separately granted permissions (for example the Starter
     ledger-live switch): the ``admin`` role bypass and wildcard grants such as
     ``*`` or ``billing:*`` deliberately do NOT satisfy it. Only an active
-    permission row granted directly or through an active role counts.
+    permission row granted directly or through an active role counts, except
+    for ``DIRECT_ONLY_PERMISSION_KEYS``, which only a direct grant satisfies.
     """
     permission_id = (
         db.query(Permission.id)
@@ -175,15 +176,12 @@ def system_user_holds_exact_permission(
     )
     if permission_id is None:
         return False
-    via_role = (
-        db.query(RolePermission.id)
-        .join(Role, RolePermission.role_id == Role.id)
-        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
-        .filter(SystemUserRole.system_user_id == system_user_id)
-        .filter(RolePermission.permission_id == permission_id)
-        .filter(Role.is_active.is_(True))
-        .first()
-    )
+    if permission_key in DIRECT_ONLY_PERMISSION_KEYS:
+        # Direct-only: role membership (including ERP HR / local staff sync)
+        # never satisfies these keys; only an explicit direct user grant does.
+        via_role = None
+    else:
+        via_role = _role_grant(db, system_user_id, permission_id)
     if via_role is not None:
         return True
     return (
@@ -195,12 +193,30 @@ def system_user_holds_exact_permission(
     )
 
 
+def _role_grant(db: Session, system_user_id: UUID, permission_id: UUID):
+    return (
+        db.query(RolePermission.id)
+        .join(Role, RolePermission.role_id == Role.id)
+        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+        .filter(SystemUserRole.system_user_id == system_user_id)
+        .filter(RolePermission.permission_id == permission_id)
+        .filter(Role.is_active.is_(True))
+        .first()
+    )
+
+
 #: Permissions that only an acting principal holding the ``admin`` role may
 #: grant or revoke (directly to a user or by adding them to a role). They are
 #: also granted to no role by default, so holding ``admin`` alone never
 #: satisfies them. Kept in step with ``SettingSpec.required_permission``
 #: (tests/test_starter_ledger_live_permission.py).
 ADMIN_ONLY_GRANT_PERMISSION_KEYS = frozenset({"billing:starter_ledger_live:write"})
+
+#: Permissions that exist only as DIRECT user grants. They can never be put on a
+#: role (``rbac_catalog`` refuses, even for an admin) and a role never satisfies
+#: them in ``system_user_holds_exact_permission``, so role membership - ERP HR
+#: sync, local staff provisioning, role reactivation - cannot confer them.
+DIRECT_ONLY_PERMISSION_KEYS = frozenset({"billing:starter_ledger_live:write"})
 
 
 def actor_holds_admin_role(db: Session, actor: str) -> bool:
@@ -233,6 +249,15 @@ def admin_only_grant_permission_ids(db: Session) -> dict[UUID, str]:
     return {row[0]: row[1] for row in rows}
 
 
+def direct_only_permission_ids(db: Session) -> dict[UUID, str]:
+    rows = (
+        db.query(Permission.id, Permission.key)
+        .filter(Permission.key.in_(DIRECT_ONLY_PERMISSION_KEYS))
+        .all()
+    )
+    return {row[0]: row[1] for row in rows}
+
+
 def refused_admin_only_grant_keys(
     db: Session, *, actor: str, touched_permission_ids: Iterable[UUID]
 ) -> tuple[str, ...]:
@@ -247,6 +272,54 @@ def refused_admin_only_grant_keys(
     return tuple(keys)
 
 
+def _stage_refusal_audit(
+    db: Session, *, context, operation_name: str, keys, refusal: str
+) -> None:
+    from app.models.audit import AuditActorType
+    from app.services.audit_adapter import AuditActor, stage_audit_event
+
+    prefix, _, identifier = context.actor.partition(":")
+    try:
+        actor = AuditActor(
+            actor_type=AuditActorType(prefix), actor_id=identifier or prefix
+        )
+    except ValueError:
+        actor = AuditActor.system(context.actor)
+    stage_audit_event(
+        db,
+        action="auth.rbac_admin_only_grant_refused",
+        entity_type="permission",
+        actor=actor,
+        request_id=str(context.correlation_id),
+        is_success=False,
+        status_code=403,
+        metadata={
+            "schema_version": 1,
+            "outcome": "refused",
+            "refusal": refusal,
+            "operation": operation_name,
+            "permission_keys": list(keys),
+            "reason": context.reason,
+            "command_id": str(context.command_id),
+            "correlation_id": str(context.correlation_id),
+        },
+    )
+
+
+def forbidden_direct_only_role_keys(
+    db: Session, role_addition_permission_ids: Iterable[UUID]
+) -> tuple[str, ...]:
+    """Direct-only keys among permissions about to be put on a role."""
+    added = set(role_addition_permission_ids)
+    if not added:
+        return ()
+    return tuple(
+        sorted(
+            key for pid, key in direct_only_permission_ids(db).items() if pid in added
+        )
+    )
+
+
 def guard_admin_only_grants(
     db: Session,
     *,
@@ -256,60 +329,59 @@ def guard_admin_only_grants(
     make_error: Callable[[tuple[str, ...]], Exception],
     operation: Callable[[], object],
     commit: Callable[[], None],
+    role_additions: Callable[[], Iterable[UUID]] | None = None,
+    make_direct_only_error: Callable[[tuple[str, ...]], Exception] | None = None,
 ):
-    """Wrap an RBAC owner operation with the admin-only-grant rule.
+    """Wrap an RBAC owner operation with the admin-only-grant rules.
 
-    Pre-check on a transaction-free session: a refusal is audited in its own
-    committed event (the owner transaction would roll it back) and raised.
-    The same check is repeated inside the owner transaction as a backstop.
+    Two refusals, both audited in their own committed event (the owner
+    transaction would roll an in-transaction audit back) and both repeated
+    inside the owner transaction as a backstop:
+
+    * a direct-only key may never be put on a role (``role_additions``), even
+      for an admin;
+    * an admin-only key may be granted or revoked only by an admin
+      (``touched``).
+
     Names only; no secrets. ``commit`` is the caller's own session commit (this
     module owns no persistence).
     """
 
-    def checked():
+    def evaluate() -> tuple[str, tuple[str, ...]] | None:
+        if role_additions is not None:
+            keys = forbidden_direct_only_role_keys(db, role_additions())
+            if keys:
+                return "direct_only_permission", keys
         keys = refused_admin_only_grant_keys(
             db, actor=context.actor, touched_permission_ids=touched()
         )
         if keys:
-            raise make_error(keys)
+            return "admin_role_required", keys
+        return None
+
+    def error_for(refusal: str, keys: tuple[str, ...]) -> Exception:
+        if refusal == "direct_only_permission" and make_direct_only_error is not None:
+            return make_direct_only_error(keys)
+        return make_error(keys)
+
+    def checked():
+        refused = evaluate()
+        if refused:
+            raise error_for(*refused)
         return operation()
 
     if not db.in_transaction():
-        keys = refused_admin_only_grant_keys(
-            db, actor=context.actor, touched_permission_ids=touched()
-        )
-        if keys:
-            from app.models.audit import AuditActorType
-            from app.services.audit_adapter import AuditActor, stage_audit_event
-
-            prefix, _, identifier = context.actor.partition(":")
-            try:
-                actor = AuditActor(
-                    actor_type=AuditActorType(prefix), actor_id=identifier or prefix
-                )
-            except ValueError:
-                actor = AuditActor.system(context.actor)
-            stage_audit_event(
+        refused = evaluate()
+        if refused:
+            _stage_refusal_audit(
                 db,
-                action="auth.rbac_admin_only_grant_refused",
-                entity_type="permission",
-                actor=actor,
-                request_id=str(context.correlation_id),
-                is_success=False,
-                status_code=403,
-                metadata={
-                    "schema_version": 1,
-                    "outcome": "refused",
-                    "refusal": "admin_role_required",
-                    "operation": operation_name,
-                    "permission_keys": list(keys),
-                    "reason": context.reason,
-                    "command_id": str(context.command_id),
-                    "correlation_id": str(context.correlation_id),
-                },
+                context=context,
+                operation_name=operation_name,
+                keys=refused[1],
+                refusal=refused[0],
             )
             commit()
-            raise make_error(keys)
+            raise error_for(*refused)
         if db.in_transaction():
             commit()
     return checked

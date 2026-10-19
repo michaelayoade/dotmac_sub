@@ -36,7 +36,10 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
-from app.services.permission_authorization import guard_admin_only_grants
+from app.services.permission_authorization import (
+    DIRECT_ONLY_PERMISSION_KEYS,
+    guard_admin_only_grants,
+)
 from app.services.session_hooks import run_after_commit
 
 ROLE_WRITE_SCOPE = "rbac:roles:write"
@@ -641,6 +644,8 @@ def _active_permissions(
 
 
 def _ensure_role_permission_policy(role: Role, permission: Permission) -> None:
+    if permission.key in DIRECT_ONLY_PERMISSION_KEYS:
+        raise _direct_only_error((permission.key,))
     if role.name != "admin" and not permission.is_ui_assignable:
         raise _error(
             "protected_permission",
@@ -695,6 +700,23 @@ def _update_role_touched(db: Session, command: UpdateRoleCommand) -> set[UUID]:
     return set(_role_permission_ids(db, command.role_id)) ^ set(command.permission_ids)
 
 
+def _update_role_additions(db: Session, command: UpdateRoleCommand) -> set[UUID]:
+    if command.permission_ids is None:
+        return set()
+    return set(command.permission_ids) - set(_role_permission_ids(db, command.role_id))
+
+
+def _link_additions(db: Session, command: UpdateRolePermissionCommand) -> set[UUID]:
+    added: set[UUID] = set()
+    if command.permission_id is not None:
+        added.add(command.permission_id)
+    if command.role_id is not None:
+        link = db.get(RolePermission, command.link_id)
+        if link is not None:
+            added.add(link.permission_id)
+    return added
+
+
 def _link_touched(
     db: Session, link_id: UUID, new_permission_id: UUID | None
 ) -> set[UUID]:
@@ -705,6 +727,14 @@ def _link_touched(
     if new_permission_id is not None:
         touched.add(new_permission_id)
     return touched
+
+
+def _direct_only_error(keys: tuple[str, ...]) -> RbacCatalogError:
+    return _error(
+        "direct_only_permission",
+        "This permission can only be granted directly to a user, never to a role.",
+        permission_keys=list(keys),
+    )
 
 
 def _admin_required_error(keys: tuple[str, ...]) -> RbacCatalogError:
@@ -722,6 +752,7 @@ def _execute(
     context: CommandContext,
     operation,
     touched=None,
+    role_additions=None,
     operation_name: str = "rbac_catalog",
 ):
     if touched is not None:
@@ -733,6 +764,10 @@ def _execute(
             make_error=_admin_required_error,
             operation=operation,
             commit=db.commit,
+            role_additions=(
+                (lambda: role_additions(db)) if role_additions is not None else None
+            ),
+            make_direct_only_error=_direct_only_error,
         )
     try:
         return execute_owner_command(
@@ -799,6 +834,7 @@ def create_role(db: Session, command: CreateRoleCommand) -> RoleCatalogOutcome:
         context=command.context,
         operation=operation,
         touched=lambda session: set(command.permission_ids),
+        role_additions=lambda session: set(command.permission_ids),
         operation_name="create_role",
     )
 
@@ -891,6 +927,7 @@ def update_role(db: Session, command: UpdateRoleCommand) -> RoleCatalogOutcome:
         context=command.context,
         operation=operation,
         touched=lambda session: _update_role_touched(session, command),
+        role_additions=lambda session: _update_role_additions(session, command),
         operation_name="update_role",
     )
 
@@ -1187,6 +1224,7 @@ def grant_role_permission(
         context=command.context,
         operation=operation,
         touched=lambda session: {command.permission_id},
+        role_additions=lambda session: {command.permission_id},
         operation_name="grant_role_permission",
     )
 
@@ -1256,6 +1294,7 @@ def update_role_permission(
         touched=lambda session: _link_touched(
             session, command.link_id, command.permission_id
         ),
+        role_additions=lambda session: _link_additions(session, command),
         operation_name="update_role_permission",
     )
 

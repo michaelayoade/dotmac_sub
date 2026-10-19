@@ -639,11 +639,17 @@ def _setting_value(payload: DomainSettingUpdate) -> object:
     )
 
 
-def _is_disable_write(payload: DomainSettingUpdate) -> bool:
-    """True only for an explicit boolean False (fail closed otherwise)."""
-    if payload.value_json is not None:
-        return payload.value_json is False
-    return str(payload.value_text or "").strip().lower() == "false"
+def _is_disable_write(spec, payload: DomainSettingUpdate) -> bool:
+    """True only when the coerced value is an explicit boolean False.
+
+    Decided from the parsed, coerced value (never the raw form string); any
+    unparseable or missing value fails closed to "not a disable write".
+    """
+    from app.services import settings_spec
+
+    raw = payload.value_json if payload.value_json is not None else payload.value_text
+    value, error = settings_spec.coerce_value(spec, raw)
+    return error is None and value is False
 
 
 def _required_permissions(
@@ -657,7 +663,9 @@ def _required_permissions(
         spec = settings_spec.get_spec(update.domain, update.key)
         if spec is None or not spec.required_permission:
             continue
-        if spec.required_permission_enable_only and _is_disable_write(update.payload):
+        if spec.required_permission_enable_only and _is_disable_write(
+            spec, update.payload
+        ):
             continue
         required[f"{update.domain}.{update.key}"] = spec.required_permission
     return required

@@ -237,3 +237,139 @@ def test_seed_does_not_grant_it_to_the_admin_role() -> None:
 
     assert KEY in {key for key, _ in seed_rbac.DEFAULT_PERMISSIONS}
     assert KEY not in seed_rbac.ROLE_PERMISSIONS["admin"]
+
+
+# ---- direct-only: role membership can never confer the key ------------------
+
+
+def _legacy_role_with_key(db, *, active: bool = True) -> Role:
+    """A role that somehow carries the key (raw rows, bypassing the services)."""
+    permission = _permission(db)
+    role = Role(name=f"legacy-{uuid4().hex[:8]}", is_active=active)
+    db.add(role)
+    db.flush()
+    db.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    db.commit()
+    return role
+
+
+def _holds(db, user: SystemUser) -> bool:
+    from app.services.permission_authorization import (
+        system_user_holds_exact_permission,
+    )
+
+    db.commit()
+    return system_user_holds_exact_permission(db, user.id, KEY)
+
+
+def _switch_on_refused(db, user: SystemUser) -> bool:
+    from app.services import web_system_settings_forms
+    from app.services.domain_settings import ADMIN_SETTINGS_FORM_WRITE_SCOPE
+
+    db.commit()
+    errors = web_system_settings_forms.set_starter_ledger_live_switch(
+        db=db,
+        enabled=True,
+        context=CommandContext.system(
+            actor=f"user:{user.id}",
+            scope=ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+            reason="flip",
+        ),
+    )
+    return bool(errors)
+
+
+def test_role_carrying_the_key_does_not_satisfy_the_check(db_session) -> None:
+    role = _legacy_role_with_key(db_session)
+    user = _user(db_session)
+    db_session.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+    db_session.commit()
+    assert _holds(db_session, user) is False
+    assert _switch_on_refused(db_session, user) is True
+
+
+def test_direct_grant_still_satisfies_the_check(db_session) -> None:
+    permission = _permission(db_session)
+    user = _user(db_session)
+    db_session.add(
+        SystemUserPermission(system_user_id=user.id, permission_id=permission.id)
+    )
+    db_session.commit()
+    assert _holds(db_session, user) is True
+
+
+def test_staff_provisioning_with_such_a_role_cannot_enable_the_switch(
+    db_session,
+) -> None:
+    role = _legacy_role_with_key(db_session)
+    by_ids, by_names = _user(db_session), _user(db_session)
+    system_user_assignments.sync_source_roles_by_ids(
+        db_session, user_id=by_ids.id, role_ids=(role.id,), source="local"
+    )
+    system_user_assignments.sync_source_roles_by_names(
+        db_session, user_id=by_names.id, role_names=(role.name,), source="erp_hr"
+    )
+    db_session.commit()
+    for user in (by_ids, by_names):
+        assert _holds(db_session, user) is False
+        assert _switch_on_refused(db_session, user) is True
+
+
+def test_admin_cannot_put_the_key_on_a_role_and_it_is_audited(db_session) -> None:
+    permission = _permission(db_session)
+    admin, role = _admin(db_session), _role(db_session)
+    db_session.commit()
+    with pytest.raises(rbac_catalog.RbacCatalogError) as caught:
+        rbac_catalog.grant_role_permission(
+            db_session,
+            rbac_catalog.GrantRolePermissionCommand(
+                context=_ctx(admin, rbac_catalog.ROLE_WRITE_SCOPE),
+                role_id=role.id,
+                permission_id=permission.id,
+            ),
+        )
+    assert caught.value.code.endswith("direct_only_permission")
+    db_session.commit()
+    with pytest.raises(rbac_catalog.RbacCatalogError):
+        rbac_catalog.update_role(
+            db_session,
+            rbac_catalog.UpdateRoleCommand(
+                context=_ctx(admin, rbac_catalog.ROLE_WRITE_SCOPE),
+                role_id=role.id,
+                permission_ids=(permission.id,),
+            ),
+        )
+    db_session.commit()
+    with pytest.raises(rbac_catalog.RbacCatalogError):
+        rbac_catalog.create_role(
+            db_session,
+            rbac_catalog.CreateRoleCommand(
+                context=_ctx(admin, rbac_catalog.ROLE_WRITE_SCOPE),
+                name=f"new-{uuid4().hex[:6]}",
+                permission_ids=(permission.id,),
+            ),
+        )
+    assert (
+        db_session.scalars(
+            select(RolePermission).where(RolePermission.role_id == role.id)
+        ).first()
+        is None
+    )
+    assert len(_refusals(db_session)) == 3
+
+
+def test_reactivating_a_role_that_carries_the_key_grants_nothing(db_session) -> None:
+    role = _legacy_role_with_key(db_session, active=False)
+    admin, member = _admin(db_session), _user(db_session)
+    db_session.add(SystemUserRole(system_user_id=member.id, role_id=role.id))
+    db_session.commit()
+    rbac_catalog.update_role(
+        db_session,
+        rbac_catalog.UpdateRoleCommand(
+            context=_ctx(admin, rbac_catalog.ROLE_WRITE_SCOPE),
+            role_id=role.id,
+            is_active=True,
+        ),
+    )
+    assert _holds(db_session, member) is False
+    assert _switch_on_refused(db_session, member) is True

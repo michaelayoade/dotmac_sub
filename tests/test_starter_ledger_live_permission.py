@@ -326,3 +326,38 @@ def test_admin_only_grant_keys_match_required_permissions() -> None:
         if spec.required_permission
     }
     assert declared <= ADMIN_ONLY_GRANT_PERMISSION_KEYS
+
+
+def test_direct_only_keys_are_admin_only_keys() -> None:
+    from app.services.permission_authorization import (
+        ADMIN_ONLY_GRANT_PERMISSION_KEYS,
+        DIRECT_ONLY_PERMISSION_KEYS,
+    )
+
+    assert DIRECT_ONLY_PERMISSION_KEYS <= ADMIN_ONLY_GRANT_PERMISSION_KEYS
+    assert PERMISSION in DIRECT_ONLY_PERMISSION_KEYS
+
+
+def test_disable_decision_uses_the_coerced_value(db_session) -> None:
+    user = _user(db_session)  # no dedicated permission
+    # A truthy spelling is ON, not a disable write: refused without the grant.
+    with pytest.raises(AdminSettingsFormUpdateError):
+        apply_admin_settings_form_updates(
+            db_session,
+            ApplyAdminSettingsFormCommand(
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope=ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+                    reason="flip",
+                ),
+                updates=(
+                    AdminSettingWrite(
+                        domain=SettingDomain.billing,
+                        key="starter_ledger_live_enabled",
+                        payload=DomainSettingUpdate(
+                            value_type=SettingValueType.boolean, value_text="on"
+                        ),
+                    ),
+                ),
+            ),
+        )
