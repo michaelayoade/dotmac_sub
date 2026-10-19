@@ -1845,6 +1845,7 @@ class CreditNotes(ListResponseMixin):
             return replay
         if draft.status != CreditNoteStatus.draft:
             raise HTTPException(status_code=409, detail="Credit note is not a draft")
+        invoice: Invoice | None = None
         if draft.invoice_id is not None:
             invoice = lock_for_update(db, Invoice, draft.invoice_id)
             if invoice is None:
@@ -1880,7 +1881,7 @@ class CreditNotes(ListResponseMixin):
             ),
             None,
         )
-        if draft.invoice_id is not None and draft_reason:
+        if invoice is not None and draft_reason:
             starter_reason = _starter_lane_reason(
                 db,
                 invoice=invoice,
