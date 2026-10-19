@@ -415,9 +415,7 @@ def _create_customer_gateway_topup_intent(
         # no Starter link the checkout is exactly the legacy TopupIntent and
         # never touches the mod_payments schema (production has none yet). A
         # Starter-linked invoice routes by its own identity, as settlement does.
-        if starter_ledger_live_enabled(db) or has_starter_invoice_link(
-            db, invoice.id
-        ):
+        if starter_ledger_live_enabled(db) or has_starter_invoice_link(db, invoice.id):
             _open_module_invoice_intent(db, staged.intent)
         preview_fingerprint = None
     elif command.flow is CustomerGatewayTopupFlow.account_credit_deposit:
