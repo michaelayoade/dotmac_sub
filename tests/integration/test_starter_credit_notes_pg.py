@@ -60,6 +60,8 @@ def _starter_series_isolation(monkeypatch):
             return f"cn-{_SERIES}"
         if key == "starter_billing_credit_note_series_prefix":
             return "SCN"
+        if key == "starter_ledger_live_enabled":
+            return True
         return real_resolve(db, domain, key)
 
     monkeypatch.setattr(starter_policies, "resolve_value", _resolve)
