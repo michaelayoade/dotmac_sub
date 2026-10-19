@@ -382,6 +382,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "Do not use a second subscription to hide an accidental activation; use the correction workflow.",
             "Viewing the list and detail requires subscription:read; opening or saving the edit form requires subscription:update.",
             "A plan change replaces the plan; it does not move network access.",
+            "The edit page never shows the stored service password. Leave the Service Password field blank to keep it, or enter a new one to replace it. Use Reveal only when you need the current password: it requires subscription:credential:reveal, and every reveal is recorded in the audit log.",
         ),
     ),
     _guide(
