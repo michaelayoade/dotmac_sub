@@ -304,6 +304,9 @@ def historical_predecessor_database(template_base_url: URL) -> Iterator[URL]:
             environment["PYTHONPATH"] = str(root)
             environment["DATABASE_URL"] = url.render_as_string(hide_password=False)
             environment["TEST_DATABASE_URL"] = url.render_as_string(hide_password=False)
+            environment["MIGRATION_DATABASE_URL"] = url.render_as_string(
+                hide_password=False
+            )
             old_upgrade = subprocess.run(
                 [
                     sys.executable,
@@ -349,7 +352,9 @@ def test_real_predecessor_upgrade_preserves_existing_invoice_exports(
         app_config,
         "settings",
         replace(
-            app_config.settings, database_url=url.render_as_string(hide_password=False)
+            app_config.settings,
+            database_url=url.render_as_string(hide_password=False),
+            migration_database_url=url.render_as_string(hide_password=False),
         ),
     )
     config = Config("alembic.ini")

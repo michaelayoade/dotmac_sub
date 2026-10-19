@@ -171,3 +171,65 @@ def test_blank_owner_refuses_adapter_setup(
 ) -> None:
     with pytest.raises(ValueError, match="^MIGRATION_DATABASE_URL must not be blank"):
         _run_env(monkeypatch, offline=offline, owner_url=" \t")
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_test_migration_owner_is_scoped_and_runtime_is_preserved(
+    monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    from app import config as app_config
+    from scripts.ci import migrated_test_database as migration
+
+    original = Settings(database_url=RUNTIME_URL, migration_database_url=OWNER_URL)
+    monkeypatch.setattr(app_config, "settings", original)
+    target = migration.parse_test_database_target(
+        "postgresql+psycopg://postgres:synthetic@localhost/disposable_test"
+    )
+
+    def upgrade(config: Config, revision: str) -> None:
+        assert revision == "heads"
+        assert app_config.settings.alembic_database_url == target.url.render_as_string(
+            hide_password=False
+        )
+        assert app_config.settings.database_url == RUNTIME_URL
+        if fail:
+            raise RuntimeError("synthetic migration refusal")
+
+    monkeypatch.setattr(migration.command, "upgrade", upgrade)
+    engine = MagicMock()
+    monkeypatch.setattr(migration, "create_engine", MagicMock(return_value=engine))
+    state = migration.MigratedSchemaState(
+        actual_heads=frozenset({"test"}), expected_heads=frozenset({"test"})
+    )
+    monkeypatch.setattr(migration, "require_migrated_schema", lambda _: state)
+    if fail:
+        with pytest.raises(RuntimeError, match="synthetic migration refusal"):
+            migration.migrate_test_database(target)
+    else:
+        assert migration.migrate_test_database(target) is state
+        engine.dispose.assert_called_once_with()
+    assert app_config.settings is original
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_template_owner_targets_its_disposable_database_and_restores_settings(
+    monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    from app import config as app_config
+    from scripts.ci.template_database import _alembic_target
+
+    original = Settings(database_url=RUNTIME_URL, migration_database_url=OWNER_URL)
+    monkeypatch.setattr(app_config, "settings", original)
+    target = sqlalchemy.make_url(
+        "postgresql+psycopg://postgres:synthetic@localhost/template_test"
+    )
+    try:
+        with _alembic_target(target):
+            assert app_config.settings.alembic_database_url == target.render_as_string(
+                hide_password=False
+            )
+            if fail:
+                raise RuntimeError("synthetic migration refusal")
+    except RuntimeError:
+        assert fail
+    assert app_config.settings is original

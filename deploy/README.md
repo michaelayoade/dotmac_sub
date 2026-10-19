@@ -77,6 +77,16 @@ refuses migration setup with a sanitized error; it never falls back. Percent
 encoding is preserved through Alembic's ConfigParser boundary. Runtime database
 connections still use `DATABASE_URL` independently.
 
+Foundation's deployment material contract separately requires an explicit
+migration-owner URL for its one-shot migration container; the generic developer
+fallback does not satisfy that deployment requirement. This source adapter
+consumes owner material but does not enforce login roles or object ownership.
+
+Disposable migration-test adapters and fixtures explicitly bind their own target
+as migration material, even when settings inherit a different owner URL. Hosted
+CI's one-shot migration container explicitly receives its synthetic PostgreSQL
+owner URL; ordinary application startup receives only its runtime material.
+
 This closes the descriptor's migration-owner consumption blocker in source.
 It does not provision owner credentials, activate a Foundation container,
 change live deployment wiring, or demonstrate deployed migration acceptance.

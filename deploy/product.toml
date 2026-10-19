@@ -395,12 +395,10 @@ bind = "127.0.0.1"
 [migration]
 command = ["alembic", "upgrade", "heads"]
 heads_command = ["alembic", "current"]
-# BLOCKER (see deploy/README.md): alembic/env.py reads settings.database_url
-# (DATABASE_URL) only. This distinct owner material name already exists in
-# scripts/deploy.sh for prerequisite scripts, but Alembic does not consume it
-# yet, so a Foundation-driven migration container holding only this material
-# could not run. Declaring DATABASE_URL here instead would be refused: every
-# runtime role legitimately holds it.
+# alembic/env.py consumes this explicit owner material through
+# settings.alembic_database_url for online and offline migration setup.
+# Foundation requires this material; generic developer commands retain the
+# absent-owner runtime URL fallback. A supplied blank owner URL refuses.
 owner_material = "MIGRATION_DATABASE_URL"
 # Effective composed heads computed with Alembic ScriptDirectory over the
 # local lineage plus the nine pinned module migration trees (2026-10-16);

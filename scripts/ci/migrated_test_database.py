@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -193,17 +193,21 @@ def require_migrated_schema(engine: Engine) -> MigratedSchemaState:
 def migrate_test_database(target: DatabaseTarget) -> MigratedSchemaState:
     """Apply the real chain once, then verify its exact resulting head."""
 
-    previous_database_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = target.url.render_as_string(hide_password=False)
+    from app import config as app_config
+
+    previous_settings = app_config.settings
+    # The explicit disposable test target is the test migration owner connection.
+    # Do not inherit a migration URL pointing at an unrelated database.
+    app_config.settings = replace(
+        previous_settings,
+        migration_database_url=target.url.render_as_string(hide_password=False),
+    )
     try:
         config = Config(str(ALEMBIC_CONFIG_PATH))
         config.set_main_option("script_location", str(REPOSITORY_ROOT / "alembic"))
         command.upgrade(config, "heads")
     finally:
-        if previous_database_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = previous_database_url
+        app_config.settings = previous_settings
 
     engine = create_engine(target.url)
     try:
