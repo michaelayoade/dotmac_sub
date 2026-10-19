@@ -3,6 +3,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -638,11 +639,67 @@ def _setting_value(payload: DomainSettingUpdate) -> object:
     )
 
 
+def _required_permissions(
+    command: ApplyAdminSettingsFormCommand,
+) -> dict[str, str]:
+    """Setting identity -> dedicated permission, for keys that declare one."""
+    from app.services import settings_spec
+
+    required: dict[str, str] = {}
+    for update in command.updates:
+        spec = settings_spec.get_spec(update.domain, update.key)
+        if spec is not None and spec.required_permission:
+            required[f"{update.domain}.{update.key}"] = spec.required_permission
+    return required
+
+
+def _missing_required_permissions(
+    db: Session, command: ApplyAdminSettingsFormCommand
+) -> dict[str, str]:
+    """Required permissions the acting system user does not hold (fail closed)."""
+    from app.services.permission_authorization import (
+        system_user_holds_exact_permission,
+    )
+
+    required = _required_permissions(command)
+    if not required:
+        return {}
+    prefix, _, identifier = command.context.actor.partition(":")
+    actor_id: UUID | None = None
+    if prefix == "user":
+        try:
+            actor_id = UUID(identifier)
+        except ValueError:
+            actor_id = None
+    return {
+        identity: permission
+        for identity, permission in required.items()
+        if actor_id is None
+        or not system_user_holds_exact_permission(db, actor_id, permission)
+    }
+
+
+def _permission_denied_error(missing: dict[str, str]) -> AdminSettingsFormUpdateError:
+    return _admin_settings_error(
+        "permission_denied",
+        "A dedicated permission is required to change this setting.",
+        setting_keys=sorted(missing),
+        required_permissions=sorted(set(missing.values())),
+    )
+
+
 def _apply_admin_settings_form_operation(
     db: Session,
     command: ApplyAdminSettingsFormCommand,
 ) -> ApplyAdminSettingsFormOutcome:
     from app.services import settings_spec
+
+    # Re-checked inside the owner transaction (the pre-check in
+    # apply_admin_settings_form_updates audits the refusal; a rollback here
+    # cannot, so this is only the fail-closed backstop).
+    missing = _missing_required_permissions(db, command)
+    if missing:
+        raise _permission_denied_error(missing)
 
     if command.context.scope != ADMIN_SETTINGS_FORM_WRITE_SCOPE:
         raise _admin_settings_error(
@@ -720,6 +777,33 @@ def apply_admin_settings_form_updates(
 ) -> ApplyAdminSettingsFormOutcome:
     """Atomically persist one fully validated admin settings submission."""
 
+    if _required_permissions(command) and not db.in_transaction():
+        missing = _missing_required_permissions(db, command)
+        if missing:
+            # Audit the refusal in its own committed event (the owner
+            # transaction would roll it back). Names only, no values.
+            stage_audit_event(
+                db,
+                action="control.settings_form_updated",
+                entity_type="domain_settings",
+                actor=_audit_actor(command.context),
+                request_id=str(command.context.correlation_id),
+                is_success=False,
+                status_code=403,
+                metadata={
+                    "schema_version": 2,
+                    "outcome": "refused",
+                    "refusal": "required_permission_missing",
+                    "setting_keys": sorted(missing),
+                    "required_permissions": sorted(set(missing.values())),
+                    "reason": command.context.reason,
+                    "command_id": str(command.context.command_id),
+                    "correlation_id": str(command.context.correlation_id),
+                },
+            )
+            db.commit()
+            raise _permission_denied_error(missing)
+        db.commit()  # end the read-only permission check; the command needs a clean session
     return execute_owner_command(
         db,
         definition=_APPLY_ADMIN_SETTINGS_FORM_COMMAND,

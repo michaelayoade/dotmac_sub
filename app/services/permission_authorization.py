@@ -154,3 +154,41 @@ def effective_permission_keys(auth: PermissionPrincipal, db: Session) -> frozens
     keys.update(key for (key,) in role_rows.all())
     keys.update(key for (key,) in direct_rows.all())
     return frozenset(keys)
+
+
+def system_user_holds_exact_permission(
+    db: Session, system_user_id: UUID, permission_key: str
+) -> bool:
+    """Whether the system user was explicitly granted exactly ``permission_key``.
+
+    For dedicated, separately granted permissions (for example the Starter
+    ledger-live switch): the ``admin`` role bypass and wildcard grants such as
+    ``*`` or ``billing:*`` deliberately do NOT satisfy it. Only an active
+    permission row granted directly or through an active role counts.
+    """
+    permission_id = (
+        db.query(Permission.id)
+        .filter(Permission.key == permission_key)
+        .filter(Permission.is_active.is_(True))
+        .scalar()
+    )
+    if permission_id is None:
+        return False
+    via_role = (
+        db.query(RolePermission.id)
+        .join(Role, RolePermission.role_id == Role.id)
+        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+        .filter(SystemUserRole.system_user_id == system_user_id)
+        .filter(RolePermission.permission_id == permission_id)
+        .filter(Role.is_active.is_(True))
+        .first()
+    )
+    if via_role is not None:
+        return True
+    return (
+        db.query(SystemUserPermission.id)
+        .filter(SystemUserPermission.system_user_id == system_user_id)
+        .filter(SystemUserPermission.permission_id == permission_id)
+        .first()
+        is not None
+    )
