@@ -2484,6 +2484,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="starter_billing_credit_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_CREDIT_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="credit-note-issue:{credit_note_id}",
+        label="Starter Billing Credit Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_credit_correlation_template",
+        env_var="BILLING_STARTER_BILLING_CREDIT_CORRELATION_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="starter-credit-issue:{idempotency_key}",
+        label="Starter Billing Credit Correlation Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="starter_billing_credit_note_series",
         env_var="BILLING_STARTER_BILLING_CREDIT_NOTE_SERIES",
         value_type=SettingValueType.string,

@@ -66,7 +66,7 @@ def _text(db: Session, key: str) -> str:
 
 
 def _render_template(
-    template: str, placeholder: str, value: UUID, *, setting: str
+    template: str, placeholder: str, value: UUID | str, *, setting: str
 ) -> str:
     rendered = template.replace("{" + placeholder + "}", str(value))
     if rendered == template or "{" in rendered:
@@ -503,4 +503,39 @@ def resolve_starter_settlement_policies(db: Session) -> StarterSettlementPolicie
         ),
         confirmation_evidence=presented,
         accepted_confirmation_evidence=accepted,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StarterCreditPolicies:
+    """Resolved Starter credit-note policy surface (ADR 0031)."""
+
+    credit_source_fact_template: str
+    credit_correlation_template: str
+
+    def credit_source_fact_id(self, credit_note_id: UUID) -> str:
+        return _render_template(
+            self.credit_source_fact_template,
+            "credit_note_id",
+            credit_note_id,
+            setting="starter_billing_credit_source_fact_template",
+        )
+
+    def credit_correlation_id(self, idempotency_key: str) -> str:
+        return _render_template(
+            self.credit_correlation_template,
+            "idempotency_key",
+            idempotency_key,
+            setting="starter_billing_credit_correlation_template",
+        )
+
+
+def resolve_starter_credit_policies(db: Session) -> StarterCreditPolicies:
+    return StarterCreditPolicies(
+        credit_source_fact_template=_text(
+            db, "starter_billing_credit_source_fact_template"
+        ),
+        credit_correlation_template=_text(
+            db, "starter_billing_credit_correlation_template"
+        ),
     )
