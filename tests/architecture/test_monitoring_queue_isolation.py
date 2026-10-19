@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MONITORING_TASKS = {
     "app.tasks.infrastructure_polling.run_infrastructure_poll",
     "app.tasks.topology_sync.warm_topology_status",
+    "app.tasks.radius_health.run_radius_health_check",
 }
 MAC_HARVEST_TASKS = {
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest",
@@ -26,7 +27,7 @@ def test_monitoring_tasks_have_a_reserved_declared_queue():
     for task_name in MONITORING_TASKS:
         assert celery_app.conf.task_routes[task_name] == {"queue": "monitoring"}
     for task_name in MAC_HARVEST_TASKS:
-        assert celery_app.conf.task_routes[task_name] == {"queue": "ingestion"}
+        assert celery_app.conf.task_routes[task_name] == {"queue": "inventory"}
 
 
 def test_compose_has_a_dedicated_monitoring_consumer():
