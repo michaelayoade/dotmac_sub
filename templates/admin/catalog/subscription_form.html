@@ -375,6 +375,7 @@
                 {% if subscription.id and credential_problem %}
                 <p class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">{{ credential_problem }}</p>
                 {% endif %}
+                {% set reveal_allowed = has_current_service_password and can(request, 'subscription:credential:reveal') %}
                 {% if subscription.id and current_service_login %}
                 <div x-data="{ revealPassword: false, revealed: '', revealLoading: false, revealError: '' }" class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/40">
                     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -390,7 +391,7 @@
                                 <div class="mt-1 flex gap-2">
                                     <input type="text" readonly :value="revealPassword ? revealed : '{{ '••••••••' if has_current_service_password else 'Not available' }}'" autocomplete="off"
                                         class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                                    {% if has_current_service_password and can(request, 'subscription:credential:reveal') %}
+                                    <template x-if="{{ 'true' if reveal_allowed else 'false' }}">
                                     <button type="button" :disabled="revealLoading"
                                         @click="(async () => {
                                             if (revealPassword) { revealPassword = false; revealed = ''; return; }
@@ -406,7 +407,7 @@
                                         class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                                         <span x-text="revealPassword ? 'Hide' : 'Reveal'"></span>
                                     </button>
-                                    {% endif %}
+</template>
                                 </div>
                                 <p class="mt-1 text-xs text-rose-600" x-show="revealError" x-text="revealError" x-cloak></p>
                             </div>

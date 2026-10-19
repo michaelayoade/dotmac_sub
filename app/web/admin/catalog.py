@@ -144,7 +144,7 @@ def _apply_edit_form_permissions(
     )
     if not context["can_manage_subscription_catalog"]:
         # Credentials are shown only to operators who may update the service.
-        context["current_service_password"] = ""
+        context["has_current_service_password"] = False
         if isinstance(context.get("subscription"), dict):
             context["subscription"] = {
                 **context["subscription"],
