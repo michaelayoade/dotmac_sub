@@ -274,6 +274,20 @@
       ],
       "reason": "Structural identity storage for the credits and readers lanes (ADR 0007: no metadata as financial identity): starter_credit_note_links records the Starter credit document identity for credit notes issued through dotmac-billing, and starter_invoice_links gains the issued document fact version so readers can read the exact frozen document fact. Identity only, never financial state.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "LEARNING-KERNEL-ENTRY-3674",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/operator_tenant_kernel_import.py",
+        "app/services/party_kernel_import.py",
+        "app/services/sot_registry/domains/party_identity.py",
+        "app/services/sot_registry/domains/tenancy.py"
+      ],
+      "reason": "Michael set the Academy learning extraction/adoption goal on 2026-10-16, including preservation of Kernel tenancy/identity boundaries, genuine migration lineage, one authoritative writer and rollback safety. This scope records the necessary Sub-owned, rollback-only identity-entry preparation in PR #3674: two exact historical-import participants and their existing-owner declarations, currently +429 app lines. It creates no runtime caller, CLI, credential/provider conversion, reference transfer or writer activation. It does not authorize another Sub capability or further growth. CODEOWNERS review of this exception remains required before merge; this entry is not a record of that review.",
+      "starter_contract": "Published dotmac-kernel 0.1.0a105: genuine unchanged 28-revision Kernel chain through 0028_machine_attribution, independent Kernel migration history, public Tenant/Party identity storage and tenant-scoped composite Party references. The product-specific historical lifecycle/JSON context remains Sub-owned; no new Kernel API is introduced.",
+      "deletion_trigger": "Remove this scoped exception and retire the rollback-only prototype participants when the qualified canonical Sub Kernel-identity adoption path replaces them and preserves their rollback, losslessness and lineage regression evidence.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
