@@ -195,6 +195,16 @@
       "reason": "Next Step 4 caller-migration lane after the admin issuance slices (6a #3691, multi-line #3697): switch the scheduled invoice cycle's newly created postpaid invoices to Starter issuance at end-of-run. The cycle stages drafts, appends lines, then issues eligible groups (single-subscription homogeneous line sets, no available account credit) through the existing starter_issuance service; ineligible groups keep the legacy issuance path. A reuse guard excludes Starter-linked invoices from the cycle's existing-invoice line appends. Sub remains caller-only: no new billing logic, no dual-write. The account_credit path carries the structural guard excluding Starter-linked invoices from legacy account-credit settlement.",
       "approved_by": "michaelayoade",
       "starter_contract": "Published dotmac-billing 0.1.0a8 issue_rated_invoice + accept_rated_obligation + create_multi_line_draft_document + issue_document + create_billing_account, and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "PREPAID-STALE-DRAFT-3699",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/prepaid_draft_reconciliation.py"
+      ],
+      "reason": "Michael explicitly approved Sub #3699 on 2026-10-19 under the freeze carve-out 'root-cause the settlement auto-repair' (PAID-NOT-REACTIVATED 2026-10-18, SUB-005060): +62 money-writer lines (TOTAL 24013 -> 24075) in one existing file. A prepaid draft whose billing_period_end precedes the funding event, or which has no service period, no longer receives new funding; it is recorded once (insert-if-absent) in prepaid_draft_reconciliation_exceptions for manual review and the existing current-period renewal proceeds. No new money path, migration or data repair; no further growth authorized.",
+      "deletion_trigger": "Remove when prepaid funding/renewal moves to Starter dotmac-billing (ADR 0020) and prepaid_draft_reconciliation.py is retired, or when the money-writer baseline next shrinks below 24013.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
