@@ -35,6 +35,10 @@ from app.services.owner_commands import (
     execute_owner_command,
     owner_command_active,
 )
+from app.services.permission_authorization import (
+    admin_only_grant_permission_ids,
+    guard_admin_only_grants,
+)
 from app.services.session_hooks import run_after_commit
 
 LOCAL_ROLE_SOURCE = "local"
@@ -602,6 +606,54 @@ def _audit_actor(
     )
 
 
+def _admin_only_touched(
+    db: Session, command: ReplaceSystemUserAssignmentsCommand
+) -> set[UUID]:
+    """Admin-only-grant permission ids this replacement would grant or revoke.
+
+    Covers the direct grant and a role carrying the permission being added to
+    or removed from the user.
+    """
+    gated = admin_only_grant_permission_ids(db)
+    if not gated:
+        return set()
+    existing_direct = set(
+        db.execute(
+            select(SystemUserPermission.permission_id).where(
+                SystemUserPermission.system_user_id == command.user_id
+            )
+        ).scalars()
+    )
+    touched = (existing_direct ^ set(command.direct_permission_ids)) & set(gated)
+    existing_roles = set(
+        db.execute(
+            select(SystemUserRole.role_id).where(
+                SystemUserRole.system_user_id == command.user_id,
+                SystemUserRole.source == LOCAL_ROLE_SOURCE,
+            )
+        ).scalars()
+    )
+    changed_roles = existing_roles ^ set(command.role_ids)
+    if changed_roles:
+        touched |= set(
+            db.execute(
+                select(RolePermission.permission_id).where(
+                    RolePermission.role_id.in_(changed_roles),
+                    RolePermission.permission_id.in_(set(gated)),
+                )
+            ).scalars()
+        )
+    return touched
+
+
+def _admin_required_error(keys: tuple[str, ...]) -> SystemUserAssignmentError:
+    return _error(
+        "admin_role_required",
+        "Only an administrator may grant or revoke this permission.",
+        permission_keys=list(keys),
+    )
+
+
 def replace_system_user_assignments(
     db: Session,
     command: ReplaceSystemUserAssignmentsCommand,
@@ -728,5 +780,12 @@ def replace_system_user_assignments(
         db,
         definition=_REPLACE_ASSIGNMENTS,
         context=command.context,
-        operation=operation,
+        operation=guard_admin_only_grants(
+            db,
+            context=command.context,
+            operation_name="replace_system_user_assignments",
+            touched=lambda: _admin_only_touched(db, command),
+            make_error=_admin_required_error,
+            operation=operation,
+        ),
     )

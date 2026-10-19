@@ -273,3 +273,50 @@ def test_backstop_refuses_when_grant_is_revoked_mid_write(
     assert len(calls) == 2
     assert errors
     assert starter_policies.starter_ledger_live_enabled(db_session) is False
+
+
+def test_turning_the_switch_off_needs_only_settings_write_and_is_audited(
+    db_session,
+) -> None:
+    user = _user(db_session)  # no dedicated permission
+    errors = web_system_settings_forms.set_starter_ledger_live_switch(
+        db=db_session, enabled=False, context=_context_for(user)
+    )
+    assert errors == ()
+    assert starter_policies.starter_ledger_live_enabled(db_session) is False
+    audits = _audits(db_session)
+    assert len(audits) == 1
+    assert audits[0].is_success is True
+
+
+def test_turning_the_switch_on_without_permission_is_refused_and_audited(
+    db_session,
+) -> None:
+    user = _user(db_session)
+    errors = web_system_settings_forms.set_starter_ledger_live_switch(
+        db=db_session, enabled=True, context=_context_for(user)
+    )
+    assert errors
+    assert _refused_count(db_session) == 1
+
+
+def test_off_write_through_owner_command_needs_no_dedicated_permission(
+    db_session,
+) -> None:
+    user = _user(db_session)
+    outcome = _write(db_session, f"user:{user.id}", "starter_ledger_live_enabled", False)
+    assert outcome.updated_keys == ("billing.starter_ledger_live_enabled",)
+
+
+def test_admin_only_grant_keys_match_required_permissions() -> None:
+    from app.services.permission_authorization import (
+        ADMIN_ONLY_GRANT_PERMISSION_KEYS,
+    )
+
+    declared = {
+        spec.required_permission
+        for domain in SettingDomain
+        for spec in settings_spec.list_specs(domain)
+        if spec.required_permission
+    }
+    assert declared <= ADMIN_ONLY_GRANT_PERMISSION_KEYS

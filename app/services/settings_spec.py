@@ -105,6 +105,10 @@ class SettingSpec(ListResponseMixin):
     #: wildcard grants do NOT satisfy it) IN ADDITION to ``control:settings:write``
     #: before the owner command writes this key. Refused attempts are audited.
     required_permission: str | None = None
+    #: With ``required_permission`` on a boolean: require it only to turn the
+    #: setting ON. Writing ``False`` (the safe direction) needs only
+    #: ``control:settings:write`` and is still audited.
+    required_permission_enable_only: bool = False
     allowed: set[str] | None = None
     min_value: int | None = None
     max_value: int | None = None
@@ -5877,6 +5881,7 @@ SETTINGS_SPECS.append(
         inherits=False,
         owner_command_only=True,
         required_permission="billing:starter_ledger_live:write",
+        required_permission_enable_only=True,
     )
 )
 

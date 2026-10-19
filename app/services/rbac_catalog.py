@@ -36,6 +36,7 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
+from app.services.permission_authorization import guard_admin_only_grants
 from app.services.session_hooks import run_after_commit
 
 ROLE_WRITE_SCOPE = "rbac:roles:write"
@@ -688,13 +689,50 @@ def _replace_role_permissions(
     return changed
 
 
+def _update_role_touched(db: Session, command: UpdateRoleCommand) -> set[UUID]:
+    if command.permission_ids is None:
+        return set()
+    return set(_role_permission_ids(db, command.role_id)) ^ set(
+        command.permission_ids
+    )
+
+
+def _link_touched(db: Session, link_id: UUID, new_permission_id: UUID | None) -> set[UUID]:
+    link = db.get(RolePermission, link_id)
+    touched: set[UUID] = set()
+    if link is not None:
+        touched.add(link.permission_id)
+    if new_permission_id is not None:
+        touched.add(new_permission_id)
+    return touched
+
+
+def _admin_required_error(keys: tuple[str, ...]) -> RbacCatalogError:
+    return _error(
+        "admin_role_required",
+        "Only an administrator may grant or revoke this permission.",
+        permission_keys=list(keys),
+    )
+
+
 def _execute(
     db: Session,
     *,
     definition: OwnerCommandDefinition,
     context: CommandContext,
     operation,
+    touched=None,
+    operation_name: str = "rbac_catalog",
 ):
+    if touched is not None:
+        operation = guard_admin_only_grants(
+            db,
+            context=context,
+            operation_name=operation_name,
+            touched=lambda: touched(db),
+            make_error=_admin_required_error,
+            operation=operation,
+        )
     try:
         return execute_owner_command(
             db,
@@ -759,6 +797,8 @@ def create_role(db: Session, command: CreateRoleCommand) -> RoleCatalogOutcome:
         definition=_ROLE_COMMAND,
         context=command.context,
         operation=operation,
+        touched=lambda session: set(command.permission_ids),
+        operation_name="create_role",
     )
 
 
@@ -849,6 +889,8 @@ def update_role(db: Session, command: UpdateRoleCommand) -> RoleCatalogOutcome:
         definition=_ROLE_COMMAND,
         context=command.context,
         operation=operation,
+        touched=lambda session: _update_role_touched(session, command),
+        operation_name="update_role",
     )
 
 
@@ -1031,6 +1073,8 @@ def update_permission(
         definition=_PERMISSION_COMMAND,
         context=command.context,
         operation=operation,
+        touched=lambda _session: {command.permission_id},
+        operation_name="update_permission",
     )
 
 
@@ -1068,6 +1112,8 @@ def deactivate_permission(
         definition=_PERMISSION_COMMAND,
         context=command.context,
         operation=operation,
+        touched=lambda _session: {command.permission_id},
+        operation_name="deactivate_permission",
     )
 
 
@@ -1139,6 +1185,8 @@ def grant_role_permission(
         definition=_ROLE_COMMAND,
         context=command.context,
         operation=operation,
+        touched=lambda session: {command.permission_id},
+        operation_name="grant_role_permission",
     )
 
 
@@ -1204,6 +1252,8 @@ def update_role_permission(
         definition=_ROLE_COMMAND,
         context=command.context,
         operation=operation,
+        touched=lambda session: _link_touched(session, command.link_id, command.permission_id),
+        operation_name="update_role_permission",
     )
 
 
@@ -1260,6 +1310,8 @@ def revoke_role_permission(
         definition=_ROLE_COMMAND,
         context=command.context,
         operation=operation,
+        touched=lambda session: _link_touched(session, command.link_id, None),
+        operation_name="revoke_role_permission",
     )
 
 

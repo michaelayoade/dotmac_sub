@@ -3,6 +3,7 @@
 Legacy HTTP wrappers and strict staff admission delegate to this calculator.
 """
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
@@ -192,3 +193,121 @@ def system_user_holds_exact_permission(
         .first()
         is not None
     )
+
+
+#: Permissions that only an acting principal holding the ``admin`` role may
+#: grant or revoke (directly to a user or by adding them to a role). They are
+#: also granted to no role by default, so holding ``admin`` alone never
+#: satisfies them. Kept in step with ``SettingSpec.required_permission``
+#: (tests/test_starter_ledger_live_permission.py).
+ADMIN_ONLY_GRANT_PERMISSION_KEYS = frozenset({"billing:starter_ledger_live:write"})
+
+
+def actor_holds_admin_role(db: Session, actor: str) -> bool:
+    """Whether ``user:<system user id>`` holds the active ``admin`` role."""
+    prefix, _, identifier = actor.partition(":")
+    if prefix != "user":
+        return False
+    try:
+        user_id = UUID(identifier)
+    except ValueError:
+        return False
+    return (
+        db.query(SystemUserRole.id)
+        .join(Role, SystemUserRole.role_id == Role.id)
+        .filter(SystemUserRole.system_user_id == user_id)
+        .filter(Role.name == "admin")
+        .filter(Role.is_active.is_(True))
+        .first()
+        is not None
+    )
+
+
+def admin_only_grant_permission_ids(db: Session) -> dict[UUID, str]:
+    """Catalog ids (any state) of the admin-only-grant permissions."""
+    rows = (
+        db.query(Permission.id, Permission.key)
+        .filter(Permission.key.in_(ADMIN_ONLY_GRANT_PERMISSION_KEYS))
+        .all()
+    )
+    return {row[0]: row[1] for row in rows}
+
+
+def refused_admin_only_grant_keys(
+    db: Session, *, actor: str, touched_permission_ids: Iterable[UUID]
+) -> tuple[str, ...]:
+    """Admin-only keys the actor may not grant or revoke here (empty = allowed)."""
+    touched = set(touched_permission_ids)
+    if not touched:
+        return ()
+    gated = admin_only_grant_permission_ids(db)
+    keys = sorted(key for pid, key in gated.items() if pid in touched)
+    if not keys or actor_holds_admin_role(db, actor):
+        return ()
+    return tuple(keys)
+
+
+def guard_admin_only_grants(
+    db: Session,
+    *,
+    context,
+    operation_name: str,
+    touched: Callable[[], Iterable[UUID]],
+    make_error: Callable[[tuple[str, ...]], Exception],
+    operation: Callable[[], object],
+):
+    """Wrap an RBAC owner operation with the admin-only-grant rule.
+
+    Pre-check on a transaction-free session: a refusal is audited in its own
+    committed event (the owner transaction would roll it back) and raised.
+    The same check is repeated inside the owner transaction as a backstop.
+    Names only; no secrets.
+    """
+
+    def checked():
+        keys = refused_admin_only_grant_keys(
+            db, actor=context.actor, touched_permission_ids=touched()
+        )
+        if keys:
+            raise make_error(keys)
+        return operation()
+
+    if not db.in_transaction():
+        keys = refused_admin_only_grant_keys(
+            db, actor=context.actor, touched_permission_ids=touched()
+        )
+        if keys:
+            from app.models.audit import AuditActorType
+            from app.services.audit_adapter import AuditActor, stage_audit_event
+
+            prefix, _, identifier = context.actor.partition(":")
+            try:
+                actor = AuditActor(
+                    actor_type=AuditActorType(prefix), actor_id=identifier or prefix
+                )
+            except ValueError:
+                actor = AuditActor.system(context.actor)
+            stage_audit_event(
+                db,
+                action="auth.rbac_admin_only_grant_refused",
+                entity_type="permission",
+                actor=actor,
+                request_id=str(context.correlation_id),
+                is_success=False,
+                status_code=403,
+                metadata={
+                    "schema_version": 1,
+                    "outcome": "refused",
+                    "refusal": "admin_role_required",
+                    "operation": operation_name,
+                    "permission_keys": list(keys),
+                    "reason": context.reason,
+                    "command_id": str(context.command_id),
+                    "correlation_id": str(context.correlation_id),
+                },
+            )
+            db.commit()
+            raise make_error(keys)
+        if db.in_transaction():
+            db.commit()
+    return checked
