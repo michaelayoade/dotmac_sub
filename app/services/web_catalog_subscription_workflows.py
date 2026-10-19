@@ -1353,6 +1353,8 @@ def handle_subscription_update_form(
             ipv4_assignment_submitted=False,
             credential_update_allowed=credential_update_allowed,
             feedback=feedback,
+            adopt_legacy_credential_id=str(form.get("adopt_legacy_credential_id") or "")
+            or None,
         )
         if feedback:
             # Never silent success: stay on the edit page with a visible warning.

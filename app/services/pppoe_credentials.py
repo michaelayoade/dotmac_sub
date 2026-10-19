@@ -28,6 +28,11 @@ from app.models.catalog import (
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import numbering, settings_spec
+from app.services.access_credential_secret import (
+    UNUSABLE_STORED_SECRET_MESSAGE,
+    is_secret_reference_value,
+    reject_reserved_service_password,
+)
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.customer_identifiers import pppoe_username_from_subscriber_number
 from app.services.domain_errors import DomainError
@@ -191,6 +196,59 @@ def _is_live_binding(db: Session, credential: AccessCredential) -> bool:
     return bound is None or bound.status not in _ENDED_STATUSES
 
 
+def _login_moved_to_live_service(
+    db: Session,
+    command: EnsurePppoeCredentialCommand,
+    subscription: Subscription,
+) -> bool:
+    """True when ``subscription.login`` is an ACTIVE credential of the same
+    customer that is bound to another, non-ended service."""
+    holders = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == command.subscriber_id,
+            AccessCredential.username == subscription.login,
+            AccessCredential.is_active.is_(True),
+            AccessCredential.subscription_id.is_not(None),
+            AccessCredential.subscription_id != command.subscription_id,
+        )
+        .all()
+    )
+    return any(_is_live_binding(db, holder) for holder in holders)
+
+
+def legacy_unbound_candidate(
+    db: Session, subscriber_id: UUID, subscription_id: UUID
+) -> AccessCredential | None:
+    """The customer's single unbound legacy credential, or None.
+
+    Explicit rule (never a guess): exactly ONE credential of the customer has
+    ``subscription_id IS NULL`` and this service is the customer's ONLY live
+    service. Staff must still choose to adopt it.
+    """
+    unbound = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscriber_id,
+            AccessCredential.subscription_id.is_(None),
+        )
+        .all()
+    )
+    if len(unbound) != 1:
+        return None
+    others = (
+        db.query(Subscription)
+        .filter(
+            Subscription.subscriber_id == subscriber_id,
+            Subscription.id != subscription_id,
+        )
+        .all()
+    )
+    if any(other.status not in _ENDED_STATUSES for other in others):
+        return None
+    return unbound[0]
+
+
 def _inherit_enabled(db: Session) -> bool:
     return _resolve_radius_setting(db, "pppoe_credential_on_new_service") == "inherit"
 
@@ -207,6 +265,8 @@ def _inherit_statuses(db: Session) -> set[SubscriptionStatus]:
 
 def _has_usable_secret(credential: AccessCredential) -> bool:
     if not credential.secret_hash:
+        return False
+    if is_secret_reference_value(credential.secret_hash):
         return False
     try:
         return bool(decrypt_credential(credential.secret_hash))
@@ -284,6 +344,7 @@ def stage_pending_credential(
     as typed instead of generating new credentials. Only this subscription's own staged row is touched; there is
     no subscriber-level fallback.
     """
+    reject_reserved_service_password(plain_password)
     staged = (
         db.query(AccessCredential)
         .filter(
@@ -404,6 +465,10 @@ def ensure_pppoe_credential(
                 .first()
             )
             if staged is not None:
+                if is_secret_reference_value(staged.secret_hash):
+                    raise _error(
+                        "secret_reference_refused", UNUSABLE_STORED_SECRET_MESSAGE
+                    )
                 # Login/password typed on the create form were staged on an
                 # inactive credential bound to this exact service; activate it
                 # as typed. The secret is never read or logged here.
@@ -431,20 +496,14 @@ def ensure_pppoe_credential(
                 subscription is not None
                 and str(subscription.login or "").strip()
                 and _inherit_enabled(db)
-                and db.query(AccessCredential.id)
-                .filter(
-                    AccessCredential.subscriber_id == command.subscriber_id,
-                    AccessCredential.username == subscription.login,
-                    AccessCredential.subscription_id.is_not(None),
-                    AccessCredential.subscription_id != command.subscription_id,
-                )
-                .first()
-                is not None
+                and _login_moved_to_live_service(db, command, subscription)
             ):
                 # Known limitation (pending the Starter disabled->SUSPENDED
-                # mapping): this service's credential was rebound to a
+                # mapping): this service's credential was rebound to a LIVE
                 # replacement. Restoring it must neither issue a second
-                # credential nor take the first back.
+                # credential nor take the first back. A pre-set login that
+                # matches an ENDED predecessor (bulk activate, API create) is
+                # the normal replacement and falls through to the inherit rule.
                 raise _error(
                     "credential_rebound_elsewhere",
                     "This service's PPPoE credential now belongs to a "
@@ -528,6 +587,11 @@ def ensure_pppoe_credential(
                     ]
                     if len(candidates) == 1 and not live:
                         inherited = candidates[0]
+                        if is_secret_reference_value(inherited.secret_hash):
+                            raise _error(
+                                "secret_reference_refused",
+                                UNUSABLE_STORED_SECRET_MESSAGE,
+                            )
                         inherited.subscription_id = command.subscription_id
                         inherited.radius_profile_id = command.radius_profile_id
                         inherited.connection_type = ConnectionType.pppoe
@@ -677,6 +741,7 @@ __all__ = [
     "PppoeCredentialError",
     "ensure_pppoe_credential",
     "generate_pppoe_username",
+    "legacy_unbound_candidate",
     "plan_change_provisioning",
     "stage_pending_credential",
     "username_in_use",

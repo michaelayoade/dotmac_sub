@@ -78,6 +78,7 @@ from app.services import (
     web_billing_service_extensions as web_billing_service_extensions_service,
 )
 from app.services import web_customer_user_access as web_customer_user_access_service
+from app.services.access_credential_secret import is_secret_reference_value
 from app.services.access_resolution import resolve_customer_access
 from app.services.billing_profile import resolve_billing_profiles
 from app.services.billing_settings import resolve_payment_due_days
@@ -1496,6 +1497,8 @@ def reveal_customer_pppoe_password(
     if not credential or not credential.secret_hash:
         return "", False
     if credential_id and str(credential.id) != str(credential_id):
+        return "", False
+    if is_secret_reference_value(credential.secret_hash):
         return "", False
     try:
         password = decrypt_credential(credential.secret_hash)

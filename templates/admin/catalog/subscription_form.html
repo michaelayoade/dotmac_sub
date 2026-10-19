@@ -449,6 +449,15 @@
                             <option value="dynamic" {% if subscription.ipv4_method != 'permanent_static' %}selected{% endif %}>Dynamic IP</option>
                         </select>
                     </div>
+                    {% if credential_unusable %}
+                    <p class="sm:col-span-2 text-xs text-red-600" role="alert">The stored service password is a secret reference and is not used. Set a new service password.</p>
+                    {% endif %}
+                    {% if legacy_credential_candidate and can_update_credentials %}
+                    <label class="sm:col-span-2 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                        <input type="checkbox" name="adopt_legacy_credential_id" value="{{ legacy_credential_candidate.id }}">
+                        Use the legacy login {{ legacy_credential_candidate.username }} for this service
+                    </label>
+                    {% endif %}
                     {% if is_new or can_update_credentials %}
                     <div>
                         <label for="login" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Login</label>

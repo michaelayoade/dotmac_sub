@@ -17,6 +17,35 @@ class AccessCredentialSecretFormat(StrEnum):
     pbkdf2_hash = "pbkdf2_hash"
     opaque_hash = "opaque_hash"
     legacy_cleartext = "legacy_cleartext"
+    #: A stored secret-store reference (``env://``, ``bao://`` ...). A subscriber
+    #: service password is never a reference: it is unusable, never resolved.
+    secret_reference = "secret_reference"
+
+
+_REFERENCE_PREFIXES = ("bao://", "openbao://", "vault://", "env://")
+_RESERVED_PREFIXES = ("enc:", "plain:", "cleartext:")
+RESERVED_SERVICE_PASSWORD_MESSAGE = (
+    "A service password cannot be a secret reference (env://, bao://, "
+    "openbao://, vault://) or start with enc:, plain: or cleartext:."
+)
+UNUSABLE_STORED_SECRET_MESSAGE = (
+    "The stored service password is a secret reference and is not used. "
+    "Set a new service password."
+)
+
+
+def is_secret_reference_value(value: str | None) -> bool:
+    """True for a stored/typed value the secret resolver would dereference."""
+    text = str(value or "").strip().lower()
+    return text.startswith(_REFERENCE_PREFIXES)
+
+
+def reject_reserved_service_password(value: str | None) -> None:
+    """Refuse a typed service password that would be stored as a reference or
+    as an at-rest marker. Raises ``ValueError`` with a staff-safe message."""
+    text = str(value or "").strip().lower()
+    if text.startswith(_REFERENCE_PREFIXES + _RESERVED_PREFIXES):
+        raise ValueError(RESERVED_SERVICE_PASSWORD_MESSAGE)
 
 
 _ONE_WAY_FORMATS = frozenset(
@@ -36,6 +65,8 @@ def classify_access_credential_secret(
     if not text:
         return AccessCredentialSecretFormat.empty
     lowered = text.lower()
+    if lowered.startswith(_REFERENCE_PREFIXES):
+        return AccessCredentialSecretFormat.secret_reference
     if lowered.startswith("enc:"):
         return AccessCredentialSecretFormat.encrypted
     if lowered.startswith(("plain:", "cleartext:")):

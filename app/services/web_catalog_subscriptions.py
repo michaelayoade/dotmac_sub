@@ -78,6 +78,11 @@ from app.services import radius_reject as radius_reject_service
 from app.services import settings_spec
 from app.services import sms as sms_service
 from app.services import subscriber as subscriber_service
+from app.services.access_credential_secret import (
+    UNUSABLE_STORED_SECRET_MESSAGE,
+    is_secret_reference_value,
+    reject_reserved_service_password,
+)
 from app.services.audit_adapter import record_audit_event
 from app.services.audit_helpers import (
     build_changes_metadata,
@@ -107,6 +112,7 @@ from app.services.network.radius_sessions import (
 )
 from app.services.owner_commands import CommandContext
 from app.services.pppoe_credentials import (
+    legacy_unbound_candidate,
     plan_change_provisioning,
     stage_pending_credential,
     username_in_use,
@@ -1231,6 +1237,7 @@ def _upsert_access_credential(
     radius_profile_id: str | None = None,
     subscription_id: UUID | None = None,
 ) -> None:
+    reject_reserved_service_password(plain_password)
     normalized_username = str(username or "").strip()
     same_username_query = db.query(AccessCredential).filter(
         AccessCredential.subscriber_id == subscriber_id,
@@ -1414,6 +1421,26 @@ def _current_access_credential(
     ).first()
 
 
+def _legacy_candidate_for_form(
+    db: Session,
+    subscriber_id: object,
+    subscription_id: str | None,
+    bound: AccessCredential | None,
+) -> dict[str, str] | None:
+    """Staff-visible choice to adopt the customer's single unbound credential."""
+    if bound is not None or not subscriber_id or not subscription_id:
+        return None
+    try:
+        candidate = legacy_unbound_candidate(
+            db, UUID(str(subscriber_id)), UUID(str(subscription_id))
+        )
+    except ValueError:
+        return None
+    if candidate is None:
+        return None
+    return {"id": str(candidate.id), "username": str(candidate.username)}
+
+
 def _current_service_password(
     db: Session,
     subscriber_id: str | UUID | None,
@@ -1424,6 +1451,8 @@ def _current_service_password(
         db, subscriber_id, subscription_id=subscription_id
     )
     if not credential or not credential.secret_hash:
+        return None
+    if is_secret_reference_value(credential.secret_hash):
         return None
     try:
         return decrypt_credential(credential.secret_hash)
@@ -1473,6 +1502,8 @@ def send_subscription_credentials(
     if not credential or not credential.username:
         raise ValueError("No service credential is stored for this subscriber.")
 
+    if is_secret_reference_value(credential.secret_hash):
+        raise ValueError(UNUSABLE_STORED_SECRET_MESSAGE)
     password = _current_service_password(db, subscription.subscriber_id)
     if not password:
         raise ValueError("Current service password is not available for delivery.")
@@ -4353,6 +4384,13 @@ def subscription_form_context(
         else "",
         "current_service_password": current_password or "",
         "credential_targets": credential_targets or {"email": [], "sms": []},
+        "credential_unusable": bool(
+            current_credential is not None
+            and is_secret_reference_value(current_credential.secret_hash)
+        ),
+        "legacy_credential_candidate": _legacy_candidate_for_form(
+            db, subscriber_id, _context_subscription_id, current_credential
+        ),
         "commercial_policy": {"rows": []},
     }
     if subscriber_id:
@@ -4669,6 +4707,7 @@ def create_subscription_with_audit(
     )
     typed_login = str(form.get("login") or "").strip()
     typed_password = str(form.get("service_password") or "").strip()
+    reject_reserved_service_password(typed_password)
     if typed_login:
         # Refuse a taken login before anything is created.
         if username_in_use(db, typed_login):
@@ -4888,6 +4927,7 @@ def update_subscription_with_audit(
     ipv4_assignment_submitted: bool = False,
     credential_update_allowed: bool = False,
     feedback: list[str] | None = None,
+    adopt_legacy_credential_id: str | None = None,
 ) -> object:
     """Update subscription, compute diff, and log audit.
 
@@ -4929,7 +4969,12 @@ def update_subscription_with_audit(
     current_username = (
         bound_credential.username if bound_credential else str(before.login or "")
     )
-    username_changed = bool(requested_login) and requested_login != current_username
+    # Only an explicit change counts: the form prefills S.login, which can drift
+    # from the credential, so a value equal to either is "no change".
+    username_changed = bool(requested_login) and requested_login not in {
+        current_username,
+        str(before.login or ""),
+    }
     credential_change = username_changed or bool(entered_password)
     old_username = str(bound_credential.username) if bound_credential else None
     stage_only = False
@@ -4941,12 +4986,31 @@ def update_subscription_with_audit(
                 "A plan change is provisioning on this service; change its "
                 "credentials after it completes."
             )
-        if bound_credential is None:
-            if before.status != SubscriptionStatus.pending:
+        if entered_password:
+            reject_reserved_service_password(entered_password)
+        if bound_credential is None and before.status != SubscriptionStatus.pending:
+            legacy = legacy_unbound_candidate(db, before.subscriber_id, before.id)
+            if legacy is None:
                 raise ValueError(
                     "This service has no credential of its own, so its login "
                     "cannot be changed here."
                 )
+            if str(adopt_legacy_credential_id or "") != str(legacy.id):
+                raise ValueError(
+                    "This service has no credential of its own. The customer has "
+                    f"one unbound legacy login ({legacy.username}); tick 'Use the "
+                    "legacy login for this service' and save to adopt it."
+                )
+            legacy.subscription_id = before.id
+            db.flush()
+            bound_credential = legacy
+            old_username = str(legacy.username)
+            current_username = old_username
+            username_changed = bool(requested_login) and requested_login not in {
+                current_username,
+                str(before.login or ""),
+            }
+        if bound_credential is None:
             stage_only = True
             if not (requested_login or current_username):
                 raise ValueError("Enter a service login to stage the password.")
