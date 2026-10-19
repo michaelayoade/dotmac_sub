@@ -98,6 +98,7 @@ class WanServiceSpec:
     pppoe_username_template: str = ""
     pppoe_password: str = ""
     pppoe_password_mode: str = ""
+    pppoe_password_unusable: bool = False
     cos_priority: int | None = None
     c_vlan: int | None = None
     nat_enabled: bool = True
@@ -552,6 +553,9 @@ def build_spec_from_profile(
                 pppoe_username_template=ws.pppoe_username_template or "",
                 pppoe_password=_static_pppoe_password(ws.pppoe_static_password),
                 pppoe_password_mode=password_mode,
+                pppoe_password_unusable=is_secret_reference_value(
+                    ws.pppoe_static_password
+                ),
                 cos_priority=ws.cos_priority,
                 c_vlan=ws.c_vlan,
                 nat_enabled=ws.nat_enabled,
