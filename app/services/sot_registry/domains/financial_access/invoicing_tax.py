@@ -4040,4 +4040,197 @@ SERVICES: tuple[SOTService, ...] = (
             ),
         ),
     ),
+    SOTService(
+        name="financial.starter_credit_notes",
+        module="app.services.billing.starter_credit_notes",
+        owns=(
+            "Starter credit-note issuance against Starter invoices",
+            "Starter-issued credit note mirror and structural link",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.credit_notes",
+            "financial.invoices",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Credits lane (ADR 0031): a fully-applied credit against a "
+            "Starter-linked invoice is issued by pinned dotmac-billing as "
+            "sole ledger writer inside the legacy credit owner's "
+            "preview/confirm transaction. Sub retains the CreditNote "
+            "mirror (Starter document number, issued status, applied "
+            "total), the structural StarterCreditNoteLink, and the audit "
+            "row; no legacy funding or application ledger entries are "
+            "written, and legacy void/apply writers refuse Starter "
+            "credits. Partially applied or unlinked credits stay legacy "
+            "in this slice."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Starter credit-note issuance against Starter invoices",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "confirmed credit issue preview",
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter billing policies",
+                        "canonical credit tax rate",
+                    ),
+                    canonical_writer="financial.starter_credit_notes",
+                ),
+                ConcernContract(
+                    name="Starter-issued credit note mirror and structural link",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter collectible position",
+                    ),
+                    canonical_writer="financial.starter_credit_notes",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="confirmed credit issue preview",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "fingerprint-confirmed preview proving the credit "
+                        "applies in full to the named invoice at issue "
+                        "with reconciled totals"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink binding the Sub invoice to "
+                        "the Starter billing account, obligation, and "
+                        "document identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter billing policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): credit series and "
+                        "profile, source-fact and correlation templates, "
+                        "tax policy, currency minor units"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical credit tax rate",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active TaxRate named by the confirmed credit "
+                        "payload; its code and rate form the exact "
+                        "Starter tax snapshot"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter collectible position",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "current receivable position read after credit "
+                        "issuance; its collectible amount is the only "
+                        "balance the Sub mirror may show"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The credit issue owner owns the transaction: "
+                    "Starter credit issuance, Sub credit-note and link "
+                    "mirrors, invoice balance/status mirror, audit row, "
+                    "and idempotency reservation commit or roll back "
+                    "together."
+                ),
+                locking=(
+                    "The account and invoice locks are held by the "
+                    "credit issue owner; Starter billing applies its "
+                    "own writer fences inside the same transaction."
+                ),
+                idempotency=(
+                    "The confirmed issue idempotency key is the "
+                    "correlation identity; an exact replay returns the "
+                    "recorded Starter credit identities without new "
+                    "postings."
+                ),
+                retries=(
+                    "The caller retries the whole confirmed issue after "
+                    "rollback; partial Starter writes never survive a "
+                    "failed attempt."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_credit_notes.amount_unrepresentable",
+                    "financial.starter_credit_notes.configuration_invalid",
+                    "financial.starter_credit_notes.position_unavailable",
+                    "financial.starter_credit_notes.starter_refused",
+                ),
+                mapping_owner="credit note issue owner",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "credit that is not fully applied to a Starter-linked invoice",
+                    "manually numbered credit",
+                    "missing or inactive credit tax evidence",
+                    "Starter billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("credit_note.issued", "credit_note.applied"),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 keeps the legacy credit owner's issued "
+                    "and applied meanings; the Starter document number "
+                    "and identity ride on the mirror and structural "
+                    "link. Settlement of the credited invoice hands "
+                    "its consequence to the access owner through the "
+                    "existing settlement reconciliation path."
+                ),
+                replay=(
+                    "Replay re-observes the recorded credit identities; "
+                    "the Starter ledger is never rewritten by replay."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.credit_notes legacy funding writer",
+                new_owner="financial.starter_credit_notes",
+                verification=(
+                    "Migrated-PostgreSQL proof: a full credit against "
+                    "a Starter-issued invoice reaches zero collectible "
+                    "with a paid mirror, a StarterCreditNoteLink, and "
+                    "no legacy funding ledger entry."
+                ),
+                cutover_gate=(
+                    "Only fully-applied credits against Starter-linked "
+                    "invoices take this lane; every other credit keeps "
+                    "the legacy writer until its lane migrates."
+                ),
+                fallback_retirement=(
+                    "The legacy credit funding writer is deleted at "
+                    "the money-pack cutover; it is never used as a "
+                    "fallback for a Starter-linked invoice."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_credit_eligibility.py",
+                "tests/integration/test_starter_credit_notes_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
 )
