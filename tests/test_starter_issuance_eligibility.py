@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+
 from app.models.billing import Invoice, InvoiceLine, InvoiceStatus
 from app.models.catalog import BillingMode
 from app.models.subscriber import Subscriber
@@ -42,6 +44,13 @@ _POLICY_DEFAULTS = {
     "starter_billing_default_country_code": "NGA",
     "starter_billing_series_start_value": 1,
 }
+
+
+@pytest.fixture(autouse=True)
+def _switch_on(monkeypatch):
+    """These cases exercise eligibility rules, so the live switch is ON."""
+
+    monkeypatch.setattr(issuance, "starter_ledger_live_enabled", lambda _db: True)
 
 
 class _Db:

@@ -34,6 +34,7 @@ from app.models.billing import (
 )
 from app.models.catalog import BillingMode
 from app.services import web_billing_invoices as web_invoices
+from app.services.billing import starter_issuance as issuance
 from app.services.billing import starter_policies
 from app.services.billing.starter_settlement import (
     StarterSettlementError,
@@ -60,6 +61,7 @@ def _starter_series_isolation(monkeypatch):
         return real_resolve(db, domain, key)
 
     monkeypatch.setattr(starter_policies, "resolve_value", _resolve)
+    monkeypatch.setattr(issuance, "starter_ledger_live_enabled", lambda _db: True)
 
 
 @pytest.fixture

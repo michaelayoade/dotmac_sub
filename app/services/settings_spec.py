@@ -5671,6 +5671,23 @@ SETTINGS_SPECS: list[SettingSpec] = [
 # change them is apply_admin_settings_form_updates (control:settings:write),
 # which audits every write. Read only through
 # app.services.sole_approver_exception.
+# D1 hold (Michael, 2026-10-19): the Starter live slice (admin issuance
+# 6a/multi-line and Starter settlement) stays dark until one deliberate
+# switch decision. Owner-command-only so every change is audited through
+# apply_admin_settings_form_updates (control:settings:write).
+SETTINGS_SPECS.append(
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_ledger_live_enabled",
+        env_var=None,
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Starter ledger live (issue and settle eligible postpaid invoices through Starter)",
+        inherits=False,
+        owner_command_only=True,
+    )
+)
+
 SETTINGS_SPECS.extend(
     [
         SettingSpec(
@@ -6287,6 +6304,17 @@ def active_setting_updated_at(db, domain: SettingDomain, key: str) -> datetime |
         .limit(1)
     )
     return db.scalar(stmt)
+
+
+def starter_ledger_live_enabled(db) -> bool:
+    """True only when the Starter ledger live switch is explicitly ON.
+
+    Fail closed: any unset, malformed or non-boolean value is OFF. Reads
+    domain settings only; never touches the Starter tables.
+    """
+
+    value = resolve_value(db, SettingDomain.billing, "starter_ledger_live_enabled")
+    return value is True
 
 
 def resolve_boolean(db, domain: SettingDomain, key: str) -> bool:
