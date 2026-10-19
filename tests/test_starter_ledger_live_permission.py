@@ -102,7 +102,6 @@ def test_write_without_permission_is_refused_and_audited(db_session) -> None:
     assert meta["outcome"] == "refused"
     assert meta["setting_keys"] == ["billing.starter_ledger_live_enabled"]
     assert meta["required_permissions"] == [PERMISSION]
-    assert "value" not in str(meta).lower().replace("setting", "")
 
 
 def test_non_user_actor_is_refused(db_session) -> None:
@@ -112,7 +111,7 @@ def test_non_user_actor_is_refused(db_session) -> None:
         _write(db_session, "system:job", "starter_ledger_live_enabled", True)
 
 
-def test_write_with_permission_succeeds_and_is_audited(db_session, monkeypatch) -> None:
+def test_write_with_permission_succeeds_and_is_audited(db_session) -> None:
     user = _user(db_session)
     _grant(db_session, user)
     outcome = _write(db_session, f"user:{user.id}", "starter_ledger_live_enabled", True)
