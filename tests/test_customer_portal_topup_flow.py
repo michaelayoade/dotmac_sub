@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -2336,3 +2337,69 @@ def test_invoice_verify_switch_off_skips_module_parity_query(
         flow.verify_and_record_payment(
             db_session, {"account_id": str(subscriber.id)}, intent.reference
         )
+
+
+def test_invoice_verify_switch_off_starter_linked_invoice_reads_module_parity(
+    monkeypatch: pytest.MonkeyPatch, db_session, subscriber
+) -> None:
+    """A Starter-linked invoice keeps the module parity read even when OFF."""
+
+    from app.models.billing import StarterInvoiceLink
+    from app.services import customer_portal_flow_payments as flow
+    from app.services.payment_intent_module_shadow import (
+        IntentBindingParity,
+        IntentParityOutcome,
+    )
+
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-VERIFY-LINKED",
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        status=InvoiceStatus.issued,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        StarterInvoiceLink(
+            tenant_id=uuid.UUID(int=1),
+            invoice_id=invoice.id,
+            billing_account_id=uuid.UUID(int=2),
+            document_id=uuid.uuid4(),
+            source_fact_id="fact-verify-linked",
+        )
+    )
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        invoice_id=invoice.id,
+        reference="verify-linked",
+        provider_type="paystack",
+        requested_amount=Decimal("100.00"),
+        currency="NGN",
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    calls: list[str] = []
+
+    class ProviderReached(Exception):
+        pass
+
+    def compare(_db, _binding):
+        calls.append("module")
+        return IntentBindingParity(IntentParityOutcome.MATCH)
+
+    def provider(*_args, **_kwargs):
+        raise ProviderReached
+
+    monkeypatch.setattr(flow, "customer_can_access_account", lambda *_args: True)
+    monkeypatch.setattr(flow, "starter_ledger_live_enabled", lambda _db: False)
+    monkeypatch.setattr(flow, "observe_invoice_intent_parity", compare)
+    monkeypatch.setattr(flow, "_observe_gateway_for_customer", provider)
+    with pytest.raises(ProviderReached):
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+    assert calls == ["module"]

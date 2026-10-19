@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
 
-from app.models.billing import BillingAccount, Invoice, InvoiceStatus, TopupIntent
+from app.models.billing import (
+    BillingAccount,
+    Invoice,
+    InvoiceStatus,
+    StarterInvoiceLink,
+    TopupIntent,
+)
 from app.models.idempotency import IdempotencyKey
 from app.models.service_period_purchase import (
     PrepaidPeriodPurchase,
@@ -451,7 +457,9 @@ def test_customer_creation_rejects_missing_checkout_binding(
     assert exc_info.value.code.endswith("checkout_binding_unavailable")
 
 
-def _invoice_checkout(db_session, subscriber, *, number: str, reference: str):
+def _invoice_checkout(
+    db_session, subscriber, *, number: str, reference: str, starter_linked: bool = False
+):
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number=number,
@@ -462,6 +470,17 @@ def _invoice_checkout(db_session, subscriber, *, number: str, reference: str):
         status=InvoiceStatus.issued,
     )
     db_session.add(invoice)
+    db_session.flush()
+    if starter_linked:
+        db_session.add(
+            StarterInvoiceLink(
+                tenant_id=UUID(int=1),
+                invoice_id=invoice.id,
+                billing_account_id=UUID(int=2),
+                document_id=uuid4(),
+                source_fact_id=f"fact-{number}",
+            )
+        )
     db_session.commit()
     invoice_id = invoice.id
     account_id = subscriber.id
@@ -509,6 +528,26 @@ def test_invoice_creation_switch_off_never_touches_payments_module(
     assert intent is not None
     assert intent.reference == "gateway-off-ref"
     assert result.payment_flow == "invoice_payment"
+
+
+def test_invoice_creation_switch_off_starter_linked_invoice_opens_module_intent(
+    monkeypatch, db_session, subscriber, _stub_module_intent_open
+):
+    """Structural identity wins over the switch: a Starter-issued invoice keeps
+    its module intent so Starter settlement can find it."""
+
+    _patch_policy(monkeypatch)
+    monkeypatch.setattr(svc, "starter_ledger_live_enabled", lambda _db: False)
+
+    result = _invoice_checkout(
+        db_session,
+        subscriber,
+        number="INV-MODULE-LINKED",
+        reference="gateway-linked-ref",
+        starter_linked=True,
+    )
+
+    assert [intent.id for intent in _stub_module_intent_open] == [result.intent_id]
 
 
 def test_invoice_creation_switch_on_opens_module_intent_once(

@@ -39,7 +39,10 @@ from app.services.account_credit_deposits import (
 from app.services.billing import collection_account_directory
 from app.services.billing._common import lock_account
 from app.services.billing.account_credit import eligible_invoices
-from app.services.billing.starter_policies import starter_ledger_live_enabled
+from app.services.billing.starter_policies import (
+    has_starter_invoice_link,
+    starter_ledger_live_enabled,
+)
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.collections import get_available_balance, restore_account_services
 from app.services.common import round_money, to_decimal
@@ -1345,9 +1348,11 @@ def verify_and_record_payment(
     if not customer_can_access_account(db, customer, intent.account_id):
         raise ValueError("Payment reference does not belong to this account")
     # D1 hold: the parity read queries mod_payments; skip it while the Starter
-    # live switch is OFF (intents are then legacy-only and the schema may be
-    # absent).
-    if starter_ledger_live_enabled(db):
+    # live switch is OFF and the invoice has no Starter link (intents are then
+    # legacy-only and the schema may be absent).
+    if starter_ledger_live_enabled(db) or has_starter_invoice_link(
+        db, intent.invoice_id
+    ):
         observe_invoice_intent_parity(db, authorized_invoice_binding(intent))
     provider_type = provider_for_intent(intent, provider).value
 

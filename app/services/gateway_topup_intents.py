@@ -39,7 +39,10 @@ from app.services.account_credit_deposits import (
     DepositEligibilityError,
 )
 from app.services.billing._common import lock_account
-from app.services.billing.starter_policies import starter_ledger_live_enabled
+from app.services.billing.starter_policies import (
+    has_starter_invoice_link,
+    starter_ledger_live_enabled,
+)
 from app.services.common import round_money, to_decimal
 from app.services.domain_errors import DomainError
 from app.services.locking import lock_for_update
@@ -408,10 +411,13 @@ def _create_customer_gateway_topup_intent(
                 "intent_conflict",
                 "Invoice gateway intent is already being created",
             ) from exc
-        # D1 hold (Michael, 2026-10-19): with the Starter live switch OFF the
-        # checkout is exactly the legacy TopupIntent and never touches the
-        # mod_payments schema (production has none yet).
-        if starter_ledger_live_enabled(db):
+        # D1 hold (Michael, 2026-10-19): with the Starter live switch OFF and
+        # no Starter link the checkout is exactly the legacy TopupIntent and
+        # never touches the mod_payments schema (production has none yet). A
+        # Starter-linked invoice routes by its own identity, as settlement does.
+        if starter_ledger_live_enabled(db) or has_starter_invoice_link(
+            db, invoice.id
+        ):
             _open_module_invoice_intent(db, staged.intent)
         preview_fingerprint = None
     elif command.flow is CustomerGatewayTopupFlow.account_credit_deposit:

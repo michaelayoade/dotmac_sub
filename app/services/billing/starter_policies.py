@@ -32,6 +32,7 @@ __all__ = [
     "percent_to_fraction",
     "resolve_starter_billing_policies",
     "resolve_starter_settlement_policies",
+    "has_starter_invoice_link",
     "starter_ledger_live_enabled",
 ]
 
@@ -40,6 +41,28 @@ def starter_ledger_live_enabled(db: Session) -> bool:
     """D1 hold switch, fail closed: only a boolean ``True`` is ON."""
     value = resolve_value(db, SettingDomain.billing, "starter_ledger_live_enabled")
     return value is True
+
+
+def has_starter_invoice_link(db: Session, invoice_id: UUID | None) -> bool:
+    """Structural identity: the invoice was issued through Starter.
+
+    Routes by the invoice's own link row (as settlement does), never by the
+    switch, so an already Starter-issued invoice keeps its module intent.
+    """
+    if invoice_id is None:
+        return False
+    from sqlalchemy import select
+
+    from app.models.billing import StarterInvoiceLink
+
+    return (
+        db.scalar(
+            select(StarterInvoiceLink.id).where(
+                StarterInvoiceLink.invoice_id == invoice_id
+            )
+        )
+        is not None
+    )
 
 
 class StarterBillingPolicyError(DomainError, ValueError):
