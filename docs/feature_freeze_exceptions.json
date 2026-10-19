@@ -338,6 +338,97 @@
       "reason": "Michael approved 2026-10-19 landing the reviewed open branches via one integration PR (#3716) instead of 17 separate merges: Learning/Kernel party and operator-tenant imports (#3672-#3678), audit visibility fixes (#3660/#3661), billing kill-switch and ingestion split (#3708/#3709), and small fixes (#3631-#3635, #3671). The combined diff exceeds the per-PR size threshold and adds two kernel-import modules plus one audit template; each constituent branch was reviewed on its own PR. No new capability beyond those branches.",
       "starter_contract": "Starter kernel party-identity and operator-tenancy import contracts consumed by party_kernel_import/operator_tenant_kernel_import (Learning/Kernel #3672-#3678); remaining paths are corrections to existing Sub audit/admin surfaces (#3660/#3661, #3708/#3709, #3631-#3635, #3671) landed under the same approval, consuming no new Starter contract.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-D1-HOLD-3721",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/billing/starter_policies.py"
+      ],
+      "reason": "Approved by Michael 2026-10-19. PR #3721 puts the #3680 payments-module intent under the D1 hold: starter_policies.py gains has_starter_invoice_link (+23 lines), so the thin-client billing surface grows 94519 -> 94542 (money-writer baseline unchanged at 24075). It routes the module intent by the invoice's own Starter link row, as settlement does. No new capability and no new files; no further growth is authorized. The billing_thin_client_baseline.txt TOTAL edit (94519 -> 94542) is committed in #3721 (eada43662).",
+      "deletion_trigger": "Remove this entry with has_starter_invoice_link when the legacy Invoice writer retires at the cutover seal.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-D1-PERMISSION-SCHEMA-3722",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/694_starter_ledger_live_permission.py"
+      ],
+      "reason": "Approved by Michael 2026-10-19. PR #3722 restricts the D1 switch billing.starter_ledger_live_enabled to users holding billing:starter_ledger_live:write. Migration 694 only inserts that permission row (granted to no role or user) and downgrade removes it. Corrective access-control schema/data only; no billing data or writer behavior changes.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-D1-PERMISSION-3722",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/domain_settings.py",
+        "app/services/permission_authorization.py",
+        "app/services/rbac_catalog.py",
+        "app/services/settings_spec.py",
+        "app/services/system_user_assignments.py",
+        "app/services/web_system_settings_forms.py",
+        "app/services/web_system_settings_views.py",
+        "app/web/admin/system.py",
+        "templates/admin/system/settings.html"
+      ],
+      "reason": "Approved by Michael 2026-10-19. PR #3722 restricts the D1 switch: SettingSpec.required_permission (enable-only) enforced in the owner-command settings write, a dedicated switch form/route, the generic Settings tab skipping gated specs, and admin-only grant/revoke of billing:starter_ledger_live:write enforced in the RBAC owner services. Existing files only (+473 lines in app/ and templates/, above the 400-line size threshold); no new modules or templates, no billing writers.",
+      "deletion_trigger": "Remove with the D1 switch once the Starter ledger is live for all postpaid invoices and the hold is lifted.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "SEC-PPPOE-REVEAL-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/695_subscription_credential_reveal.py"
+      ],
+      "reason": "Security correction D10 (Michael approved 2026-10-19): migration 695 registers the dedicated subscription:credential:reveal permission so revealing a stored PPPoE service password is no longer gated by customer:read. Permission row only, UI-assignable, no role grants, downgrade refuses while grants exist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "SEC-PPPOE-REVEAL",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/pppoe_password_reveal.py"
+      ],
+      "reason": "Security correction D10 (Michael approved 2026-10-19): one shared helper so both reveal endpoints (customer detail and subscription edit page) run the same permission-gated, rate-limited, audited and no-store reveal, replacing duplicated inline code in app/web/admin/customers.py. Adds no capability: the page no longer renders the password, and the reveal that already existed becomes POST, CSRF-protected and gated by subscription:credential:reveal.",
+      "starter_contract": "None: security correction to an existing Sub surface, not a new capability. The credential reveal and projection move to the Starter credential owner (dotmac-access-credentials) in the PPPoE credential bridge scope.",
+      "deletion_trigger": "Delete with the Sub PPPoE credential surfaces when the Starter credential owner takes over reveal.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PPPOE-CREDENTIAL-INHERIT-20261019",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/pppoe_credentials.py",
+        "app/services/settings_spec.py",
+        "app/services/web_catalog_subscriptions.py",
+        "app/services/web_catalog_subscription_workflows.py",
+        "app/services/enforcement.py",
+        "app/web/admin/catalog.py",
+        "templates/admin/catalog/subscription_form.html",
+        "app/services/admin_workflow_guidance.py",
+        "app/services/access_credential_secret.py",
+        "app/services/radius.py",
+        "app/services/radius_population.py",
+        "app/services/customer_authentication.py",
+        "app/services/test_connection.py",
+        "app/services/web_customer_details.py",
+        "app/services/cpe_dialer_credential_reconcile.py",
+        "app/services/network/provisioning_enforcement.py"
+      ],
+      "reason": "Michael approved option C on 2026-10-19 (D3 ended-service credential may be inherited by the same customer only; D6 new permission subscription:credential:update; D7 disconnect after RADIUS projection). Minimal Sub bridge until the Starter access-credentials owner exists: setting-gated inherit of a replacement service's credential (default 'new', behaviour unchanged until flipped), reactivation keeps the existing password, typed create-form login/password honoured, and the edit path corrected to touch only this service's credential, remove the old username from RADIUS, disconnect only after projection succeeds and surface failure. No new Python module, no new template, no OpenAPI change. The workflow guidance gate also requires a one-line guidance update in app/services/admin_workflow_guidance.py. The review follow-ups also touch the existing secret-reference guard readers (access_credential_secret, radius, radius_population, customer_authentication, test_connection, web_customer_details, cpe_dialer_credential_reconcile, provisioning_enforcement); they add no capability.",
+      "starter_contract": "proposed dotmac-access-credentials on_replacement_service / inherit_from_service_states / change_disconnect policy keys (ADR-00NN, pending); the bridge settings map 1:1 and the bridge branch is deleted at the Starter cutover.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PPPOE-CREDENTIAL-PERMISSION-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/696_subscription_credential_permission.py"
+      ],
+      "reason": "Permission-only migration registering subscription:credential:update (Michael decision D6, 2026-10-19): the credential edit path currently has no dedicated permission, so any actor holding subscription:update can rename or re-password a PPPoE credential. No tables, no role grants; additive and reversible unless operators have assigned it. Exact path; it is updated if the migration is renumbered on merge order.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
