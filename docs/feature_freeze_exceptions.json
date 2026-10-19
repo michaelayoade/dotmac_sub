@@ -377,6 +377,26 @@
       "approved_by": "michaelayoade"
     },
     {
+      "id": "SEC-PPPOE-REVEAL-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/695_subscription_credential_reveal.py"
+      ],
+      "reason": "Security correction D10 (Michael approved 2026-10-19): migration 695 registers the dedicated subscription:credential:reveal permission so revealing a stored PPPoE service password is no longer gated by customer:read. Permission row only, UI-assignable, no role grants, downgrade refuses while grants exist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "SEC-PPPOE-REVEAL",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/pppoe_password_reveal.py"
+      ],
+      "reason": "Security correction D10 (Michael approved 2026-10-19): one shared helper so both reveal endpoints (customer detail and subscription edit page) run the same permission-gated, rate-limited, audited and no-store reveal, replacing duplicated inline code in app/web/admin/customers.py. Adds no capability: the page no longer renders the password, and the reveal that already existed becomes POST, CSRF-protected and gated by subscription:credential:reveal.",
+      "starter_contract": "None: security correction to an existing Sub surface, not a new capability. The credential reveal and projection move to the Starter credential owner (dotmac-access-credentials) in the PPPoE credential bridge scope.",
+      "deletion_trigger": "Delete with the Sub PPPoE credential surfaces when the Starter credential owner takes over reveal.",
+      "approved_by": "michaelayoade"
+    },
+    {
       "id": "PPPOE-CREDENTIAL-INHERIT-20261019",
       "kind": "feature-exception",
       "paths": [
