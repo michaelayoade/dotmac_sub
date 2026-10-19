@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -403,6 +404,11 @@ def _configure_form_context_from_state(
     return {
         "ont": ont,
         "ont_id": ont_id,
+        # Fresh per-render keys for the hidden fields in _configure_form.html.
+        # Every render of that form goes through this builder, so the retry
+        # route's required idempotency_key is never an empty field.
+        "config_idempotency_key": str(uuid.uuid4()),
+        "retry_idempotency_key": str(uuid.uuid4()),
         "wan_mode": values.get("wan_mode"),
         "ip_protocol": values.get("ip_protocol"),
         "wan_static_ip": str(values.get("wan_static_ip") or ""),

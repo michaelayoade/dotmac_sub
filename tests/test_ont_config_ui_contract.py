@@ -509,3 +509,122 @@ def test_provision_operation_progress_is_scoped_to_the_ont(db_session) -> None:
     assert progress.status == "Pending"
     assert progress.is_active is True
     assert cross_ont_progress is None
+
+
+def _hidden_values(html: str, name: str) -> list[str]:
+    import re
+
+    return re.findall(rf'<input type="hidden" name="{name}" value="([^"]*)"', html)
+
+
+def _retry_lifecycle() -> SimpleNamespace:
+    from app.services.network.ont_service_configuration import (
+        OntConfigurationNextAction,
+    )
+
+    return SimpleNamespace(
+        next_action=OntConfigurationNextAction.retry_current_configuration,
+        configuration_head_id=uuid.uuid4(),
+        revision=3,
+        phase=OntServiceConfigurationPhase.failed,
+        failure_message="boom",
+        failure_code="x",
+    )
+
+
+def test_detail_context_renders_nonempty_idempotency_keys(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The detail-page context (not just the fragment routes) carries fresh keys."""
+    from app.models.network import OntUnit
+
+    ont = OntUnit(serial_number="CTX-IDEM-KEYS-001")
+    db_session.add(ont)
+    db_session.commit()
+    monkeypatch.setattr(
+        context_builders,
+        "resolve_effective_ont_config",
+        lambda *_a, **_k: {
+            "config_pack": None,
+            "desired_config_keys": [],
+            "values": {},
+        },
+    )
+
+    def render() -> list[str]:
+        context = context_builders.unified_config_context(db_session, str(ont.id))
+        html = templates.env.get_template(
+            "admin/network/onts/_configure_form.html"
+        ).render(
+            request=_request(),
+            **{**context, "configuration_lifecycle": _retry_lifecycle()},
+        )
+        return _hidden_values(html, "idempotency_key")
+
+    first, second = render(), render()
+    # Retry form + configure form each carry a key.
+    assert len(first) == 2
+    for value in first + second:
+        uuid.UUID(value)
+    assert first[0] != first[1]
+    assert not set(first) & set(second)  # fresh per render
+
+
+def test_retry_post_with_rendered_key_is_not_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.db import get_db
+
+    captured: dict[str, object] = {}
+    ont_id = uuid.uuid4()
+
+    def fake_retry(_db: object, command: object) -> ConfigureOntServiceOutcome:
+        captured["command"] = command
+        return ConfigureOntServiceOutcome(
+            ont_unit_id=ont_id,
+            assignment_id=uuid.uuid4(),
+            configuration_head_id=uuid.uuid4(),
+            revision=3,
+            operation_id=uuid.uuid4(),
+            phase=OntServiceConfigurationPhase.queued,
+            replayed=False,
+            message="Retry queued.",
+        )
+
+    monkeypatch.setattr(network_onts, "retry_ont_service_configuration", fake_retry)
+    monkeypatch.setattr(network_onts, "has_permission", lambda *_args: True)
+    monkeypatch.setattr(network_onts, "finish_read_transaction", lambda *_args: None)
+    monkeypatch.setattr(network_onts, "_base_context", lambda *_a, **_k: {})
+    monkeypatch.setattr(network_onts, "_ont_configuration_form_context", lambda *_a: {})
+    monkeypatch.setattr(network_onts, "_log_ont_action_result", lambda **_k: None)
+    monkeypatch.setattr(
+        network_onts.templates,
+        "TemplateResponse",
+        lambda *_a, **_k: HTMLResponse("updated"),
+    )
+    app = FastAPI()
+    app.include_router(network_onts.router)
+    app.dependency_overrides[get_db] = lambda: MagicMock()
+    for route in network_onts.router.routes:
+        for dep in getattr(route, "dependencies", []):
+            app.dependency_overrides[dep.dependency] = lambda: {}
+
+    @app.middleware("http")
+    async def _auth(request, call_next):  # noqa: ANN001
+        request.state.auth = {"principal_type": "user", "principal_id": "op"}
+        return await call_next(request)
+
+    client = TestClient(app)
+    url = f"/network/onts/{ont_id}/configure/retry"
+    body = {"configuration_head_id": str(uuid.uuid4()), "configuration_revision": "3"}
+
+    # Regression: the empty hidden field the detail page used to render is a 422.
+    assert client.post(url, data={**body, "idempotency_key": ""}).status_code == 422
+
+    key = str(uuid.uuid4())
+    response = client.post(url, data={**body, "idempotency_key": key})
+    assert response.status_code == 200
+    assert captured["command"].context.idempotency_key == key

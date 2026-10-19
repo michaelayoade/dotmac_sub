@@ -159,8 +159,6 @@ def _ont_configuration_form_context(db: Session, ont_id: str) -> dict[str, objec
     context["configuration_lifecycle"] = get_ont_service_configuration_projection(
         db, ont_unit_id=parsed_ont_id
     )
-    context["config_idempotency_key"] = str(uuid.uuid4())
-    context["retry_idempotency_key"] = str(uuid.uuid4())
     return context
 
 
