@@ -4184,14 +4184,16 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             events=EventContract(
-                event_types=(),
+                event_types=("credit_note.issued", "credit_note.applied"),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
-                    "No new public event in this slice; settlement of "
-                    "the credited invoice hands its consequence to the "
-                    "access owner through the existing settlement "
-                    "reconciliation path."
+                    "Version 1 keeps the legacy credit owner's issued "
+                    "and applied meanings; the Starter document number "
+                    "and identity ride on the mirror and structural "
+                    "link. Settlement of the credited invoice hands "
+                    "its consequence to the access owner through the "
+                    "existing settlement reconciliation path."
                 ),
                 replay=(
                     "Replay re-observes the recorded credit identities; "

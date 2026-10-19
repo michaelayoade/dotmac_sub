@@ -787,10 +787,9 @@ def _issue_via_starter_lane(
             source_fact_id=credit_policies.credit_source_fact_id(credit_note.id),
         )
     )
-    invoice.balance_due = issued.collectible_after
-    if preview.settles_invoice:
-        invoice.status = InvoiceStatus.paid
-        invoice.paid_at = issued_at
+    starter_credit_notes.mirror_invoice_after_starter_credit(
+        invoice, issued, settles_invoice=preview.settles_invoice, issued_at=issued_at
+    )
     db.flush()
     if preview.settles_invoice:
         reconcile_service_after_invoice_settlement(db, invoice.account_id, invoice.id)

@@ -36,7 +36,7 @@ from dotmac_kernel.money import Currency, Money, MoneyError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, StarterInvoiceLink, TaxRate
+from app.models.billing import Invoice, InvoiceStatus, StarterInvoiceLink, TaxRate
 from app.services.billing.starter_issuance import _Numbering
 from app.services.billing.starter_policies import (
     StarterBillingPolicies,
@@ -51,6 +51,7 @@ __all__ = [
     "StarterCreditNoteError",
     "credit_eligibility_reason",
     "issue_credit_note_via_starter",
+    "mirror_invoice_after_starter_credit",
     "starter_invoice_link",
 ]
 
@@ -245,3 +246,17 @@ def issue_credit_note_via_starter(
         billing_account_id=link.billing_account_id,
         collectible_after=current.position.collectible_receivable.amount,
     )
+
+
+def mirror_invoice_after_starter_credit(
+    invoice: Invoice,
+    issued: StarterCreditIssued,
+    *,
+    settles_invoice: bool,
+    issued_at: datetime,
+) -> None:
+    """Mirror balance/status from the Starter position; writes no ledger state."""
+    invoice.balance_due = issued.collectible_after
+    if settles_invoice:
+        invoice.status = InvoiceStatus.paid
+        invoice.paid_at = issued_at
