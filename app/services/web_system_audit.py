@@ -320,7 +320,7 @@ def _event_views(
     """Build the one redacted projection shared by screen and exports."""
 
     try:
-        people = load_audit_actor_subscribers(db, events)
+        people = load_audit_actor_subscribers(db, list(events))
     except Exception:
         people = {}
 
