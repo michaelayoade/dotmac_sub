@@ -40,8 +40,10 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+import signal
 import subprocess
 import sys
+import time
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -548,6 +550,12 @@ def test_app_middleware_and_routes_are_kernel_free_and_prefixes_unchanged() -> N
     assert result.returncode == 0, result.stderr
 
 
+def _read_probe_diagnostics(diagnostics) -> str:
+    """Bounded (32 KiB) stack/phase text only; no locals, no environment."""
+    diagnostics.seek(0)
+    return diagnostics.read(32 * 1024).decode("utf-8", errors="replace")
+
+
 def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
     """K105 may load its runtime facility, but Sub must not use it at boot.
 
@@ -562,14 +570,16 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
     """
     with TemporaryFile() as diagnostics:
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(  # noqa: S603 — fixed argv, our own interpreter
                 [
                     sys.executable,
                     "-c",
                     "import faulthandler\n"
+                    "import signal\n"
                     "import sys\n"
                     "diagnostics = open(int(sys.argv[1]), 'w', closefd=False)\n"
-                    "faulthandler.dump_traceback_later(90, repeat=False, file=diagnostics)\n"
+                    "faulthandler.enable(file=diagnostics, all_threads=True)\n"
+                    "faulthandler.register(signal.SIGUSR1, file=diagnostics, all_threads=True)\n"
                     "print('K105 boot probe: dependency imports', file=diagnostics, flush=True)\n"
                     "import sqlalchemy\n"
                     "import sqlalchemy.engine\n"
@@ -670,7 +680,6 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     "    import app.main\n"
                     "finally:\n"
                     "    sys.setprofile(None)\n"
-                    "    faulthandler.cancel_dump_traceback_later()\n"
                     "print('K105 boot probe: import complete; assertions', file=diagnostics, flush=True)\n"
                     "forbidden = {'dotmac_kernel.app_factory', 'dotmac_kernel.db', "
                     "'dotmac_kernel.database_runtime'}\n"
@@ -687,15 +696,23 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     str(diagnostics.fileno()),
                 ],
                 cwd=PROJECT_ROOT,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=120,
                 pass_fds=(diagnostics.fileno(),),
             )
+            _stdout, stderr = process.communicate(timeout=120)
         except subprocess.TimeoutExpired:
-            diagnostics.seek(0)
-            trace = diagnostics.read(32 * 1024).decode("utf-8", errors="replace")
+            # Stack-only dump from the child's own handler, then kill.
+            process.send_signal(signal.SIGUSR1)
+            time.sleep(2)
+            process.kill()
+            process.communicate()
             raise AssertionError(
-                "K105 boot probe exceeded the unchanged 120s deadline:\n" + trace
+                "K105 boot probe exceeded the unchanged 120s deadline:\n"
+                + _read_probe_diagnostics(diagnostics)
             ) from None
-    assert result.returncode == 0, result.stderr
+        assert process.returncode == 0, (
+            f"K105 boot probe exit {process.returncode}:\n{stderr}\n"
+            + _read_probe_diagnostics(diagnostics)
+        )
