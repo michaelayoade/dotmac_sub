@@ -34,7 +34,6 @@ from app.services.account_credit_deposits import (
     DepositEligibilityError,
     SettleAccountCreditDepositCommand,
 )
-from app.services.billing.starter_policies import starter_ledger_live_enabled
 from app.services.billing.starter_settlement import (
     StarterSettlementError,
     StarterSettlementResult,
@@ -994,10 +993,6 @@ def _stage_starter_invoice_settlement(
     billing allocation staged here are the only money record.
     """
 
-    # D1 hold: with the Starter ledger live switch OFF no Starter table is
-    # read or written; the legacy provider-event lane owns the settlement.
-    if not starter_ledger_live_enabled(db):
-        return None
     settlement = prepared.settlement
     intent = prepared.topup_intent
     if (

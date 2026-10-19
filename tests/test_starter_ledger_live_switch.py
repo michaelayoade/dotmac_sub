@@ -122,22 +122,40 @@ def _prepared() -> SimpleNamespace:
     )
 
 
-def test_settlement_lane_is_inert_when_off(monkeypatch) -> None:
-    monkeypatch.setattr(webhooks, "starter_ledger_live_enabled", lambda _db: False)
+def test_settlement_with_link_goes_to_starter_even_when_switch_off(
+    monkeypatch,
+) -> None:
+    """The switch gates NEW issuance only; a linked invoice never settles legacy."""
+
+    monkeypatch.setattr(issuance, "starter_ledger_live_enabled", lambda _db: False)
+    sentinel = object()
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        webhooks,
+        "settle_starter_invoice_payment",
+        lambda _db, **kwargs: calls.append(kwargs) or sentinel,
+    )
+    db = SimpleNamespace(
+        scalar=lambda _stmt: SimpleNamespace(id=uuid4()),
+        get=lambda _model, _id: SimpleNamespace(id=uuid4()),
+    )
     result = webhooks._stage_starter_invoice_settlement(
-        _ExplodingDb(),  # type: ignore[arg-type]
+        db,  # type: ignore[arg-type]
         prepared=_prepared(),  # type: ignore[arg-type]
     )
-    assert result is None
+    assert result is sentinel
+    assert len(calls) == 1
 
 
-def test_settlement_lane_reads_link_when_on(monkeypatch) -> None:
-    monkeypatch.setattr(webhooks, "starter_ledger_live_enabled", lambda _db: True)
+def test_settlement_without_link_runs_lookup_and_settles_legacy_when_off(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(issuance, "starter_ledger_live_enabled", lambda _db: False)
     queried: list[object] = []
     db = SimpleNamespace(scalar=lambda stmt: queried.append(stmt))
     result = webhooks._stage_starter_invoice_settlement(
         db,  # type: ignore[arg-type]
         prepared=_prepared(),  # type: ignore[arg-type]
     )
-    assert result is None  # no link row -> legacy lane, but the lookup ran
+    assert result is None  # no link row -> legacy lane
     assert len(queried) == 1
