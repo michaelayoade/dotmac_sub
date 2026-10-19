@@ -60,7 +60,7 @@ def test_stale_huawei_onts_queue_one_bulk_olt_refresh(db_session, monkeypatch):
         return QueueDispatchResult(
             queued=True,
             task_name="app.tasks.ont_runtime_status.refresh_huawei_olt_status",
-            queue="ingestion",
+            queue="inventory",
         )
 
     monkeypatch.setattr(ont_status_refresh, "queue_huawei_olt_status_poll", fake_queue)
@@ -202,7 +202,7 @@ def test_suppressed_candidates_do_not_consume_successful_admission_cap(
         return QueueDispatchResult(
             queued=True,
             task_name="app.tasks.ont_runtime_status.refresh_huawei_olt_status",
-            queue="ingestion",
+            queue="inventory",
         )
 
     monkeypatch.setattr(

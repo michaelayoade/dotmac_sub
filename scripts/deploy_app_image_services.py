@@ -43,6 +43,7 @@ REQUIRED_APP_SERVICES: tuple[str, ...] = (
     "celery-worker",
     "celery-worker-bandwidth",
     "celery-worker-ingestion",
+    "celery-worker-inventory",
     "celery-worker-monitoring",
     "celery-worker-notifications-immediate",
     "celery-worker-notifications",

@@ -36,6 +36,7 @@ _DEFAULT_CELERY_QUEUES = (
     "bandwidth",
     "monitoring",
     "ingestion",
+    "inventory",
     "crm",
     "billing",
 )
@@ -50,6 +51,7 @@ _DEFAULT_CELERY_QUEUE_RESTART_TARGETS = {
     "bandwidth": "celery-worker-bandwidth",
     "monitoring": "celery-worker-monitoring",
     "ingestion": "celery-worker-ingestion",
+    "inventory": "celery-worker-inventory",
     "billing": "celery-worker-billing",
 }
 

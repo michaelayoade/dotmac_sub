@@ -20,6 +20,9 @@ from app.tasks._postgres_lock import postgres_session_advisory_lock
 
 logger = logging.getLogger(__name__)
 
+#: Parent cadence assumed when no enabled schedule row exists (30 minutes).
+_DEFAULT_PARENT_INTERVAL_SECONDS = 1800
+
 
 def _olt_harvest_lock_key(olt_id: str) -> int:
     digest = hashlib.blake2b(
@@ -74,7 +77,15 @@ def run_olt_mac_harvest() -> dict[str, int]:
     """Queue one independently bounded MAC harvest per active Huawei OLT."""
 
     from app.models.network import OLTDevice
+    from app.services.scheduler_config import fanout_child_expires_seconds
 
+    # Own session: a failed interval lookup must not poison the OLT query.
+    with db_session_adapter.read_session() as lookup_db:
+        child_expires = fanout_child_expires_seconds(
+            lookup_db,
+            "app.tasks.olt_mac_harvest.run_olt_mac_harvest",
+            default_interval_seconds=_DEFAULT_PARENT_INTERVAL_SECONDS,
+        )
     with db_session_adapter.read_session() as db:
         olt_ids = list(
             db.scalars(
@@ -95,6 +106,7 @@ def run_olt_mac_harvest() -> dict[str, int]:
                 run_single_olt_mac_harvest,
                 args=[str(olt_id)],
                 source="network.olt_mac_harvest.scheduled",
+                expires=child_expires,
             )
             queued += 1
         except Exception:  # noqa: BLE001 - isolate one enqueue from the fleet

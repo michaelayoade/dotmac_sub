@@ -104,13 +104,15 @@ celery_app.conf.task_routes = {
     # long-running inventory/SSH collection on the ingestion queue.
     "app.tasks.topology_sync.warm_topology_status": {"queue": "monitoring"},
     "app.tasks.infrastructure_polling.run_infrastructure_poll": {"queue": "monitoring"},
+    # RADIUS probe: ~0.6 s per run on a 120 s interval. It must never queue
+    # behind inventory work, or radius_probe_ok goes absent and the alert fires.
+    "app.tasks.radius_health.run_radius_health_check": {"queue": "monitoring"},
     # High-volume ingestion tasks - dedicated queue
-    "app.tasks.radius_health.run_radius_health_check": {"queue": "ingestion"},
     "app.tasks.customer_impact_metrics.export_customer_impact_metrics": {
         "queue": "ingestion"
     },
     "app.tasks.monitoring_coverage.refresh_monitoring_coverage": {"queue": "ingestion"},
-    "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "ingestion"},
+    "app.tasks.topology_lldp.run_lldp_topology_poll": {"queue": "inventory"},
     "app.tasks.forwarding_control_observations.run_forwarding_control_observation_poll": {
         "queue": "ingestion"
     },
@@ -118,7 +120,7 @@ celery_app.conf.task_routes = {
     "app.tasks.outage_auto_notify.auto_dispatch_outage_notifications": {
         "queue": "ingestion"
     },
-    "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "ingestion"},
+    "app.tasks.topology_uisp.run_uisp_topology_sync": {"queue": "inventory"},
     "app.tasks.uisp_ip_backfill.run_uisp_mgmt_ip_backfill": {"queue": "ingestion"},
     # Operator-triggered writes must not wait behind long inventory and
     # topology jobs. Unrouted apply tasks use the default worker queue.
@@ -128,18 +130,18 @@ celery_app.conf.task_routes = {
     "app.tasks.router_health.reconcile_service_path": {"queue": "ingestion"},
     "app.tasks.router_health.run_coa_canary": {"queue": "ingestion"},
     "app.tasks.router_health.reprobe_coa_canary": {"queue": "ingestion"},
-    "app.tasks.router_health.observe_router_runtime": {"queue": "ingestion"},
+    "app.tasks.router_health.observe_router_runtime": {"queue": "inventory"},
     "router_sync.reconcile_config_push_readback": {"queue": "ingestion"},
     "router_sync.audit_sot_drift": {"queue": "ingestion"},
     "router_sync.reconcile_nas_vlan_readback": {"queue": "ingestion"},
-    "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "ingestion"},
+    "app.tasks.topology_ufiber_link.run_ufiber_onu_link": {"queue": "inventory"},
     "app.tasks.topology_metrics.export_topology_metrics": {"queue": "ingestion"},
-    "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "ingestion"},
-    "app.tasks.olt_mac_harvest.run_single_olt_mac_harvest": {"queue": "ingestion"},
+    "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "inventory"},
+    "app.tasks.olt_mac_harvest.run_single_olt_mac_harvest": {"queue": "inventory"},
     "app.tasks.ont_signal_observations.record_ont_observations": {"queue": "ingestion"},
-    "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": {"queue": "ingestion"},
-    "app.tasks.ont_runtime_status.refresh_huawei_olt_status": {"queue": "ingestion"},
-    "app.tasks.ont_runtime_status.refresh_single_ont_status": {"queue": "ingestion"},
+    "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": {"queue": "inventory"},
+    "app.tasks.ont_runtime_status.refresh_huawei_olt_status": {"queue": "inventory"},
+    "app.tasks.ont_runtime_status.refresh_single_ont_status": {"queue": "inventory"},
     "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
     "app.tasks.usage.reap_stale_radius_sessions": {"queue": "ingestion"},
     "app.tasks.radius.reap_radacct_ghosts": {"queue": "ingestion"},
@@ -199,7 +201,8 @@ celery_app.conf.task_queues = (
     Queue("acs"),  # Dedicated GenieACS/TR-069 queue
     Queue("bandwidth"),  # High-volume bandwidth processing
     Queue("monitoring"),  # Reserved device reachability/status processing
-    Queue("ingestion"),  # High-volume data ingestion (usage, topology)
+    Queue("ingestion"),  # Minute-cadence RADIUS/usage/session/outage ingestion
+    Queue("inventory"),  # Long inventory/SSH collection (OLT, UISP, LLDP, routers)
     Queue("crm"),  # ERP outbox delivery (external API paced)
     Queue("billing"),  # Daily business runners (billing/dunning/expiry/FUP)
 )

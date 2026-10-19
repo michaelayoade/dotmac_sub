@@ -230,10 +230,32 @@ ping_command = ["celery", "-A", "app.celery_app.celery_app", "inspect", "ping"]
 
 [[roles]]
 code = "celery-worker-ingestion"
-command = ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info", "--concurrency=1", "--max-tasks-per-child=50", "-Q", "ingestion"]
+command = ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info", "--concurrency=3", "--max-tasks-per-child=50", "-Q", "ingestion"]
 replicas = 1
 stop_grace_seconds = 30
 materials = ["DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", "OPENBAO_ADDR", "OPENBAO_TOKEN", "S3_ENDPOINT_URL", "S3_ACCESS_KEY", "S3_SECRET_KEY", "RADIUS_PROBE_PASSWORD", "RADIUS_PROBE_SECRET", "VICTORIAMETRICS_URL"]
+
+[roles.resources]
+# Placeholder: docker-compose.yml declares no resource limits for this role;
+# confirm against production host sizing before trusting as a ceiling.
+cpus = "1.0"
+memory = "1g"
+pids = 512
+
+[[roles.volumes]]
+name = "uploads"
+target = "/app/uploads"
+
+[roles.worker]
+kind = "celery"
+ping_command = ["celery", "-A", "app.celery_app.celery_app", "inspect", "ping"]
+
+[[roles]]
+code = "celery-worker-inventory"
+command = ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info", "--concurrency=2", "--max-tasks-per-child=50", "-Q", "inventory"]
+replicas = 1
+stop_grace_seconds = 30
+materials = ["DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", "OPENBAO_ADDR", "OPENBAO_TOKEN", "VICTORIAMETRICS_URL"]
 
 [roles.resources]
 # Placeholder: docker-compose.yml declares no resource limits for this role;
@@ -255,7 +277,7 @@ code = "celery-worker-monitoring"
 command = ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info", "--concurrency=2", "--max-tasks-per-child=50", "-Q", "monitoring"]
 replicas = 1
 stop_grace_seconds = 30
-materials = ["DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", "OPENBAO_ADDR", "OPENBAO_TOKEN", "VICTORIAMETRICS_URL"]
+materials = ["DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", "OPENBAO_ADDR", "OPENBAO_TOKEN", "RADIUS_PROBE_PASSWORD", "RADIUS_PROBE_SECRET", "VICTORIAMETRICS_URL"]
 
 [roles.resources]
 # Placeholder: docker-compose.yml declares no resource limits for this role;

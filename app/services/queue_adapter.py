@@ -23,6 +23,7 @@ class QueueMessage:
     queue: str | None = None
     countdown: int | None = None
     eta: datetime | None = None
+    expires: int | None = None
     correlation_id: str | None = None
     source: str | None = None
     request_id: str | None = None
@@ -79,6 +80,8 @@ class CeleryQueueAdapter:
             apply_async_kwargs["countdown"] = message.countdown
         if message.eta is not None:
             apply_async_kwargs["eta"] = message.eta
+        if message.expires is not None:
+            apply_async_kwargs["expires"] = message.expires
 
         try:
             enqueue_kwargs: dict[str, object] = {
@@ -127,6 +130,7 @@ def enqueue_task(
     queue: str | None = None,
     countdown: int | None = None,
     eta: datetime | None = None,
+    expires: int | None = None,
     correlation_id: str | None = None,
     source: str | None = None,
     request_id: str | None = None,
@@ -141,6 +145,7 @@ def enqueue_task(
             queue=queue,
             countdown=countdown,
             eta=eta,
+            expires=expires,
             correlation_id=correlation_id,
             source=source,
             request_id=request_id,
