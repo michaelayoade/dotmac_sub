@@ -1,0 +1,86 @@
+name: Observe PR 3659 release baseline
+
+# Read-only, approval-gated evidence only. No build, pull, migrate, restart,
+# container exec, provider call, alias movement, or deployment command exists.
+on:
+  workflow_dispatch:
+    inputs:
+      authority_revision:
+        description: Exact protected-main commit containing this reviewed observer
+        required: true
+        type: string
+      target_server_name:
+        description: Explicitly authorized production target (dotmac-sub-prod)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr3659-production-baseline-observation
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      authority_revision: ${{ steps.source.outputs.authority_revision }}
+    steps:
+      - name: Admit exact protected source and target
+        id: source
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        env:
+          AUTHORITY_REVISION: ${{ inputs.authority_revision }}
+          TARGET_SERVER_NAME: ${{ inputs.target_server_name }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            if (context.ref !== "refs/heads/main" || process.env.RUN_ATTEMPT !== "1" ||
+                process.env.TARGET_SERVER_NAME !== "dotmac-sub-prod" ||
+                process.env.AUTHORITY_REVISION !== context.sha) {
+              core.setFailed("Observation requires first-attempt protected main and the named production target.");
+              return;
+            }
+            const {data} = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: "main"
+            });
+            if (!data.protected || data.commit.sha !== context.sha) {
+              core.setFailed("Protected main moved; dispatch a fresh observation.");
+              return;
+            }
+            core.setOutput("authority_revision", context.sha);
+
+  observe:
+    needs: admit
+    runs-on: [self-hosted, linux, x64, dotmac-sub-production]
+    environment: production
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed authority code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.admit.outputs.authority_revision }}
+          persist-credentials: false
+      - name: Capture only non-secret application identity
+        env:
+          AUTHORITY_REVISION: ${{ needs.admit.outputs.authority_revision }}
+          OBSERVATION_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
+          OUTPUT_PATH: ${{ runner.temp }}/pr3659-baseline/baseline.json
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DEPLOY_DIR"
+          python3 -m scripts.pr3659_release_preflight \
+            --authority-revision "$AUTHORITY_REVISION" \
+            --observation-run-id "$OBSERVATION_RUN_ID" \
+            --deploy-directory "$PRODUCTION_DEPLOY_DIR" \
+            --output "$OUTPUT_PATH"
+      - name: Upload read-only baseline evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr3659-baseline-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr3659-baseline/baseline.json
+          if-no-files-found: error
+          retention-days: 7

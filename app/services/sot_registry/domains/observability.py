@@ -31,6 +31,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "audit event persistence and queries",
                 "request audit payload redaction",
+                "audit evidence read redaction",
                 "typed actor provenance normalization",
                 "staged and deferred audit recording",
             ),
@@ -70,6 +71,14 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.POLICY,
                         input_names=(
                             "request forensic observation",
+                            "audit actor and redaction contract",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="audit evidence read redaction",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "persisted audit rows",
                             "audit actor and redaction contract",
                         ),
                     ),

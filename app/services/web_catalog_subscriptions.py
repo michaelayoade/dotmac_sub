@@ -106,6 +106,7 @@ from app.services.network.radius_sessions import (
     latest_open_accounting_session_for_subscription,
 )
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_credentials import subscription_bound_credential
 from app.services.pppoe_password_reveal import (
     UNUSABLE_MESSAGE,
     CredentialUnusable,
@@ -1351,36 +1352,6 @@ def _current_access_credential(
     ).first()
 
 
-def _subscription_bound_credential(
-    db: Session, subscriber_id: str | UUID | None, subscription_id: str | UUID | None
-) -> AccessCredential | None:
-    """Return this subscription's own active credential, strictly.
-
-    No fallback to the subscriber's newest credential: on an account with
-    several services that would return another service's password. Raises
-    ``CredentialUnusable("ambiguous_credential")`` when more than one active
-    credential is bound to the subscription.
-    """
-    try:
-        subscriber_uuid = UUID(str(subscriber_id))
-        subscription_uuid = UUID(str(subscription_id))
-    except (TypeError, ValueError):
-        return None
-    rows = (
-        db.query(AccessCredential)
-        .filter(
-            AccessCredential.subscriber_id == subscriber_uuid,
-            AccessCredential.subscription_id == subscription_uuid,
-            AccessCredential.is_active.is_(True),
-        )
-        .limit(2)
-        .all()
-    )
-    if len(rows) > 1:
-        raise CredentialUnusable("ambiguous_credential")
-    return rows[0] if rows else None
-
-
 def _decrypt_credential_row(
     credential: AccessCredential | None, owner_ref: object
 ) -> str | None:
@@ -1424,7 +1395,7 @@ def _own_service_credential_view(
     if not subscriber_id or not subscription_id:
         return "", False, ""
     try:
-        credential = _subscription_bound_credential(
+        credential = subscription_bound_credential(
             db, str(subscriber_id), str(subscription_id)
         )
     except CredentialUnusable:
@@ -1462,7 +1433,7 @@ def reveal_subscription_service_password(
     subscriber_id = subscription_subscriber_id(db, subscription_id)
     if subscriber_id is None:
         return "", False
-    credential = _subscription_bound_credential(db, subscriber_id, subscription_id)
+    credential = subscription_bound_credential(db, subscriber_id, subscription_id)
     password = _decrypt_credential_row(credential, f"subscription {subscription_id}")
     return password or "", bool(password)
 

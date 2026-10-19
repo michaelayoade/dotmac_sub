@@ -91,9 +91,27 @@ def apply_migration_idle_transaction_timeout(connection) -> None:
     )
 
 
+_APPLICATION_NAME_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def resolve_application_name(raw: str | None = None) -> str | None:
+    """Sanitised Postgres ``application_name`` for this process, else ``None``.
+
+    Lets ``pg_stat_activity`` attribute connections and lock waits to a worker
+    (for example ``dotmac_sub_celery_worker_ingestion``). Unsafe characters are
+    replaced and the value is cut to Postgres' 63-byte limit.
+    """
+    value = (raw if raw is not None else settings.db_application_name).strip()
+    cleaned = _APPLICATION_NAME_UNSAFE_RE.sub("_", value)[:63]
+    return cleaned or None
+
+
 def get_engine():
     connect_args = {}
     if settings.database_url.startswith(("postgresql://", "postgresql+")):
+        application_name = resolve_application_name()
+        if application_name:
+            connect_args["application_name"] = application_name
         server_options = (
             f"-c statement_timeout={settings.db_statement_timeout_ms} "
             f"-c lock_timeout={settings.db_lock_timeout_ms} "

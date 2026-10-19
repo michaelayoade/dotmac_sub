@@ -58,10 +58,10 @@ def test_settings_loader_defaults_match_the_dataclass(db_session) -> None:
     assert load_settings(db_session) == RouterHealthSettings()
 
 
-def test_poll_task_is_routed_to_ingestion_and_classified() -> None:
+def test_poll_task_is_routed_to_inventory_and_classified() -> None:
     name = "app.tasks.router_health.observe_router_runtime"
     route = celery_app.conf.task_routes[name]
-    assert route == {"queue": "ingestion"}
+    assert route == {"queue": "inventory"}
     assert name in TASK_RELIABILITY_CONTRACTS
     import app.tasks  # noqa: F401  registers the task
 

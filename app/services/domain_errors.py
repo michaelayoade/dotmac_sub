@@ -40,3 +40,31 @@ class DomainError(Exception):
         self.details = dict(details or {})
         self.retryable = retryable
         super().__init__(message)
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        """Preserve the keyword-only error contract across worker processes."""
+
+        return (
+            _restore_domain_error,
+            (type(self), self.code, self.message, self.details, self.retryable),
+        )
+
+
+def _restore_domain_error(
+    error_type: type[DomainError],
+    code: str,
+    message: str,
+    details: Mapping[str, Any],
+    retryable: bool,
+) -> DomainError:
+    """Rebuild a domain error without depending on a subclass constructor."""
+
+    restored = error_type.__new__(error_type)
+    DomainError.__init__(
+        restored,
+        code=code,
+        message=message,
+        details=details,
+        retryable=retryable,
+    )
+    return restored

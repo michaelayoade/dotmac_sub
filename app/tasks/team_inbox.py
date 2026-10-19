@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, PendingRollbackError
 
 from app.celery_app import celery_app
 from app.services import (
@@ -155,7 +155,7 @@ def send_queue_position_notifications(*, limit: int = 200) -> dict[str, int]:
 
 @celery_app.task(
     name="app.tasks.team_inbox.process_ai_intake_sessions",
-    autoretry_for=(OperationalError,),
+    autoretry_for=(OperationalError, PendingRollbackError),
     retry_backoff=True,
     retry_backoff_max=60,
     retry_jitter=True,

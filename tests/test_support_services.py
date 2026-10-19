@@ -439,6 +439,37 @@ def test_ticket_update_deduplicates_manual_and_auto_assignee(db_session, monkeyp
     assert [row.person_id for row in assignees] == [assignee_id]
 
 
+def test_ensure_assignee_tolerates_a_concurrent_existing_row(db_session, monkeypatch):
+    ticket = Ticket(title="Concurrent assignment", status=TicketStatus.open.value)
+    assignee_id = uuid4()
+    db_session.add(ticket)
+    db_session.flush()
+    db_session.add(TicketAssignee(ticket_id=ticket.id, person_id=assignee_id))
+    db_session.commit()
+
+    monkeypatch.setattr(
+        support_service.Tickets,
+        "_assignee_person_ids_in_unit_of_work",
+        staticmethod(lambda _db, _ticket: set()),
+    )
+
+    inserted = support_service.Tickets._ensure_assignee(
+        db_session,
+        ticket,
+        assignee_id,
+    )
+    db_session.flush()
+
+    assert inserted is False
+    assert (
+        db_session.query(TicketAssignee)
+        .filter(TicketAssignee.ticket_id == ticket.id)
+        .filter(TicketAssignee.person_id == assignee_id)
+        .count()
+        == 1
+    )
+
+
 def test_ticket_update_preserves_explicit_service_team_when_auto_assignment_runs(
     db_session, monkeypatch
 ):

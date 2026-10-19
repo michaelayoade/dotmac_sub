@@ -6,6 +6,7 @@ from app.services import tr069_web_audit, web_network_cpe_audit, web_network_ont
 from app.services import web_admin as web_admin_service
 from app.services.network import olt_web_audit, ont_web_forms
 from app.web.admin import catalog as admin_catalog
+from app.web.admin import customers as admin_customers
 from app.web.admin import provisioning as admin_provisioning
 from app.web.admin import support_tickets as admin_support_tickets
 from app.web.admin import wireguard as admin_wireguard
@@ -53,6 +54,7 @@ def test_admin_audit_actor_helpers_prefer_stable_principal_id(monkeypatch):
     )
 
     assert admin_catalog._get_actor_id(request) == "system-user-1"
+    assert admin_customers._get_actor_id(request) == "system-user-1"
     assert admin_provisioning._actor_id(request) == "system-user-1"
     assert admin_support_tickets._actor_id(request) == "system-user-1"
     assert admin_wireguard._get_actor_id(request) == "system-user-1"
