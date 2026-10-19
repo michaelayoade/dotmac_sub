@@ -42,6 +42,8 @@ from app.services.operator_tenant import OPERATOR_TENANT_ID
 pytestmark = pytest.mark.integration
 
 _SERIES = f"invr-{uuid4().hex[:8]}"
+# D1 switch as the isolation resolver reports it; the OFF test flips it.
+_LEDGER_LIVE = {"enabled": True}
 
 
 @pytest.fixture
@@ -53,6 +55,8 @@ def _starter_series_isolation(monkeypatch):
             return _SERIES
         if key == "starter_billing_invoice_series_prefix":
             return "SR"
+        if key == "starter_ledger_live_enabled":
+            return _LEDGER_LIVE["enabled"]
         return real_resolve(db, domain, key)
 
     monkeypatch.setattr(starter_policies, "resolve_value", _resolve)
@@ -148,3 +152,35 @@ def test_cycle_invoice_issues_through_starter(
     )
     assert current.position is not None
     assert current.position.collectible_receivable.amount == invoice.total
+
+
+def test_cycle_invoice_stays_legacy_when_switch_off(
+    db_session,
+    subscription,
+    subscriber,
+    _seller_and_bank,
+    _starter_series_isolation,
+    monkeypatch,
+) -> None:
+    monkeypatch.setitem(_LEDGER_LIVE, "enabled", False)
+    now = _billable(db_session, subscription, subscriber)
+
+    summary = billing_automation.run_invoice_cycle(
+        db_session, run_at=now, run_prepaid_renewals=False
+    )
+
+    assert summary["starter_issued_invoices"] == 0
+    invoice = db_session.execute(
+        select(Invoice).where(Invoice.account_id == subscriber.id)
+    ).scalar_one()
+    assert not (invoice.invoice_number or "").startswith("SR-")
+    links = (
+        db_session.execute(
+            select(StarterInvoiceLink).where(
+                StarterInvoiceLink.invoice_id == invoice.id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert links == []
