@@ -1094,9 +1094,10 @@ def ont_reveal_pppoe_password(
     password, found = web_network_ont_actions_service.reveal_stored_pppoe_password(
         db, ont_id, request=request
     )
+    no_store = {"Cache-Control": "no-store, private", "Pragma": "no-cache"}
     if not found:
-        return JSONResponse({"password": ""}, status_code=404)
-    return JSONResponse({"password": password})
+        return JSONResponse({"password": ""}, status_code=404, headers=no_store)
+    return JSONResponse({"password": password}, headers=no_store)
 
 
 @router.get(

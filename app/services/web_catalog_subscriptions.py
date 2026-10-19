@@ -1363,6 +1363,32 @@ def _current_service_password(
         return None
 
 
+def subscription_subscriber_id(db: Session, subscription_id: str) -> str | None:
+    """Return the owning subscriber id for audit attribution, or None."""
+    try:
+        subscription = catalog_service.subscriptions.get(
+            db=db, subscription_id=subscription_id
+        )
+    except Exception:
+        return None
+    return str(subscription.subscriber_id)
+
+
+def reveal_subscription_service_password(
+    db: Session, subscription_id: str
+) -> tuple[str, bool]:
+    """Return ``(password, found)`` for an explicit reveal action.
+
+    Callers must enforce the reveal permission, CSRF and audit; this never logs
+    the secret.
+    """
+    subscriber_id = subscription_subscriber_id(db, subscription_id)
+    if subscriber_id is None:
+        return "", False
+    password = _current_service_password(db, subscriber_id)
+    return password or "", bool(password)
+
+
 def _credential_contact_targets(subscriber: Subscriber) -> dict[str, list[str]]:
     emails: list[str] = []
     phones: list[str] = []
@@ -4118,7 +4144,6 @@ def subscription_form_context(
     )
     route_range_options = _route_range_parent_options_for_ipam(db)
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
-    current_password = _current_service_password(db, str(subscriber_id or ""))
     current_credential = _current_access_credential(db, str(subscriber_id or ""))
     credential_targets = None
     if subscriber_id:
@@ -4261,7 +4286,11 @@ def subscription_form_context(
         "current_service_login": getattr(current_credential, "username", "")
         if current_credential
         else "",
-        "current_service_password": current_password or "",
+        # The stored password is never rendered into page HTML; the page only
+        # learns whether one exists. Revealing it is a separate audited action.
+        "has_current_service_password": bool(
+            current_credential and getattr(current_credential, "secret_hash", None)
+        ),
         "credential_targets": credential_targets or {"email": [], "sms": []},
         "commercial_policy": {"rows": []},
     }
