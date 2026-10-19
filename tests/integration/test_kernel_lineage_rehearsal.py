@@ -179,7 +179,11 @@ def isolated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
         monkeypatch.setattr(
             app_config,
             "settings",
-            replace(app_config.settings, database_url=_render(database_url)),
+            replace(
+                app_config.settings,
+                database_url=_render(database_url),
+                migration_database_url=_render(database_url),
+            ),
         )
         yield database_url
     finally:

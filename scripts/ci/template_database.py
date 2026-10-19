@@ -222,14 +222,16 @@ def _alembic_target(url: URL) -> Iterator[None]:
 
     `env.py` resolves its target from `app_config.settings`, NOT from the
     Config's `sqlalchemy.url`, so setting the latter silently does nothing and
-    the upgrade runs against whatever `DATABASE_URL` the job exported.
+    the upgrade runs against whatever migration owner URL the job exported.
     """
 
     from app import config as app_config
 
     previous = app_config.settings
     app_config.settings = replace(
-        previous, database_url=url.render_as_string(hide_password=False)
+        previous,
+        database_url=url.render_as_string(hide_password=False),
+        migration_database_url=url.render_as_string(hide_password=False),
     )
     previous_env = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = url.render_as_string(hide_password=False)
