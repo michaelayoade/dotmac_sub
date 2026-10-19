@@ -4196,7 +4196,9 @@ def subscription_form_context(
     # Bind to THIS subscription's credential; the subscriber-level newest
     # credential belongs to whichever service was created last.
     _context_subscription_id = (
-        subscription.get("id") if isinstance(subscription, dict) else None
+        str(subscription.get("id") or "") or None
+        if isinstance(subscription, dict)
+        else None
     )
     current_password = _current_service_password(
         db,

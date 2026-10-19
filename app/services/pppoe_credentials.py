@@ -183,6 +183,14 @@ _ENDED_STATUSES = _INHERITABLE_STATUSES | {
 }
 
 
+def _is_live_binding(db: Session, credential: AccessCredential) -> bool:
+    """True when the credential serves a service that has not ended."""
+    if credential.subscription_id is None:
+        return True
+    bound = db.get(Subscription, credential.subscription_id)
+    return bound is None or bound.status not in _ENDED_STATUSES
+
+
 def _inherit_enabled(db: Session) -> bool:
     return _resolve_radius_setting(db, "pppoe_credential_on_new_service") == "inherit"
 
@@ -516,10 +524,7 @@ def ensure_pppoe_credential(
                     live = [
                         c
                         for c in existing_query.with_for_update().all()
-                        if c.subscription_id is None
-                        or db.get(Subscription, c.subscription_id) is None
-                        or db.get(Subscription, c.subscription_id).status
-                        not in _ENDED_STATUSES
+                        if _is_live_binding(db, c)
                     ]
                     if len(candidates) == 1 and not live:
                         inherited = candidates[0]

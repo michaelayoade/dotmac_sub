@@ -347,6 +347,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "A subscription is the service record, not an invoice or an access move.",
             "Creating a subscription requires the subscription:create permission.",
+            "A service login and password typed here are kept for this service and used at activation. Changing them later needs the subscription:credential:update permission, updates RADIUS, and disconnects the live session only after RADIUS accepts the change.",
         ),
         route_templates=("/admin/catalog/subscriptions/new",),
     ),
