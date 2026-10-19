@@ -343,9 +343,9 @@
       "id": "SEC-PPPOE-REVEAL-SCHEMA",
       "kind": "schema",
       "paths": [
-        "alembic/versions/696_subscription_credential_reveal.py"
+        "alembic/versions/695_subscription_credential_reveal.py"
       ],
-      "reason": "Security correction D10 (Michael approved 2026-10-19): migration 696 registers the dedicated subscription:credential:reveal permission so revealing a stored PPPoE service password is no longer gated by customer:read. Permission row only, UI-assignable, no role grants, downgrade refuses while grants exist.",
+      "reason": "Security correction D10 (Michael approved 2026-10-19): migration 695 registers the dedicated subscription:credential:reveal permission so revealing a stored PPPoE service password is no longer gated by customer:read. Permission row only, UI-assignable, no role grants, downgrade refuses while grants exist.",
       "approved_by": "michaelayoade"
     },
     {
