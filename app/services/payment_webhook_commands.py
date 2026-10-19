@@ -34,6 +34,7 @@ from app.services.account_credit_deposits import (
     DepositEligibilityError,
     SettleAccountCreditDepositCommand,
 )
+from app.services.billing.starter_policies import starter_ledger_live_enabled
 from app.services.billing.starter_settlement import (
     StarterSettlementError,
     StarterSettlementResult,
@@ -59,7 +60,6 @@ from app.services.prepaid_period_purchases import (
     SettleVerifiedPrepaidPeriodPurchaseCommand,
     stage_verified_prepaid_period_purchase,
 )
-from app.services.billing.starter_policies import starter_ledger_live_enabled
 from app.services.topup_intents import (
     COMPLETION_SCOPE,
     CompleteTopupIntentCommand,
