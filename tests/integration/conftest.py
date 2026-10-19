@@ -186,6 +186,7 @@ def cloned_database(
             replace(
                 app_config.settings,
                 database_url=clone.render_as_string(hide_password=False),
+                migration_database_url=clone.render_as_string(hide_password=False),
             ),
         )
         return clone

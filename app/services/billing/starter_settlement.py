@@ -45,9 +45,11 @@ from dotmac_payments import (
     get_payment_intent_v1,
     record_confirmation,
 )
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, StarterInvoiceLink
+from app.models.event_store import EventStore
 from app.schemas.audit import AuditEventCreate
 from app.services.audit import AuditEvents
 from app.services.billing.starter_policies import (
@@ -99,6 +101,29 @@ def _funding_lane(policies: StarterSettlementPolicies) -> SettlementFundingLane:
             "Settlement funding lane is not a Starter funding lane",
             funding_lane=policies.funding_lane,
         ) from exc
+
+
+def _access_signal_already_emitted(
+    db: Session, invoice_id: UUID, confirmation_id: UUID
+) -> bool:
+    """Whether this confirmation's access signal was already recorded.
+
+    Keyed on the Starter confirmation identity carried in the original
+    emission payload, so an exact provider-evidence replay reuses the
+    first signal instead of producing a second one (ADR 0032).
+    """
+
+    existing = db.execute(
+        select(EventStore.id)
+        .where(
+            EventStore.event_type == EventType.payment_received.value,
+            EventStore.invoice_id == invoice_id,
+            EventStore.payload["starter_confirmation_id"].astext
+            == str(confirmation_id),
+        )
+        .limit(1)
+    ).first()
+    return existing is not None
 
 
 def settle_starter_invoice_payment(
@@ -233,41 +258,44 @@ def settle_starter_invoice_payment(
     # Same public event the legacy lane emits, minus the legacy payment
     # identity: enforcement, arrangements, and lifecycle handlers key off
     # account/invoice/amount, and receipt rendering simply stays
-    # unresolved until the Starter receipt surface lands.
-    emit_event(
-        db,
-        EventType.payment_received,
-        {
-            "amount": str(confirmed.amount),
-            "currency": invoice.currency,
-            "invoice_id": str(invoice.id),
-            "status": "succeeded",
-            "settlement_lane": "starter",
-            "starter_confirmation_id": str(confirmation.id),
-            "starter_settlement_id": str(settlement.id),
-        },
-        account_id=invoice.account_id,
-        invoice_id=invoice.id,
-    )
-    AuditEvents.stage(
-        db,
-        AuditEventCreate(
-            action="starter_invoice_settlement",
-            entity_type="invoice",
-            entity_id=str(invoice.id),
-            metadata_={
+    # unresolved until the Starter receipt surface lands. Emission is
+    # exactly-once per confirmation: an exact replay returns the same
+    # Starter identities without a second access signal or audit row.
+    if not _access_signal_already_emitted(db, invoice.id, confirmation.id):
+        emit_event(
+            db,
+            EventType.payment_received,
+            {
+                "amount": str(confirmed.amount),
+                "currency": invoice.currency,
+                "invoice_id": str(invoice.id),
+                "status": "succeeded",
                 "settlement_lane": "starter",
-                "intent_reference": intent_reference,
-                "external_reference": external_reference,
                 "starter_confirmation_id": str(confirmation.id),
                 "starter_settlement_id": str(settlement.id),
-                "starter_document_id": str(link.document_id),
-                "allocated": str(confirmed.amount),
-                "collectible_after": str(collectible),
-                "currency": invoice.currency,
             },
-        ),
-    )
+            account_id=invoice.account_id,
+            invoice_id=invoice.id,
+        )
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                action="starter_invoice_settlement",
+                entity_type="invoice",
+                entity_id=str(invoice.id),
+                metadata_={
+                    "settlement_lane": "starter",
+                    "intent_reference": intent_reference,
+                    "external_reference": external_reference,
+                    "starter_confirmation_id": str(confirmation.id),
+                    "starter_settlement_id": str(settlement.id),
+                    "starter_document_id": str(link.document_id),
+                    "allocated": str(confirmed.amount),
+                    "collectible_after": str(collectible),
+                    "currency": invoice.currency,
+                },
+            ),
+        )
     db.flush()
     return StarterSettlementResult(
         confirmation_id=confirmation.id,

@@ -2138,6 +2138,7 @@ class StarterInvoiceLink(Base):
     obligation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     source_fact_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    issued_fact_version: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -2177,6 +2178,52 @@ class StarterInvoiceLineLink(Base):
     )
 
     invoice_line = relationship("InvoiceLine")
+
+
+class StarterCreditNoteLink(Base):
+    """Structural identity link from a Sub credit note to its Starter document.
+
+    Thin-client credit issuance records the Starter billing account and
+    credit document identities returned by the pinned ``dotmac-billing``
+    receipt. Identity only (ADR 0007); balances and document facts are
+    read from Starter. Retires with the legacy CreditNote writer at the
+    cutover seal.
+    """
+
+    __tablename__ = "starter_credit_note_links"
+    __table_args__ = (
+        UniqueConstraint("credit_note_id", name="uq_starter_credit_note_link_note"),
+        UniqueConstraint("tenant_id", "id", name="uq_starter_credit_note_link_scope"),
+        UniqueConstraint("document_id", name="uq_starter_credit_note_link_document"),
+        Index(
+            "ix_starter_credit_note_links_billing_account",
+            "billing_account_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    credit_note_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("credit_notes.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    original_document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    source_fact_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    issued_fact_version: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    credit_note = relationship("CreditNote")
 
 
 class PaymentAllocation(Base):

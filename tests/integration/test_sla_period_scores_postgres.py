@@ -68,6 +68,7 @@ def _temporary_database(prefix: str) -> Iterator[URL]:
     app_config.settings = replace(
         original,
         database_url=target.render_as_string(hide_password=False),
+        migration_database_url=target.render_as_string(hide_password=False),
     )
     try:
         yield target

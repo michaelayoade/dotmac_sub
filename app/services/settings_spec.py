@@ -5857,6 +5857,23 @@ SETTINGS_SPECS: list[SettingSpec] = [
 # change them is apply_admin_settings_form_updates (control:settings:write),
 # which audits every write. Read only through
 # app.services.sole_approver_exception.
+# D1 hold (Michael, 2026-10-19): the Starter live slice (admin issuance
+# 6a/multi-line and Starter settlement) stays dark until one deliberate
+# switch decision. Owner-command-only so every change is audited through
+# apply_admin_settings_form_updates (control:settings:write).
+SETTINGS_SPECS.append(
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_ledger_live_enabled",
+        env_var=None,
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Starter ledger live (issue and settle eligible postpaid invoices through Starter)",
+        inherits=False,
+        owner_command_only=True,
+    )
+)
+
 SETTINGS_SPECS.extend(
     [
         SettingSpec(

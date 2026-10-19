@@ -38,11 +38,26 @@ class ListenerHealthReason(StrEnum):
     MALFORMED = "malformed"
 
 
+@dataclass(frozen=True, slots=True)
+class ListenerObservationIdentity:
+    """Coordinates from one challenged listener reply; no health/transport fields."""
+
+    generation: UUID
+    observed_monotonic: float
+
+
 @dataclass(frozen=True)
 class ListenerReadiness:
     reason: ListenerHealthReason
     generation: UUID
     observed_monotonic: float
+
+    @property
+    def observation_identity(self) -> ListenerObservationIdentity | None:
+        """The existing zero generation marks synthetic local failure, not a reply."""
+        if self.generation.int == 0:
+            return None
+        return ListenerObservationIdentity(self.generation, self.observed_monotonic)
 
     @property
     def ready(self) -> bool:

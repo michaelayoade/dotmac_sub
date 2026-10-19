@@ -61,12 +61,18 @@ def queue_huawei_olt_status_poll(
     olt_id: str,
     *,
     source: str = "network.ont_runtime_status",
+    expires: int | None = None,
 ) -> QueueDispatchResult:
-    """Publish one retry-safe infrastructure observation poll."""
+    """Publish one retry-safe infrastructure observation poll.
+
+    ``expires`` bounds the message to the parent's interval so a backlogged
+    inventory worker discards stale fan-out children instead of replaying them.
+    """
     return enqueue_task(
         HUAWEI_OLT_STATUS_TASK,
         args=[str(olt_id)],
-        queue="ingestion",
+        queue="inventory",
+        expires=expires,
         correlation_id=f"ont-status-refresh:{olt_id}",
         source=source,
     )

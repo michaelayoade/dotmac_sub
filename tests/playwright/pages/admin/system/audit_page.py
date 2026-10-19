@@ -42,11 +42,13 @@ class AuditPage(BasePage):
 
     def filter_by_action(self, action: str) -> None:
         """Filter by action type."""
-        self.page.get_by_label("Action").select_option(action)
+        self.page.get_by_label("Action").fill(action)
+        self.page.get_by_role("button", name="Apply filters").click()
 
     def filter_by_entity(self, entity_type: str) -> None:
         """Filter by entity type."""
-        self.page.get_by_label("Entity").select_option(entity_type)
+        self.page.get_by_label("Module").select_option(entity_type)
+        self.page.get_by_role("button", name="Apply filters").click()
 
     def filter_by_date_range(self, start: str, end: str) -> None:
         """Filter by date range."""
