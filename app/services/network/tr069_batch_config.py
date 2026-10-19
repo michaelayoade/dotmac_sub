@@ -381,12 +381,11 @@ class Tr069ConfigBatch:
             # Decrypt password if encrypted
             decrypted_password = None
             if wifi_password:
-                try:
-                    from app.services.credential_crypto import decrypt_credential
+                from app.services.credential_crypto import (
+                    decrypt_stored_secret_or_none,
+                )
 
-                    decrypted_password = decrypt_credential(wifi_password)
-                except Exception:
-                    decrypted_password = str(wifi_password)
+                decrypted_password = decrypt_stored_secret_or_none(wifi_password)
 
             batch.add_wifi_config(
                 ssid=wifi_ssid,

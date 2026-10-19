@@ -544,7 +544,7 @@ def test_olt_omci_pppoe_resolves_password_ref():
     olt = _StubOltAdapter()
     ctx = _ctx(
         olt_adapter=olt,
-        resolve_secret=lambda ref: "PLAIN_PW" if ref == "bao://pw" else ref,
+        resolve_secret=lambda ref: "PLAIN_PW" if ref == "stored-ref-pw" else ref,
     )
     plan = _plan(
         OltOmciPppoe(
@@ -553,7 +553,7 @@ def test_olt_omci_pppoe_resolves_password_ref():
             ip_index=1,
             vlan=203,
             username="100024456",
-            password_ref="bao://pw",
+            password_ref="stored-ref-pw",
         )
     )
     apply_plan(plan, ctx)
@@ -679,7 +679,7 @@ def test_acs_pppoe_pushes_six_params_including_resolved_password():
     acs = _StubAcsClient()
     ctx = _ctx(
         acs_client=acs,
-        resolve_secret=lambda ref: "PW_RESOLVED" if ref == "bao://pw" else ref,
+        resolve_secret=lambda ref: "PW_RESOLVED" if ref == "stored-ref-pw" else ref,
     )
     plan = _plan(
         AcsSetPppoe(
@@ -687,7 +687,7 @@ def test_acs_pppoe_pushes_six_params_including_resolved_password():
             wcd_index=1,
             instance_index=1,
             username="100024456",
-            password_ref="bao://pw",
+            password_ref="stored-ref-pw",
             vlan=203,
         )
     )
@@ -721,9 +721,9 @@ def test_acs_set_wifi_password_pushes_resolved_psk_and_records_redacted():
     acs = _StubAcsClient()
     ctx = _ctx(
         acs_client=acs,
-        resolve_secret=lambda ref: "ACTUAL_PSK" if ref == "bao://wifi" else ref,
+        resolve_secret=lambda ref: "ACTUAL_PSK" if ref == "stored-ref-wifi" else ref,
     )
-    plan = _plan(AcsSetWifiPassword(device_id="dev", password_ref="bao://wifi"))
+    plan = _plan(AcsSetWifiPassword(device_id="dev", password_ref="stored-ref-wifi"))
     result = apply_plan(plan, ctx)
 
     # The pushed value is the resolved plaintext...
@@ -757,14 +757,16 @@ def test_acs_set_wifi_config_batches_fields_and_resolves_password():
                 paths=paths,
                 enabled=False,
                 ssid="DOTMAC",
-                password_ref="bao://wifi",
+                password_ref="stored-ref-wifi",
                 channel=6,
                 security_mode="WPA2-Personal",
             )
         ),
         _ctx(
             acs_client=acs,
-            resolve_secret=lambda ref: "ACTUAL_PSK" if ref == "bao://wifi" else ref,
+            resolve_secret=lambda ref: (
+                "ACTUAL_PSK" if ref == "stored-ref-wifi" else ref
+            ),
         ),
     )
 
@@ -937,7 +939,7 @@ def test_resolver_exception_during_acs_psk_push_maps_to_acs_write_faulted():
         raise RuntimeError("OpenBao 503")
 
     ctx = _ctx(acs_client=acs, resolve_secret=_exploding_resolver)
-    plan = _plan(AcsSetWifiPassword(device_id="dev", password_ref="bao://wifi"))
+    plan = _plan(AcsSetWifiPassword(device_id="dev", password_ref="stored-ref-wifi"))
     result = apply_plan(plan, ctx)
 
     assert result.success is False
@@ -960,7 +962,7 @@ def test_resolver_none_return_during_pppoe_push_maps_to_acs_write_faulted():
             wcd_index=1,
             instance_index=1,
             username="100024456",
-            password_ref="bao://pppoe",
+            password_ref="stored-ref-pppoe",
             vlan=203,
         )
     )
