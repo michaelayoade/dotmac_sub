@@ -764,7 +764,9 @@ def test_acs_set_wifi_config_batches_fields_and_resolves_password():
         ),
         _ctx(
             acs_client=acs,
-            resolve_secret=lambda ref: "ACTUAL_PSK" if ref == "stored-ref-wifi" else ref,
+            resolve_secret=lambda ref: (
+                "ACTUAL_PSK" if ref == "stored-ref-wifi" else ref
+            ),
         ),
     )
 
