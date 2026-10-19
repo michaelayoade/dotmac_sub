@@ -192,7 +192,11 @@ def test_the_enum_becomes_open_text_and_keeps_every_row(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
     config = _alembic_config()
 
@@ -241,7 +245,11 @@ def test_the_downgrade_restores_the_enum(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
     config = _alembic_config()
 

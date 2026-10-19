@@ -370,7 +370,11 @@ def test_postgres_upgrades_revision_423_through_current_head(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
     config = _alembic_config()
 

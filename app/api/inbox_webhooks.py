@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.webhook_observation import webhook_observation
@@ -316,5 +317,10 @@ async def receive_meta_whatsapp_webhook(
                 error_code="whatsapp_consequence_failed",
                 error_detail=type(exc).__name__,
             )
+            if isinstance(exc, OperationalError):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="WhatsApp processing is temporarily unavailable.",
+                ) from exc
             raise
         return consequence

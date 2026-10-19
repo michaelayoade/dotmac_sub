@@ -360,6 +360,7 @@ class QueueStrategyAdapter:
             "bandwidth",
             "monitoring",
             "ingestion",
+            "inventory",
         ]:
             state = self._update_queue_health(queue_name)
             result[queue_name] = {

@@ -82,7 +82,11 @@ def test_524_preserves_unknown_history_and_defaults_only_future_rows(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render(isolated_database)),
+        replace(
+            app_config.settings,
+            database_url=_render(isolated_database),
+            migration_database_url=_render(isolated_database),
+        ),
     )
     config = _config()
     command.upgrade(config, PREDECESSOR)

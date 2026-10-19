@@ -59,7 +59,7 @@ def test_narrow_lifecycle_permissions_only_authorize_their_command(
     assert canceled.value.status_code == 403
 
 
-def test_catalog_write_authorizes_every_lifecycle_command(monkeypatch) -> None:
+def test_catalog_write_no_longer_authorizes_lifecycle_commands(monkeypatch) -> None:
     request = SimpleNamespace(
         state=SimpleNamespace(auth={"principal_id": "operator-2"})
     )
@@ -70,39 +70,10 @@ def test_catalog_write_authorizes_every_lifecycle_command(monkeypatch) -> None:
     )
 
     for kind in SubscriptionCommandKind:
-        catalog_routes._assert_lifecycle_command_permission(request, object(), kind)
-
-
-def test_lifecycle_preview_accepts_reader_or_exact_action_permission(
-    monkeypatch,
-) -> None:
-    request = SimpleNamespace(
-        state=SimpleNamespace(auth={"principal_id": "operator-preview"})
-    )
-    granted = {"subscription:activate"}
-    monkeypatch.setattr(
-        catalog_routes,
-        "has_permission",
-        lambda auth, db, permission: permission in granted,
-    )
-
-    catalog_routes._assert_lifecycle_preview_permission(
-        request,
-        object(),
-        SubscriptionCommandKind.restore,
-    )
-    with pytest.raises(HTTPException) as suspended:
-        catalog_routes._assert_lifecycle_preview_permission(
-            request,
-            object(),
-            SubscriptionCommandKind.suspend,
-        )
-    assert suspended.value.status_code == 403
-
-    granted.clear()
-    granted.add("catalog:read")
-    for kind in SubscriptionCommandKind:
-        catalog_routes._assert_lifecycle_preview_permission(request, object(), kind)
+        with pytest.raises(HTTPException) as denied:
+            catalog_routes._assert_lifecycle_command_permission(request, object(), kind)
+        assert denied.value.status_code == 403
+        assert denied.value.detail == "Forbidden"
 
 
 def test_legacy_bulk_adapters_delegate_without_direct_lifecycle_writes() -> None:

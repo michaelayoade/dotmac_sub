@@ -51,6 +51,14 @@ class PollerDeviceFailure:
     services_without_live_bandwidth: int
 
 
+@dataclass(frozen=True, slots=True)
+class PollerObservationIdentity:
+    """Native cycle coordinates only; not an authenticated deployment identity."""
+
+    poll_count: int
+    observed_at: datetime
+
+
 @dataclass(frozen=True)
 class PollerSnapshot:
     observed_at: datetime
@@ -60,6 +68,18 @@ class PollerSnapshot:
     devices_ok: int
     devices_failing: int
     device_failures: tuple[PollerDeviceFailure, ...] = ()
+
+    @property
+    def observation_identity(self) -> PollerObservationIdentity:
+        """Retain the source timestamp verbatim, independently of outcome/freshness."""
+        return PollerObservationIdentity(self.poll_count, self.observed_at)
+
+
+def poller_observation_identity(
+    *, snapshot: PollerSnapshot | None
+) -> PollerObservationIdentity | None:
+    """Missing/malformed/unavailable source snapshots have no native coordinates."""
+    return None if snapshot is None else snapshot.observation_identity
 
 
 def _nonnegative_count(value: object) -> int:

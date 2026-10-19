@@ -29,6 +29,7 @@ CLASSIFICATIONS: Final[dict[str, tuple[str, str]]] = {
     "celery-worker-bandwidth": ("role", "celery-worker-bandwidth"),
     "celery-worker-billing": ("role", "celery-worker-billing"),
     "celery-worker-ingestion": ("role", "celery-worker-ingestion"),
+    "celery-worker-inventory": ("role", "celery-worker-inventory"),
     "celery-worker-monitoring": ("role", "celery-worker-monitoring"),
     "celery-worker-notifications": ("role", "celery-worker-notifications"),
     "celery-worker-notifications-immediate": (

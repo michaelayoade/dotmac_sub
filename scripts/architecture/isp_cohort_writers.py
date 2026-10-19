@@ -131,6 +131,7 @@ _FAMILY_PREFIXES: Final[tuple[tuple[str, EntryPointFamily], ...]] = (
     ("app/syslog/", EntryPointFamily.POLLER),
     ("scripts/", EntryPointFamily.CLI_SCRIPT),
     ("alembic/", EntryPointFamily.MIGRATION),
+    ("alembic_kernel_adoption/", EntryPointFamily.MIGRATION),
     ("app/", EntryPointFamily.APP_MODULE),
 )
 
@@ -138,7 +139,12 @@ _FAMILY_PREFIXES: Final[tuple[tuple[str, EntryPointFamily], ...]] = (
 #: root. `tests/` is excluded on purpose: a fixture that builds a Party is not
 #: a production writer, and counting fixtures would move the ratchet for
 #: reasons unrelated to the writer surface.
-SCAN_ROOTS: Final[tuple[str, ...]] = ("app", "scripts", "alembic")
+SCAN_ROOTS: Final[tuple[str, ...]] = (
+    "app",
+    "scripts",
+    "alembic",
+    "alembic_kernel_adoption",
+)
 
 #: Subtrees inside a scan root that are not part of the executable surface.
 #: `versions_archive` holds superseded migrations that Alembic's configured

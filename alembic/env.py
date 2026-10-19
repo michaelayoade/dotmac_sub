@@ -60,7 +60,11 @@ from app.models import (  # noqa: F401
 
 config = context.config
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# ConfigParser interpolates percent signs; escape only at this write boundary.
+# Both offline SQL generation and the online engine read the original URL back.
+config.set_main_option(
+    "sqlalchemy.url", settings.alembic_database_url.replace("%", "%%")
+)
 
 # Installed BEFORE the revision map is built. A composed module's migration
 # resolves its `depends_on` from these bindings at script-load time, so an

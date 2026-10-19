@@ -365,14 +365,24 @@ def test_detector_sees_an_adapter_bypassing_its_owner(tmp_path: Path) -> None:
     assert counts.get("api_route|app/api/customers.py") == 1
 
 
-def test_detector_sees_raw_sql_against_a_cohort_table(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("path", "family"),
+    [
+        ("scripts/one_off/repair.py", "cli_script"),
+        ("alembic/versions/repair.py", "migration"),
+        ("alembic_kernel_adoption/versions/repair.py", "migration"),
+    ],
+)
+def test_detector_sees_raw_sql_against_a_cohort_table(
+    tmp_path: Path, path: str, family: str
+) -> None:
     _synthetic_tree(
         tmp_path,
-        "scripts/one_off/repair.py",
+        path,
         "SQL = 'UPDATE subscribers SET billing_mode = :mode WHERE id = :id'\n",
     )
     counts = _counts(tmp_path)
-    assert counts.get("cli_script|scripts/one_off/repair.py") == 1
+    assert counts == {f"{family}|{path}": 1}
 
 
 @pytest.mark.parametrize(

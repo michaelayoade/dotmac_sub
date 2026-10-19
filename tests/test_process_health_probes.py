@@ -9,8 +9,8 @@ import socket
 import time
 from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from dataclasses import FrozenInstanceError, replace
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TypeVar
 from unittest.mock import AsyncMock, MagicMock
@@ -30,13 +30,16 @@ from app.services.poller_health import (
     PollerFailureCategory,
     PollerHealthReason,
     PollerLivenessQuery,
+    PollerObservationIdentity,
     PollerSnapshot,
     decode_poller_health,
+    poller_observation_identity,
     poller_platform_health_observation,
 )
 from app.syslog import health as syslog_health
 from app.syslog.health import (
     ListenerHealthReason,
+    ListenerObservationIdentity,
     ListenerProbeQuery,
     ListenerReadiness,
     bind_health_socket,
@@ -299,6 +302,9 @@ def test_healthy_idle_real_challenge_and_cleanup(tmp_path: Path) -> None:
         result = await query_listener_readiness(query=ListenerProbeQuery(path))
         assert result.ready
         assert result.generation == listener._generation
+        assert result.observation_identity == ListenerObservationIdentity(
+            listener._generation, result.observed_monotonic
+        )
         assert listener._event_count == 0
         assert listener._ont_event_count == 0
         await listener.stop()
@@ -415,6 +421,7 @@ def test_probe_rejects_bad_or_prior_response(
         try:
             result = await query_listener_readiness(query=ListenerProbeQuery(path))
             assert not result.ready
+            assert result.observation_identity is None
         finally:
             server.close()
             await server.wait_closed()
@@ -929,3 +936,91 @@ def test_syslog_cli_can_emit_platform_health_observation(
             ]
         )
     assert error.value.code == 2
+
+
+def test_poller_native_identity_retains_exact_source_coordinates() -> None:
+    observed = NOW.astimezone(tz=timezone(timedelta(hours=1)))
+    snapshot = replace(_snapshot(), observed_at=observed)
+    identity = snapshot.observation_identity
+    assert identity == PollerObservationIdentity(snapshot.poll_count, observed)
+    assert identity.observed_at is observed
+    assert poller_observation_identity(snapshot=snapshot) == identity
+    assert (
+        replace(snapshot, devices_failing=2, devices_ok=0).observation_identity
+        == identity
+    )
+    assert replace(snapshot, cycle_seconds=99).observation_identity == identity
+    assert (
+        replace(snapshot, poll_count=snapshot.poll_count + 1).observation_identity
+        != identity
+    )
+    assert (
+        replace(
+            snapshot, observed_at=observed + timedelta(seconds=1)
+        ).observation_identity
+        != identity
+    )
+    with pytest.raises(FrozenInstanceError):
+        identity.poll_count = 99  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("raw", [b"", b"{}", b"not-json"])
+def test_missing_or_malformed_poller_source_has_no_native_identity(raw: bytes) -> None:
+    assert poller_observation_identity(snapshot=None) is None
+    assert poller_observation_identity(snapshot=decode_poller_health(raw=raw)) is None
+
+
+def test_unavailable_poller_reader_has_no_native_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(poller_health, "_get_redis", lambda: None)
+    assert (
+        poller_observation_identity(snapshot=poller_health.load_poller_health()) is None
+    )
+
+
+@pytest.mark.parametrize("age", [-1, 0, 61])
+def test_native_poller_identity_does_not_classify_freshness(age: int) -> None:
+    snapshot = _snapshot(observed_at=NOW - timedelta(seconds=age))
+    assert snapshot.observation_identity == PollerObservationIdentity(
+        12, snapshot.observed_at
+    )
+
+
+def test_listener_native_identity_is_independent_of_health_reason() -> None:
+    generation = uuid4()
+    observed = 123.5
+    readiness = ListenerReadiness(ListenerHealthReason.READY, generation, observed)
+    identity = readiness.observation_identity
+    assert identity == ListenerObservationIdentity(generation, observed)
+    assert identity is not None
+    for reason in ListenerHealthReason:
+        assert replace(readiness, reason=reason).observation_identity == identity
+    assert replace(readiness, generation=uuid4()).observation_identity != identity
+    assert (
+        replace(readiness, observed_monotonic=observed + 1).observation_identity
+        != identity
+    )
+    with pytest.raises(FrozenInstanceError):
+        identity.observed_monotonic = 999  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "reason", [ListenerHealthReason.UNAVAILABLE, ListenerHealthReason.MALFORMED]
+)
+def test_synthetic_listener_failure_has_no_native_identity(
+    reason: ListenerHealthReason,
+) -> None:
+    readiness = ListenerReadiness(reason, UUID(int=0), 123.5)
+    assert readiness.observation_identity is None
+    assert replace(readiness, observed_monotonic=999).observation_identity is None
+
+
+def test_missing_listener_endpoint_has_no_native_identity(tmp_path: Path) -> None:
+    readiness = _run(
+        query_listener_readiness(
+            query=ListenerProbeQuery(tmp_path / "missing" / "health.sock")
+        )
+    )
+    assert readiness.reason is ListenerHealthReason.UNAVAILABLE
+    assert readiness.observation_identity is None

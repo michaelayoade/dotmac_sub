@@ -62,7 +62,7 @@ DOMAIN = DomainSOT(
                         name="component runtime observation",
                         owner="runtime.bandwidth_poller_health",
                         kind=AuthorityKind.OBSERVATION,
-                        source="Incumbent POLLER_HEALTH_KEY JSON published by the polling loop after successful or caught-failed cycles; Redis is transport, not collection-success authority.",
+                        source="Incumbent POLLER_HEALTH_KEY JSON published by the polling loop after successful or caught-failed cycles; Redis is transport, not collection-success authority. Native observation coordinates are the retained poll_count and observed_at; a missing snapshot exposes no identity.",
                     ),
                     AuthorityInput(
                         name="bounded probe freshness policy",
@@ -141,7 +141,7 @@ DOMAIN = DomainSOT(
                         name="component runtime observation",
                         owner="runtime.syslog_receiver_health",
                         kind=AuthorityKind.OBSERVATION,
-                        source="Actual UDP bind/nonclosing transport and monotonic progress of the same listener event loop; random generation and request challenge prevent cached prior-process responses.",
+                        source="Actual UDP bind/nonclosing transport and monotonic progress of the same listener event loop; random generation and request challenge prevent cached prior-process responses. Native observation coordinates retain generation and observed_monotonic independently of readiness reason; zero-generation synthetic failures expose no identity.",
                     ),
                     AuthorityInput(
                         name="bounded probe freshness policy",

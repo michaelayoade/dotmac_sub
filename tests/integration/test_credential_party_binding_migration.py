@@ -65,6 +65,7 @@ def migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
         replace(
             app_config.settings,
             database_url=target.render_as_string(hide_password=False),
+            migration_database_url=target.render_as_string(hide_password=False),
         ),
     )
     try:

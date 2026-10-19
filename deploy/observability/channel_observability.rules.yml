@@ -241,6 +241,27 @@ groups:
             draining — a stalled or under-provisioned worker. This is the
             failure mode that, on restart, dumps a backlog all at once.
 
+      # The ingestion and inventory queues carry periodic messages that expire
+      # after one interval. A sustained backlog there means the consumer is
+      # saturated and tasks are being discarded as "revoked" (2026-10-19 RCA:
+      # the queue held ~80 messages while the radius probe went silent). The
+      # generic >1000 rule above can never see that.
+      - alert: CeleryIngestionQueueBacklog
+        expr: observability_state{domain="celery_queues",signal="queue_depth",scope=~"ingestion|inventory"} > 30
+        for: 15m
+        labels:
+          severity: warning
+          area: ingestion
+          owner: platform-operations
+        annotations:
+          summary: "Celery queue {{ $labels.scope }} is saturated"
+          description: >
+            Queue {{ $labels.scope }} depth has stayed above 30 for 15 minutes.
+            Its periodic messages expire after one interval, so a standing
+            backlog means tasks are being discarded unrun. Check worker
+            concurrency and long-running tasks before relaxing any radius or
+            usage alert.
+
       - alert: CeleryQueueObserverDegraded
         expr: observability_snapshot_status{domain="celery_queues",status="degraded"} == 1
         for: 10m
