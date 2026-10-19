@@ -410,7 +410,7 @@ owner_material = "MIGRATION_DATABASE_URL"
 # local lineage plus the nine pinned module migration trees (2026-10-16);
 # tests/architecture/test_deployment_descriptor.py re-derives this set in CI.
 expected_heads = [
-    "692_starter_invoice_line_links",
+    "696_subscription_credential_reveal",
     "bi_0011_settlement_earmarks",
     "cl_0001_collections",
     "ib_0001_conversations",
