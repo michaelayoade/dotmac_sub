@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, PendingRollbackError
 
 from app.models.ai_intake import (
     AiIntakeConfig,
@@ -673,6 +673,10 @@ def test_ai_intake_database_failure_escapes_owner_for_rollback_and_retry(
 
 def test_ai_intake_task_retries_transient_database_failures():
     assert OperationalError in team_inbox_tasks.process_ai_intake_sessions.autoretry_for
+    assert (
+        PendingRollbackError
+        in team_inbox_tasks.process_ai_intake_sessions.autoretry_for
+    )
 
 
 def test_invalid_classifier_output_asks_without_handoff(db_session, monkeypatch):
