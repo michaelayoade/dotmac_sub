@@ -213,3 +213,68 @@ def test_application_name_is_sanitised_and_optional() -> None:
     )
     assert resolve_application_name("bad name;drop") == "bad_name_drop"
     assert len(resolve_application_name("x" * 200) or "") == 63
+
+
+def test_status_dispatch_lookup_failure_cannot_fail_the_fanout(monkeypatch) -> None:
+    from contextlib import contextmanager
+    from uuid import uuid4
+
+    from app.services.network import ont_runtime_status
+    from app.services.queue_adapter import QueueDispatchResult
+    from app.tasks import ont_runtime_status as status_tasks
+
+    olt_id = uuid4()
+
+    class _Broken:
+        def query(self, *_a: object) -> object:
+            raise RuntimeError("lookup session poisoned")
+
+    class _Scalars:
+        def all(self) -> list[object]:
+            return [olt_id]
+
+    class _MainDb:
+        def query(self, *_a: object) -> object:  # would fail if shared
+            raise AssertionError("fan-out session must not run the lookup")
+
+        def scalars(self, *_a: object) -> _Scalars:
+            return _Scalars()
+
+    @contextmanager
+    def read_session():
+        yield _Broken()
+
+    @contextmanager
+    def session():
+        yield _MainDb()
+
+    expiries: list[int | None] = []
+
+    def fake_queue(olt: str, *, source: str, expires: int | None = None):
+        expiries.append(expires)
+        return QueueDispatchResult(queued=True)
+
+    monkeypatch.setattr(status_tasks.db_session_adapter, "read_session", read_session)
+    monkeypatch.setattr(status_tasks.db_session_adapter, "session", session)
+    monkeypatch.setattr(ont_runtime_status, "queue_huawei_olt_status_poll", fake_queue)
+
+    result = status_tasks.dispatch_huawei_ont_status.run()
+
+    assert result == {"queued": 1, "failed": 0}
+    assert expiries == [300]  # documented default, fan-out unaffected
+
+
+@pytest.mark.parametrize(
+    "service", ["celery-worker-ingestion", "celery-worker-inventory"]
+)
+def test_compose_caps_worker_db_pool(service: str) -> None:
+    worker = _service_block((ROOT / "docker-compose.yml").read_text(), service)
+    assert '      DB_POOL_SIZE: "2"\n' in worker
+    assert '      DB_MAX_OVERFLOW: "1"\n' in worker
+
+
+def test_inventory_worker_has_no_object_storage_credentials() -> None:
+    worker = _service_block(
+        (ROOT / "docker-compose.yml").read_text(), "celery-worker-inventory"
+    )
+    assert "S3_" not in worker

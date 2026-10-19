@@ -79,12 +79,14 @@ def dispatch_huawei_ont_status() -> dict[str, int]:
     )
     from app.services.scheduler_config import fanout_child_expires_seconds
 
-    with db_session_adapter.session() as db:
+    # Own session: a failed interval lookup must not poison the fan-out query.
+    with db_session_adapter.read_session() as lookup_db:
         child_expires = fanout_child_expires_seconds(
-            db,
+            lookup_db,
             "app.tasks.ont_runtime_status.dispatch_huawei_ont_status",
             default_interval_seconds=_DEFAULT_PARENT_INTERVAL_SECONDS,
         )
+    with db_session_adapter.session() as db:
         olt_ids = list(
             db.scalars(
                 select(OLTDevice.id).where(

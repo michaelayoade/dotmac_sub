@@ -442,6 +442,8 @@ services:
       GIT_SHA: ${GIT_SHA:-}
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
       DB_APPLICATION_NAME: dotmac_sub_celery_worker_ingestion
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "1"
     env_file:
     - .env
     depends_on:
@@ -480,17 +482,14 @@ services:
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       REDIS_URL: ${REDIS_URL}
       VICTORIAMETRICS_URL: http://victoriametrics:8428
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
-      S3_REGION: ${S3_REGION:-us-east-1}
       OPENBAO_ADDR: ${OPENBAO_ADDR}
       OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
       DB_APPLICATION_NAME: dotmac_sub_celery_worker_inventory
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "1"
     env_file:
     - .env
     depends_on:

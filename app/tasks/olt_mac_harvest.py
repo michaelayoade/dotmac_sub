@@ -79,12 +79,14 @@ def run_olt_mac_harvest() -> dict[str, int]:
     from app.models.network import OLTDevice
     from app.services.scheduler_config import fanout_child_expires_seconds
 
-    with db_session_adapter.read_session() as db:
+    # Own session: a failed interval lookup must not poison the OLT query.
+    with db_session_adapter.read_session() as lookup_db:
         child_expires = fanout_child_expires_seconds(
-            db,
+            lookup_db,
             "app.tasks.olt_mac_harvest.run_olt_mac_harvest",
             default_interval_seconds=_DEFAULT_PARENT_INTERVAL_SECONDS,
         )
+    with db_session_adapter.read_session() as db:
         olt_ids = list(
             db.scalars(
                 select(OLTDevice.id)
