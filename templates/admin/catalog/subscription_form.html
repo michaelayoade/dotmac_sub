@@ -55,6 +55,11 @@
             {{ error }}
         </div>
         {% endif %}
+        {% if warning %}
+        <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300" role="alert">
+            {{ warning }}
+        </div>
+        {% endif %}
         {% if notice %}
         <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
             {{ notice }}
@@ -444,6 +449,7 @@
                             <option value="dynamic" {% if subscription.ipv4_method != 'permanent_static' %}selected{% endif %}>Dynamic IP</option>
                         </select>
                     </div>
+                    {% if is_new or can_update_credentials %}
                     <div>
                         <label for="login" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Login</label>
                         <input type="text" name="login" id="login" value="{{ subscription.login }}"
@@ -469,6 +475,9 @@
                             {% endif %}
                         </p>
                     </div>
+                    {% else %}
+                    <p class="text-xs text-slate-500">Changing the service login or password needs the subscription:credential:update permission.</p>
+                    {% endif %}
                     <div class="sm:col-span-2">
                         <label for="mac_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">MAC Address</label>
                         <input type="text" name="mac_address" id="mac_address" readonly value="{{ subscription.mac_address }}"

@@ -1350,6 +1350,7 @@ def disconnect_subscription_sessions(
     require_terminal: bool = False,
     authoritative_only: bool = False,
     refresh_test_access: bool = False,
+    login: str | None = None,
 ) -> int:
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
@@ -1363,7 +1364,10 @@ def disconnect_subscription_sessions(
     ):
         return 0
 
-    login = (subscription.login or "").strip()
+    # An explicit ``login`` targets sessions of that exact username (for example
+    # the name a credential edit just retired) and never the app-side rows.
+    explicit_login = (login or "").strip()
+    login = explicit_login or (subscription.login or "").strip()
     expected_framed_ip = str(framed_ip_address or "").strip()
 
     # Primary source: open radacct sessions by login. Keyed by session_id
@@ -1399,7 +1403,7 @@ def disconnect_subscription_sessions(
     # login changed after they started).
     legacy_sessions = (
         []
-        if authoritative_only
+        if authoritative_only or explicit_login
         else (
             db.query(RadiusAccountingSession)
             .filter(RadiusAccountingSession.subscription_id == subscription.id)

@@ -215,6 +215,10 @@ DEFAULT_PERMISSIONS = [
     ("subscription:create", "Create subscriptions"),
     ("subscription:update", "Update subscriptions"),
     (
+        "subscription:credential:update",
+        "Change a subscription's PPPoE service login and password",
+    ),
+    (
         "subscription:additional_ip:write",
         "Assign and remove additional subscription IP ranges",
     ),

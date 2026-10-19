@@ -52,6 +52,7 @@ from app.web.request_parsing import parse_form_data, parse_form_data_sync
 logger = logging.getLogger(__name__)
 
 ADDITIONAL_IP_WRITE_PERMISSION = "subscription:additional_ip:write"
+CREDENTIAL_UPDATE_PERMISSION = "subscription:credential:update"
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog", tags=["web-admin-catalog"])
 
@@ -754,7 +755,11 @@ def catalog_subscription_edit(
     context["can_manage_additional_ip"] = has_permission(
         auth, db, ADDITIONAL_IP_WRITE_PERMISSION
     )
+    context["can_update_credentials"] = has_permission(
+        auth, db, CREDENTIAL_UPDATE_PERMISSION
+    )
     context["notice"] = request.query_params.get("notice")
+    context["warning"] = request.query_params.get("warning")
     context["error"] = request.query_params.get("error") or context.get("error")
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
@@ -1389,18 +1394,22 @@ def catalog_subscription_update(
     subscription_id: str,
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission("subscription:update")),
 ):
+    may_update_credentials = has_permission(auth, db, CREDENTIAL_UPDATE_PERMISSION)
     result = web_catalog_subscription_workflows_service.handle_subscription_update_form(
         db,
         subscription_id=subscription_id,
         form=form,
         request=request,
         actor_id=_get_actor_id(request),
+        credential_update_allowed=may_update_credentials,
     )
     if result.get("redirect_url"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(cast(dict[str, Any], result["form_context"]))
+    context["can_update_credentials"] = may_update_credentials
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
