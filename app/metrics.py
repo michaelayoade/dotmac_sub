@@ -38,6 +38,11 @@ INTEGRATION_ROUTE_404 = Counter(
     "404 responses for registered integration routes",
     ["path"],
 )
+TR069_WEBHOOK_AUTH = Counter(
+    "tr069_webhook_auth_total",
+    "GenieACS webhook token checks by mode and outcome",
+    ["mode", "outcome"],
+)
 APPLICATION_EXCEPTIONS = Counter(
     "application_exceptions_total",
     "Unhandled application exceptions by bounded route and exception fingerprint",
