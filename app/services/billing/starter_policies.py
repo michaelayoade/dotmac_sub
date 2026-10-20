@@ -30,7 +30,9 @@ __all__ = [
     "collection_timing_for_billing_mode",
     "due_terms_code",
     "percent_to_fraction",
+    "StarterManualSettlementPolicies",
     "resolve_starter_billing_policies",
+    "resolve_starter_manual_settlement_policies",
     "resolve_starter_settlement_policies",
     "has_starter_invoice_link",
     "starter_ledger_live_enabled",
@@ -560,5 +562,44 @@ def resolve_starter_credit_policies(db: Session) -> StarterCreditPolicies:
         ),
         credit_correlation_template=_text(
             db, "starter_billing_credit_correlation_template"
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StarterManualSettlementPolicies:
+    """Resolved Starter manual-settlement policy surface (ADR 0031)."""
+
+    manual_intent_reference_template: str
+    manual_confirmation_source: str
+    manual_intent_provider_type: str
+    manual_intent_channel: str
+    manual_intent_expiry_hours: int
+
+    def manual_intent_reference(self, idempotency_key: str) -> str:
+        return _render_template(
+            self.manual_intent_reference_template,
+            "idempotency_key",
+            idempotency_key,
+            setting="starter_payments_manual_intent_reference_template",
+        )
+
+
+def resolve_starter_manual_settlement_policies(
+    db: Session,
+) -> StarterManualSettlementPolicies:
+    return StarterManualSettlementPolicies(
+        manual_intent_reference_template=_text(
+            db, "starter_payments_manual_intent_reference_template"
+        ),
+        manual_confirmation_source=_text(
+            db, "starter_payments_manual_confirmation_source"
+        ),
+        manual_intent_provider_type=_text(
+            db, "starter_payments_manual_intent_provider_type"
+        ),
+        manual_intent_channel=_text(db, "starter_payments_manual_intent_channel"),
+        manual_intent_expiry_hours=_positive_int(
+            db, "starter_payments_manual_intent_expiry_hours"
         ),
     )
