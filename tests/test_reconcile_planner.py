@@ -1045,7 +1045,10 @@ def test_tr069_wan_wrong_wcd_is_healed_on_desired_wcd_and_stale_child_deleted():
         ),
     )
     plan = compute_plan(desired, observed, "sweep")
-    add = next(a for a in plan.actions if isinstance(a, AcsAddObject))
+    adds = [a for a in plan.actions if isinstance(a, AcsAddObject)]
+    # WCD parent first (applier selects/creates it), then the PPP child.
+    assert adds[0].object_path.endswith("WANDevice.1.WANConnectionDevice")
+    add = adds[1]
     ppp = next(a for a in plan.actions if isinstance(a, AcsSetPppoe))
     nat = next(a for a in plan.actions if isinstance(a, AcsSetNatEnabled))
     assert add.object_path.endswith("WANConnectionDevice.2.WANPPPConnection")

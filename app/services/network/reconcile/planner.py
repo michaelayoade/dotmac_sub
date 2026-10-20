@@ -1520,6 +1520,16 @@ def _plan_acs_wan_ppp(
     # If ACS doesn't have a WAN PPP instance, addObject first.
     created = target_inst is None
     if target_inst is None:
+        # The WCD itself may not exist (management-only HG8546M). The applier
+        # selects the desired WCD if present and not management, else creates
+        # the parent and remaps the index for every downstream action.
+        actions.append(
+            AcsAddObject(
+                device_id=device_id,
+                object_path=("InternetGatewayDevice.WANDevice.1.WANConnectionDevice"),
+                wcd_index=desired.wan_pppoe_wcd_index,
+            )
+        )
         actions.append(
             AcsAddObject(
                 device_id=device_id,
@@ -1569,6 +1579,11 @@ def _plan_acs_wan_ppp(
                 username=desired.wan_pppoe_username or "",
                 password_ref=desired.wan_pppoe_password_ref or "",
                 vlan=desired.wan_vlan,
+                reset_on_apply=created
+                or _observed_differs(
+                    observed.acs.acs_observed_pppoe_username,
+                    desired.wan_pppoe_username,
+                ),
             )
         )
         drifts.append(

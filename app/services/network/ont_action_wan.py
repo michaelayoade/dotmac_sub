@@ -34,14 +34,17 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.services.genieacs_client import GenieACSError
+from app.services.genieacs_client import GenieACSError, GenieACSTaskQueuedError
 from app.services.network.ont_action_common import (
     ActionResult,
     detect_data_model_root,
     genieacs_error_result,
     get_ont_client_or_error,
+    get_ppp_credential_revision,
     persist_data_model_root,
+    ppp_credential_revision,
     set_and_verify,
+    set_ppp_credential_revision,
 )
 
 logger = logging.getLogger(__name__)
@@ -396,7 +399,7 @@ def _igd_wcd_is_management(wcd: dict[str, Any]) -> bool:
 
 
 def _select_igd_ppp_wcd(
-    device: dict[str, Any], root: str, requested_index: int
+    device: dict[str, Any], root: str, requested_index: int | None
 ) -> int | None:
     """Pick the WANConnectionDevice that may receive the internet PPP child.
 
@@ -407,7 +410,7 @@ def _select_igd_ppp_wcd(
     container is never adopted and an arbitrary lowest index is never used.
     """
     wcds = _igd_wcd_nodes(device, root)
-    if requested_index in wcds:
+    if requested_index is not None and requested_index in wcds:
         return requested_index
     usable = {i: n for i, n in sorted(wcds.items()) if not _igd_wcd_is_management(n)}
     for index, node in usable.items():
@@ -427,7 +430,7 @@ def _create_igd_wcd_parent(
     client: Any,
     device_id: str,
     root: str,
-    requested_index: int,
+    requested_index: int | None,
     wan_vlan: int | None,
 ) -> tuple[int | None, ActionResult | None]:
     """addObject on the WANConnectionDevice parent and read back the new index."""
@@ -456,7 +459,7 @@ def _create_igd_wcd_parent(
             },
         )
 
-    if _pending_wan_add_object(ont, requested_index, "wcd", wan_vlan):
+    if _pending_wan_add_object(ont, requested_index or 0, "wcd", wan_vlan):
         _refresh()
         return _waiting(
             "A WANConnectionDevice creation task is already pending for this ONT."
@@ -469,7 +472,7 @@ def _create_igd_wcd_parent(
             ont,
             wan_type="wcd",
             root=root,
-            instance_index=requested_index,
+            instance_index=requested_index or 0,
             wan_vlan=wan_vlan,
             object_path=parent_path,
         )
@@ -766,7 +769,7 @@ def set_pppoe_credentials(
     *,
     username: str,
     password: str,
-    instance_index: int = 1,
+    instance_index: int | None = 1,
     wan_vlan: int | None = None,
     connection_name: str = INTERNET_PPP_CONNECTION_NAME,
 ) -> ActionResult:
@@ -777,7 +780,9 @@ def set_pppoe_credentials(
         ont_id: OntUnit primary key.
         username: PPPoE username.
         password: PPPoE password.
-        instance_index: WAN instance index (default 1).
+        instance_index: WANConnectionDevice index; ``None`` selects an existing
+            non-management container or creates one. Only an explicitly
+            configured index that is the management container is refused.
         wan_vlan: Optional VLAN for service tagging.
 
     Returns:
@@ -802,11 +807,18 @@ def set_pppoe_credentials(
 
     nat_params: dict[str, str] = {}
     reset_path: str | None = None
+    credential_revision = ppp_credential_revision(username, password)
     if root == "InternetGatewayDevice":
         device = client.get_device(device_id) if hasattr(client, "get_device") else None
+        if device is None and instance_index is None:
+            instance_index = 1
         if device is not None:
             wcds = _igd_wcd_nodes(device, root)
-            if instance_index in wcds and _igd_wcd_is_management(wcds[instance_index]):
+            if (
+                instance_index is not None
+                and instance_index in wcds
+                and _igd_wcd_is_management(wcds[instance_index])
+            ):
                 return ActionResult(
                     success=False,
                     message=(
@@ -869,15 +881,25 @@ def set_pppoe_credentials(
             params[f"{ppp_base}.Name"] = connection_name
 
         # A credential change on an already-enabled connection does not
-        # redial; Reset does. Only when the child is new or the username
-        # changed, so an unchanged re-apply never drops a live session.
+        # redial; Reset does. Reset when the child is new, the username
+        # changed, or the (keyed, non-secret) credential revision changed.
+        # Never keyed off ConnectionStatus: HG8546M reports a false
+        # Disconnected while the PPP session is up.
         old_username = (
             client.extract_parameter_value(device, f"{ppp_base}.Username")
             if device is not None and existing_ppp is not None
             else None
         )
+        stored_revision = get_ppp_credential_revision(ont)
+        secret_changed = (
+            credential_revision is not None
+            and stored_revision is not None
+            and credential_revision != stored_revision
+        )
         if device is not None and (
-            existing_ppp is None or str(old_username or "") != username
+            existing_ppp is None
+            or str(old_username or "") != username
+            or secret_changed
         ):
             reset_path = f"{ppp_base}.Reset"
     else:
@@ -896,11 +918,17 @@ def set_pppoe_credentials(
         path: value for path, value in params.items() if not path.endswith(".Password")
     }
 
+    reset_issued = False
+
+    def _mark_reset_done() -> None:
+        nonlocal reset_issued
+        reset_issued = True
+        set_ppp_credential_revision(ont, credential_revision)
+
     try:
         result = set_and_verify(client, device_id, params, expected=expected)
         if nat_params:
             set_and_verify(client, device_id, nat_params)
-        reset_issued = False
         if reset_path:
             # Only after params were delivered and read back above.
             try:
@@ -910,6 +938,9 @@ def set_pppoe_credentials(
                     {reset_path: "true"},
                     skip_verification=True,
                 )
+            except GenieACSTaskQueuedError:
+                _mark_reset_done()  # task is queued; it will run on next inform
+                raise
             except GenieACSError as exc:
                 logger.error(
                     "PPP Reset failed for ONT %s after credentials were applied: %s",
@@ -919,7 +950,11 @@ def set_pppoe_credentials(
                 return genieacs_error_result(
                     exc, "PPPoE credentials were applied but the PPP Reset failed"
                 )
-            reset_issued = True
+            _mark_reset_done()
+        elif root == "InternetGatewayDevice":
+            # Baseline the revision so a later password-only change is seen.
+            if get_ppp_credential_revision(ont) is None:
+                set_ppp_credential_revision(ont, credential_revision)
         logger.info(
             "PPPoE credentials set on ONT %s (user: %s, instance: %d, root: %s)",
             ont.serial_number,
@@ -943,6 +978,22 @@ def set_pppoe_credentials(
             },
         )
     except GenieACSError as exc:
+        if isinstance(exc, GenieACSTaskQueuedError) and reset_path and not reset_issued:
+            # The params task is queued (Connection Request failed or timed
+            # out). Queue the Reset behind it with no Connection Request so it
+            # is not lost: on retry the username already matches and nothing
+            # would trigger a redial.
+            try:
+                client.set_parameter_values(
+                    device_id, {reset_path: "true"}, connection_request=False
+                )
+                _mark_reset_done()
+            except Exception:  # noqa: BLE001 - best effort, reported below
+                logger.warning(
+                    "Could not queue PPP Reset behind queued credentials for %s",
+                    ont.serial_number,
+                    exc_info=True,
+                )
         logger.error(
             "Set PPPoE credentials failed for ONT %s: %s",
             ont.serial_number,

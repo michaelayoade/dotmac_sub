@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import time
 from dataclasses import dataclass
@@ -30,6 +32,52 @@ class ActionResult:
     data: dict[str, Any] | None = None
     waiting: bool = False
     error_code: str | None = None
+
+
+def ppp_credential_revision(username: str, password: str) -> str | None:
+    """Non-secret revision marker for a PPP credential pair.
+
+    Keyed HMAC of the pair with the credential encryption key, truncated. The
+    password is never stored or logged; ``None`` when no key is available, in
+    which case callers must not reset on a password-only change.
+    """
+    from app.services.credential_crypto import get_encryption_key
+
+    key = get_encryption_key()
+    if not key:
+        return None
+    digest = hmac.new(
+        key, f"{username}\x00{password}".encode(), hashlib.sha256
+    ).hexdigest()
+    return digest[:16]
+
+
+def get_ppp_credential_revision(ont: Any) -> str | None:
+    snapshot = getattr(ont, "tr069_last_snapshot", None)
+    caps = snapshot.get("capabilities") if isinstance(snapshot, dict) else None
+    value = caps.get("ppp_credential_revision") if isinstance(caps, dict) else None
+    return str(value) if value else None
+
+
+def set_ppp_credential_revision(ont: Any, revision: str | None) -> None:
+    """Record the revision whose Reset has been queued (or baselined)."""
+    if not revision:
+        return
+    from datetime import UTC, datetime
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    snapshot = getattr(ont, "tr069_last_snapshot", None)
+    snapshot = dict(snapshot) if isinstance(snapshot, dict) else {}
+    caps = dict(snapshot.get("capabilities") or {})
+    caps["ppp_credential_revision"] = revision
+    snapshot["capabilities"] = caps
+    ont.tr069_last_snapshot = snapshot
+    try:
+        flag_modified(ont, "tr069_last_snapshot")
+    except Exception:  # noqa: BLE001 - non-ORM objects in unit tests
+        pass
+    ont.tr069_last_snapshot_at = datetime.now(UTC)
 
 
 def genieacs_error_result(exc: Exception, message_prefix: str) -> ActionResult:

@@ -279,7 +279,9 @@ class OltReset:
 class AcsAddObject:
     """``POST /devices/<id>/tasks {addObject: path}``.
 
-    Creates a WANPPPConnection instance on the device. Required before
+    Creates a WANPPPConnection instance on the device, or, when the path is
+    the ``WANConnectionDevice`` parent, selects/creates the WCD container with
+    index readback (never the TR-069 management WCD). Required before
     ``AcsSetPppoe`` writes can land — setting parameters on a non-existent
     object silently queues forever.
     """
@@ -327,6 +329,11 @@ class AcsSetPppoe:
     username: str
     password_ref: str  # OpenBao path
     vlan: int
+    #: The planner saw a new child or a username change, so the applier must
+    #: queue ``WANPPPConnection.N.Reset`` after the write (a credential change
+    #: on an enabled connection does not redial). The applier also resets when
+    #: the keyed, non-secret credential revision changed (password-only).
+    reset_on_apply: bool = False
 
 
 @dataclass(frozen=True)
